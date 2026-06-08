@@ -2143,19 +2143,34 @@ def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
     ])
 
 
-def ingredients_kb(n: int) -> types.InlineKeyboardMarkup:
+def _vid_fmt_count_rows(vfmt: str, vcount: int) -> list:
+    """Общие ряды кнопок «формат + количество» для видео-экранов."""
     B = types.InlineKeyboardButton
-    rows = []
-    if n >= 2:
+    return [
+        [
+            B(text=_sel(L("fmt:land"), vfmt == "land"), callback_data="v:fmt:land"),
+            B(text=_sel(L("fmt:port"), vfmt == "port"), callback_data="v:fmt:port"),
+        ],
+        [
+            B(text=_sel(f"{n}", vcount == n), callback_data=f"v:cnt:{n}")
+            for n in (1, 2, 3, 4)
+        ],
+    ]
+
+
+def ingredients_kb(n: int, vfmt: str, vcount: int) -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    rows = _vid_fmt_count_rows(vfmt, vcount)
+    if n >= 1:
         rows.append([B(text=L("vid_ing_done"), callback_data="v:ing:done")])
     rows.append([B(text=L("vid_ing_clear"), callback_data="v:ing:clear")])
     rows.append([B(text=L("cancel"),        callback_data="v:cancel")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def frames_kb(has_start: bool, has_end: bool) -> types.InlineKeyboardMarkup:
+def frames_kb(has_start: bool, has_end: bool, vfmt: str, vcount: int) -> types.InlineKeyboardMarkup:
     B = types.InlineKeyboardButton
-    rows = []
+    rows = _vid_fmt_count_rows(vfmt, vcount)
     if has_start and has_end:
         rows.append([B(text=L("vid_frm_go"), callback_data="v:frm:go")])
     rows.append([B(text=L("vid_frm_clear"), callback_data="v:frm:clear")])
@@ -2169,16 +2184,21 @@ async def show_video_ingredients(message: types.Message, *, user_id: int, edit: 
     st["vawait"] = "ving_photo"
     st.setdefault("vmode", "ingredients")
     st.setdefault("vmodel", VID_REF_DEFAULT_MODEL)
-    st.setdefault("vcount", 1)
+    st.setdefault("vfmt", VID_DEFAULT_FMT)
+    st.setdefault("vcount", VID_DEFAULT_COUNT)
+    vfmt = st.get("vfmt", VID_DEFAULT_FMT)
+    vcount = st.get("vcount", VID_DEFAULT_COUNT)
+    model_id = st.get("vmodel", VID_REF_DEFAULT_MODEL)
     n = len(st.get("ving_photos") or [])
     text = flow_copy.msg(
         "vid_ing_screen",
         n=n,
-        model=L(f"vid_model_name:{st.get('vmodel', VID_REF_DEFAULT_MODEL)}"),
-        price=video_price(st.get("vmodel", VID_REF_DEFAULT_MODEL), 1, "ingredients"),
+        fmt=_VID_FMT_NAMES.get(vfmt, vfmt),
+        count=vcount,
+        price=video_price(model_id, vcount, "ingredients"),
         credits=credit_store.balance(user_id),
     )
-    kb = ingredients_kb(n)
+    kb = ingredients_kb(n, vfmt, vcount)
     if edit:
         await _vid_edit(message, text, kb, user_id)
     else:
@@ -2191,13 +2211,20 @@ async def show_video_frames(message: types.Message, *, user_id: int, edit: bool 
     st["vstep"] = "vfrm"
     st.setdefault("vmode", "frames")
     st.setdefault("vmodel", VID_FRAMES_DEFAULT_MODEL)
-    st.setdefault("vcount", 1)
+    st.setdefault("vfmt", VID_DEFAULT_FMT)
+    st.setdefault("vcount", VID_DEFAULT_COUNT)
+    vfmt = st.get("vfmt", VID_DEFAULT_FMT)
+    vcount = st.get("vcount", VID_DEFAULT_COUNT)
+    model_id = st.get("vmodel", VID_FRAMES_DEFAULT_MODEL)
     has_start = bool(st.get("vfrm_start"))
     has_end = bool(st.get("vfrm_end"))
     text = flow_copy.msg(
         "vid_frm_screen",
-        model=L(f"vid_model_name:{st.get('vmodel', VID_FRAMES_DEFAULT_MODEL)}"),
-        price=video_price(st.get("vmodel", VID_FRAMES_DEFAULT_MODEL), 1, "frames"),
+        start_mark="✅" if has_start else "⬜",
+        end_mark="✅" if has_end else "⬜",
+        fmt=_VID_FMT_NAMES.get(vfmt, vfmt),
+        count=vcount,
+        price=video_price(model_id, vcount, "frames"),
         credits=credit_store.balance(user_id),
     )
     if not has_start:
@@ -2208,7 +2235,7 @@ async def show_video_frames(message: types.Message, *, user_id: int, edit: bool 
         st["vawait"] = "vfrm_end"
     else:
         st["vawait"] = None
-    kb = frames_kb(has_start, has_end)
+    kb = frames_kb(has_start, has_end, vfmt, vcount)
     if edit:
         await _vid_edit(message, text, kb, user_id)
     else:
@@ -2239,6 +2266,17 @@ async def _vid_edit(message: types.Message, text: str, kb, user_id: int):
     except Exception:
         sent = await message.answer(text, reply_markup=kb)
         wizard_state[user_id]["vmsg_id"] = sent.message_id
+
+
+async def _vid_rerender_settings(message: types.Message, *, user_id: int):
+    """Перерисовать активный экран настроек по текущему режиму видео."""
+    vmode = wizard_state[user_id].get("vmode", "text")
+    if vmode == "frames":
+        await show_video_frames(message, user_id=user_id, edit=True)
+    elif vmode == "ingredients":
+        await show_video_ingredients(message, user_id=user_id, edit=True)
+    else:
+        await show_video_settings(message, user_id=user_id)
 
 
 async def show_video_family(message: types.Message, *, user_id: int, edit: bool):
@@ -3187,9 +3225,10 @@ async def on_video_action(callback: types.CallbackQuery):
     # Ingredients actions.
     if data == "v:ing:done":
         photos = st.get("ving_photos") or []
-        if len(photos) < 2:
+        if len(photos) < 1:
             await callback.answer(flow_copy.msg("vid_ing_need_more"), show_alert=True)
             return
+        # Генерация Ingredients ещё заблокирована — контракт API не захвачен.
         await callback.answer()
         await msg.answer(flow_copy.msg("vid_gen_blocked"))
         _vid_clear(user_id)
@@ -3217,6 +3256,13 @@ async def on_video_action(callback: types.CallbackQuery):
                 flow_copy.msg("low_balance", needed=price, have=credit_store.balance(user_id)),
                 reply_markup=kb,
             )
+            return
+        # Подпись к фото уже задаёт описание перехода — генерируем сразу.
+        caption = st.pop("vcaption_prompt", None)
+        if caption:
+            st["vawait"] = None
+            await callback.answer()
+            await _video_generate_and_send(msg, caption, user_id=user_id)
             return
         st["vawait"] = "vprompt"
         st["vstep"] = "vprompt"
@@ -3256,16 +3302,16 @@ async def on_video_action(callback: types.CallbackQuery):
         await show_video_variant(msg, user_id=user_id)
         return
 
-    # Смена формата / количества на экране настроек.
+    # Смена формата / количества на экране настроек (текст / кадры / ингредиенты).
     if data.startswith("v:fmt:"):
         st["vfmt"] = data.split(":")[2]
         await callback.answer()
-        await show_video_settings(msg, user_id=user_id)
+        await _vid_rerender_settings(msg, user_id=user_id)
         return
     if data.startswith("v:cnt:"):
         st["vcount"] = clamp_num_videos(data.split(":")[2])
         await callback.answer()
-        await show_video_settings(msg, user_id=user_id)
+        await _vid_rerender_settings(msg, user_id=user_id)
         return
 
     # Повтор после ошибки — снова просим промпт с теми же настройками.
@@ -3356,7 +3402,7 @@ async def _video_generate_and_send(
     if not meta:
         await message.answer(flow_copy.msg("vid_expired_wizard"))
         return
-    if vmode == "ingredients" and len(build_video_reference_images(st.get("ving_photos"))) < 2:
+    if vmode == "ingredients" and len(build_video_reference_images(st.get("ving_photos"))) < 1:
         await message.answer(flow_copy.msg("vid_ing_need_more"))
         return
     if vmode == "frames":
@@ -3671,6 +3717,66 @@ async def _upload_photo_source_from_message(
     return source
 
 
+# ── album (media group) buffering for video modes ──────────────────────
+# Telegram delivers an album as separate photo messages sharing media_group_id.
+# We debounce by group id: each photo (re)schedules a short flush; when the group
+# goes quiet we process all of its photos at once. Keyed by the globally-unique
+# media_group_id, so user sessions can't mix.
+_album_buf: dict[str, list[types.Message]] = {}
+_album_tasks: dict[str, "asyncio.Task"] = {}
+_ALBUM_FLUSH_DELAY = 0.8
+
+
+def _vid_caption(message: types.Message) -> str:
+    return (message.caption or "").strip()
+
+
+async def _flush_album(media_group_id: str, user_id: int):
+    try:
+        await asyncio.sleep(_ALBUM_FLUSH_DELAY)
+    except asyncio.CancelledError:
+        return
+    messages = _album_buf.pop(media_group_id, [])
+    _album_tasks.pop(media_group_id, None)
+    if messages:
+        await _handle_album_photos(messages, user_id=user_id)
+
+
+async def _handle_album_photos(messages: list, *, user_id: int):
+    """Обработать альбом для frames/ingredients: загрузить фото пачкой."""
+    st = _ws(user_id)
+    vmode = st.get("vmode")
+    first = messages[0]
+    status_msg = await first.answer(flow_copy.msg("uploading_photo"))
+    sources = []
+    for m in messages:
+        src = await _upload_photo_source_from_message(m, user_id=user_id, status_msg=status_msg)
+        if src:
+            sources.append(src)
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+    if not sources:
+        return
+    caption = _vid_caption(first)
+    if caption:
+        st["vcaption_prompt"] = caption
+    if vmode == "frames":
+        # Первое фото → начало, второе → конец.
+        st["vfrm_start"] = sources[0]
+        if len(sources) > 1:
+            st["vfrm_end"] = sources[1]
+        await show_video_frames(first, user_id=user_id, edit=False)
+    else:
+        photos: list = st.setdefault("ving_photos", [])
+        for s in sources:
+            if len(photos) >= 4:
+                break
+            photos.append(s)
+        await show_video_ingredients(first, user_id=user_id, edit=False)
+
+
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
     """Пользователь прислал фото (+ опц. подпись) — загружаем его в Flow и правим.
@@ -3681,6 +3787,16 @@ async def handle_photo(message: types.Message):
     user_id = message.from_user.id
     st = _ws(user_id)
     vawait = st.get("vawait")
+
+    # Альбом в видео-режимах: буферизуем и обрабатываем пачкой (см. _flush_album).
+    mgid = message.media_group_id
+    if mgid and vawait in ("ving_photo", "vfrm_start", "vfrm_end"):
+        _album_buf.setdefault(mgid, []).append(message)
+        task = _album_tasks.get(mgid)
+        if task:
+            task.cancel()
+        _album_tasks[mgid] = asyncio.create_task(_flush_album(mgid, user_id))
+        return
 
     # Ingredients: upload and store Flow sources; generation stays blocked until API capture.
     if vawait == "ving_photo":
@@ -3693,6 +3809,9 @@ async def handle_photo(message: types.Message):
             if not source:
                 return
             photos.append(source)
+            caption = _vid_caption(message)
+            if caption:
+                st["vcaption_prompt"] = caption
             try:
                 await status_msg.delete()
             except Exception:
@@ -3710,11 +3829,14 @@ async def handle_photo(message: types.Message):
             return
         st["vfrm_start"] = source
         st["vawait"] = "vfrm_end"
+        caption = _vid_caption(message)
+        if caption:
+            st["vcaption_prompt"] = caption
         try:
             await status_msg.delete()
         except Exception:
             pass
-        await message.answer(flow_copy.msg("vid_frm_send_photo_end"))
+        await show_video_frames(message, user_id=user_id, edit=False)
         return
     if vawait == "vfrm_end":
         status_msg = await message.answer(flow_copy.msg("uploading_photo"))
@@ -3725,6 +3847,9 @@ async def handle_photo(message: types.Message):
             return
         st["vfrm_end"] = source
         st["vawait"] = None
+        caption = _vid_caption(message)
+        if caption:
+            st["vcaption_prompt"] = caption
         try:
             await status_msg.delete()
         except Exception:

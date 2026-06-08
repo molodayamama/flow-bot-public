@@ -8,6 +8,7 @@ Common usage:
 
     python tools/capture_video.py
     python tools/capture_video.py --frames
+    python tools/capture_video.py --ingredients
     python tools/capture_video.py --no-abort --timeout 300
 
 Frames capture workflow:
@@ -231,6 +232,8 @@ def default_output(args: argparse.Namespace) -> Path:
         return args.output
     if args.frames:
         return Path("tools/video_frames_capture.json")
+    if args.ingredients:
+        return Path("tools/video_ingredients_capture.json")
     if args.no_abort:
         return Path("tools/video_flow_capture.json")
     return Path("tools/video_raw_capture.json")
@@ -241,12 +244,19 @@ def default_timeout(args: argparse.Namespace) -> int:
         return args.timeout
     if args.no_abort:
         return 300
-    if args.frames:
+    if args.frames or args.ingredients:
         return 300
     return 180
 
 
-async def run(output_path: Path, timeout_sec: int, *, no_abort: bool, frames: bool) -> int:
+async def run(
+    output_path: Path,
+    timeout_sec: int,
+    *,
+    no_abort: bool,
+    frames: bool,
+    ingredients: bool = False,
+) -> int:
     from playwright.async_api import async_playwright
 
     check_profile_lock()
@@ -400,6 +410,16 @@ async def run(output_path: Path, timeout_sec: int, *, no_abort: bool, frames: bo
                 "  4. Enter a short prompt and click Generate.\n"
                 "  5. Default mode aborts the video-like POST before spending credits.\n"
             )
+        elif ingredients:
+            instructions = (
+                "Ingredients capture (photo[s] + text -> video):\n"
+                "  1. Open your Flow project.\n"
+                "  2. Choose the Ingredients / reference-images video flow.\n"
+                "  3. Upload one or more reference photos.\n"
+                "  4. Enter a short prompt and click Generate.\n"
+                "  5. Default mode aborts the video-like POST before spending credits.\n"
+                "  Goal: capture the endpoint URL + how reference images are passed.\n"
+            )
         else:
             instructions = (
                 "Text video capture:\n"
@@ -452,7 +472,7 @@ async def run(output_path: Path, timeout_sec: int, *, no_abort: bool, frames: bo
 
     out: dict = {
         "mode": "no-abort" if no_abort else "abort",
-        "capture_kind": "frames" if frames else "text-video",
+        "capture_kind": "frames" if frames else ("ingredients" if ingredients else "text-video"),
         "captured_at": utc_now(),
         "generation_request": None,
         "api_traffic": traffic,
@@ -488,6 +508,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Manual Frames capture mode; default output is tools/video_frames_capture.json.",
     )
     parser.add_argument(
+        "--ingredients",
+        action="store_true",
+        help="Manual Ingredients (photos+text) capture; default output is tools/video_ingredients_capture.json.",
+    )
+    parser.add_argument(
         "--no-abort",
         action="store_true",
         help="Let video-like POSTs through. This can spend Google Flow credits.",
@@ -516,6 +541,7 @@ if __name__ == "__main__":
                 default_timeout(parsed),
                 no_abort=parsed.no_abort,
                 frames=parsed.frames,
+                ingredients=parsed.ingredients,
             )
         )
     )

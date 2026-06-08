@@ -252,6 +252,29 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('b("realup", "realup")', self.source)
         self.assertIn('elif action == "realup"', self.source)
 
+    def test_frames_and_ingredients_have_format_and_count(self) -> None:
+        # Frames/Ingredients screens reuse the shared format+count picker rows.
+        self.assertIn("def _vid_fmt_count_rows", self.source)
+        self.assertIn("def frames_kb(has_start: bool, has_end: bool, vfmt: str, vcount: int)", self.source)
+        self.assertIn("def ingredients_kb(n: int, vfmt: str, vcount: int)", self.source)
+        # Format/count callbacks re-render the active video screen by mode.
+        self.assertIn("def _vid_rerender_settings", self.source)
+        self.assertIn("await _vid_rerender_settings(msg, user_id=user_id)", self.source)
+
+    def test_ingredients_minimum_is_one_photo(self) -> None:
+        # Ingredients works from a single photo now (no 2-photo gate).
+        ing = self.source.index("def ingredients_kb")
+        block = self.source[ing:ing + 400]
+        self.assertIn("if n >= 1:", block)
+        self.assertIn('if len(photos) < 1:', self.source)
+
+    def test_album_and_caption_support(self) -> None:
+        # Grouped photos (album) → first=start, second=end; caption → prompt.
+        self.assertIn("async def _handle_album_photos", self.source)
+        self.assertIn("message.media_group_id", self.source)
+        self.assertIn('st["vfrm_start"] = sources[0]', self.source)
+        self.assertIn("vcaption_prompt", self.source)
+
     def test_no_backend_or_captcha_words_in_user_messages(self) -> None:
         # User-facing copy must not reveal the backend or mention captcha.
         import flow_copy
