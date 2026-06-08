@@ -26,7 +26,9 @@ Observed stack:
 - External APIs: Telegram Bot API, OpenRouter, ImageRouter, Google Labs Flow
   web/API surface, 2Captcha.
 - No package manifest was found: no `package.json`, no `requirements.txt`.
-- No `.git` directory was found in this workspace.
+- Git **is** initialized (branch `main`); initial import committed 2026-06-08.
+  Commit per new feature/change going forward. `.gitignore` excludes all
+  secrets/runtime state — keep it that way.
 - No application database schema was found. Runtime state is file-based.
 
 Important files:
@@ -188,18 +190,23 @@ changes.
 
 Purpose: package the change for version control.
 
-Current workspace note: no `.git` directory was found. Until git is initialized
-or this folder is placed inside a repository, Committer can only prepare commit
-notes, not create commits.
+Current workspace note: git **is** initialized (branch `main`). Committer creates
+one focused commit per feature/change. Before committing, run `git status` and
+confirm no secret/runtime files are staged (they should be `.gitignore`d).
+End commit messages with a `Co-Authored-By:` line when AI-authored.
+
+**Hardcoded-secret caveat:** `checker.py` and `login.py` carry hardcoded
+token/proxy material that is now in local history. Scrub + rotate those before
+adding any git remote or pushing — the repo is local-only until then.
 
 Required output:
 
 - Final diff summary.
 - Validation summary.
-- Suggested commit message.
-- List of files that must not be committed if git is later initialized:
+- Commit message (subject + body).
+- Confirmation that no secret/runtime files were committed:
   `.env`, `.env_flow`, `api_config.json`, `labs.google.har`, `google_profile/`,
-  proxy lists, logs, runtime state files, generated images.
+  proxy lists, `tools/*_capture.json`, logs, runtime state files, generated images.
 
 ## Task Handoff Template
 
