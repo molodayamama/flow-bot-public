@@ -2090,6 +2090,13 @@ def _vid_clear(user_id: int) -> None:
         st["vlast"] = vlast
 
 
+def _vid_clear_reference_inputs(user_id: int) -> None:
+    """Drop mode-specific image/caption inputs before a plain text video run."""
+    st = wizard_state[user_id]
+    for key in ("ving_photos", "vfrm_start", "vfrm_end", "vcaption_prompt"):
+        st.pop(key, None)
+
+
 def video_family_kb() -> types.InlineKeyboardMarkup:
     B = types.InlineKeyboardButton
     return types.InlineKeyboardMarkup(inline_keyboard=[
@@ -3337,14 +3344,16 @@ async def on_video_action(callback: types.CallbackQuery):
                 reply_markup=kb,
             )
             return
+        caption = st.pop("vcaption_prompt", None)
+        if caption:
+            st["vawait"] = None
+            await callback.answer()
+            await _video_generate_and_send(msg, caption, user_id=user_id)
+            return
         st["vawait"] = "vprompt"
         st["vstep"] = "vprompt"
         await callback.answer()
-        caption = st.get("vcaption_prompt")
-        if caption:
-            await msg.answer(flow_copy.msg("vid_frm_ask_prompt_with_caption", prompt=caption[:300]))
-        else:
-            await msg.answer(flow_copy.msg("vid_frm_ask_prompt"))
+        await msg.answer(flow_copy.msg("vid_frm_ask_prompt"))
         return
 
     if data == "v:frm:clear":
@@ -3701,6 +3710,7 @@ async def _video_prompt_edit_and_send(
         return
 
     st = _ws(user_id)
+    _vid_clear_reference_inputs(user_id)
     st["vmode"] = "text"
     st["vmodel"] = ref.model_id or "omni-flash-4s"
     st["vfmt"] = _aspect_to_vfmt(ref.aspect_ratio)

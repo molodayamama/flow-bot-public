@@ -9,6 +9,8 @@ Common usage:
     python tools/capture_video.py
     python tools/capture_video.py --frames
     python tools/capture_video.py --ingredients
+    python tools/capture_video.py --edit
+    python tools/capture_video.py --extend
     python tools/capture_video.py --no-abort --timeout 300
 
 Frames capture workflow:
@@ -57,6 +59,12 @@ if not Path(USER_DATA_DIR).is_absolute():
 VIDEO_URL_KEYWORDS = (
     "batchAsyncGenerateVideoText",
     "batchAsyncGenerateVideoStartAndEndImage",
+    "batchAsyncGenerateVideoReferenceImages",
+    "batchAsyncEditVideo",
+    "batchAsyncGenerateVideoEdit",
+    "batchAsyncExtendVideo",
+    "editVideo",
+    "extendVideo",
     "batchGenerateVideos",
     "GenerateVideo",
     "generateVideo",
@@ -75,6 +83,15 @@ VIDEO_BODY_KEYWORDS = (
     "referenceImages",
     "referenceImageMediaIds",
     "IMAGE_USAGE_TYPE_ASSET",
+    "videoInput",
+    "videoInputs",
+    "sourceVideo",
+    "referenceVideo",
+    "generatedVideo",
+    "editInstruction",
+    "editPrompt",
+    "extend",
+    "extension",
 )
 
 SECRET_QUERY_KEYS = {
@@ -222,18 +239,37 @@ def is_video_like_request(url: str, method: str, body_str: str) -> bool:
         return False
     if "batchLogFrontendEvents" in url:
         return False
-    if any(keyword in url for keyword in VIDEO_URL_KEYWORDS):
+    url_l = url.lower()
+    body_l = body_str.lower()
+    if any(keyword.lower() in url_l for keyword in VIDEO_URL_KEYWORDS):
         return True
-    return any(keyword in body_str for keyword in VIDEO_BODY_KEYWORDS)
+    return any(keyword.lower() in body_l for keyword in VIDEO_BODY_KEYWORDS)
+
+
+def capture_kind_from_args(args: argparse.Namespace) -> str:
+    if args.frames:
+        return "frames"
+    if args.ingredients:
+        return "ingredients"
+    if args.edit:
+        return "edit"
+    if args.extend:
+        return "extend"
+    return "text-video"
 
 
 def default_output(args: argparse.Namespace) -> Path:
     if args.output is not None:
         return args.output
-    if args.frames:
+    kind = capture_kind_from_args(args)
+    if kind == "frames":
         return Path("tools/video_frames_capture.json")
-    if args.ingredients:
+    if kind == "ingredients":
         return Path("tools/video_ingredients_capture.json")
+    if kind == "edit":
+        return Path("tools/video_edit_capture.json")
+    if kind == "extend":
+        return Path("tools/video_extend_capture.json")
     if args.no_abort:
         return Path("tools/video_flow_capture.json")
     return Path("tools/video_raw_capture.json")
@@ -244,7 +280,7 @@ def default_timeout(args: argparse.Namespace) -> int:
         return args.timeout
     if args.no_abort:
         return 300
-    if args.frames or args.ingredients:
+    if capture_kind_from_args(args) != "text-video":
         return 300
     return 180
 
@@ -256,6 +292,8 @@ async def run(
     no_abort: bool,
     frames: bool,
     ingredients: bool = False,
+    edit: bool = False,
+    extend: bool = False,
 ) -> int:
     from playwright.async_api import async_playwright
 
@@ -420,6 +458,24 @@ async def run(
                 "  5. Default mode aborts the video-like POST before spending credits.\n"
                 "  Goal: capture the endpoint URL + how reference images are passed.\n"
             )
+        elif edit:
+            instructions = (
+                "Native video Edit capture:\n"
+                "  1. Open your Flow project and find a generated video.\n"
+                "  2. Use Flow's native Edit action for that video.\n"
+                "  3. Enter a short edit instruction and submit it.\n"
+                "  4. Default mode aborts the video-like POST before spending credits.\n"
+                "  Goal: capture the endpoint URL + how the source video and edit text are passed.\n"
+            )
+        elif extend:
+            instructions = (
+                "Native video Extend capture:\n"
+                "  1. Open your Flow project and find a generated video that can be extended.\n"
+                "  2. Use Flow's native Extend / Continue action.\n"
+                "  3. Submit the extension request.\n"
+                "  4. Default mode aborts the video-like POST before spending credits.\n"
+                "  Goal: capture the endpoint URL + how the source video is referenced.\n"
+            )
         else:
             instructions = (
                 "Text video capture:\n"
@@ -472,7 +528,11 @@ async def run(
 
     out: dict = {
         "mode": "no-abort" if no_abort else "abort",
-        "capture_kind": "frames" if frames else ("ingredients" if ingredients else "text-video"),
+        "capture_kind": (
+            "frames"
+            if frames
+            else ("ingredients" if ingredients else ("edit" if edit else ("extend" if extend else "text-video")))
+        ),
         "captured_at": utc_now(),
         "generation_request": None,
         "api_traffic": traffic,
@@ -502,15 +562,26 @@ async def run(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Capture sanitized Google Flow video API traffic.")
-    parser.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--frames",
         action="store_true",
         help="Manual Frames capture mode; default output is tools/video_frames_capture.json.",
     )
-    parser.add_argument(
+    mode_group.add_argument(
         "--ingredients",
         action="store_true",
         help="Manual Ingredients (photos+text) capture; default output is tools/video_ingredients_capture.json.",
+    )
+    mode_group.add_argument(
+        "--edit",
+        action="store_true",
+        help="Manual native video Edit capture; default output is tools/video_edit_capture.json.",
+    )
+    mode_group.add_argument(
+        "--extend",
+        action="store_true",
+        help="Manual native video Extend capture; default output is tools/video_extend_capture.json.",
     )
     parser.add_argument(
         "--no-abort",
@@ -542,6 +613,8 @@ if __name__ == "__main__":
                 no_abort=parsed.no_abort,
                 frames=parsed.frames,
                 ingredients=parsed.ingredients,
+                edit=parsed.edit,
+                extend=parsed.extend,
             )
         )
     )

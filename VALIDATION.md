@@ -292,6 +292,11 @@ Video Ingredients/Frames (Flow API):
   opens the persistent Flow browser profile, records sanitized API traffic to
   `tools/video_frames_capture.json`, and aborts the first video-like POST by
   default. Do not add `--no-abort` unless credit spend is explicitly accepted.
+- Manual native video capture helpers:
+  `python tools/capture_video.py --edit` writes `tools/video_edit_capture.json`;
+  `python tools/capture_video.py --extend` writes
+  `tools/video_extend_capture.json`. Both are abort-by-default endpoint discovery
+  modes for Flow's own video Edit/Extend UI actions.
 - `build_video_reference_images` and `build_video_frame_images` must use the
   uploaded Flow asset `mediaId` values, stripping any `fe_id_` prefix. Do not use
   Telegram `file_id` values.
@@ -300,9 +305,15 @@ Video Ingredients/Frames (Flow API):
   endpoint/request-shape helpers instead of guessing new video endpoints.
 - Video prompt edit currently generates a new text-to-video version from the
   previous prompt plus the user's edit instruction and charges 20 bot credits.
-  It is not a native video-to-video edit endpoint.
+  It is not a native video-to-video edit endpoint; capture native Edit with
+  `tools/capture_video.py --edit` before replacing this fallback.
 - Video Extend is UI-gated to original `veo-lite` results only, but the callback
-  must remain fail-closed/no-charge until a real extend endpoint is captured.
+  must remain fail-closed/no-charge until a real extend endpoint is captured with
+  `tools/capture_video.py --extend`.
+- Recent UX/state-only changes do not require new provider capture: Frames
+  caption-on-Next behavior, image edit 429 recovery, video download, and retry
+  buttons. Optional captures are still useful for unverified Veo tier/orientation
+  model-key combinations if a live request fails.
 - Live validation requires approval because Telegram photo upload opens the
   persistent browser profile, contacts Telegram/Google Flow, may solve captcha,
   and may spend Google Flow credits. The bot must refund user credits on

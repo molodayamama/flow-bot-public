@@ -292,13 +292,16 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('st["vfrm_start"] = sources[0]', self.source)
         self.assertIn("vcaption_prompt", self.source)
 
-    def test_frames_next_does_not_generate_from_caption(self) -> None:
+    def test_frames_next_generates_from_saved_caption(self) -> None:
         start = self.source.index('if data == "v:frm:go":')
         end = self.source.index('if data == "v:frm:clear":')
         block = self.source[start:end]
-        self.assertNotIn("_video_generate_and_send", block)
+        self.assertIn('caption = st.pop("vcaption_prompt", None)', block)
+        self.assertIn("if caption:", block)
+        self.assertIn("_video_generate_and_send(msg, caption, user_id=user_id)", block)
         self.assertIn('st["vawait"] = "vprompt"', block)
-        self.assertIn("vid_frm_ask_prompt_with_caption", block)
+        self.assertIn("vid_frm_ask_prompt", block)
+        self.assertNotIn("vid_frm_ask_prompt_with_caption", block)
         self.assertIn("vid_frm_ready_next", self.source)
 
     def test_video_result_edit_and_extend_wiring(self) -> None:
@@ -312,6 +315,14 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('unit_price_override=action_price("video_prompt_edit")', self.source)
         self.assertIn("vid_extend_unavailable", self.source)
 
+    def test_video_prompt_edit_clears_reference_mode_inputs(self) -> None:
+        self.assertIn("def _vid_clear_reference_inputs", self.source)
+        start = self.source.index("async def _video_prompt_edit_and_send")
+        end = self.source.index("async def _video_repeat_last")
+        block = self.source[start:end]
+        self.assertIn("_vid_clear_reference_inputs(user_id)", block)
+        self.assertIn('st["vmode"] = "text"', block)
+
     def test_no_backend_or_captcha_words_in_user_messages(self) -> None:
         # User-facing copy must not reveal the backend or mention captcha.
         import flow_copy
@@ -323,6 +334,26 @@ class BotMenuWiringTests(unittest.TestCase):
             self.assertNotIn("recaptcha", low, key)
         for key, text in flow_copy.LABELS.items():
             self.assertNotIn("flow", text.lower(), key)
+
+
+class CaptureVideoToolTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = (PROJECT_ROOT / "tools" / "capture_video.py").read_text(encoding="utf-8")
+
+    def test_native_edit_and_extend_capture_modes_are_available(self) -> None:
+        self.assertIn('"--edit"', self.source)
+        self.assertIn('"--extend"', self.source)
+        self.assertIn('Path("tools/video_edit_capture.json")', self.source)
+        self.assertIn('Path("tools/video_extend_capture.json")', self.source)
+        self.assertIn('"capture_kind"', self.source)
+
+    def test_capture_matching_covers_unknown_native_video_actions(self) -> None:
+        self.assertIn("batchAsyncEditVideo", self.source)
+        self.assertIn("batchAsyncExtendVideo", self.source)
+        self.assertIn("editInstruction", self.source)
+        self.assertIn("sourceVideo", self.source)
+        self.assertIn("body_l = body_str.lower()", self.source)
 
 
 class BotImportSmokeTests(unittest.TestCase):
