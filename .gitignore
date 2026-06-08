@@ -1,0 +1,118 @@
+# Environment variables and secrets
+.env
+.env.local
+.env.*.local
+.env_flow
+
+# Local secret config (kept on disk, never committed)
+api_config.json
+
+# Token and cookie files
+tokens.json
+cookies.pkl
+.sessions/
+*.session
+*.session-journal
+chrome_profile/
+google_profile/
+
+# Per-user Flow project map (runtime state)
+user_projects.json
+
+# Per-user credits / balances (runtime state)
+user_credits.json
+
+# Learned Google Flow edit-request shape + calibration runtime state
+edit_capture.json
+edit_capture_raw.json
+recent_images.json
+upload_capture.json
+upscale_capture.json
+
+# Proxy lists (may contain credentials)
+proxylist*.txt
+
+# Captured API traffic / run artifacts under tools/ (regenerable; may contain
+# tokens/cookies/project ids — keep on disk, never commit)
+tools/*_capture.json
+tools/results_*.jsonl
+
+# Personal prompt/system-prompt scratch files (not project source)
+corial_style.txt
+eni_lime.txt
+snnme.txt
+
+# HAR files (contain sensitive data)
+*.har
+
+# Logs
+bot.log
+*.log
+logs/
+
+# Flow quota profiler local runs
+flow_profiler_runs/
+tg_e2e_runs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Scratch / validation run artifacts (leftover output, not source — see CLAUDE.md)
+*-mode.stdout.txt
+*-mode.stderr.txt
+single-*.txt
+unknown-*.txt
+lock*.txt
+stale.*
+flagcheck.*
+tempCodeRunnerFile.py
+
+# Editor temp
+*.bak
