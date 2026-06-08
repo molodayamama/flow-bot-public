@@ -2212,6 +2212,27 @@ def _vid_clear_reference_inputs(user_id: int) -> None:
         st.pop(key, None)
 
 
+def _video_plain_text_ready(st: dict) -> bool:
+    """True when the text-to-video settings screen can accept a chat prompt."""
+    if st.get("vawait"):
+        return False
+    if st.get("vstep") != "vsettings":
+        return False
+    if st.get("vmode", "text") != "text":
+        return False
+    model_id = st.get("vmodel")
+    if not model_id or not video_model_meta(model_id):
+        return False
+    vfmt = st.get("vfmt")
+    if vfmt not in _VID_FMT_TO_ASPECT:
+        return False
+    try:
+        vcount = int(st.get("vcount"))
+    except (TypeError, ValueError):
+        return False
+    return clamp_num_videos(vcount) == vcount
+
+
 def video_family_kb() -> types.InlineKeyboardMarkup:
     B = types.InlineKeyboardButton
     return types.InlineKeyboardMarkup(inline_keyboard=[
@@ -3729,6 +3750,8 @@ async def _video_generate_and_send(
             vtoken = video_registry.add(vref)
 
             caption = flow_copy.msg("vid_result_caption", i=i + 1, n=vcount, prompt=prompt[:60])
+            if meta.get("family") == "omni-flash":
+                caption = f"{caption}\n\n{flow_copy.msg('vid_omni_no_extend_hint')}"
             try:
                 await message.answer_video(
                     BufferedInputFile(video_bytes, f"video_{i + 1}.mp4"),
@@ -4321,6 +4344,11 @@ async def handle_plain_text(message: types.Message):
         if message.photo:
             await message.answer(flow_copy.msg("vid_text_only_hint"))
             return
+        st["vawait"] = None
+        await _video_generate_and_send(message, text, user_id=user_id)
+        return
+
+    if _video_plain_text_ready(st):
         st["vawait"] = None
         await _video_generate_and_send(message, text, user_id=user_id)
         return

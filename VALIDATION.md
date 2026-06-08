@@ -321,6 +321,12 @@ Video Ingredients/Frames (Flow API):
   caption-on-Next behavior, image edit 429 recovery, video download, and retry
   buttons. Optional captures are still useful for unverified Veo tier/orientation
   model-key combinations if a live request fails.
+- Video settings plain-text prompt UX is state-only. Validate offline that the
+  plain-text branch runs before image fallback and is gated to
+  `vstep == "vsettings"`, text mode, valid `vmodel`, `vfmt`, and `vcount`:
+  `python -m py_compile flow_bot.py flow_copy.py tests\test_flow_menu.py`,
+  `python -m unittest discover -s tests -p "test_flow_menu.py"`, and
+  `python -m unittest discover -s tests -p "test_flow_video.py"`.
 - Live validation requires approval because Telegram photo upload opens the
   persistent browser profile, contacts Telegram/Google Flow, may solve captcha,
   and may spend Google Flow credits. The bot must refund user credits on

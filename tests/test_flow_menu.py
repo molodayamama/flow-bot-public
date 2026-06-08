@@ -304,6 +304,36 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertNotIn("vid_frm_ask_prompt_with_caption", block)
         self.assertIn("vid_frm_ready_next", self.source)
 
+    def test_video_settings_plain_text_runs_video_before_image_fallback(self) -> None:
+        self.assertIn("def _video_plain_text_ready", self.source)
+        start = self.source.index("async def handle_plain_text")
+        video_branch = self.source.index("if _video_plain_text_ready(st):", start)
+        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        awaiting_image_prompt = self.source.index('awaiting = st.get("await")', start)
+        self.assertLess(video_branch, awaiting_image_prompt)
+        self.assertLess(video_branch, image_fallback)
+        block = self.source[video_branch:video_branch + 250]
+        self.assertIn("_video_generate_and_send(message, text, user_id=user_id)", block)
+        self.assertIn("return", block)
+
+    def test_video_plain_text_ready_is_narrow(self) -> None:
+        start = self.source.index("def _video_plain_text_ready")
+        end = self.source.index("def video_family_kb", start)
+        block = self.source[start:end]
+        self.assertIn('st.get("vawait")', block)
+        self.assertIn('st.get("vstep") != "vsettings"', block)
+        self.assertIn('st.get("vmode", "text") != "text"', block)
+        self.assertIn("video_model_meta(model_id)", block)
+        self.assertIn("vfmt not in _VID_FMT_TO_ASPECT", block)
+        self.assertIn("clamp_num_videos(vcount) == vcount", block)
+
+    def test_omni_video_result_warns_extend_unavailable(self) -> None:
+        self.assertIn("vid_omni_no_extend_hint", flow_copy.MESSAGES)
+        start = self.source.index('caption = flow_copy.msg("vid_result_caption"')
+        block = self.source[start:start + 350]
+        self.assertIn('meta.get("family") == "omni-flash"', block)
+        self.assertIn("vid_omni_no_extend_hint", block)
+
     def test_video_result_edit_and_extend_wiring(self) -> None:
         self.assertIn("def _video_can_edit", self.source)
         self.assertIn("def _video_can_extend", self.source)
