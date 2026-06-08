@@ -303,13 +303,20 @@ Video Ingredients/Frames (Flow API):
 - Live 2026-06-08 evidence in `HANDOFF.md`: text-to-video, Frames, and
   Ingredients generated successfully through the bot. Keep using the captured
   endpoint/request-shape helpers instead of guessing new video endpoints.
-- Video prompt edit currently generates a new text-to-video version from the
-  previous prompt plus the user's edit instruction and charges 20 bot credits.
-  It is not a native video-to-video edit endpoint; capture native Edit with
-  `tools/capture_video.py --edit` before replacing this fallback.
-- Video Extend is UI-gated to original `veo-lite` results only, but the callback
-  must remain fail-closed/no-charge until a real extend endpoint is captured with
-  `tools/capture_video.py --extend`.
+- Native Video Edit uses the captured
+  `video:batchAsyncGenerateVideoEditVideo` endpoint. It requires a stored source
+  `mediaId` and `workflowId`; stale or incomplete video refs must fail closed
+  without falling back to text-to-video.
+- Native Video Extend uses the captured
+  `video:batchAsyncGenerateVideoExtendVideo` endpoint after preparing a Flow
+  scene from the source `workflowId`. The bot must not charge for Extend until a
+  usable `sceneId` exists; stale or incomplete video refs remain no-charge
+  unavailable.
+- Offline native Edit/Extend checks:
+  `python -m py_compile flow_core.py flow_bot.py tests\test_flow_video.py tests\test_flow_menu.py`,
+  `python -m unittest discover -s tests -p "test_flow_video.py"`,
+  `python -m unittest discover -s tests -p "test_flow_menu.py"`,
+  `python -m unittest discover -s tests -p "test_flow_edit.py"`.
 - Recent UX/state-only changes do not require new provider capture: Frames
   caption-on-Next behavior, image edit 429 recovery, video download, and retry
   buttons. Optional captures are still useful for unverified Veo tier/orientation

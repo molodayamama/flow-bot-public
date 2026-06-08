@@ -677,6 +677,8 @@ def build_generation_payload(
 VIDEO_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1/video:batchAsyncGenerateVideoText"
 VIDEO_FRAMES_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1/video:batchAsyncGenerateVideoStartAndEndImage"
 VIDEO_REFERENCE_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1/video:batchAsyncGenerateVideoReferenceImages"
+VIDEO_EDIT_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1/video:batchAsyncGenerateVideoEditVideo"
+VIDEO_EXTEND_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1/video:batchAsyncGenerateVideoExtendVideo"
 VIDEO_POLL_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1/video:batchCheckAsyncVideoGenerationStatus"
 
 # Video download: the front-end (labs.google, NOT the API host) resolves a media
@@ -777,6 +779,21 @@ def video_reference_model_key(model_key: str, aspect: str = "portrait") -> str:
     """
     orient = "landscape" if video_aspect_code(aspect) == VIDEO_ASPECT_MAP["landscape"] else "portrait"
     return f"veo_3_1_r2v_{_veo_tier(model_key)}_{orient}"
+
+
+def video_edit_model_key() -> str:
+    """Google's native video-edit model key, captured from Flow Edit."""
+    return "abra_edit"
+
+
+def video_extend_model_key(model_key: str) -> str:
+    """Resolve a friendly model id to the Extend videoModelKey.
+
+    Captured from Flow Extend:
+    ``veo-lite`` -> ``veo_3_1_extension_lite``. Other Veo tiers follow the
+    same tier suffix pattern used by Frames.
+    """
+    return f"veo_3_1_extension_{_veo_tier(model_key)}"
 
 
 def video_aspect_code(aspect_ratio: str) -> str:
@@ -1007,6 +1024,145 @@ def build_video_payload(
     }
 
 
+def build_video_edit_payload(
+    *,
+    prompt: str,
+    project_id: str | None,
+    captcha_token: str,
+    aspect: str,
+    session_id: str,
+    batch_id: str,
+    source_media_id: str,
+    source_workflow_id: str,
+) -> dict:
+    """Construct the native Flow video Edit request body.
+
+    Shape captured by ``tools/capture_video.py --edit``:
+    endpoint ``video:batchAsyncGenerateVideoEditVideo``, model ``abra_edit``,
+    source video under ``videoInput.mediaId``, and original workflow under
+    ``metadata.workflowId``.
+    """
+    return {
+        "mediaGenerationContext": {
+            "batchId": batch_id,
+            "audioFailurePreference": "BLOCK_SILENCED_VIDEOS",
+        },
+        "clientContext": {
+            "projectId": project_id,
+            "tool": "PINHOLE",
+            "userPaygateTier": "PAYGATE_TIER_ONE",
+            "sessionId": session_id,
+            "recaptchaContext": {
+                "token": captcha_token,
+                "applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB",
+            },
+        },
+        "requests": [
+            {
+                "aspectRatio": video_aspect_code(aspect),
+                "textInput": {
+                    "structuredPrompt": {
+                        "parts": [{"text": prompt}],
+                    },
+                },
+                "videoModelKey": video_edit_model_key(),
+                "seed": secrets.randbelow(90000) + 10000,
+                "metadata": {"workflowId": source_workflow_id},
+                "videoInput": {
+                    "mediaId": source_media_id,
+                    "startFrameIndex": 0,
+                    "endFrameIndex": 240,
+                },
+            }
+        ],
+    }
+
+
+def build_video_extend_payload(
+    *,
+    prompt: str,
+    project_id: str | None,
+    captcha_token: str,
+    aspect: str,
+    model_key: str,
+    session_id: str,
+    batch_id: str,
+    source_media_id: str,
+    scene_id: str,
+    position: int = 1,
+) -> dict:
+    """Construct the native Flow video Extend request body.
+
+    Shape captured by ``tools/capture_video.py --extend``:
+    endpoint ``video:batchAsyncGenerateVideoExtendVideo``, source video under
+    ``videoInput.mediaId``, and scene linkage in both request metadata and
+    ``mediaGenerationContext.sceneContext``.
+    """
+    scene_context = {"sceneId": scene_id, "position": position}
+    return {
+        "mediaGenerationContext": {
+            "batchId": batch_id,
+            "audioFailurePreference": "BLOCK_SILENCED_VIDEOS",
+            "sceneContext": scene_context,
+        },
+        "clientContext": {
+            "projectId": project_id,
+            "tool": "PINHOLE",
+            "userPaygateTier": "PAYGATE_TIER_ONE",
+            "sessionId": session_id,
+            "recaptchaContext": {
+                "token": captcha_token,
+                "applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB",
+            },
+        },
+        "requests": [
+            {
+                "aspectRatio": video_aspect_code(aspect),
+                "textInput": {
+                    "structuredPrompt": {
+                        "parts": [{"text": prompt}],
+                    },
+                },
+                "videoModelKey": video_extend_model_key(model_key),
+                "seed": secrets.randbelow(90000) + 10000,
+                "metadata": {"sceneId": scene_id},
+                "videoInput": {"mediaId": source_media_id},
+            }
+        ],
+        "useV2ModelConfig": True,
+    }
+
+
+def flow_scene_create_url(project_id: str) -> str:
+    """Endpoint used by Flow to create a scene from existing workflow ids."""
+    from urllib.parse import quote
+    return f"https://aisandbox-pa.googleapis.com/v1/flow/projects/{quote(project_id, safe='')}/scenes"
+
+
+def flow_scene_workflows_url(scene_id: str, project_id: str) -> str:
+    """Endpoint used by Flow to read workflows attached to a prepared scene."""
+    from urllib.parse import quote, urlencode
+    scene = quote(scene_id, safe="")
+    query = urlencode({"sceneId": scene_id, "projectId": project_id})
+    return f"https://aisandbox-pa.googleapis.com/v1/flow/scene/{scene}/workflows?{query}"
+
+
+def parse_video_scene_id(data: dict) -> str | None:
+    """Extract ``sceneId`` from Flow scene-create / scene-workflows responses."""
+    scene = data.get("scene")
+    if isinstance(scene, dict):
+        scene_id = scene.get("sceneId")
+        if isinstance(scene_id, str) and scene_id:
+            return scene_id
+    for item in data.get("sceneWorkflows", []) or []:
+        if not isinstance(item, dict):
+            continue
+        scene_id = item.get("sceneId")
+        if isinstance(scene_id, str) and scene_id:
+            return scene_id
+    return None
+
+
 def build_video_poll_payload(media_id: str, project_id: str) -> dict:
     """Construct the ``video:batchCheckAsyncVideoGenerationStatus`` request body.
 
@@ -1028,7 +1184,14 @@ def parse_video_gen_response(data: dict) -> dict | None:
         media_id   = item.get("name")
         project_id = item.get("projectId")
         if media_id and project_id:
-            return {"media_id": media_id, "project_id": project_id}
+            result = {"media_id": media_id, "project_id": project_id}
+            workflow_id = item.get("workflowId")
+            if isinstance(workflow_id, str) and workflow_id:
+                result["workflow_id"] = workflow_id
+            scene_id = item.get("sceneId")
+            if isinstance(scene_id, str) and scene_id:
+                result["scene_id"] = scene_id
+            return result
     return None
 
 
@@ -1294,6 +1457,8 @@ class VideoRef:
     aspect_ratio: str = "landscape"
     mode: str = "text"
     prompt_edited: bool = False
+    workflow_id: str | None = None
+    scene_id: str | None = None
 
 
 class ImageRegistry:

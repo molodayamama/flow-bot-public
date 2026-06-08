@@ -8,6 +8,8 @@ from flow_core import (
     VIDEO_MODEL_KEYS,
     VIDEO_ASPECT_MAP,
     VIDEO_ENDPOINT,
+    VIDEO_EDIT_ENDPOINT,
+    VIDEO_EXTEND_ENDPOINT,
     VIDEO_POLL_ENDPOINT,
     VIDEO_STATUS_SCHEDULED,
     VIDEO_STATUS_ACTIVE,
@@ -17,11 +19,16 @@ from flow_core import (
     video_model_key,
     video_aspect_code,
     video_media_redirect_url,
+    build_video_edit_payload,
+    build_video_extend_payload,
     build_video_frame_images,
     build_video_payload,
     build_video_poll_payload,
     build_video_reference_images,
+    flow_scene_create_url,
+    flow_scene_workflows_url,
     parse_video_gen_response,
+    parse_video_scene_id,
     check_video_poll_status,
     parse_video_batch_id,
     parse_video_result,
@@ -31,6 +38,8 @@ FAKE_BATCH_ID = "619ce05f-5416-4ca4-8840-0a74a1f669f2"
 # Real values from tools/capture_video.py --no-abort capture
 REAL_MEDIA_ID   = "3a1ebe94-c8bb-4727-8565-9135b0f1fff7"
 REAL_PROJECT_ID = "7626e48a-5faf-4e6c-a26c-94a3cf02191c"
+REAL_WORKFLOW_ID = "770a887f-b5f6-40ec-841a-2810818c2259"
+REAL_SCENE_ID = "c2fd6ac1-7e3d-4752-81a6-740e0a431732"
 
 
 class TestVideoModelKey(unittest.TestCase):
@@ -215,6 +224,80 @@ class TestBuildVideoPayload(unittest.TestCase):
         self.assertEqual(start["cropCoordinates"], crop)
 
 
+class TestNativeVideoEditPayload(unittest.TestCase):
+    def test_endpoint_verified_from_capture(self):
+        self.assertIn("aisandbox-pa.googleapis.com", VIDEO_EDIT_ENDPOINT)
+        self.assertIn("batchAsyncGenerateVideoEditVideo", VIDEO_EDIT_ENDPOINT)
+
+    def test_payload_shape_matches_capture(self):
+        p = build_video_edit_payload(
+            prompt="make the camera orbit",
+            project_id=REAL_PROJECT_ID,
+            captcha_token="tok",
+            aspect="landscape",
+            session_id=";1780931934213",
+            batch_id=FAKE_BATCH_ID,
+            source_media_id=REAL_MEDIA_ID,
+            source_workflow_id=REAL_WORKFLOW_ID,
+        )
+        req = p["requests"][0]
+        self.assertEqual(req["videoModelKey"], "abra_edit")
+        self.assertEqual(req["metadata"], {"workflowId": REAL_WORKFLOW_ID})
+        self.assertEqual(req["videoInput"]["mediaId"], REAL_MEDIA_ID)
+        self.assertEqual(req["videoInput"]["startFrameIndex"], 0)
+        self.assertEqual(req["videoInput"]["endFrameIndex"], 240)
+        self.assertNotIn("useV2ModelConfig", p)
+
+
+class TestNativeVideoExtendPayload(unittest.TestCase):
+    def test_endpoint_verified_from_capture(self):
+        self.assertIn("aisandbox-pa.googleapis.com", VIDEO_EXTEND_ENDPOINT)
+        self.assertIn("batchAsyncGenerateVideoExtendVideo", VIDEO_EXTEND_ENDPOINT)
+
+    def test_payload_shape_matches_capture(self):
+        p = build_video_extend_payload(
+            prompt="continue into a sunrise",
+            project_id=REAL_PROJECT_ID,
+            captcha_token="tok",
+            aspect="landscape",
+            model_key="veo-lite",
+            session_id=";1780932112774",
+            batch_id=FAKE_BATCH_ID,
+            source_media_id=REAL_MEDIA_ID,
+            scene_id=REAL_SCENE_ID,
+        )
+        req = p["requests"][0]
+        self.assertEqual(req["videoModelKey"], "veo_3_1_extension_lite")
+        self.assertEqual(req["metadata"], {"sceneId": REAL_SCENE_ID})
+        self.assertEqual(req["videoInput"], {"mediaId": REAL_MEDIA_ID})
+        self.assertEqual(
+            p["mediaGenerationContext"]["sceneContext"],
+            {"sceneId": REAL_SCENE_ID, "position": 1},
+        )
+        self.assertTrue(p["useV2ModelConfig"])
+
+
+class TestVideoSceneHelpers(unittest.TestCase):
+    def test_scene_urls_match_captured_routes(self):
+        create = flow_scene_create_url(REAL_PROJECT_ID)
+        workflows = flow_scene_workflows_url(REAL_SCENE_ID, REAL_PROJECT_ID)
+        self.assertIn(f"/v1/flow/projects/{REAL_PROJECT_ID}/scenes", create)
+        self.assertIn(f"/v1/flow/scene/{REAL_SCENE_ID}/workflows", workflows)
+        self.assertIn("sceneId=", workflows)
+        self.assertIn("projectId=", workflows)
+
+    def test_parse_scene_id_from_create_response(self):
+        data = {"scene": {"sceneId": REAL_SCENE_ID}, "sceneWorkflows": []}
+        self.assertEqual(parse_video_scene_id(data), REAL_SCENE_ID)
+
+    def test_parse_scene_id_from_workflows_response(self):
+        data = {"sceneWorkflows": [{"sceneId": REAL_SCENE_ID}]}
+        self.assertEqual(parse_video_scene_id(data), REAL_SCENE_ID)
+
+    def test_parse_scene_id_missing(self):
+        self.assertIsNone(parse_video_scene_id({"sceneWorkflows": [{}]}))
+
+
 class TestParseVideoBatchId(unittest.TestCase):
     def test_top_level_batch_id(self):
         self.assertEqual(parse_video_batch_id({"batchId": "abc-123"}), "abc-123")
@@ -295,11 +378,39 @@ class TestParseVideoGenResponse(unittest.TestCase):
             "remainingCredits": 1961,
             "media": [
                 {"name": REAL_MEDIA_ID, "projectId": REAL_PROJECT_ID,
-                 "workflowId": "770a887f-b5f6-40ec-841a-2810818c2259"}
+                 "workflowId": REAL_WORKFLOW_ID}
             ],
         }
         info = parse_video_gen_response(data)
-        self.assertEqual(info, {"media_id": REAL_MEDIA_ID, "project_id": REAL_PROJECT_ID})
+        self.assertEqual(
+            info,
+            {
+                "media_id": REAL_MEDIA_ID,
+                "project_id": REAL_PROJECT_ID,
+                "workflow_id": REAL_WORKFLOW_ID,
+            },
+        )
+
+    def test_scene_id_is_preserved_when_present(self):
+        data = {
+            "media": [
+                {
+                    "name": REAL_MEDIA_ID,
+                    "projectId": REAL_PROJECT_ID,
+                    "workflowId": REAL_WORKFLOW_ID,
+                    "sceneId": REAL_SCENE_ID,
+                }
+            ],
+        }
+        self.assertEqual(
+            parse_video_gen_response(data),
+            {
+                "media_id": REAL_MEDIA_ID,
+                "project_id": REAL_PROJECT_ID,
+                "workflow_id": REAL_WORKFLOW_ID,
+                "scene_id": REAL_SCENE_ID,
+            },
+        )
 
     def test_missing_media_returns_none(self):
         self.assertIsNone(parse_video_gen_response({}))

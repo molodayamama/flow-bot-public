@@ -305,15 +305,21 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("vid_frm_ready_next", self.source)
 
     def test_video_result_edit_and_extend_wiring(self) -> None:
+        self.assertIn("def _video_can_edit", self.source)
         self.assertIn("def _video_can_extend", self.source)
-        self.assertIn('ref.model_id == "veo-lite" and not ref.prompt_edited', self.source)
+        self.assertIn("ref.workflow_id", self.source)
+        self.assertIn('ref.model_id == "veo-lite"', self.source)
+        self.assertIn("not ref.prompt_edited", self.source)
         self.assertIn('callback_data=f"v:edit:{vtoken}"', self.source)
         self.assertIn('callback_data=f"v:extend:{vtoken}"', self.source)
         self.assertIn('if data.startswith("v:edit:")', self.source)
         self.assertIn('if data.startswith("v:extend:")', self.source)
         self.assertIn('st["vawait"] = "vedit_prompt"', self.source)
+        self.assertIn('st["vawait"] = "vextend_prompt"', self.source)
         self.assertIn('unit_price_override=action_price("video_prompt_edit")', self.source)
-        self.assertIn("vid_extend_unavailable", self.source)
+        self.assertIn('video_operation="edit"', self.source)
+        self.assertIn('video_operation="extend"', self.source)
+        self.assertIn("prepare_video_extend_scene", self.source)
 
     def test_video_prompt_edit_clears_reference_mode_inputs(self) -> None:
         self.assertIn("def _vid_clear_reference_inputs", self.source)
@@ -321,7 +327,19 @@ class BotMenuWiringTests(unittest.TestCase):
         end = self.source.index("async def _video_repeat_last")
         block = self.source[start:end]
         self.assertIn("_vid_clear_reference_inputs(user_id)", block)
-        self.assertIn('st["vmode"] = "text"', block)
+        self.assertIn('st["vmode"] = "edit"', block)
+        self.assertIn('source_video=ref', block)
+        self.assertNotIn("_video_prompt_edit_prompt(ref, instruction)", block)
+
+    def test_video_extend_prepares_scene_before_generation(self) -> None:
+        start = self.source.index("async def _video_extend_and_send")
+        end = self.source.index("async def _video_repeat_last")
+        block = self.source[start:end]
+        self.assertIn("client.prepare_video_extend_scene", block)
+        self.assertIn("if not scene_id:", block)
+        self.assertIn('st["vmode"] = "extend"', block)
+        self.assertIn('video_operation="extend"', block)
+        self.assertIn("source_scene_id=scene_id", block)
 
     def test_no_backend_or_captcha_words_in_user_messages(self) -> None:
         # User-facing copy must not reveal the backend or mention captcha.

@@ -88,16 +88,23 @@ from flow_core import (
     VIDEO_ENDPOINT      as VIDEO_GEN_ENDPOINT,
     VIDEO_FRAMES_ENDPOINT,
     VIDEO_REFERENCE_ENDPOINT,
+    VIDEO_EDIT_ENDPOINT,
+    VIDEO_EXTEND_ENDPOINT,
     VIDEO_POLL_ENDPOINT,
     VIDEO_POLL_INTERVAL,
     VIDEO_POLL_TIMEOUT,
     VIDEO_STATUS_SUCCESSFUL,
     VIDEO_STATUS_FAILED,
+    build_video_edit_payload,
+    build_video_extend_payload,
     build_video_frame_images,
     build_video_payload,
     build_video_poll_payload,
     build_video_reference_images,
+    flow_scene_create_url,
+    flow_scene_workflows_url,
     parse_video_gen_response,
+    parse_video_scene_id,
     check_video_poll_status,
     video_media_redirect_url,
 )
@@ -1530,14 +1537,71 @@ class FlowHttpClient:
 
         return {"error": flow_copy.msg("upscale_unavailable")}
 
+    async def prepare_video_extend_scene(
+        self,
+        *,
+        project_id: str | None,
+        workflow_id: str | None,
+    ) -> str | None:
+        """Create/read the Flow scene required by native video Extend."""
+        if not (project_id and workflow_id):
+            return None
+
+        session = await self.keeper.get_session()
+        if not session["bearer"]:
+            return None
+
+        headers = self._build_headers(session)
+        proxy = _effective_proxy_url(API_PROXY_URL) or None
+
+        try:
+            async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
+                async with http.post(
+                    flow_scene_create_url(project_id),
+                    headers=headers,
+                    json={"workflowIds": [workflow_id]},
+                    proxy=proxy,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        log.warning(f"video scene create -> {resp.status}: {text[:200]}")
+                        return None
+                    create_data = await resp.json(content_type=None)
+
+                scene_id = parse_video_scene_id(create_data)
+                if not scene_id:
+                    return None
+
+                async with http.get(
+                    flow_scene_workflows_url(scene_id, project_id),
+                    headers=headers,
+                    proxy=proxy,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status == 200:
+                        workflows_data = await resp.json(content_type=None)
+                        scene_id = parse_video_scene_id(workflows_data) or scene_id
+                    else:
+                        log.warning(f"video scene workflows -> {resp.status}")
+                return scene_id
+        except Exception as exc:
+            log.warning(f"video scene prep failed: {exc}")
+            return None
+
     async def generate_video(
         self,
         prompt: str,
         model_key: str = "omni-flash-4s",
         aspect: str = "landscape",
+        project_id: str | None = None,
         reference_sources: list[dict] | None = None,
         start_source: dict | None = None,
         end_source: dict | None = None,
+        operation: str = "generate",
+        source_media_id: str | None = None,
+        source_workflow_id: str | None = None,
+        source_scene_id: str | None = None,
         progress_cb=None,
     ) -> dict:
         """Сгенерировать видео через асинхронный Flow video API.
@@ -1560,7 +1624,7 @@ class FlowHttpClient:
         if not session["bearer"]:
             return {"error": "Нет Bearer-токена для видео"}
 
-        project_id = session.get("project_id")
+        project_id = project_id or session.get("project_id")
         if not project_id:
             return {"error": "Нет project_id для видео"}
 
@@ -1569,14 +1633,30 @@ class FlowHttpClient:
         proxy    = _effective_proxy_url(API_PROXY_URL) or None
         reference_images = build_video_reference_images(reference_sources)
         start_image, end_image = build_video_frame_images(start_source, end_source)
-        is_frames = bool(start_image or end_image)
-        is_reference = bool(reference_images) and not is_frames
-        if is_frames:
+        operation = (operation or "generate").strip().lower()
+        is_edit = operation == "edit"
+        is_extend = operation == "extend"
+        is_frames = bool(start_image or end_image) and not (is_edit or is_extend)
+        is_reference = bool(reference_images) and not is_frames and not (is_edit or is_extend)
+        if is_edit:
+            if not (source_media_id and source_workflow_id):
+                return {"error": flow_copy.msg("vid_extend_unavailable")}
+            gen_endpoint = VIDEO_EDIT_ENDPOINT
+            endpoint_name = "Edit"
+        elif is_extend:
+            if not (source_media_id and source_scene_id):
+                return {"error": flow_copy.msg("vid_extend_unavailable")}
+            gen_endpoint = VIDEO_EXTEND_ENDPOINT
+            endpoint_name = "Extend"
+        elif is_frames:
             gen_endpoint = VIDEO_FRAMES_ENDPOINT
+            endpoint_name = "Frames"
         elif is_reference:
             gen_endpoint = VIDEO_REFERENCE_ENDPOINT
+            endpoint_name = "Reference"
         else:
             gen_endpoint = VIDEO_GEN_ENDPOINT
+            endpoint_name = "Text"
 
         # ── Шаг 1: капча + отправка с авто-перебором video-action ───────
         # Видео-эндпоинт отклоняет (403) reCAPTCHA-токен, выданный под action
@@ -1594,18 +1674,43 @@ class FlowHttpClient:
             if not captcha_token:
                 continue
             solved_any = True
-            payload = build_video_payload(
-                prompt=prompt,
-                project_id=project_id,
-                captcha_token=captcha_token,
-                aspect=aspect,
-                model_key=model_key,
-                session_id=sess_id,
-                batch_id=str(_uuid.uuid4()),
-                reference_images=reference_images,
-                start_image=start_image,
-                end_image=end_image,
-            )
+            batch_id = str(_uuid.uuid4())
+            if is_edit:
+                payload = build_video_edit_payload(
+                    prompt=prompt,
+                    project_id=project_id,
+                    captcha_token=captcha_token,
+                    aspect=aspect,
+                    session_id=sess_id,
+                    batch_id=batch_id,
+                    source_media_id=source_media_id or "",
+                    source_workflow_id=source_workflow_id or "",
+                )
+            elif is_extend:
+                payload = build_video_extend_payload(
+                    prompt=prompt,
+                    project_id=project_id,
+                    captcha_token=captcha_token,
+                    aspect=aspect,
+                    model_key=model_key,
+                    session_id=sess_id,
+                    batch_id=batch_id,
+                    source_media_id=source_media_id or "",
+                    scene_id=source_scene_id or "",
+                )
+            else:
+                payload = build_video_payload(
+                    prompt=prompt,
+                    project_id=project_id,
+                    captcha_token=captcha_token,
+                    aspect=aspect,
+                    model_key=model_key,
+                    session_id=sess_id,
+                    batch_id=batch_id,
+                    reference_images=reference_images,
+                    start_image=start_image,
+                    end_image=end_image,
+                )
             try:
                 async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
                     async with http.post(
@@ -1623,7 +1728,6 @@ class FlowHttpClient:
             if gen_status == 403:
                 log.warning(f"🎬 video → 403 (action={action}), пробую следующий action")
                 continue
-            endpoint_name = "Frames" if is_frames else ("Reference" if is_reference else "Text")
             log.info(f"🎬 video {endpoint_name} → {gen_status} (action={action})")
             break
 
@@ -1651,6 +1755,8 @@ class FlowHttpClient:
 
         media_id   = media_info["media_id"]
         project_id = media_info["project_id"]
+        workflow_id = media_info.get("workflow_id")
+        scene_id = media_info.get("scene_id") or (source_scene_id if is_extend else None)
         log.info(f"🎬 media_id={media_id}, ожидаю готовности…")
 
         # ── Шаг 2: polling ─────────────────────────────────────────────
@@ -1683,14 +1789,23 @@ class FlowHttpClient:
                 log.warning(f"⚠️ poll {poll_num} ошибка: {exc}")
                 continue
 
-            status, _ = check_video_poll_status(poll_data)
+            status, poll_item = check_video_poll_status(poll_data)
             log.info(f"🎬 poll {poll_num}: {status}")
 
             if status == VIDEO_STATUS_SUCCESSFUL:
+                if isinstance(poll_item, dict):
+                    item_workflow_id = poll_item.get("workflowId")
+                    if isinstance(item_workflow_id, str) and item_workflow_id:
+                        workflow_id = item_workflow_id
+                    item_scene_id = poll_item.get("sceneId")
+                    if isinstance(item_scene_id, str) and item_scene_id:
+                        scene_id = item_scene_id
                 return {
                     "media_id":   media_id,
                     "project_id": project_id,
                     "model_key":  model_key,
+                    "workflow_id": workflow_id,
+                    "scene_id":    scene_id,
                     "status":     "ok",
                 }
             if status == VIDEO_STATUS_FAILED:
@@ -2147,8 +2262,19 @@ def video_wizard_kb(vfmt: str, vcount: int) -> types.InlineKeyboardMarkup:
     ])
 
 
+def _video_can_edit(ref: VideoRef | None) -> bool:
+    return bool(ref and ref.media_id and ref.project_id and ref.workflow_id)
+
+
 def _video_can_extend(ref: VideoRef | None) -> bool:
-    return bool(ref and ref.model_id == "veo-lite" and not ref.prompt_edited)
+    return bool(
+        ref
+        and ref.media_id
+        and ref.project_id
+        and ref.workflow_id
+        and ref.model_id == "veo-lite"
+        and not ref.prompt_edited
+    )
 
 
 def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
@@ -2156,8 +2282,9 @@ def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
     ref = video_registry.get(vtoken)
     rows = [
         [B(text=L("vid_dl"), callback_data=f"v:dl:{vtoken}")],
-        [B(text=L("vid_edit"), callback_data=f"v:edit:{vtoken}")],
     ]
+    if _video_can_edit(ref):
+        rows.append([B(text=L("vid_edit"), callback_data=f"v:edit:{vtoken}")])
     if _video_can_extend(ref):
         rows.append([B(text=L("vid_extend"), callback_data=f"v:extend:{vtoken}")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
@@ -3252,7 +3379,7 @@ async def on_video_action(callback: types.CallbackQuery):
         await _video_edit_start(callback, user_id, data.split(":", 2)[2])
         return
     if data.startswith("v:extend:"):
-        await _video_extend_unavailable(callback, user_id, data.split(":", 2)[2])
+        await _video_extend_start(callback, user_id, data.split(":", 2)[2])
         return
 
     # Повторить последнюю генерацию.
@@ -3481,6 +3608,9 @@ async def _video_generate_and_send(
     unit_price_override: int | None = None,
     prompt_edited: bool = False,
     status_text: str | None = None,
+    source_video: VideoRef | None = None,
+    video_operation: str = "generate",
+    source_scene_id: str | None = None,
 ) -> None:
     """Запустить видеогенерацию: списать кредиты, дождаться, отправить, показать кнопки."""
     st = _ws(user_id)
@@ -3543,9 +3673,14 @@ async def _video_generate_and_send(
                 prompt,
                 model_key=model_key,
                 aspect=aspect,
+                project_id=source_video.project_id if source_video else None,
                 reference_sources=st.get("ving_photos") if vmode == "ingredients" else None,
                 start_source=st.get("vfrm_start") if vmode == "frames" else None,
                 end_source=st.get("vfrm_end") if vmode == "frames" else None,
+                operation=video_operation,
+                source_media_id=source_video.media_id if source_video else None,
+                source_workflow_id=source_video.workflow_id if source_video else None,
+                source_scene_id=source_scene_id or (source_video.scene_id if source_video else None),
                 progress_cb=update_status,
             )
 
@@ -3586,8 +3721,10 @@ async def _video_generate_and_send(
                 prompt=prompt,
                 model_id=model_id,
                 aspect_ratio=aspect,
-                mode=vmode,
+                mode=video_operation if video_operation != "generate" else vmode,
                 prompt_edited=prompt_edited,
+                workflow_id=result.get("workflow_id"),
+                scene_id=result.get("scene_id"),
             )
             vtoken = video_registry.add(vref)
 
@@ -3674,6 +3811,9 @@ async def _video_edit_start(callback: types.CallbackQuery, user_id: int, token: 
     if ref is None or ref.user_id != user_id:
         await callback.answer(flow_copy.msg("expired"), show_alert=True)
         return
+    if not _video_can_edit(ref):
+        await callback.answer(flow_copy.msg("vid_extend_unavailable"), show_alert=True)
+        return
 
     st = _ws(user_id)
     _vid_clear(user_id)
@@ -3685,21 +3825,27 @@ async def _video_edit_start(callback: types.CallbackQuery, user_id: int, token: 
     )
 
 
-async def _video_extend_unavailable(callback: types.CallbackQuery, user_id: int, token: str) -> None:
-    """Fail closed until a real video-extend endpoint has been captured."""
+async def _video_extend_start(callback: types.CallbackQuery, user_id: int, token: str) -> None:
+    """Ask for a continuation prompt for a delivered video."""
     ref = video_registry.get(token)
     if ref is None or ref.user_id != user_id:
         await callback.answer(flow_copy.msg("expired"), show_alert=True)
         return
-    await callback.answer(flow_copy.msg("vid_extend_unavailable"), show_alert=True)
+    if not _video_can_extend(ref):
+        await callback.answer(flow_copy.msg("vid_extend_unavailable"), show_alert=True)
+        return
+
+    st = _ws(user_id)
+    _vid_clear(user_id)
+    st["vawait"] = "vextend_prompt"
+    st["vextend_token"] = token
+    await callback.answer()
+    await callback.message.answer(flow_copy.msg("vid_ask_prompt"))
 
 
 def _video_prompt_edit_prompt(ref: VideoRef, instruction: str) -> str:
-    base = (ref.prompt or "").strip()
     instruction = (instruction or "").strip()
-    if not base:
-        return instruction
-    return f"{base}\n\nПравка для новой версии: {instruction}"
+    return instruction
 
 
 async def _video_prompt_edit_and_send(
@@ -3708,10 +3854,13 @@ async def _video_prompt_edit_and_send(
     if not instruction or len(instruction.strip()) < 3:
         await message.answer(flow_copy.msg("vid_prompt_too_short"))
         return
+    if not _video_can_edit(ref):
+        await message.answer(flow_copy.msg("vid_extend_unavailable"))
+        return
 
     st = _ws(user_id)
     _vid_clear_reference_inputs(user_id)
-    st["vmode"] = "text"
+    st["vmode"] = "edit"
     st["vmodel"] = ref.model_id or "omni-flash-4s"
     st["vfmt"] = _aspect_to_vfmt(ref.aspect_ratio)
     st["vcount"] = 1
@@ -3719,11 +3868,59 @@ async def _video_prompt_edit_and_send(
     st.pop("vedit_token", None)
     await _video_generate_and_send(
         message,
-        _video_prompt_edit_prompt(ref, instruction),
+        instruction.strip(),
         user_id=user_id,
         unit_price_override=action_price("video_prompt_edit"),
         prompt_edited=True,
         status_text=flow_copy.msg("vid_edit_working"),
+        source_video=ref,
+        video_operation="edit",
+    )
+
+
+async def _video_extend_and_send(
+    message: types.Message, ref: VideoRef, prompt: str, *, user_id: int
+) -> None:
+    if not prompt or len(prompt.strip()) < 3:
+        await message.answer(flow_copy.msg("vid_prompt_too_short"))
+        return
+    if not _video_can_extend(ref):
+        await message.answer(flow_copy.msg("vid_extend_unavailable"))
+        return
+
+    status_msg = await message.answer(flow_copy.msg("vid_working"))
+    scene_id = ref.scene_id or await client.prepare_video_extend_scene(
+        project_id=ref.project_id,
+        workflow_id=ref.workflow_id,
+    )
+    if not scene_id:
+        try:
+            await status_msg.edit_text(flow_copy.msg("vid_extend_unavailable"))
+        except Exception:
+            await message.answer(flow_copy.msg("vid_extend_unavailable"))
+        return
+    ref.scene_id = scene_id
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
+    st = _ws(user_id)
+    _vid_clear_reference_inputs(user_id)
+    st["vmode"] = "extend"
+    st["vmodel"] = ref.model_id or "veo-lite"
+    st["vfmt"] = _aspect_to_vfmt(ref.aspect_ratio)
+    st["vcount"] = 1
+    st["vawait"] = None
+    st.pop("vextend_token", None)
+    await _video_generate_and_send(
+        message,
+        prompt.strip(),
+        user_id=user_id,
+        status_text=flow_copy.msg("vid_working"),
+        source_video=ref,
+        video_operation="extend",
+        source_scene_id=scene_id,
     )
 
 
@@ -4016,7 +4213,7 @@ async def handle_photo(message: types.Message):
         return
 
     # Video wizard expects text, not a photo.
-    if vawait in ("vprompt", "vedit_prompt"):
+    if vawait in ("vprompt", "vedit_prompt", "vextend_prompt"):
         await message.answer(flow_copy.msg("vid_text_only_hint"))
         return
 
@@ -4106,6 +4303,17 @@ async def handle_plain_text(message: types.Message):
             await show_main_menu(message, user_id=user_id)
             return
         await _video_prompt_edit_and_send(message, ref, text, user_id=user_id)
+        return
+
+    if st.get("vawait") == "vextend_prompt":
+        token = st.get("vextend_token")
+        ref = video_registry.get(token) if token else None
+        if ref is None or ref.user_id != user_id:
+            _vid_clear(user_id)
+            await message.answer(flow_copy.msg("expired"))
+            await show_main_menu(message, user_id=user_id)
+            return
+        await _video_extend_and_send(message, ref, text, user_id=user_id)
         return
 
     # Видео-визард ждёт промпт.
