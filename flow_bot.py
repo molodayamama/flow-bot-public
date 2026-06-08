@@ -2140,10 +2140,20 @@ def video_wizard_kb(vfmt: str, vcount: int) -> types.InlineKeyboardMarkup:
     ])
 
 
+def _video_can_extend(ref: VideoRef | None) -> bool:
+    return bool(ref and ref.model_id == "veo-lite" and not ref.prompt_edited)
+
+
 def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=L("vid_dl"), callback_data=f"v:dl:{vtoken}")]
-    ])
+    B = types.InlineKeyboardButton
+    ref = video_registry.get(vtoken)
+    rows = [
+        [B(text=L("vid_dl"), callback_data=f"v:dl:{vtoken}")],
+        [B(text=L("vid_edit"), callback_data=f"v:edit:{vtoken}")],
+    ]
+    if _video_can_extend(ref):
+        rows.append([B(text=L("vid_extend"), callback_data=f"v:extend:{vtoken}")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # Варианты модели, доступные в режимах Frames/Ingredients (тиры Veo).
@@ -2254,6 +2264,11 @@ async def show_video_frames(message: types.Message, *, user_id: int, edit: bool 
         text += "\n\n" + flow_copy.msg("vid_frm_send_photo_end")
         st["vawait"] = "vfrm_end"
     else:
+        caption = st.get("vcaption_prompt")
+        if caption:
+            text += "\n\n" + flow_copy.msg("vid_frm_ready_next_with_caption", prompt=caption[:300])
+        else:
+            text += "\n\n" + flow_copy.msg("vid_frm_ready_next")
         st["vawait"] = None
     kb = frames_kb(has_start, has_end, vfmt, vcount, model_id)
     if edit:
@@ -2690,7 +2705,17 @@ async def cmd_mix(message: types.Message):
     await _mix_and_send(message, prompt)
 
 
-async def _edit_and_send(message: types.Message, ref: ImageRef, instruction: str):
+def _is_rate_limit_error(result: dict) -> bool:
+    error = str((result or {}).get("error", "")).lower()
+    return (
+        error == flow_copy.msg("rate_limited").lower()
+        or "429" in error
+        or "too many requests" in error
+        or "слишком много" in error
+    )
+
+
+async def _edit_and_send(message: types.Message, ref: ImageRef, instruction: str) -> bool:
     """Применить правку ``instruction`` к конкретной картинке ``ref``.
 
     Правка уходит именно этому изображению (через ``imageInputs``) в проекте
@@ -2701,7 +2726,7 @@ async def _edit_and_send(message: types.Message, ref: ImageRef, instruction: str
 
     if not instruction or len(instruction) < 3:
         await message.answer("❌ Опишите правку (минимум 3 символа)")
-        return
+        return False
 
     capture = load_edit_capture(EDIT_CAPTURE_FILE)
     image_inputs = build_image_inputs(ref.source, capture)
@@ -2710,7 +2735,7 @@ async def _edit_and_send(message: types.Message, ref: ImageRef, instruction: str
             "⚠️ Не удалось определить идентификатор исходной картинки. "
             "Сгенерируйте изображение заново и нажмите «Редактировать» под ним."
         )
-        return
+        return False
 
     try:
         async with user_slot(user_id, message):
@@ -2718,10 +2743,12 @@ async def _edit_and_send(message: types.Message, ref: ImageRef, instruction: str
                 charge.ok = await _do_edit_and_send(
                     message, ref, instruction, image_inputs, user_id
                 )
+                return charge.ok
     except RateLimited:
-        return
+        return False
     except NotEnoughCredits:
-        return
+        return False
+    return False
 
 
 async def _do_edit_and_send(
@@ -2757,7 +2784,10 @@ async def _do_edit_and_send(
         return False
 
     if "error" in result:
-        await status_msg.edit_text(f"❌ {result['error']}")
+        if _is_rate_limit_error(result):
+            await status_msg.edit_text(flow_copy.msg("image_edit_rate_limited"))
+        else:
+            await status_msg.edit_text(f"❌ {result['error']}")
         return False
 
     pairs = result_pairs(result)
@@ -2784,7 +2814,7 @@ async def _run_i2i(
     emoji: str,
     fail_text: str,
     action: str = "edit",
-):
+) -> bool:
     """Общий image-to-image: правка/вариации/улучшение картинки ``ref``.
 
     Браузерный фолбэк отключён, чтобы вместо результата по этой картинке не
@@ -2798,7 +2828,7 @@ async def _run_i2i(
             "⚠️ Не удалось определить идентификатор исходной картинки. "
             "Сгенерируйте изображение заново и попробуйте снова."
         )
-        return
+        return False
 
     try:
         async with user_slot(user_id, message):
@@ -2807,10 +2837,12 @@ async def _run_i2i(
                     message, ref, prompt, image_inputs,
                     num_images=num_images, emoji=emoji, fail_text=fail_text,
                 )
+                return charge.ok
     except RateLimited:
-        return
+        return False
     except NotEnoughCredits:
-        return
+        return False
+    return False
 
 
 async def _do_run_i2i(
@@ -2848,7 +2880,10 @@ async def _do_run_i2i(
         return False
 
     if "error" in result:
-        await status_msg.edit_text(f"❌ {result['error']}")
+        if _is_rate_limit_error(result):
+            await status_msg.edit_text(flow_copy.msg("image_edit_rate_limited"))
+        else:
+            await status_msg.edit_text(f"❌ {result['error']}")
         return False
 
     pairs = result_pairs(result)
@@ -3206,6 +3241,12 @@ async def on_video_action(callback: types.CallbackQuery):
     if data.startswith("v:dl:"):
         await _video_download(callback, user_id, data.split(":", 2)[2])
         return
+    if data.startswith("v:edit:"):
+        await _video_edit_start(callback, user_id, data.split(":", 2)[2])
+        return
+    if data.startswith("v:extend:"):
+        await _video_extend_unavailable(callback, user_id, data.split(":", 2)[2])
+        return
 
     # Повторить последнюю генерацию.
     if data == "v:repeat":
@@ -3296,17 +3337,14 @@ async def on_video_action(callback: types.CallbackQuery):
                 reply_markup=kb,
             )
             return
-        # Подпись к фото уже задаёт описание перехода — генерируем сразу.
-        caption = st.pop("vcaption_prompt", None)
-        if caption:
-            st["vawait"] = None
-            await callback.answer()
-            await _video_generate_and_send(msg, caption, user_id=user_id)
-            return
         st["vawait"] = "vprompt"
         st["vstep"] = "vprompt"
         await callback.answer()
-        await msg.answer(flow_copy.msg("vid_frm_ask_prompt"))
+        caption = st.get("vcaption_prompt")
+        if caption:
+            await msg.answer(flow_copy.msg("vid_frm_ask_prompt_with_caption", prompt=caption[:300]))
+        else:
+            await msg.answer(flow_copy.msg("vid_frm_ask_prompt"))
         return
 
     if data == "v:frm:clear":
@@ -3431,6 +3469,9 @@ async def _video_generate_and_send(
     prompt: str,
     *,
     user_id: int,
+    unit_price_override: int | None = None,
+    prompt_edited: bool = False,
+    status_text: str | None = None,
 ) -> None:
     """Запустить видеогенерацию: списать кредиты, дождаться, отправить, показать кнопки."""
     st = _ws(user_id)
@@ -3459,7 +3500,7 @@ async def _video_generate_and_send(
             return
 
     model_key = meta["key"]
-    single_price = video_price(model_id, 1, vmode)
+    single_price = unit_price_override if unit_price_override is not None else video_price(model_id, 1, vmode)
     total_price = single_price * vcount
 
     have = credit_store.balance(user_id)
@@ -3476,7 +3517,7 @@ async def _video_generate_and_send(
     refunded_units = 0
 
     st["vstep"] = "vgenerating"
-    status_msg = await message.answer(flow_copy.msg("vid_working"))
+    status_msg = await message.answer(status_text or flow_copy.msg("vid_working"))
 
     async def update_status(text: str):
         try:
@@ -3536,6 +3577,8 @@ async def _video_generate_and_send(
                 prompt=prompt,
                 model_id=model_id,
                 aspect_ratio=aspect,
+                mode=vmode,
+                prompt_edited=prompt_edited,
             )
             vtoken = video_registry.add(vref)
 
@@ -3614,6 +3657,64 @@ async def _video_download(callback: types.CallbackQuery, user_id: int, token: st
     except Exception:
         log.exception("video download send failed")
         await status_msg.edit_text("❌ Не удалось отправить файл.")
+
+
+async def _video_edit_start(callback: types.CallbackQuery, user_id: int, token: str) -> None:
+    """Ask for a prompt edit instruction for a delivered video."""
+    ref = video_registry.get(token)
+    if ref is None or ref.user_id != user_id:
+        await callback.answer(flow_copy.msg("expired"), show_alert=True)
+        return
+
+    st = _ws(user_id)
+    _vid_clear(user_id)
+    st["vawait"] = "vedit_prompt"
+    st["vedit_token"] = token
+    await callback.answer()
+    await callback.message.answer(
+        flow_copy.msg("vid_edit_ask_prompt", price=action_price("video_prompt_edit"))
+    )
+
+
+async def _video_extend_unavailable(callback: types.CallbackQuery, user_id: int, token: str) -> None:
+    """Fail closed until a real video-extend endpoint has been captured."""
+    ref = video_registry.get(token)
+    if ref is None or ref.user_id != user_id:
+        await callback.answer(flow_copy.msg("expired"), show_alert=True)
+        return
+    await callback.answer(flow_copy.msg("vid_extend_unavailable"), show_alert=True)
+
+
+def _video_prompt_edit_prompt(ref: VideoRef, instruction: str) -> str:
+    base = (ref.prompt or "").strip()
+    instruction = (instruction or "").strip()
+    if not base:
+        return instruction
+    return f"{base}\n\nПравка для новой версии: {instruction}"
+
+
+async def _video_prompt_edit_and_send(
+    message: types.Message, ref: VideoRef, instruction: str, *, user_id: int
+) -> None:
+    if not instruction or len(instruction.strip()) < 3:
+        await message.answer(flow_copy.msg("vid_prompt_too_short"))
+        return
+
+    st = _ws(user_id)
+    st["vmode"] = "text"
+    st["vmodel"] = ref.model_id or "omni-flash-4s"
+    st["vfmt"] = _aspect_to_vfmt(ref.aspect_ratio)
+    st["vcount"] = 1
+    st["vawait"] = None
+    st.pop("vedit_token", None)
+    await _video_generate_and_send(
+        message,
+        _video_prompt_edit_prompt(ref, instruction),
+        user_id=user_id,
+        unit_price_override=action_price("video_prompt_edit"),
+        prompt_edited=True,
+        status_text=flow_copy.msg("vid_edit_working"),
+    )
 
 
 async def _video_repeat_last(callback: types.CallbackQuery, user_id: int) -> None:
@@ -3905,7 +4006,7 @@ async def handle_photo(message: types.Message):
         return
 
     # Video wizard expects text, not a photo.
-    if vawait == "vprompt":
+    if vawait in ("vprompt", "vedit_prompt"):
         await message.answer(flow_copy.msg("vid_text_only_hint"))
         return
 
@@ -3985,6 +4086,18 @@ async def handle_plain_text(message: types.Message):
         await show_video_family(message, user_id=user_id, edit=False)
         return
 
+    # Видео-правка ждёт инструкцию к уже готовому ролику.
+    if st.get("vawait") == "vedit_prompt":
+        token = st.get("vedit_token")
+        ref = video_registry.get(token) if token else None
+        if ref is None or ref.user_id != user_id:
+            _vid_clear(user_id)
+            await message.answer(flow_copy.msg("expired"))
+            await show_main_menu(message, user_id=user_id)
+            return
+        await _video_prompt_edit_and_send(message, ref, text, user_id=user_id)
+        return
+
     # Видео-визард ждёт промпт.
     if st.get("vawait") == "vprompt":
         if message.photo:
@@ -4009,29 +4122,37 @@ async def handle_plain_text(message: types.Message):
 
     # Ждём текст правки/вариаций для конкретной картинки.
     if awaiting in ("edit", "revary"):
-        st["await"] = None
-        token = pending_edits.pop(user_id, None)
+        token = pending_edits.get(user_id)
         ref = image_registry.get(token) if token else None
         if ref is not None and ref.user_id == user_id:
+            ok = False
             if awaiting == "revary":
-                await _run_i2i(
+                ok = await _run_i2i(
                     message, ref, text, num_images=2, emoji="🎲",
                     fail_text=flow_copy.msg("nothing_returned"),
                 )
             else:
-                await _edit_and_send(message, ref, text)
+                ok = await _edit_and_send(message, ref, text)
+            if ok:
+                st["await"] = None
+                pending_edits.pop(user_id, None)
             return
+        st["await"] = None
+        pending_edits.pop(user_id, None)
         await message.answer(flow_copy.msg("expired"))
         await show_main_menu(message, user_id=user_id)
         return
 
     # Старый путь (на случай pending_edits без визард-флага).
-    token = pending_edits.pop(user_id, None)
+    token = pending_edits.get(user_id)
     if token:
         ref = image_registry.get(token)
         if ref is not None and ref.user_id == user_id:
-            await _edit_and_send(message, ref, text)
+            ok = await _edit_and_send(message, ref, text)
+            if ok:
+                pending_edits.pop(user_id, None)
             return
+        pending_edits.pop(user_id, None)
 
     # Иначе пользователь прислал промпт прямо в чат, не нажав «Создать».
     # Не генерируем вслепую: показываем выбор количества и формата с уже

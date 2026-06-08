@@ -280,17 +280,29 @@ Video Ingredients/Frames (Flow API):
 - Offline checks, assumption:
   `python -m py_compile flow_core.py flow_bot.py flow_copy.py`
   and `python -m unittest discover -s tests -p "test_flow_video.py"`.
+- Product/UX offline checks for frame prompt flow, video result actions, and
+  credit wiring:
+  `python -m py_compile flow_core.py flow_copy.py flow_bot.py tests\test_flow_edit.py tests\test_flow_menu.py tests\test_flow_video.py`,
+  `python -m unittest discover -s tests -p "test_flow_edit.py"`,
+  `python -m unittest discover -s tests -p "test_flow_menu.py"`,
+  `python -m unittest discover -s tests -p "test_flow_video.py"`,
+  `python -m unittest discover -s tests -p "test_*.py"`.
 - Manual Frames capture helper:
   `python tools/capture_video.py --frames`
   opens the persistent Flow browser profile, records sanitized API traffic to
   `tools/video_frames_capture.json`, and aborts the first video-like POST by
   default. Do not add `--no-abort` unless credit spend is explicitly accepted.
-- `build_video_reference_images` and `build_video_frame_images` must use
-  uploaded asset `mediaGenerationId` values, not Telegram `file_id` and not the
-  shorter image-edit `mediaId`.
-- Live 2026-06-08 evidence: `video:batchAsyncGenerateVideoText` rejected guessed
-  `startImage`/`endImage` request fields with HTTP 400. Keep Ingredients/Frames
-  generation fail-closed until the real endpoint/request shape is captured.
+- `build_video_reference_images` and `build_video_frame_images` must use the
+  uploaded Flow asset `mediaId` values, stripping any `fe_id_` prefix. Do not use
+  Telegram `file_id` values.
+- Live 2026-06-08 evidence in `HANDOFF.md`: text-to-video, Frames, and
+  Ingredients generated successfully through the bot. Keep using the captured
+  endpoint/request-shape helpers instead of guessing new video endpoints.
+- Video prompt edit currently generates a new text-to-video version from the
+  previous prompt plus the user's edit instruction and charges 20 bot credits.
+  It is not a native video-to-video edit endpoint.
+- Video Extend is UI-gated to original `veo-lite` results only, but the callback
+  must remain fail-closed/no-charge until a real extend endpoint is captured.
 - Live validation requires approval because Telegram photo upload opens the
   persistent browser profile, contacts Telegram/Google Flow, may solve captcha,
   and may spend Google Flow credits. The bot must refund user credits on

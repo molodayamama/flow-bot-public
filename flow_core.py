@@ -809,6 +809,7 @@ VIDEO_MODELS: "OrderedDict[str, dict]" = OrderedDict([
 
 VIDEO_INGREDIENTS_SURCHARGE = 10
 VIDEO_FRAMES_SURCHARGE = 20
+VIDEO_PROMPT_EDIT_PRICE = 20
 
 # Limits for "how many videos at once".
 MIN_NUM_VIDEOS = 1
@@ -1291,6 +1292,8 @@ class VideoRef:
     prompt: str = ""
     model_id: str = ""
     aspect_ratio: str = "landscape"
+    mode: str = "text"
+    prompt_edited: bool = False
 
 
 class ImageRegistry:
@@ -1417,6 +1420,8 @@ def action_price(action: str, num_images: int = 1) -> int:
         return price_gen(1)
     if action in ("up2x", "realup"):
         return UPSCALE_PRICE
+    if action == "video_prompt_edit":
+        return VIDEO_PROMPT_EDIT_PRICE
     if action == "dl_raw":
         return 0
     return 0

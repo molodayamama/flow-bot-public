@@ -25,6 +25,7 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.action_price("myphoto"), 10)
         self.assertEqual(flow_core.action_price("up2x"), 5)      # quick enhance
         self.assertEqual(flow_core.action_price("realup"), 5)    # true HD upscale
+        self.assertEqual(flow_core.action_price("video_prompt_edit"), 20)
         self.assertEqual(flow_core.action_price("dl_raw"), 0)    # free
         self.assertEqual(flow_core.action_price("unknown"), 0)
 
@@ -290,6 +291,26 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("message.media_group_id", self.source)
         self.assertIn('st["vfrm_start"] = sources[0]', self.source)
         self.assertIn("vcaption_prompt", self.source)
+
+    def test_frames_next_does_not_generate_from_caption(self) -> None:
+        start = self.source.index('if data == "v:frm:go":')
+        end = self.source.index('if data == "v:frm:clear":')
+        block = self.source[start:end]
+        self.assertNotIn("_video_generate_and_send", block)
+        self.assertIn('st["vawait"] = "vprompt"', block)
+        self.assertIn("vid_frm_ask_prompt_with_caption", block)
+        self.assertIn("vid_frm_ready_next", self.source)
+
+    def test_video_result_edit_and_extend_wiring(self) -> None:
+        self.assertIn("def _video_can_extend", self.source)
+        self.assertIn('ref.model_id == "veo-lite" and not ref.prompt_edited', self.source)
+        self.assertIn('callback_data=f"v:edit:{vtoken}"', self.source)
+        self.assertIn('callback_data=f"v:extend:{vtoken}"', self.source)
+        self.assertIn('if data.startswith("v:edit:")', self.source)
+        self.assertIn('if data.startswith("v:extend:")', self.source)
+        self.assertIn('st["vawait"] = "vedit_prompt"', self.source)
+        self.assertIn('unit_price_override=action_price("video_prompt_edit")', self.source)
+        self.assertIn("vid_extend_unavailable", self.source)
 
     def test_no_backend_or_captcha_words_in_user_messages(self) -> None:
         # User-facing copy must not reveal the backend or mention captcha.

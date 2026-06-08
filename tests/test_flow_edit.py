@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 import flow_core
+import flow_copy
 from flow_core import (
     ImageRef,
     ImageRegistry,
@@ -458,7 +459,15 @@ class FlowBotWiringStaticTests(unittest.TestCase):
 
     def test_pending_edit_routing_in_plain_text_handler(self) -> None:
         self.assertIn("pending_edits", self.source)
-        self.assertIn("token = pending_edits.pop(user_id, None)", self.source)
+        self.assertIn("token = pending_edits.get(user_id)", self.source)
+        self.assertIn("ok = await _edit_and_send", self.source)
+        self.assertIn("if ok:", self.source)
+        self.assertIn("pending_edits.pop(user_id, None)", self.source)
+
+    def test_edit_rate_limit_keeps_context_copy(self) -> None:
+        self.assertIn("def _is_rate_limit_error", self.source)
+        self.assertIn("image_edit_rate_limited", self.source)
+        self.assertIn("1–3 минуты", flow_copy.msg("image_edit_rate_limited"))
 
     def test_per_user_project_creation_wired(self) -> None:
         self.assertIn("async def ensure_user_project", self.source)
