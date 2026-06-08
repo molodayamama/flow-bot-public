@@ -147,16 +147,34 @@ class TestBuildVideoPayload(unittest.TestCase):
         self.assertIsInstance(req["seed"], int)
 
     def test_reference_images_for_ingredients(self):
+        # Confirmed from the live --ingredients capture: refs carry mediaId +
+        # imageUsageType, fe_id_ prefix stripped.
         refs = build_video_reference_images([
-            {"mediaGenerationId": "mg-1", "mediaId": "short-1"},
-            {"mediaGenerationId": "mg-2", "mediaId": "short-2"},
+            {"mediaId": "fe_id_short-1"},
+            {"mediaId": "short-2"},
         ])
-        self.assertEqual(
-            refs,
-            [{"mediaGenerationId": "mg-1"}, {"mediaGenerationId": "mg-2"}],
-        )
-        p = self._build(reference_images=refs)
-        self.assertNotIn("referenceImages", p["requests"][0])
+        self.assertEqual(refs, [
+            {"mediaId": "short-1", "imageUsageType": "IMAGE_USAGE_TYPE_ASSET"},
+            {"mediaId": "short-2", "imageUsageType": "IMAGE_USAGE_TYPE_ASSET"},
+        ])
+        # Ingredients payload serializes referenceImages and uses the aspect-encoded
+        # r2v key (veo-fast + portrait -> veo_3_1_r2v_fast_portrait).
+        p = self._build(model_key="veo-fast", aspect="portrait", reference_images=refs)
+        req = p["requests"][0]
+        self.assertEqual(req["referenceImages"], refs)
+        self.assertEqual(req["videoModelKey"], "veo_3_1_r2v_fast_portrait")
+
+    def test_reference_model_key_encodes_tier_and_orientation(self):
+        import flow_core
+        self.assertEqual(flow_core.video_reference_model_key("veo-fast", "portrait"), "veo_3_1_r2v_fast_portrait")
+        self.assertEqual(flow_core.video_reference_model_key("veo-lite", "landscape"), "veo_3_1_r2v_lite_landscape")
+        self.assertEqual(flow_core.video_reference_model_key("veo-quality", "16:9"), "veo_3_1_r2v_quality_landscape")
+
+    def test_frames_model_key_tiers(self):
+        import flow_core
+        self.assertEqual(flow_core.video_frames_model_key("veo-lite"), "veo_3_1_interpolation_lite")
+        self.assertEqual(flow_core.video_frames_model_key("veo-fast"), "veo_3_1_interpolation_fast")
+        self.assertEqual(flow_core.video_frames_model_key("veo-quality"), "veo_3_1_interpolation_quality")
 
     # Full-frame crop the bot sends when the user did no cropping (matches the
     # live batchAsyncGenerateVideoStartAndEndImage request shape).

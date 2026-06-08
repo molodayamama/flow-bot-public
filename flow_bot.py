@@ -87,6 +87,7 @@ from flow_core import (
 from flow_core import (
     VIDEO_ENDPOINT      as VIDEO_GEN_ENDPOINT,
     VIDEO_FRAMES_ENDPOINT,
+    VIDEO_REFERENCE_ENDPOINT,
     VIDEO_POLL_ENDPOINT,
     VIDEO_POLL_INTERVAL,
     VIDEO_POLL_TIMEOUT,
@@ -1551,12 +1552,8 @@ class FlowHttpClient:
 
         Возвращает ``{"error": ...}`` при неудаче.
         """
-        # Ingredients (reference photos) контракт ещё НЕ захвачен — блок остаётся.
-        # Frames (старт/финиш-кадр) захвачен (tools/video_frames_capture.json) и
-        # включён ниже: эндпоинт и payload выбираются по наличию кадров.
-        if reference_sources:
-            return {"error": flow_copy.msg("vid_gen_blocked")}
-
+        # Все три режима захвачены и включены: text / Frames (старт-финиш) /
+        # Ingredients (reference-to-video). Эндпоинт и payload выбираются по входу.
         import uuid as _uuid
 
         session = await self.keeper.get_session()
@@ -1573,7 +1570,13 @@ class FlowHttpClient:
         reference_images = build_video_reference_images(reference_sources)
         start_image, end_image = build_video_frame_images(start_source, end_source)
         is_frames = bool(start_image or end_image)
-        gen_endpoint = VIDEO_FRAMES_ENDPOINT if is_frames else VIDEO_GEN_ENDPOINT
+        is_reference = bool(reference_images) and not is_frames
+        if is_frames:
+            gen_endpoint = VIDEO_FRAMES_ENDPOINT
+        elif is_reference:
+            gen_endpoint = VIDEO_REFERENCE_ENDPOINT
+        else:
+            gen_endpoint = VIDEO_GEN_ENDPOINT
 
         # ── Шаг 1: капча + отправка с авто-перебором video-action ───────
         # Видео-эндпоинт отклоняет (403) reCAPTCHA-токен, выданный под action
@@ -1620,7 +1623,7 @@ class FlowHttpClient:
             if gen_status == 403:
                 log.warning(f"🎬 video → 403 (action={action}), пробую следующий action")
                 continue
-            endpoint_name = "Frames" if is_frames else "Text"
+            endpoint_name = "Frames" if is_frames else ("Reference" if is_reference else "Text")
             log.info(f"🎬 video {endpoint_name} → {gen_status} (action={action})")
             break
 
@@ -2143,6 +2146,21 @@ def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
     ])
 
 
+# Варианты модели, доступные в режимах Frames/Ingredients (тиры Veo).
+VID_REF_VARIANTS = ("veo-lite", "veo-fast", "veo-quality")
+
+
+def _vid_model_row(mode: str, selected: str | None) -> list:
+    """Ряд выбора модели (Veo Lite/Fast/Quality) с ценой под режим."""
+    B = types.InlineKeyboardButton
+    row = []
+    for mid in VID_REF_VARIANTS:
+        price = video_price(mid, 1, mode)
+        label = f"{L('vid_model_name:' + mid)} {price}кр"
+        row.append(B(text=_sel(label, mid == selected), callback_data=f"v:vmod:{mid}"))
+    return [row]
+
+
 def _vid_fmt_count_rows(vfmt: str, vcount: int) -> list:
     """Общие ряды кнопок «формат + количество» для видео-экранов."""
     B = types.InlineKeyboardButton
@@ -2158,9 +2176,9 @@ def _vid_fmt_count_rows(vfmt: str, vcount: int) -> list:
     ]
 
 
-def ingredients_kb(n: int, vfmt: str, vcount: int) -> types.InlineKeyboardMarkup:
+def ingredients_kb(n: int, vfmt: str, vcount: int, vmodel: str | None) -> types.InlineKeyboardMarkup:
     B = types.InlineKeyboardButton
-    rows = _vid_fmt_count_rows(vfmt, vcount)
+    rows = _vid_model_row("ingredients", vmodel) + _vid_fmt_count_rows(vfmt, vcount)
     if n >= 1:
         rows.append([B(text=L("vid_ing_done"), callback_data="v:ing:done")])
     rows.append([B(text=L("vid_ing_clear"), callback_data="v:ing:clear")])
@@ -2168,9 +2186,9 @@ def ingredients_kb(n: int, vfmt: str, vcount: int) -> types.InlineKeyboardMarkup
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def frames_kb(has_start: bool, has_end: bool, vfmt: str, vcount: int) -> types.InlineKeyboardMarkup:
+def frames_kb(has_start: bool, has_end: bool, vfmt: str, vcount: int, vmodel: str | None) -> types.InlineKeyboardMarkup:
     B = types.InlineKeyboardButton
-    rows = _vid_fmt_count_rows(vfmt, vcount)
+    rows = _vid_model_row("frames", vmodel) + _vid_fmt_count_rows(vfmt, vcount)
     if has_start and has_end:
         rows.append([B(text=L("vid_frm_go"), callback_data="v:frm:go")])
     rows.append([B(text=L("vid_frm_clear"), callback_data="v:frm:clear")])
@@ -2193,12 +2211,13 @@ async def show_video_ingredients(message: types.Message, *, user_id: int, edit: 
     text = flow_copy.msg(
         "vid_ing_screen",
         n=n,
+        model=L(f"vid_model_name:{model_id}"),
         fmt=_VID_FMT_NAMES.get(vfmt, vfmt),
         count=vcount,
         price=video_price(model_id, vcount, "ingredients"),
         credits=credit_store.balance(user_id),
     )
-    kb = ingredients_kb(n, vfmt, vcount)
+    kb = ingredients_kb(n, vfmt, vcount, model_id)
     if edit:
         await _vid_edit(message, text, kb, user_id)
     else:
@@ -2220,6 +2239,7 @@ async def show_video_frames(message: types.Message, *, user_id: int, edit: bool 
     has_end = bool(st.get("vfrm_end"))
     text = flow_copy.msg(
         "vid_frm_screen",
+        model=L(f"vid_model_name:{model_id}"),
         start_mark="✅" if has_start else "⬜",
         end_mark="✅" if has_end else "⬜",
         fmt=_VID_FMT_NAMES.get(vfmt, vfmt),
@@ -2235,7 +2255,7 @@ async def show_video_frames(message: types.Message, *, user_id: int, edit: bool 
         st["vawait"] = "vfrm_end"
     else:
         st["vawait"] = None
-    kb = frames_kb(has_start, has_end, vfmt, vcount)
+    kb = frames_kb(has_start, has_end, vfmt, vcount, model_id)
     if edit:
         await _vid_edit(message, text, kb, user_id)
     else:
@@ -3228,10 +3248,29 @@ async def on_video_action(callback: types.CallbackQuery):
         if len(photos) < 1:
             await callback.answer(flow_copy.msg("vid_ing_need_more"), show_alert=True)
             return
-        # Генерация Ingredients ещё заблокирована — контракт API не захвачен.
+        model_id = st.get("vmodel") or VID_REF_DEFAULT_MODEL
+        price = video_price(model_id, st.get("vcount", 1), "ingredients")
+        if credit_store.balance(user_id) < price:
+            kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                [_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]
+            ])
+            await callback.answer()
+            await msg.answer(
+                flow_copy.msg("low_balance", needed=price, have=credit_store.balance(user_id)),
+                reply_markup=kb,
+            )
+            return
+        # Подпись к фото уже задаёт описание — генерируем сразу.
+        caption = st.pop("vcaption_prompt", None)
+        if caption:
+            st["vawait"] = None
+            await callback.answer()
+            await _video_generate_and_send(msg, caption, user_id=user_id)
+            return
+        st["vawait"] = "vprompt"
+        st["vstep"] = "vprompt"
         await callback.answer()
-        await msg.answer(flow_copy.msg("vid_gen_blocked"))
-        _vid_clear(user_id)
+        await msg.answer(flow_copy.msg("vid_ing_ask_prompt"))
         return
 
     if data == "v:ing:clear":
@@ -3310,6 +3349,14 @@ async def on_video_action(callback: types.CallbackQuery):
         return
     if data.startswith("v:cnt:"):
         st["vcount"] = clamp_num_videos(data.split(":")[2])
+        await callback.answer()
+        await _vid_rerender_settings(msg, user_id=user_id)
+        return
+    # Выбор модели (Veo Lite/Fast/Quality) в режимах Frames/Ingredients.
+    if data.startswith("v:vmod:"):
+        mid = data.split(":", 2)[2]
+        if video_model_meta(mid):
+            st["vmodel"] = mid
         await callback.answer()
         await _vid_rerender_settings(msg, user_id=user_id)
         return

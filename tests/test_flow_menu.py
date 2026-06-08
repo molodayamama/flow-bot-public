@@ -255,11 +255,27 @@ class BotMenuWiringTests(unittest.TestCase):
     def test_frames_and_ingredients_have_format_and_count(self) -> None:
         # Frames/Ingredients screens reuse the shared format+count picker rows.
         self.assertIn("def _vid_fmt_count_rows", self.source)
-        self.assertIn("def frames_kb(has_start: bool, has_end: bool, vfmt: str, vcount: int)", self.source)
-        self.assertIn("def ingredients_kb(n: int, vfmt: str, vcount: int)", self.source)
+        self.assertIn("def frames_kb(has_start: bool, has_end: bool, vfmt: str, vcount: int, vmodel", self.source)
+        self.assertIn("def ingredients_kb(n: int, vfmt: str, vcount: int, vmodel", self.source)
         # Format/count callbacks re-render the active video screen by mode.
         self.assertIn("def _vid_rerender_settings", self.source)
         self.assertIn("await _vid_rerender_settings(msg, user_id=user_id)", self.source)
+
+    def test_model_picker_in_frames_and_ingredients(self) -> None:
+        # Veo Lite/Fast/Quality picker available in Frames + Ingredients.
+        self.assertIn("def _vid_model_row", self.source)
+        self.assertIn('VID_REF_VARIANTS = ("veo-lite", "veo-fast", "veo-quality")', self.source)
+        self.assertIn('data.startswith("v:vmod:")', self.source)
+
+    def test_ingredients_generation_enabled(self) -> None:
+        # Ingredients now generates (reference-to-video), no longer fail-closed.
+        self.assertIn("VIDEO_REFERENCE_ENDPOINT", self.source)
+        self.assertIn("is_reference", self.source)
+        # done button leads to prompt/generation, not vid_gen_blocked.
+        done = self.source.index('if data == "v:ing:done":')
+        block = self.source[done:done + 1500]
+        self.assertNotIn("vid_gen_blocked", block)
+        self.assertIn("_video_generate_and_send", block)
 
     def test_ingredients_minimum_is_one_photo(self) -> None:
         # Ingredients works from a single photo now (no 2-photo gate).
