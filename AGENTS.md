@@ -85,11 +85,14 @@ Important files:
   Frames model is `veo-lite` (`VID_FRAMES_DEFAULT_MODEL`) — the only confirmed
   interpolation key. **Still needs a live run** to confirm HTTP 200 and pin the
   working reCAPTCHA action; other interpolation tiers are pattern-inferred.
-- **Ingredients** (photos + prompt -> video) still collects/uploads Telegram
-  photos but generation stays **fail-closed** (`vid_gen_blocked`, no charge): its
-  request shape is not captured yet (a live probe of
-  `video:batchAsyncGenerateVideoText` with guessed reference fields returned
-  HTTP 400). Capture it before enabling, mirroring the Frames approach.
+- **Ingredients** (photos + prompt -> video) UI is improved (1–4 photos, format +
+  count pickers, caption-as-prompt, album upload) but generation stays
+  **fail-closed** (`vid_gen_blocked`, no charge): its request shape is not captured
+  yet (a live probe of `video:batchAsyncGenerateVideoText` with guessed reference
+  fields returned HTTP 400). **To enable:** run `python tools/capture_video.py
+  --ingredients` (abort mode) to capture the real endpoint + reference-image field
+  shape, then wire it like Frames (`build_video_reference_images` + payload +
+  endpoint routing) and lift the `reference_sources` gate in `generate_video`.
 - Pricing/economics (incl. the new **100 credits = $1** rate and the
   pay-via-intermediary cost model for the Google account) live in
   `docs/MONETIZATION.md`.
@@ -195,9 +198,11 @@ one focused commit per feature/change. Before committing, run `git status` and
 confirm no secret/runtime files are staged (they should be `.gitignore`d).
 End commit messages with a `Co-Authored-By:` line when AI-authored.
 
-**Hardcoded-secret caveat:** `checker.py` and `login.py` carry hardcoded
-token/proxy material that is now in local history. Scrub + rotate those before
-adding any git remote or pushing — the repo is local-only until then.
+**Hardcoded-secret caveat:** `checker.py` still carries hardcoded token/proxy
+material. `login.py` was cleaned (proxy is now optional via `BROWSER_PROXY_URL`,
+no secrets), but the **initial commit** `e0c2cd3` still contains its old hardcoded
+proxy line in history. Scrub + rotate before adding any git remote or pushing —
+the repo is local-only until then.
 
 Required output:
 
@@ -230,8 +235,8 @@ Next role:
   is not excluded by `.gitignore`.
 - `.env_flow` contains token/captcha/proxy configuration and should never be
   printed or committed.
-- `gemini_bot.py`, `checker.py`, and `login.py` contain hardcoded token/proxy
-  configuration.
+- `gemini_bot.py` and `checker.py` contain hardcoded token/proxy configuration.
+  (`login.py` was de-proxied/cleaned — no hardcoded secrets there anymore.)
 - `labs.google.har` is a captured browser archive and may contain tokens,
   cookies, request bodies, and headers.
 - `google_profile/` contains browser profile databases, cookies, account state,
