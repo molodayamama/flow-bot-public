@@ -79,20 +79,21 @@ Important files:
   Live capture `tools/video_frames_capture.json` confirmed endpoint
   `video:batchAsyncGenerateVideoStartAndEndImage` with `startImage`/`endImage`
   carrying `mediaId` (no `fe_id_` prefix) + `cropCoordinates`, and model key
-  `veo_3_1_interpolation_lite` (for veo-lite). `build_video_payload` matches that
-  shape; `generate_video` routes to the Frames endpoint when frames are set.
-  Pricing: per-model price + `VIDEO_FRAMES_SURCHARGE` (mode `"frames"`). Default
-  Frames model is `veo-lite` (`VID_FRAMES_DEFAULT_MODEL`) — the only confirmed
-  interpolation key. **Still needs a live run** to confirm HTTP 200 and pin the
-  working reCAPTCHA action; other interpolation tiers are pattern-inferred.
-- **Ingredients** (photos + prompt -> video) UI is improved (1–4 photos, format +
-  count pickers, caption-as-prompt, album upload) but generation stays
-  **fail-closed** (`vid_gen_blocked`, no charge): its request shape is not captured
-  yet (a live probe of `video:batchAsyncGenerateVideoText` with guessed reference
-  fields returned HTTP 400). **To enable:** run `python tools/capture_video.py
-  --ingredients` (abort mode) to capture the real endpoint + reference-image field
-  shape, then wire it like Frames (`build_video_reference_images` + payload +
-  endpoint routing) and lift the `reference_sources` gate in `generate_video`.
+  `veo_3_1_interpolation_{tier}` (owner-confirmed tiers lite/fast/quality; no
+  orientation in the key). Default Frames model is `veo-lite`
+  (`VID_FRAMES_DEFAULT_MODEL`).
+- **Ingredients** (photos + prompt -> video, reference-to-video) is **captured and
+  enabled**. Live capture `tools/video_ingredients_capture.json` confirmed endpoint
+  `video:batchAsyncGenerateVideoReferenceImages` with `referenceImages: [{mediaId,
+  imageUsageType: "IMAGE_USAGE_TYPE_ASSET"}]` and model key
+  `veo_3_1_r2v_{tier}_{orientation}` (the r2v key encodes BOTH tier AND aspect;
+  only `fast`+portrait is live-confirmed, other tiers/orientations pattern-match).
+  Works from 1–4 photos; pricing = per-model price + `VIDEO_INGREDIENTS_SURCHARGE`.
+- Both reference modes share a UI model picker (Veo Lite/Fast/Quality) plus format
+  + count pickers, caption-as-prompt, and album upload. `build_video_payload`
+  routes by input (text / frames / reference); `generate_video` selects the
+  matching endpoint. **A live run is still recommended** to confirm HTTP 200 and
+  pin the working reCAPTCHA action per mode.
 - Pricing/economics (incl. the new **100 credits = $1** rate and the
   pay-via-intermediary cost model for the Google account) live in
   `docs/MONETIZATION.md`.
