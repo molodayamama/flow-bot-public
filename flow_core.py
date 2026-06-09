@@ -877,7 +877,7 @@ VIDEO_MODELS: "OrderedDict[str, dict]" = OrderedDict([
 
 VIDEO_INGREDIENTS_SURCHARGE = 10
 VIDEO_FRAMES_SURCHARGE = 20
-VIDEO_PROMPT_EDIT_PRICE = 20
+VIDEO_PROMPT_EDIT_PRICE = 40  # = its real Google Flow cost (40 G-cr); was 20 (below cost)
 
 # Each successive Extend in a chain costs this many MORE credits than the
 # previous one (on top of the base video price). Longer chains cost more to
@@ -1726,7 +1726,7 @@ class UserProjectStore:
 
 PRICE_PER_IMAGE = 10        # 1 generated image = 10 credits
 UPSCALE_PRICE = 5          # +0.5x of one image, rounded
-STARTER_CREDITS = 50        # one-time grant on first /start
+STARTER_CREDITS = 30        # one-time grant on first /start (balanced: 3 free images)
 LOW_BALANCE_THRESHOLD = 20  # nudge to top up below this
 
 
@@ -1760,16 +1760,26 @@ def action_price(action: str, num_images: int = 1) -> int:
 
 
 # Telegram Stars top-up packs (id -> stars/credits/best-value flag).
+# ``trial`` is a low-barrier first-purchase pack; ``test`` is an admin-only
+# 1-star pack for verifying the Stars payment pipeline end-to-end (hidden from
+# normal users via ``test: True``).
 STARS_PACKS = {
-    "small": {"stars": 75, "credits": 100, "best": False},
-    "medium": {"stars": 200, "credits": 290, "best": False},
-    "large": {"stars": 450, "credits": 700, "best": True},
-    "xl": {"stars": 900, "credits": 1500, "best": False},
+    "trial":  {"stars": 35,  "credits": 45,   "best": False},
+    "small":  {"stars": 75,  "credits": 100,  "best": False},
+    "medium": {"stars": 200, "credits": 290,  "best": False},
+    "large":  {"stars": 450, "credits": 700,  "best": True},
+    "xl":     {"stars": 900, "credits": 1500, "best": False},
+    "test":   {"stars": 1,   "credits": 10,   "best": False, "test": True},
 }
 
 
 def pack(pack_id: str) -> dict | None:
     return STARS_PACKS.get(pack_id)
+
+
+def public_pack_ids(include_test: bool = False) -> list[str]:
+    """Pack ids to show in the top-up menu (admin-only ``test`` pack optional)."""
+    return [pid for pid, p in STARS_PACKS.items() if include_test or not p.get("test")]
 
 
 def pack_label(pack_id: str) -> str:
@@ -1781,6 +1791,8 @@ def pack_label(pack_id: str) -> str:
     if not p:
         return pack_id
     gens = p["credits"] // PRICE_PER_IMAGE
+    if p.get("test"):
+        return f"🧪 Тест · {p['credits']} кр · {p['stars']}⭐"
     text = f"{p['credits']} кр · ~{gens} ген · {p['stars']}⭐"
     if p.get("best"):
         text += " 🔥 Выгодно"

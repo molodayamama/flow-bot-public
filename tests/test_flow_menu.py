@@ -25,7 +25,7 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.action_price("myphoto"), 10)
         self.assertEqual(flow_core.action_price("up2x"), 5)      # quick enhance
         self.assertEqual(flow_core.action_price("realup"), 5)    # true HD upscale
-        self.assertEqual(flow_core.action_price("video_prompt_edit"), 20)
+        self.assertEqual(flow_core.action_price("video_prompt_edit"), 40)  # = its 40 G-credit cost
         self.assertEqual(flow_core.action_price("dl_raw"), 0)    # free
         self.assertEqual(flow_core.action_price("unknown"), 0)
 
@@ -121,11 +121,21 @@ class UpscaleCaptureTests(unittest.TestCase):
         )
 
     def test_packs_have_volume_discount_and_one_best(self) -> None:
-        rates = [(p["credits"] / p["stars"]) for p in flow_core.STARS_PACKS.values()]
+        # Retail ladder only (the admin-only 1-star "test" pack is excluded).
+        retail = [flow_core.STARS_PACKS[pid] for pid in flow_core.public_pack_ids()]
+        rates = [(p["credits"] / p["stars"]) for p in retail]
         # Larger packs give more credits per star (monotonic non-decreasing).
         self.assertEqual(rates, sorted(rates))
         best = [pid for pid, p in flow_core.STARS_PACKS.items() if p.get("best")]
         self.assertEqual(len(best), 1)
+
+    def test_test_pack_is_admin_only_and_one_star(self) -> None:
+        self.assertEqual(flow_core.STARS_PACKS["test"]["stars"], 1)
+        self.assertTrue(flow_core.STARS_PACKS["test"].get("test"))
+        # Hidden from the public ladder, shown only when include_test=True.
+        self.assertNotIn("test", flow_core.public_pack_ids())
+        self.assertIn("test", flow_core.public_pack_ids(include_test=True))
+        self.assertIn("🧪", flow_core.pack_label("test"))
 
     def test_pack_label_shows_credits_stars_and_generations(self) -> None:
         label = flow_core.pack_label("large")
@@ -513,10 +523,11 @@ class BotImportSmokeTests(unittest.TestCase):
             fb.wizard_kb(4, "f43", "nbpro")  # new format + model picker
             fb.edit_settings_kb("f34", "nbpro")  # edit-flow format/model picker
             fb.reply_menu_kb()             # persistent bottom keyboard
-            fb.topup_kb()
+            fb.topup_kb()                  # public packs (no test pack)
+            fb.topup_kb(is_admin=True)     # includes the 1-star test pack
             fb._image_keyboard("abcd1234")
             # New user receives the starter grant.
-            self.assertEqual(fb.credit_store.balance(987654321), 50)
+            self.assertEqual(fb.credit_store.balance(987654321), 30)
             # Admin IDs parse from env.
             self.assertIsInstance(fb.ADMIN_IDS, set)
 

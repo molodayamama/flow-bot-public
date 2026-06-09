@@ -77,6 +77,7 @@ from flow_core import (
     action_price,
     pack as credit_pack,
     pack_label,
+    public_pack_ids,
     price_gen,
 )
 from flow_core import (
@@ -2667,10 +2668,10 @@ def _aspect_to_vfmt(aspect: str) -> str:
     return {"landscape": "land", "portrait": "port"}.get(aspect, "land")
 
 
-def topup_kb() -> types.InlineKeyboardMarkup:
+def topup_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
     rows = [
         [types.InlineKeyboardButton(text=pack_label(pid), callback_data=f"m:pack:{pid}")]
-        for pid in STARS_PACKS
+        for pid in public_pack_ids(include_test=is_admin)
     ]
     rows.append([_menu_button("back", "m:balance")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
@@ -3485,7 +3486,10 @@ async def on_menu_action(callback: types.CallbackQuery):
         await show_balance(msg, user_id=user_id, edit=True)
     elif data == "m:topup":
         await callback.answer()
-        await msg.edit_text(flow_copy.msg("topup_screen"), reply_markup=topup_kb())
+        await msg.edit_text(
+            flow_copy.msg("topup_screen"),
+            reply_markup=topup_kb(is_admin=user_id in ADMIN_IDS),
+        )
     elif data.startswith("m:pack:"):
         await _start_topup(callback, user_id, data.split(":", 2)[2])
     elif data == "m:help":
@@ -4284,6 +4288,9 @@ async def _start_topup(callback: types.CallbackQuery, user_id: int, pack_id: str
     """Выставить счёт в Telegram Stars за выбранный пакет кредитов."""
     p = credit_pack(pack_id)
     if not p:
+        await callback.answer("Пакет не найден", show_alert=True)
+        return
+    if p.get("test") and user_id not in ADMIN_IDS:
         await callback.answer("Пакет не найден", show_alert=True)
         return
     await callback.answer()
