@@ -312,6 +312,13 @@ Video Ingredients/Frames (Flow API):
   scene from the source `workflowId`. The bot must not charge for Extend until a
   usable `sceneId` exists; stale or incomplete video refs remain no-charge
   unavailable.
+- Extend delivery is locally post-processed: if an Extend result has
+  `source_media_id`, the bot downloads the source segment and generated
+  continuation, concatenates them with local `ffmpeg`, and sends the merged MP4.
+  If source download, `ffmpeg`, temp files, or sending fail before merge, it must
+  fall back to the generated continuation segment so the paid result is not lost.
+  Validate this offline with syntax/source tests; live Telegram validation is
+  still required to confirm provider media files concatenate cleanly.
 - `VideoRef` is frozen. Extend must pass any prepared `sceneId` as
   `source_scene_id` into generation and must not mutate the stored registry ref.
 - Offline native Edit/Extend checks:

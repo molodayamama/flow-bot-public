@@ -16,6 +16,7 @@ from flow_core import (
     VIDEO_STATUS_SUCCESSFUL,
     VIDEO_STATUS_FAILED,
     VIDEO_TERMINAL_STATUSES,
+    VideoRef,
     video_model_key,
     video_aspect_code,
     video_media_redirect_url,
@@ -40,6 +41,22 @@ REAL_MEDIA_ID   = "3a1ebe94-c8bb-4727-8565-9135b0f1fff7"
 REAL_PROJECT_ID = "7626e48a-5faf-4e6c-a26c-94a3cf02191c"
 REAL_WORKFLOW_ID = "770a887f-b5f6-40ec-841a-2810818c2259"
 REAL_SCENE_ID = "c2fd6ac1-7e3d-4752-81a6-740e0a431732"
+
+
+class TestVideoRef(unittest.TestCase):
+    def test_source_media_id_is_optional_extend_metadata(self):
+        ref = VideoRef(user_id=1, project_id=REAL_PROJECT_ID, media_id=REAL_MEDIA_ID)
+        self.assertIsNone(ref.source_media_id)
+
+        extended = VideoRef(
+            user_id=1,
+            project_id=REAL_PROJECT_ID,
+            media_id="extension-media-id",
+            source_media_id=REAL_MEDIA_ID,
+            mode="extend",
+        )
+        self.assertEqual(extended.source_media_id, REAL_MEDIA_ID)
+        self.assertEqual(extended.mode, "extend")
 
 
 class TestVideoModelKey(unittest.TestCase):

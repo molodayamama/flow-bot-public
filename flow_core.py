@@ -1452,6 +1452,7 @@ class VideoRef:
     user_id: int
     project_id: str | None
     media_id: str
+    source_media_id: str | None = None
     prompt: str = ""
     model_id: str = ""
     aspect_ratio: str = "landscape"

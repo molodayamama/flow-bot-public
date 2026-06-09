@@ -3607,6 +3607,99 @@ def _aspect_to_fmt(aspect: str) -> str:
     return {"landscape": "land", "portrait": "port", "square": "sq"}.get(aspect, "land")
 
 
+async def _concat_video_bytes(first_video: bytes, second_video: bytes) -> bytes | None:
+    """Return ``first_video + second_video`` as one MP4, or ``None`` on failure."""
+    if not first_video or not second_video:
+        return None
+
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        log.warning("ffmpeg is not available; sending Extend segment only")
+        return None
+
+    with tempfile.TemporaryDirectory(prefix="flow_extend_") as tmpdir:
+        tmp = Path(tmpdir)
+        (tmp / "source.mp4").write_bytes(first_video)
+        (tmp / "extension.mp4").write_bytes(second_video)
+        (tmp / "concat.txt").write_text(
+            "file 'source.mp4'\nfile 'extension.mp4'\n",
+            encoding="utf-8",
+        )
+        output_path = tmp / "merged.mp4"
+
+        proc = await asyncio.create_subprocess_exec(
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            "concat.txt",
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            "merged.mp4",
+            cwd=str(tmp),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            log.warning("ffmpeg concat timed out; sending Extend segment only")
+            return None
+
+        if proc.returncode != 0:
+            details = stderr.decode("utf-8", "replace").strip()
+            if details:
+                log.warning("ffmpeg concat failed; sending Extend segment only: %s", details[-500:])
+            else:
+                log.warning("ffmpeg concat failed; sending Extend segment only")
+            return None
+
+        try:
+            merged = output_path.read_bytes()
+        except OSError:
+            log.exception("ffmpeg concat output could not be read")
+            return None
+        return merged or None
+
+
+async def _video_delivery_bytes(
+    ref: VideoRef, *, fetched_bytes: bytes | None = None
+) -> tuple[bytes | None, bool]:
+    """Fetch bytes for delivery; Extend refs are best-effort merged locally."""
+    video_bytes = fetched_bytes
+    if video_bytes is None:
+        video_bytes = await client.fetch_video_bytes(ref.media_id)
+    if not video_bytes:
+        return None, False
+
+    if ref.mode != "extend" or not ref.source_media_id:
+        return video_bytes, False
+
+    source_bytes = await client.fetch_video_bytes(ref.source_media_id)
+    if not source_bytes:
+        log.warning("source video download failed; sending Extend segment only")
+        return video_bytes, False
+
+    merged = await _concat_video_bytes(source_bytes, video_bytes)
+    if not merged:
+        return video_bytes, False
+    return merged, True
+
+
 async def _repeat_last(callback: types.CallbackQuery, user_id: int):
     last = _ws(user_id).get("last")
     if not last:
@@ -3739,6 +3832,7 @@ async def _video_generate_and_send(
                 user_id=user_id,
                 project_id=result.get("project_id"),
                 media_id=media_id,
+                source_media_id=source_video.media_id if video_operation == "extend" and source_video else None,
                 prompt=prompt,
                 model_id=model_id,
                 aspect_ratio=aspect,
@@ -3752,9 +3846,24 @@ async def _video_generate_and_send(
             caption = flow_copy.msg("vid_result_caption", i=i + 1, n=vcount, prompt=prompt[:60])
             if meta.get("family") == "omni-flash":
                 caption = f"{caption}\n\n{flow_copy.msg('vid_omni_no_extend_hint')}"
+            delivery_bytes, merged_video = await _video_delivery_bytes(vref, fetched_bytes=video_bytes)
+            if not delivery_bytes:
+                credit_store.refund(user_id, single_price * (vcount - i))
+                refunded_units += vcount - i
+                fail_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [_menu_button("vid_retry", "v:retry")],
+                    [_menu_button("menu", "m:menu")],
+                ])
+                try:
+                    await status_msg.edit_text(flow_copy.msg("vid_gen_failed"), reply_markup=fail_kb)
+                except Exception:
+                    await message.answer(flow_copy.msg("vid_gen_failed"), reply_markup=fail_kb)
+                return
+
+            filename = f"video_{i + 1}{'_full' if merged_video else ''}.mp4"
             try:
                 await message.answer_video(
-                    BufferedInputFile(video_bytes, f"video_{i + 1}.mp4"),
+                    BufferedInputFile(delivery_bytes, filename),
                     caption=caption,
                     reply_markup=video_result_kb(vtoken),
                 )
@@ -3763,7 +3872,7 @@ async def _video_generate_and_send(
                 log.exception("answer_video failed, falling back to document")
                 try:
                     await message.answer_document(
-                        BufferedInputFile(video_bytes, f"video_{i + 1}.mp4"),
+                        BufferedInputFile(delivery_bytes, filename),
                         caption=caption,
                         reply_markup=video_result_kb(vtoken),
                     )
@@ -3808,7 +3917,7 @@ async def _video_download(callback: types.CallbackQuery, user_id: int, token: st
 
     await callback.answer()
     status_msg = await callback.message.answer(flow_copy.msg("preparing_file"))
-    video_bytes = await client.fetch_video_bytes(ref.media_id)
+    video_bytes, merged_video = await _video_delivery_bytes(ref)
 
     if not video_bytes:
         await status_msg.edit_text("❌ Не удалось скачать видео. Попробуйте позже.")
@@ -3816,7 +3925,7 @@ async def _video_download(callback: types.CallbackQuery, user_id: int, token: st
 
     from aiogram.types import BufferedInputFile
 
-    filename = f"video_{ref.media_id[-8:]}.mp4"
+    filename = f"video_{ref.media_id[-8:]}{'_full' if merged_video else ''}.mp4"
     try:
         await callback.message.answer_document(
             BufferedInputFile(video_bytes, filename),

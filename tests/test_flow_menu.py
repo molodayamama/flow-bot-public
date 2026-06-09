@@ -372,6 +372,29 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('video_operation="extend"', block)
         self.assertIn("source_scene_id=scene_id", block)
 
+    def test_video_extend_delivery_attempts_local_merge(self) -> None:
+        self.assertIn("async def _concat_video_bytes", self.source)
+        self.assertIn("async def _video_delivery_bytes", self.source)
+        self.assertIn("asyncio.create_subprocess_exec", self.source)
+        self.assertIn('ref.mode != "extend" or not ref.source_media_id', self.source)
+        self.assertIn("source_bytes = await client.fetch_video_bytes(ref.source_media_id)", self.source)
+        self.assertIn("merged = await _concat_video_bytes(source_bytes, video_bytes)", self.source)
+        self.assertIn("return video_bytes, False", self.source)
+
+    def test_video_extend_result_keeps_source_media_id(self) -> None:
+        start = self.source.index("vref = VideoRef(")
+        block = self.source[start:start + 550]
+        self.assertIn('source_media_id=source_video.media_id if video_operation == "extend"', block)
+        self.assertIn("delivery_bytes, merged_video = await _video_delivery_bytes", self.source)
+        self.assertIn("BufferedInputFile(delivery_bytes, filename)", self.source)
+
+    def test_video_download_uses_delivery_helper(self) -> None:
+        start = self.source.index("async def _video_download")
+        end = self.source.index("async def _video_edit_start", start)
+        block = self.source[start:end]
+        self.assertIn("video_bytes, merged_video = await _video_delivery_bytes(ref)", block)
+        self.assertIn("'_full' if merged_video else ''", block)
+
     def test_no_backend_or_captcha_words_in_user_messages(self) -> None:
         # User-facing copy must not reveal the backend or mention captcha.
         import flow_copy
