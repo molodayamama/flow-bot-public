@@ -668,6 +668,18 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertNotIn("#", p)
         self.assertEqual(prompts_lib.compose_template_prompt("nope", {}), "")
 
+    def test_video_upload_edit_wired(self) -> None:
+        # Entry in the video family + upload handler + edit (no Extend on uploads).
+        self.assertIn('"vu:start"', self.source)
+        self.assertIn('@dp.callback_query(F.data.startswith("vu:"))', self.source)
+        self.assertIn("@dp.message(F.video | F.document)", self.source)
+        self.assertIn("keeper.upload_video(", self.source)
+        self.assertIn("async def _video_edit_uploaded", self.source)
+        # Uploaded-video edit is marked prompt_edited=True → extend stays blocked.
+        block = self.source[self.source.index("async def _video_edit_uploaded"):][:1300]
+        self.assertIn("prompt_edited=True", block)
+        self.assertIn('video_operation="edit"', block)
+
     def test_video_prompt_edit_clears_reference_mode_inputs(self) -> None:
         self.assertIn("def _vid_clear_reference_inputs", self.source)
         start = self.source.index("async def _video_prompt_edit_and_send")

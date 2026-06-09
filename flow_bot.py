@@ -1326,6 +1326,20 @@ class SessionKeeper:
                     except OSError:
                         pass
 
+    async def upload_video(self, data: bytes, filename: str = "upload.mp4") -> dict | None:
+        """Загрузить пользовательское видео в Flow (для редактирования промптом).
+
+        Использует ту же файловую загрузку, что и ``upload_image`` — input[type=file]
+        у Flow обычно принимает и видео, а media-id извлекается структурно. Может
+        вернуть ``workflowId`` (нужен для video-edit), если он есть в ответе.
+        Контракт video-upload+edit для пользовательских видео ещё не сверен
+        захватом — см. HANDOFF.md.
+        """
+        src = await self.upload_image(data, filename=filename)
+        if src and src.get("mediaId"):
+            log.info("⬆️ Видео загружено в Flow: mediaId=%s…", str(src["mediaId"])[:8])
+        return src
+
     async def _page_media_ids(self) -> set[str]:
         """Множество media-UUID, присутствующих в DOM страницы (src/href/srcset)."""
         try:
@@ -2704,6 +2718,7 @@ def video_family_kb() -> types.InlineKeyboardMarkup:
         [fam("veo")],
         [fam("ing")],
         [fam("frm")],
+        [B(text=L("vid_upload_edit"), callback_data="vu:start")],
         [B(text=L("cancel"), callback_data="v:cancel")],
     ])
 
@@ -4422,6 +4437,103 @@ async def on_guided_picker_action(callback: types.CallbackQuery):
         await callback.answer()
 
 
+@dp.callback_query(F.data.startswith("vu:"))
+async def on_video_upload_action(callback: types.CallbackQuery):
+    """«Изменить своё видео»: загрузка ролика и правка промптом (Extend запрещён)."""
+    user_id = callback.from_user.id
+    data = callback.data or ""
+    msg = callback.message
+    st = _ws(user_id)
+    if data == "vu:start":
+        await callback.answer()
+        _vid_clear(user_id)
+        st["vmode"] = "edit"
+        st["vawait"] = "vu_video"
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [_menu_button("vid_back:fam", "v:back:fam")],
+            [_menu_button("cancel", "v:cancel")],
+        ])
+        await _edit_or_answer(msg, flow_copy.msg("vid_upload_ask"), kb)
+    else:
+        await callback.answer()
+
+
+@dp.message(F.video | F.document)
+async def handle_video_upload(message: types.Message):
+    """Приём пользовательского видео для режима «Изменить своё видео»."""
+    user_id = message.from_user.id
+    st = _ws(user_id)
+    if st.get("vawait") != "vu_video":
+        return  # видео ждём только в этом режиме — иначе игнор
+    file_obj = message.video or message.document
+    if file_obj is None:
+        return
+    # Документы-картинки сюда не относим (для них есть обычный фото-флоу).
+    mime = (getattr(file_obj, "mime_type", "") or "")
+    if message.document and not mime.startswith("video"):
+        await message.answer(flow_copy.msg("vid_upload_need_video"))
+        return
+    status = await message.answer(flow_copy.msg("vid_upload_working"))
+    try:
+        buf = await bot.download(file_obj.file_id)
+        data = buf.read() if hasattr(buf, "read") else bytes(buf)
+    except Exception:
+        log.exception("download user video failed")
+        await status.edit_text(flow_copy.msg("vid_upload_failed"))
+        return
+    await ensure_user_project(user_id)
+    source = await keeper.upload_video(data, filename=f"tg_{user_id}.mp4")
+    if not source or not source.get("mediaId"):
+        await status.edit_text(flow_copy.msg("vid_upload_failed"))
+        return
+    st["vu_source"] = source
+    st["vawait"] = "vu_edit_prompt"
+    metrics.log_event("video_upload_edit_started", user_id=user_id, source="upload")
+    try:
+        await status.delete()
+    except Exception:
+        pass
+    await message.answer(
+        flow_copy.msg("vid_upload_ask_prompt", price=action_price("video_prompt_edit"))
+    )
+
+
+async def _video_edit_uploaded(message: types.Message, prompt: str, *, user_id: int) -> None:
+    """Правка загруженного пользователем видео промптом (Extend недоступен)."""
+    st = _ws(user_id)
+    src = st.get("vu_source") or {}
+    if not src.get("mediaId"):
+        await message.answer(flow_copy.msg("vid_expired_wizard"))
+        return
+    ref = VideoRef(
+        user_id=user_id,
+        project_id=src.get("_project_id"),
+        media_id=src.get("mediaId"),
+        prompt="",
+        model_id="omni-flash-4s",
+        aspect_ratio="landscape",
+        mode="edit",
+        prompt_edited=True,  # навсегда блокирует Продлить у результата
+        workflow_id=src.get("workflowId") or src.get("workflow_id"),
+    )
+    st["vmode"] = "edit"
+    st["vmodel"] = "omni-flash-4s"
+    st["vfmt"] = "land"
+    st["vcount"] = 1
+    st["vawait"] = None
+    st.pop("vu_source", None)
+    await _video_generate_and_send(
+        message,
+        prompt.strip(),
+        user_id=user_id,
+        unit_price_override=action_price("video_prompt_edit"),
+        prompt_edited=True,
+        status_text=flow_copy.msg("vid_edit_working"),
+        source_video=ref,
+        video_operation="edit",
+    )
+
+
 @dp.callback_query(F.data.startswith("es:"))
 async def on_edit_settings(callback: types.CallbackQuery):
     """Пикер формата/модели на экране редактирования фото."""
@@ -5635,6 +5747,14 @@ async def handle_plain_text(message: types.Message):
     if st.get("tp_await") == "text" and st.get("tp_tpl"):
         _tp_store_answer(st, text)
         await _render_template_step(message, user_id=user_id)
+        return
+
+    # Промпт-правка для загруженного пользователем видео.
+    if st.get("vawait") == "vu_edit_prompt" and st.get("vu_source"):
+        if len(text) < 3:
+            await message.answer(flow_copy.msg("vid_prompt_too_short"))
+            return
+        await _video_edit_uploaded(message, text, user_id=user_id)
         return
 
     # Видео-правка ждёт инструкцию к уже готовому ролику.
