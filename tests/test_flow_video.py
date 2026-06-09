@@ -190,18 +190,20 @@ class TestBuildVideoPayload(unittest.TestCase):
             {"mediaId": "short-1", "imageUsageType": "IMAGE_USAGE_TYPE_ASSET"},
             {"mediaId": "short-2", "imageUsageType": "IMAGE_USAGE_TYPE_ASSET"},
         ])
-        # Ingredients payload serializes referenceImages and uses the aspect-encoded
-        # r2v key (veo-fast + portrait -> veo_3_1_r2v_fast_portrait).
-        p = self._build(model_key="veo-fast", aspect="portrait", reference_images=refs)
+        # Ingredients payload serializes referenceImages and uses the tier-only
+        # r2v key (veo-lite -> veo_3_1_r2v_lite, NO orientation suffix; verified
+        # from tools/video_raw_capture.json). Orientation is carried by aspectRatio.
+        p = self._build(model_key="veo-lite", aspect="portrait", reference_images=refs)
         req = p["requests"][0]
         self.assertEqual(req["referenceImages"], refs)
-        self.assertEqual(req["videoModelKey"], "veo_3_1_r2v_fast_portrait")
+        self.assertEqual(req["videoModelKey"], "veo_3_1_r2v_lite")
 
-    def test_reference_model_key_encodes_tier_and_orientation(self):
+    def test_reference_model_key_is_tier_only_no_orientation(self):
         import flow_core
-        self.assertEqual(flow_core.video_reference_model_key("veo-fast", "portrait"), "veo_3_1_r2v_fast_portrait")
-        self.assertEqual(flow_core.video_reference_model_key("veo-lite", "landscape"), "veo_3_1_r2v_lite_landscape")
-        self.assertEqual(flow_core.video_reference_model_key("veo-quality", "16:9"), "veo_3_1_r2v_quality_landscape")
+        # Live capture (video_raw_capture.json): veo_3_1_r2v_lite — tier only.
+        self.assertEqual(flow_core.video_reference_model_key("veo-lite", "portrait"), "veo_3_1_r2v_lite")
+        self.assertEqual(flow_core.video_reference_model_key("veo-fast", "landscape"), "veo_3_1_r2v_fast")
+        self.assertEqual(flow_core.video_reference_model_key("veo-quality", "16:9"), "veo_3_1_r2v_quality")
 
     def test_frames_model_key_tiers(self):
         import flow_core

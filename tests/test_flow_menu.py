@@ -506,8 +506,8 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("def _video_can_edit", self.source)
         self.assertIn("def _video_can_extend", self.source)
         self.assertIn("ref.workflow_id", self.source)
-        self.assertIn("ref.model_id in _VID_EXTENDABLE_MODELS", self.source)
-        self.assertIn('_VID_EXTENDABLE_MODELS = {"veo-lite"}', self.source)
+        self.assertIn('str(ref.model_id).startswith("veo-")', self.source)
+        self.assertIn('VIDEO_EXTEND_MODEL = "veo-lite"', self.source)
         self.assertIn("not ref.prompt_edited", self.source)
         self.assertIn('callback_data=f"v:edit:{vtoken}"', self.source)
         self.assertIn('callback_data=f"v:extend:{vtoken}"', self.source)
@@ -688,15 +688,18 @@ class BotImportSmokeTests(unittest.TestCase):
             # Family buttons show a min-price hint.
             fam_first = fb.video_family_kb().inline_keyboard[0][0].text
             self.assertIn("⭐", fam_first)
-            # Extend gating: veo-lite ingredients clip IS extendable; veo-fast is
-            # NOT (pending capture confirmation), regardless of mode.
+            # Extend gating: ANY veo-family source (lite/fast/quality) is
+            # extendable — the extension itself runs on veo-lite. Omni is not.
             VR = fb.VideoRef
             lite = VR(user_id=1, project_id="p", media_id="m", workflow_id="w",
                       model_id="veo-lite", mode="ingredients")
             fast = VR(user_id=1, project_id="p", media_id="m", workflow_id="w",
                       model_id="veo-fast", mode="ingredients")
+            omni = VR(user_id=1, project_id="p", media_id="m", workflow_id="w",
+                      model_id="omni-flash-4s", mode="text")
             self.assertTrue(fb._video_can_extend(lite))
-            self.assertFalse(fb._video_can_extend(fast))
+            self.assertTrue(fb._video_can_extend(fast))
+            self.assertFalse(fb._video_can_extend(omni))
             # Bot API 9.4 green-button: selected option carries style=success in
             # the outgoing JSON; the unselected one omits it (graceful on old apps).
             chosen = fb._sel_btn("X", True, "w:cnt:1").model_dump(exclude_none=True)

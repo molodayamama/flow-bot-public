@@ -2608,10 +2608,9 @@ def _video_can_edit(ref: VideoRef | None) -> bool:
     return bool(ref and ref.media_id and ref.project_id and ref.workflow_id)
 
 
-# Модели, у которых подтверждён рабочий Extend (родной concat проверен на veo-lite).
-# Расширять до veo-fast/quality ТОЛЬКО после захвата, подтверждающего, что
-# veo_3_1_extension_{tier} принимается сервисом и для r2v-origin видео тоже.
-_VID_EXTENDABLE_MODELS = {"veo-lite"}
+# Продление всегда выполняется моделью veo-lite, но ИСХОДНИК может быть любым
+# veo-видео (lite/fast/quality) — оператор подтвердил. Omni продлевать нельзя.
+VIDEO_EXTEND_MODEL = "veo-lite"
 
 
 def _video_can_extend(ref: VideoRef | None) -> bool:
@@ -2620,7 +2619,7 @@ def _video_can_extend(ref: VideoRef | None) -> bool:
         and ref.media_id
         and ref.project_id
         and ref.workflow_id
-        and ref.model_id in _VID_EXTENDABLE_MODELS
+        and str(ref.model_id).startswith("veo-")
         and not ref.prompt_edited
     )
 
@@ -2638,7 +2637,8 @@ def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
         rows.append([B(text=f"{L('vid_edit')} · {edit_price}⭐", callback_data=f"v:edit:{vtoken}")])
     if _video_can_extend(ref):
         # Next extend in the chain — price escalates by VIDEO_EXTEND_STEP each time.
-        next_price = video_extend_price(ref.model_id, ref.extend_index + 1)
+        # Extension is always veo-lite, so price off veo-lite regardless of source.
+        next_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
         rows.append([B(text=f"{L('vid_extend')} · {next_price}⭐", callback_data=f"v:extend:{vtoken}")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -4296,7 +4296,7 @@ async def _video_generate_and_send(
             if meta.get("family") == "omni-flash":
                 caption = f"{caption}\n\n{flow_copy.msg('vid_omni_no_extend_hint')}"
             elif _video_can_extend(vref):
-                caption = f"{caption}\n\n{flow_copy.msg('vid_result_actions_hint', edit=action_price('video_prompt_edit'), extend=video_extend_price(vref.model_id, vref.extend_index + 1))}"
+                caption = f"{caption}\n\n{flow_copy.msg('vid_result_actions_hint', edit=action_price('video_prompt_edit'), extend=video_extend_price(VIDEO_EXTEND_MODEL, vref.extend_index + 1))}"
             delivery_bytes, merged_video = await _video_delivery_bytes(vref, fetched_bytes=video_bytes)
             if not delivery_bytes:
                 await _fail_retry(i)
@@ -4449,7 +4449,7 @@ async def _video_extend_start(callback: types.CallbackQuery, user_id: int, token
     st["vawait"] = "vextend_prompt"
     st["vextend_token"] = token
     await callback.answer()
-    next_price = video_extend_price(ref.model_id, ref.extend_index + 1)
+    next_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
     await callback.message.answer(
         flow_copy.msg("vid_extend_ask_prompt", price=next_price)
     )
@@ -4519,13 +4519,13 @@ async def _video_extend_and_send(
     st = _ws(user_id)
     _vid_clear_reference_inputs(user_id)
     st["vmode"] = "extend"
-    st["vmodel"] = ref.model_id or "veo-lite"
+    st["vmodel"] = VIDEO_EXTEND_MODEL  # продление всегда через veo-lite, независимо от исходника
     st["vfmt"] = _aspect_to_vfmt(ref.aspect_ratio)
     st["vcount"] = 1
     st["vawait"] = None
     st.pop("vextend_token", None)
     # Progressive price: each extend in the chain costs VIDEO_EXTEND_STEP more.
-    extend_price = video_extend_price(ref.model_id or "veo-lite", ref.extend_index + 1)
+    extend_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
     await _video_generate_and_send(
         message,
         prompt.strip(),

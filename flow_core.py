@@ -859,15 +859,14 @@ def video_frames_model_key(model_key: str) -> str:
 
 
 def video_reference_model_key(model_key: str, aspect: str = "portrait") -> str:
-    """Resolve a friendly model id + aspect to the Ingredients (r2v) videoModelKey.
+    """Resolve a friendly model id to the Ingredients (r2v) videoModelKey.
 
-    Confirmed from a live Ingredients capture:
-    ``veo-fast`` + portrait -> ``veo_3_1_r2v_fast_portrait``.
-    The r2v key encodes BOTH tier and orientation. Other tiers/orientations
-    follow the same observed pattern.
+    Confirmed from a live Ingredients capture (tools/video_raw_capture.json):
+    ``veo-lite`` -> ``veo_3_1_r2v_lite`` — tier suffix ONLY, NO orientation.
+    (Orientation is carried separately by ``aspectRatio`` in the request.) The
+    ``aspect`` arg is kept for signature stability but no longer affects the key.
     """
-    orient = "landscape" if video_aspect_code(aspect) == VIDEO_ASPECT_MAP["landscape"] else "portrait"
-    return f"veo_3_1_r2v_{_veo_tier(model_key)}_{orient}"
+    return f"veo_3_1_r2v_{_veo_tier(model_key)}"
 
 
 def video_edit_model_key() -> str:
