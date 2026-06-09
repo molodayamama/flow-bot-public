@@ -197,7 +197,7 @@ MESSAGES = {
         "Видео готовится дольше картинок — пожалуйста, подожди немного."
     ),
     "vid_result_caption": "Видео {i} из {n} · «{prompt}»",
-    "vid_result_actions_hint": "✏️ Изменить — {edit} кр · ⏩ Продлить — {extend} кр",
+    "vid_result_actions_hint": "✏️ Изменить — {edit}⭐ · ⏩ Продлить — {extend}⭐",
     "vid_omni_no_extend_hint": (
         "ℹ️ В режиме Omni продление недоступно. Для продления выбери Veo Lite "
         "или создай продолжение как новое видео."

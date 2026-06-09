@@ -2117,6 +2117,25 @@ def _ws(user_id: int) -> dict:
     return wizard_state[user_id]
 
 
+def _reset_image_flow(user_id: int, *, keep_last: bool = True) -> None:
+    """Сбросить незавершённый image-флоу: состояние визарда И ожидание правки.
+
+    ``pending_edits`` живёт отдельно от ``_ws``, поэтому ``_ws.clear()`` его не
+    трогает — без этого сброса загруженное для правки фото «залипает» и
+    следующий промпт уходит на правку старой картинки. ``keep_last`` сохраняет
+    настройки прошлой генерации как дефолты визарда.
+    """
+    st = _ws(user_id)
+    last = st.get("last") if keep_last else None
+    st.clear()
+    pending_edits.pop(user_id, None)
+    if last:
+        st["last"] = last
+        st["count"] = last.get("count", DEFAULT_COUNT)
+        st["fmt"] = _aspect_to_fmt(last.get("aspect", "landscape"))
+        st["imodel"] = last.get("imodel", DEFAULT_IMAGE_MODEL)
+
+
 def _fmt_to_aspect(fmt: str) -> str:
     return {
         "land": "landscape",
@@ -2263,15 +2282,14 @@ def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
         label = flow_copy.label(copy_key)
         price = action_price(copy_key)
         if price > 0:
-            label = f"{label} · {price} кр"
+            label = f"{label} · {price}⭐"
         return B(text=label, callback_data=action_callback_data(action, token))
 
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
             [b("edit", "edit"), b("vary", "revary")],
-            [b("regen", "regen"), b("mix", "mix")],
-            [b("up2x", "up2x"), b("realup", "realup")],
-            [b("download", "dl_raw")],
+            [b("regen", "regen"), b("up2x", "up2x")],
+            [b("realup", "realup"), b("download", "dl_raw")],
         ]
     )
 
@@ -2491,7 +2509,7 @@ def video_variant_kb(family: str, selected_model: str | None) -> types.InlineKey
     rows = []
     for model_id, meta in video_models_in_family(family):
         name = L(f"vid_model_name:{model_id}")
-        label = f"{name} · {meta['price']} кр"
+        label = f"{name} · {meta['price']}⭐"
         rows.append([B(
             text=_sel(label, model_id == selected_model),
             callback_data=f"v:model:{model_id}",
@@ -2544,11 +2562,11 @@ def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
         rows.append([B(text=L("vid_dl_seg"), callback_data=f"v:dl_seg:{vtoken}")])
     if _video_can_edit(ref):
         edit_price = action_price("video_prompt_edit")
-        rows.append([B(text=f"{L('vid_edit')} · {edit_price} кр", callback_data=f"v:edit:{vtoken}")])
+        rows.append([B(text=f"{L('vid_edit')} · {edit_price}⭐", callback_data=f"v:edit:{vtoken}")])
     if _video_can_extend(ref):
         # Next extend in the chain — price escalates by VIDEO_EXTEND_STEP each time.
         next_price = video_extend_price(ref.model_id, ref.extend_index + 1)
-        rows.append([B(text=f"{L('vid_extend')} · {next_price} кр", callback_data=f"v:extend:{vtoken}")])
+        rows.append([B(text=f"{L('vid_extend')} · {next_price}⭐", callback_data=f"v:extend:{vtoken}")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -2562,7 +2580,7 @@ def _vid_model_row(mode: str, selected: str | None) -> list:
     row = []
     for mid in VID_REF_VARIANTS:
         price = video_price(mid, 1, mode)
-        label = f"{L('vid_model_name:' + mid)} {price}кр"
+        label = f"{L('vid_model_name:' + mid)} {price}⭐"
         row.append(B(text=_sel(label, mid == selected), callback_data=f"v:vmod:{mid}"))
     return [row]
 
@@ -3606,15 +3624,11 @@ async def on_menu_action(callback: types.CallbackQuery):
 
     if data == "m:gen":
         await callback.answer()
-        last = _ws(user_id).get("last")
-        _ws(user_id).clear()
-        if last:  # сохраняем прошлые настройки как дефолт визарда
-            _ws(user_id)["last"] = last
-            _ws(user_id)["count"] = last.get("count", DEFAULT_COUNT)
-            _ws(user_id)["fmt"] = _aspect_to_fmt(last.get("aspect", "landscape"))
+        _reset_image_flow(user_id)  # сбрасывает и pending_edits (залипшее фото)
         await show_wizard(msg, user_id=user_id, edit=True)
     elif data == "m:vid":
         await callback.answer()
+        pending_edits.pop(user_id, None)  # бросаем залипшее фото-правку при переходе в видео
         await show_video_family(msg, user_id=user_id, edit=True)
     elif data == "m:repeat":
         await callback.answer("Повторяю 🔁")
@@ -3638,11 +3652,13 @@ async def on_menu_action(callback: types.CallbackQuery):
         await msg.edit_text(flow_copy.msg("help"), reply_markup=kb)
     elif data == "m:myphoto":
         await callback.answer()
-        _ws(user_id).clear()
+        _reset_image_flow(user_id, keep_last=False)
         _ws(user_id)["await"] = "photo"
         await msg.edit_text(flow_copy.msg("ask_photo"))
     elif data == "m:menu":
         await callback.answer()
+        pending_edits.pop(user_id, None)
+        _ws(user_id)["await"] = None
         await show_main_menu(msg, user_id=user_id, edit=True)
     else:
         await callback.answer()
@@ -4772,15 +4788,12 @@ async def handle_plain_text(message: types.Message):
 
     # Постоянная нижняя клавиатура: её нажатия приходят как обычный текст.
     if text == L("kb_gen"):
-        last = st.get("last")
-        st.clear()
-        if last:
-            st["last"] = last
-            st["count"] = last.get("count", DEFAULT_COUNT)
-            st["fmt"] = _aspect_to_fmt(last.get("aspect", "landscape"))
+        _reset_image_flow(user_id)  # чистит и pending_edits (залипшее фото)
         await show_wizard(message, user_id=user_id, edit=False)
         return
     if text == L("kb_menu"):
+        pending_edits.pop(user_id, None)
+        st["await"] = None
         await show_main_menu(message, user_id=user_id, ensure_kb=True)
         return
     if text == L("kb_balance"):
@@ -4789,6 +4802,7 @@ async def handle_plain_text(message: types.Message):
     if text == L("kb_vid"):
         vlast = st.get("vlast")
         _vid_clear(user_id)
+        pending_edits.pop(user_id, None)  # бросаем залипшее фото-правку при переходе в видео
         if vlast:
             st["vlast"] = vlast
         await show_video_family(message, user_id=user_id, edit=False)
@@ -4872,16 +4886,10 @@ async def handle_plain_text(message: types.Message):
         await show_main_menu(message, user_id=user_id)
         return
 
-    # Старый путь (на случай pending_edits без визард-флага).
-    token = pending_edits.get(user_id)
-    if token:
-        ref = image_registry.get(token)
-        if ref is not None and ref.user_id == user_id:
-            ok = await _edit_and_send(message, ref, text)
-            if ok:
-                pending_edits.pop(user_id, None)
-            return
-        pending_edits.pop(user_id, None)
+    # ВАЖНО: раньше тут был «старый путь», который редактировал pending_edits-фото
+    # даже без awaiting=="edit". Из-за этого после «фото → меню → генерация» промпт
+    # уходил на правку залипшего фото. Убрано намеренно: правка идёт ТОЛЬКО при
+    # awaiting in ("edit","revary") выше; навигация по меню чистит pending_edits.
 
     # Визард уже открыт и пользователь выбрал настройки — промпт из чата запускает
     # генерацию сразу, с текущими количеством/форматом/моделью (без «Сгенерировать»).

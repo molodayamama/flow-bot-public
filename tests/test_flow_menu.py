@@ -341,6 +341,28 @@ class BotMenuWiringTests(unittest.TestCase):
         real_block = self.source[real_start:real_start + 900]
         self.assertNotIn("_enhance_and_send", real_block)
 
+    def test_image_keyboard_has_no_mix_button_and_star_prices(self) -> None:
+        start = self.source.index("def _image_keyboard")
+        block = self.source[start:start + 700]
+        self.assertNotIn('b("mix"', block)          # «В микс» removed from results
+        self.assertIn('· {price}⭐', block)          # price tags carry the star emoji
+
+    def test_star_price_tags_on_action_buttons(self) -> None:
+        # Video result / model rows show the credit cost with a star emoji.
+        self.assertIn('· {edit_price}⭐', self.source)
+        self.assertIn('· {next_price}⭐', self.source)
+        self.assertIn("{price}⭐", self.source)
+
+    def test_stale_photo_edit_cleared_on_navigation(self) -> None:
+        # Regression: photo upload sets pending_edits; navigating to generate/menu
+        # must clear it so the next prompt is NOT applied as an edit of that photo.
+        self.assertIn("def _reset_image_flow", self.source)
+        reset_start = self.source.index("def _reset_image_flow")
+        self.assertIn("pending_edits.pop(user_id, None)", self.source[reset_start:reset_start + 600])
+        # The dangerous unconditional "old path" edit fallback is gone.
+        self.assertNotIn("Старый путь (на случай pending_edits", self.source)
+        self.assertIn("_reset_image_flow(user_id)", self.source)
+
     def test_frames_and_ingredients_have_format_and_count(self) -> None:
         # Frames/Ingredients screens reuse the shared format+count picker rows.
         self.assertIn("def _vid_fmt_count_rows", self.source)
