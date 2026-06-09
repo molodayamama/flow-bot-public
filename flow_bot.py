@@ -80,6 +80,8 @@ from flow_core import (
     VIDEO_UI_ASPECTS,
     video_model_meta,
     video_price,
+    video_extend_price,
+    VIDEO_EXTEND_STEP,
     clamp_num_videos,
     video_models_in_family,
     video_families,
@@ -2156,7 +2158,12 @@ def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
     B = types.InlineKeyboardButton
 
     def b(action: str, copy_key: str) -> types.InlineKeyboardButton:
-        return B(text=flow_copy.label(copy_key), callback_data=action_callback_data(action, token))
+        # Show the credit cost on paid actions; free ones (download) stay clean.
+        label = flow_copy.label(copy_key)
+        price = action_price(copy_key)
+        if price > 0:
+            label = f"{label} · {price} кр"
+        return B(text=label, callback_data=action_callback_data(action, token))
 
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
@@ -2395,9 +2402,12 @@ def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
     if ref and ref.mode == "extend" and ref.media_id:
         rows.append([B(text=L("vid_dl_seg"), callback_data=f"v:dl_seg:{vtoken}")])
     if _video_can_edit(ref):
-        rows.append([B(text=L("vid_edit"), callback_data=f"v:edit:{vtoken}")])
+        edit_price = action_price("video_prompt_edit")
+        rows.append([B(text=f"{L('vid_edit')} · {edit_price} кр", callback_data=f"v:edit:{vtoken}")])
     if _video_can_extend(ref):
-        rows.append([B(text=L("vid_extend"), callback_data=f"v:extend:{vtoken}")])
+        # Next extend in the chain — price escalates by VIDEO_EXTEND_STEP each time.
+        next_price = video_extend_price(ref.model_id, ref.extend_index + 1)
+        rows.append([B(text=f"{L('vid_extend')} · {next_price} кр", callback_data=f"v:extend:{vtoken}")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -3863,12 +3873,17 @@ async def _video_generate_and_send(
                 workflow_id=result.get("workflow_id"),
                 # Extend needs the scene id to stitch the full timeline on download.
                 scene_id=result.get("scene_id") or (source_scene_id if video_operation == "extend" else None),
+                # Each extend deepens the chain; drives the progressive extend price.
+                extend_index=(source_video.extend_index + 1)
+                if (video_operation == "extend" and source_video) else 0,
             )
             vtoken = video_registry.add(vref)
 
             caption = flow_copy.msg("vid_result_caption", i=i + 1, n=vcount, prompt=prompt[:60])
             if meta.get("family") == "omni-flash":
                 caption = f"{caption}\n\n{flow_copy.msg('vid_omni_no_extend_hint')}"
+            elif _video_can_extend(vref):
+                caption = f"{caption}\n\n{flow_copy.msg('vid_result_actions_hint', edit=action_price('video_prompt_edit'), extend=video_extend_price(vref.model_id, vref.extend_index + 1))}"
             delivery_bytes, merged_video = await _video_delivery_bytes(vref, fetched_bytes=video_bytes)
             if not delivery_bytes:
                 credit_store.refund(user_id, single_price * (vcount - i))
@@ -4029,7 +4044,10 @@ async def _video_extend_start(callback: types.CallbackQuery, user_id: int, token
     st["vawait"] = "vextend_prompt"
     st["vextend_token"] = token
     await callback.answer()
-    await callback.message.answer(flow_copy.msg("vid_ask_prompt"))
+    next_price = video_extend_price(ref.model_id, ref.extend_index + 1)
+    await callback.message.answer(
+        flow_copy.msg("vid_extend_ask_prompt", price=next_price)
+    )
 
 
 def _video_prompt_edit_prompt(ref: VideoRef, instruction: str) -> str:
@@ -4101,10 +4119,13 @@ async def _video_extend_and_send(
     st["vcount"] = 1
     st["vawait"] = None
     st.pop("vextend_token", None)
+    # Progressive price: each extend in the chain costs VIDEO_EXTEND_STEP more.
+    extend_price = video_extend_price(ref.model_id or "veo-lite", ref.extend_index + 1)
     await _video_generate_and_send(
         message,
         prompt.strip(),
         user_id=user_id,
+        unit_price_override=extend_price,
         status_text=flow_copy.msg("vid_working"),
         source_video=ref,
         video_operation="extend",

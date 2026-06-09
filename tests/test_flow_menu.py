@@ -45,6 +45,32 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.video_price("veo-fast", mode="ingredients"), 70)
         self.assertEqual(flow_core.video_price("veo-fast", mode="frames"), 80)
 
+    def test_extend_price_escalates_by_step(self) -> None:
+        base = flow_core.video_price("veo-lite", 1, "text")  # 30
+        step = flow_core.VIDEO_EXTEND_STEP                    # 5
+        # 1st extend = base+5, 2nd = base+10, … each one step dearer.
+        self.assertEqual(flow_core.video_extend_price("veo-lite", 1), base + step)
+        self.assertEqual(flow_core.video_extend_price("veo-lite", 2), base + 2 * step)
+        self.assertEqual(flow_core.video_extend_price("veo-lite", 3), base + 3 * step)
+        # Consecutive extends differ by exactly one step.
+        self.assertEqual(
+            flow_core.video_extend_price("veo-lite", 3)
+            - flow_core.video_extend_price("veo-lite", 2),
+            step,
+        )
+
+    def test_extend_price_index_floor_is_one(self) -> None:
+        base = flow_core.video_price("veo-lite", 1, "text")
+        # A 0 / negative index never charges less than the first extend.
+        self.assertEqual(
+            flow_core.video_extend_price("veo-lite", 0),
+            base + flow_core.VIDEO_EXTEND_STEP,
+        )
+
+    def test_extend_index_default_on_videoref(self) -> None:
+        ref = flow_core.VideoRef(user_id=1, project_id="p", media_id="m")
+        self.assertEqual(ref.extend_index, 0)
+
 
 class UpscaleCaptureTests(unittest.TestCase):
     """The real upscale learns its request shape once, then replays it."""

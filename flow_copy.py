@@ -36,7 +36,8 @@ LABELS = {
     "back": "← Назад",
     "cancel": "✕ Отмена",
     "repeat_last": "🔁 Повторить так же",
-    # per-image actions
+    # per-image actions — price suffix ("· N кр") is appended at runtime in
+    # _image_keyboard via action_price(); do NOT bake a price into these labels.
     "dl_raw": "⬇ Скачать оригинал",
     "up2x": "✨ Чёткость ×2",       # быстрая доработка детализации (по промпту)
     "realup": "🔍 Апскейл",         # увеличение разрешения (родное у сервиса)
@@ -191,6 +192,7 @@ MESSAGES = {
         "Видео готовится дольше картинок — пожалуйста, подожди немного."
     ),
     "vid_result_caption": "Видео {i} из {n} · «{prompt}»",
+    "vid_result_actions_hint": "✏️ Изменить — {edit} кр · ⏩ Продлить — {extend} кр",
     "vid_omni_no_extend_hint": (
         "ℹ️ В режиме Omni продление недоступно. Для продления выбери Veo Lite "
         "или создай продолжение как новое видео."
@@ -204,6 +206,11 @@ MESSAGES = {
     "vid_edit_ask_prompt": (
         "Напиши, что изменить в видео.\n"
         "Я сделаю новую версию на основе прошлого описания. Стоимость: {price} кр."
+    ),
+    "vid_extend_ask_prompt": (
+        "Опиши, что произойдёт дальше — я продолжу видео с этого момента.\n"
+        "Например: «герой оборачивается и идёт к двери».\n"
+        "Стоимость продления: {price} кр."
     ),
     "vid_edit_working": "✏️ Делаю новую версию видео по правке…",
     "vid_extend_unavailable": (

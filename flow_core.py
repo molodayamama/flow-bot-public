@@ -838,6 +838,11 @@ VIDEO_INGREDIENTS_SURCHARGE = 10
 VIDEO_FRAMES_SURCHARGE = 20
 VIDEO_PROMPT_EDIT_PRICE = 20
 
+# Each successive Extend in a chain costs this many MORE credits than the
+# previous one (on top of the base video price). Longer chains cost more to
+# stitch and burn more provider quota, so the escalation tracks real cost/risk.
+VIDEO_EXTEND_STEP = 5
+
 # Limits for "how many videos at once".
 MIN_NUM_VIDEOS = 1
 MAX_NUM_VIDEOS = 4
@@ -865,6 +870,18 @@ def video_price(model_id: str, num_videos: int = 1, mode: str = "text") -> int:
     elif mode == "frames":
         surcharge = VIDEO_FRAMES_SURCHARGE
     return (meta["price"] + surcharge) * clamp_num_videos(num_videos)
+
+
+def video_extend_price(model_id: str, extend_index: int) -> int:
+    """Credits for the ``extend_index``-th Extend of a chain (1-based).
+
+    Price = base video price + ``VIDEO_EXTEND_STEP`` × extend_index, so the
+    1st extend costs base+5, the 2nd base+10, the 3rd base+15, … Each extend is
+    exactly ``VIDEO_EXTEND_STEP`` credits dearer than the one before it.
+    """
+    base = video_price(model_id, 1, "text")
+    n = max(1, int(extend_index))
+    return base + VIDEO_EXTEND_STEP * n
 
 
 def clamp_num_videos(value: object, default: int = DEFAULT_NUM_VIDEOS) -> int:
@@ -1567,6 +1584,7 @@ class VideoRef:
     prompt_edited: bool = False
     workflow_id: str | None = None
     scene_id: str | None = None
+    extend_index: int = 0  # how many extends produced this clip (base video = 0)
 
 
 class ImageRegistry:
