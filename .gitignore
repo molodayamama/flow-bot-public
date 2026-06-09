@@ -120,3 +120,9 @@ tempCodeRunnerFile.py
 # Editor temp
 *.bak
 *.tmp.*
+
+# Metrics SQLite DB (runtime state)
+metrics.db
+metrics.db-journal
+metrics.db-wal
+metrics.db-shm

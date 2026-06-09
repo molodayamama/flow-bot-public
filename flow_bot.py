@@ -130,12 +130,19 @@ from flow_core import (
     video_media_redirect_url,
 )
 import flow_copy
+import metrics
 
 # ───────────────────────────────────────────
 load_dotenv(".env")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "PASTE_YOUR_TOKEN_HERE")
 USER_DATA_DIR = os.getenv("USER_DATA_DIR", "./google_profile")
+# Метрики: ярлык Flow-аккаунта (для flow_jobs) и курс Stars→₽ для выручки.
+FLOW_ACCOUNT_ID = os.getenv("FLOW_ACCOUNT_ID", "default")
+try:
+    STARS_TO_RUB = float(os.getenv("STARS_TO_RUB", "1.3"))  # ~₽ за 1 Star, best-effort
+except (TypeError, ValueError):
+    STARS_TO_RUB = 1.3
 PROXY_URL = os.getenv("PROXY_URL", "")          # общий прокси по умолчанию (http/socks5)
 BROWSER_PROXY_URL = os.getenv("BROWSER_PROXY_URL")
 API_PROXY_URL = os.getenv("API_PROXY_URL")
@@ -2123,6 +2130,21 @@ MIX_MAX = 4
 credit_store = CreditStore(os.getenv("USER_CREDITS_FILE", "user_credits.json"))
 payment_store = PaymentStore(os.getenv("PAYMENTS_FILE", "payments.json"))
 
+# Метрики (SQLite). init_db не бросает; log_* безопасны при сбое БД.
+try:
+    metrics.init_db(os.getenv("METRICS_DB", "metrics.db"))
+except Exception:
+    log.warning("metrics.init_db failed; metrics disabled", exc_info=True)
+
+
+def _username(message_or_user) -> str | None:
+    """Best-effort @username/имя для метрик (никогда не бросает)."""
+    try:
+        u = getattr(message_or_user, "from_user", message_or_user)
+        return u.username or u.full_name
+    except Exception:
+        return None
+
 # ── состояние кнопочного визарда генерации (в памяти) ──────────────────
 # user_id -> {"step", "count", "fmt", "msg_id", "await": "prompt|edit|revary|photo",
 #             "ref_token": <для edit/revary>, "last": {...настройки повтора...}}
@@ -2479,6 +2501,7 @@ async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
     if edit:
         await _edit_or_answer(message, text, kb, parse_mode="HTML")
     else:
+        metrics.log_event("wizard_started", user_id=user_id, source="image")
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
@@ -2970,6 +2993,8 @@ async def _send_one_image(
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     credit_store.balance(user_id)  # начисляем стартовые кредиты при первом старте
+    metrics.log_event("user_started", user_id=user_id,
+                      username=_username(message), source="command")
     # Показываем приветствие вместе с постоянной нижней клавиатурой.
     await message.answer(flow_copy.msg("welcome"), reply_markup=reply_menu_kb())
     await show_main_menu(message, user_id=user_id)
@@ -3099,6 +3124,157 @@ async def cmd_refund(message: types.Message):
             pass
 
 
+# ── админ-метрики (только для ADMIN_IDS; read-only) ───────────────────
+
+def _fmt_pct(x: float) -> str:
+    return f"{x * 100:.0f}%"
+
+
+def _admin_only(message: types.Message) -> bool:
+    if message.from_user.id not in ADMIN_IDS:
+        return False
+    return True
+
+
+@dp.message(Command("admin_today"))
+async def cmd_admin_today(message: types.Message):
+    if not _admin_only(message):
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    r = metrics.report_today()
+    top = "\n".join(f"  • {a['event_name']} — {a['count']}" for a in r["top_actions"]) or "  —"
+    await message.answer(
+        "📊 <b>Сегодня</b>\n"
+        f"Новые: <b>{r['new_users']}</b> · активные: <b>{r['active_users']}</b> · "
+        f"платящие: <b>{r['paying_users']}</b>\n"
+        f"Картинки: <b>{r['image_generations']}</b> · видео: <b>{r['video_generations']}</b>\n"
+        f"Success rate: <b>{_fmt_pct(r['success_rate'])}</b>\n"
+        f"Выручка: <b>{r['revenue_rub']:.0f}₽</b> ({r['revenue_stars']}⭐)\n"
+        f"Кредиты: списано <b>{r['credits_charged']}</b> · возвращено <b>{r['credits_refunded']}</b>\n"
+        f"Топ действий:\n{top}",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("admin_revenue"))
+async def cmd_admin_revenue(message: types.Message):
+    if not _admin_only(message):
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    r = metrics.report_revenue(30)
+    by_pack = "\n".join(
+        f"  • {p['package_id']}: {p['count']}× · {p['rub']:.0f}₽ ({p['stars']}⭐)"
+        for p in r["by_package"]
+    ) or "  —"
+    by_day = "\n".join(
+        f"  • {d['day']}: {d['rub']:.0f}₽ ({d['count']}×)" for d in r["by_day"][:7]
+    ) or "  —"
+    await message.answer(
+        "💰 <b>Выручка (30 дней)</b>\n"
+        f"Всего: <b>{r['revenue_rub']:.0f}₽</b> ({r['revenue_stars']}⭐) · "
+        f"платежей: <b>{r['transactions_count']}</b> · плательщиков: <b>{r['paying_users']}</b>\n"
+        f"По пакетам:\n{by_pack}\n"
+        f"По дням:\n{by_day}",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("admin_flow"))
+async def cmd_admin_flow(message: types.Message):
+    if not _admin_only(message):
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    r = metrics.report_flow()
+    ops = "\n".join(
+        f"  • {o['operation_type']}: {o['count']}× · ✅{o['success']}/❌{o['fail']}"
+        f"{' · ~%dмс' % o['avg_duration_ms'] if o['avg_duration_ms'] else ''}"
+        for o in r["by_operation"]
+    ) or "  —"
+    models = "\n".join(
+        f"  • {m['model']}: {m['jobs']}× · ΔG {m['flow_credits_delta_sum']}"
+        for m in r["by_model_credits"]
+    ) or "  —"
+    errs = "\n".join(f"  • {e['error_type']}: {e['count']}" for e in r["errors_by_type"]) or "  —"
+    await message.answer(
+        "🛠 <b>Flow-движок</b>\n"
+        f"Success rate: <b>{_fmt_pct(r['success_rate'])}</b>\n"
+        f"По операциям:\n{ops}\n"
+        f"G-кредиты по моделям:\n{models}\n"
+        f"Ошибки:\n{errs}",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("admin_accounts"))
+async def cmd_admin_accounts(message: types.Message):
+    if not _admin_only(message):
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    accounts = metrics.report_accounts().get("accounts", [])
+    if not accounts:
+        await message.answer("🧮 <b>Аккаунты</b>\nСегодня заданий не было.", parse_mode="HTML")
+        return
+    lines = []
+    for a in accounts:
+        rem = f" · остаток G {a['credits_remaining']}" if a["credits_remaining"] is not None else ""
+        err = f" · ⚠️ {a['last_error']}" if a["last_error"] else ""
+        lines.append(
+            f"  • <b>{a['account_id']}</b>: {a['jobs']}× · ✅{a['success']}/❌{a['fail']}{rem}{err}"
+        )
+    await message.answer("🧮 <b>Аккаунты (сегодня)</b>\n" + "\n".join(lines), parse_mode="HTML")
+
+
+@dp.message(Command("admin_refs"))
+async def cmd_admin_refs(message: types.Message):
+    if not _admin_only(message):
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    r = metrics.report_refs()
+    top = "\n".join(
+        f"  • {t['referrer_user_id']}: {t['count']}" for t in r["top_referrers"]
+    ) or "  —"
+    await message.answer(
+        "🤝 <b>Рефералы</b>\n"
+        f"Всего: <b>{r['total_referrals']}</b> · пришли: <b>{r['joined']}</b> · "
+        f"вознаграждены: <b>{r['rewarded']}</b>\n"
+        f"Выдано кредитов: <b>{r['total_reward_credits']}</b>\n"
+        f"Топ пригласивших:\n{top}",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("admin_errors"))
+async def cmd_admin_errors(message: types.Message):
+    if not _admin_only(message):
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    r = metrics.report_errors(7)
+    by_type = "\n".join(f"  • {e['error_type']}: {e['count']}" for e in r["errors_by_type"]) or "  —"
+    recent = "\n".join(
+        f"  • {x['created_at']} · {x['operation_type']}/{x['model']} · {x['error_type']}"
+        for x in r["recent"]
+    ) or "  —"
+    await message.answer(
+        "🚨 <b>Ошибки (7 дней)</b>\n"
+        f"По типам:\n{by_type}\n"
+        f"Последние:\n{recent}",
+        parse_mode="HTML",
+    )
+
+
+# Метрики: действие → имя события запроса / тип операции для flow_jobs.
+_IMG_REQUEST_EVENT = {
+    "gen": "image_requested", "regen": "image_requested",
+    "revary": "variations_requested",
+    "up2x": "upscale_requested",
+    "edit": "image_edit_requested", "myphoto": "image_edit_requested",
+}
+_IMG_OP = {
+    "gen": "image", "regen": "image", "revary": "variations",
+    "up2x": "enhance", "edit": "edit", "myphoto": "edit",
+}
+
+
 async def _generate_and_send(
     message: types.Message,
     prompt: str,
@@ -3119,8 +3295,14 @@ async def _generate_and_send(
         "prompt": prompt, "count": num_images, "aspect": aspect_ratio, "imodel": image_model,
     }
 
+    metrics.log_event(_IMG_REQUEST_EVENT.get(action, "image_requested"),
+                      user_id=user_id, username=_username(message), source=action,
+                      payload={"count": num_images, "model": image_model})
+
     # Премиум-модель (Nano Banana Pro) добавляет наценку на каждую картинку.
     surcharge = image_model_extra(image_model) * max(1, num_images)
+    started = time.monotonic()
+    ok = False
     try:
         async with user_slot(user_id, message):
             async with credit_gate(user_id, action, message, num_images, surcharge=surcharge) as charge:
@@ -3129,9 +3311,36 @@ async def _generate_and_send(
                 )
                 charge.ok = ok
     except RateLimited:
+        _log_image_job(user_id, action, image_model, started, ok=False, error="rate_limited")
         return
     except NotEnoughCredits:
+        metrics.log_event("image_failed", user_id=user_id, source=action,
+                          payload={"reason": "insufficient_credits"})
         return
+    charged = (action_price(action, num_images) + surcharge) if ok else 0
+    metrics.log_event("image_success" if ok else "image_failed",
+                      user_id=user_id, source=action)
+    if ok:
+        metrics.log_event("credits_charged", user_id=user_id, source=action,
+                          payload={"amount": charged, "action": action})
+        if action == "gen":
+            metrics.log_event("wizard_completed", user_id=user_id, source=action)
+    _log_image_job(user_id, action, image_model, started, ok=ok, charged=charged)
+
+
+def _ms_since(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
+
+
+def _log_image_job(user_id, action, image_model, started, *, ok, charged=0, error=None):
+    """flow_jobs-запись для картиночной операции (никогда не бросает)."""
+    metrics.log_flow_job(
+        user_id=user_id, account_id=FLOW_ACCOUNT_ID,
+        operation_type=_IMG_OP.get(action, "image"), model=image_model,
+        bot_credits_charged=charged, duration_ms=_ms_since(started),
+        status="success" if ok else "fail",
+        error_type=error or (None if ok else "gen_failed"),
+    )
 
 
 async def _do_generate_and_send(
@@ -3325,19 +3534,32 @@ async def _edit_and_send(
 
     aspect = aspect_ratio or ref.aspect_ratio
     surcharge = image_model_extra(image_model)
+    metrics.log_event("image_edit_requested", user_id=user_id, source="edit",
+                      payload={"model": image_model})
+    started = time.monotonic()
+    ok = False
     try:
         async with user_slot(user_id, message):
             async with credit_gate(user_id, "edit", message, 1, surcharge=surcharge) as charge:
-                charge.ok = await _do_edit_and_send(
+                ok = await _do_edit_and_send(
                     message, ref, instruction, image_inputs, user_id,
                     aspect_ratio=aspect, image_model=image_model,
                 )
-                return charge.ok
+                charge.ok = ok
     except RateLimited:
+        _log_image_job(user_id, "edit", image_model, started, ok=False, error="rate_limited")
         return False
     except NotEnoughCredits:
+        metrics.log_event("image_failed", user_id=user_id, source="edit",
+                          payload={"reason": "insufficient_credits"})
         return False
-    return False
+    charged = (action_price("edit", 1) + surcharge) if ok else 0
+    metrics.log_event("image_success" if ok else "image_failed", user_id=user_id, source="edit")
+    if ok:
+        metrics.log_event("credits_charged", user_id=user_id, source="edit",
+                          payload={"amount": charged, "action": "edit"})
+    _log_image_job(user_id, "edit", image_model, started, ok=ok, charged=charged)
+    return ok
 
 
 async def _do_edit_and_send(
@@ -3424,19 +3646,33 @@ async def _run_i2i(
         )
         return False
 
+    metrics.log_event(_IMG_REQUEST_EVENT.get(action, "image_requested"),
+                      user_id=user_id, source=action, payload={"count": num_images})
+    started = time.monotonic()
+    ok = False
     try:
         async with user_slot(user_id, message):
             async with credit_gate(user_id, action, message, num_images) as charge:
-                charge.ok = await _do_run_i2i(
+                ok = await _do_run_i2i(
                     message, ref, prompt, image_inputs,
                     num_images=num_images, emoji=emoji, fail_text=fail_text,
                 )
-                return charge.ok
+                charge.ok = ok
     except RateLimited:
+        _log_image_job(user_id, action, None, started, ok=False, error="rate_limited")
         return False
     except NotEnoughCredits:
+        metrics.log_event("image_failed", user_id=user_id, source=action,
+                          payload={"reason": "insufficient_credits"})
         return False
-    return False
+    charged = action_price(action, num_images) if ok else 0
+    metrics.log_event("image_success" if ok else "image_failed",
+                      user_id=user_id, source=action)
+    if ok:
+        metrics.log_event("credits_charged", user_id=user_id, source=action,
+                          payload={"amount": charged, "action": action})
+    _log_image_job(user_id, action, None, started, ok=ok, charged=charged)
+    return ok
 
 
 async def _do_run_i2i(
@@ -3530,14 +3766,31 @@ async def _real_upscale_and_send(message: types.Message, ref: ImageRef):
         await message.answer(flow_copy.msg("upscale_unavailable"))
         return
 
+    metrics.log_event("upscale_requested", user_id=user_id, source="realup")
+    started = time.monotonic()
+    ok = False
     try:
         async with user_slot(user_id, message):
             async with credit_gate(user_id, "realup", message, 1) as charge:
-                charge.ok = await _do_real_upscale(message, ref, media_id)
+                ok = await _do_real_upscale(message, ref, media_id)
+                charge.ok = ok
     except RateLimited:
+        _log_image_job(user_id, "realup", None, started, ok=False, error="rate_limited")
         return
     except NotEnoughCredits:
+        metrics.log_event("image_failed", user_id=user_id, source="realup",
+                          payload={"reason": "insufficient_credits"})
         return
+    charged = action_price("realup", 1) if ok else 0
+    metrics.log_event("image_success" if ok else "image_failed", user_id=user_id, source="realup")
+    if ok:
+        metrics.log_event("credits_charged", user_id=user_id, source="realup",
+                          payload={"amount": charged, "action": "realup"})
+    metrics.log_flow_job(
+        user_id=user_id, account_id=FLOW_ACCOUNT_ID, operation_type="upscale",
+        model=None, bot_credits_charged=charged, duration_ms=_ms_since(started),
+        status="success" if ok else "fail", error_type=None if ok else "upscale_failed",
+    )
 
 
 async def _do_real_upscale(message: types.Message, ref: ImageRef, media_id: str) -> bool:
@@ -3740,6 +3993,7 @@ async def on_menu_action(callback: types.CallbackQuery):
         await show_balance(msg, user_id=user_id, edit=True)
     elif data == "m:topup":
         await callback.answer()
+        metrics.log_event("topup_opened", user_id=user_id, source="menu")
         await msg.edit_text(
             flow_copy.msg("topup_screen"),
             reply_markup=topup_kb(is_admin=user_id in ADMIN_IDS),
@@ -4187,6 +4441,11 @@ async def _video_generate_and_send(
     single_price = unit_price_override if unit_price_override is not None else video_price(model_id, 1, vmode)
     total_price = single_price * vcount
 
+    _vid_started = time.monotonic()
+    metrics.log_event("video_requested", user_id=user_id, username=_username(message),
+                      source=video_operation if video_operation != "generate" else vmode,
+                      payload={"model": model_id, "count": vcount, "mode": vmode})
+
     have = credit_store.balance(user_id)
     if have < total_price:
         kb = types.InlineKeyboardMarkup(inline_keyboard=[
@@ -4224,9 +4483,20 @@ async def _video_generate_and_send(
 
     async def _fail_retry(i: int):
         nonlocal refunded_units
-        credit_store.refund(user_id, single_price * (vcount - i))
+        refund_amt = single_price * (vcount - i)
+        credit_store.refund(user_id, refund_amt)
         refunded_units += vcount - i
         _stash_retry()
+        metrics.log_event("video_failed", user_id=user_id, source=vmode,
+                          payload={"model": model_id})
+        metrics.log_event("credits_refunded", user_id=user_id, source=vmode,
+                          payload={"amount": refund_amt})
+        metrics.log_flow_job(
+            user_id=user_id, account_id=FLOW_ACCOUNT_ID,
+            operation_type=f"video_{vmode}", model=model_id,
+            bot_credits_charged=0, refund_amount=refund_amt,
+            duration_ms=_ms_since(_vid_started), status="fail", error_type="video_gen_failed",
+        )
         fail_kb = types.InlineKeyboardMarkup(inline_keyboard=[
             [_menu_button("vid_retry", "v:retry")],
             [_menu_button("menu", "m:menu")],
@@ -4328,6 +4598,18 @@ async def _video_generate_and_send(
         st.pop("vretry", None)  # успех — снимок для ретрая больше не нужен
 
         if sent_count:
+            charged = single_price * sent_count
+            metrics.log_event("video_success", user_id=user_id, source=vmode,
+                              payload={"model": model_id, "count": sent_count})
+            metrics.log_event("credits_charged", user_id=user_id, source=vmode,
+                              payload={"amount": charged, "action": f"video_{vmode}"})
+            metrics.log_flow_job(
+                user_id=user_id, account_id=FLOW_ACCOUNT_ID,
+                operation_type=f"video_{vmode}", model=model_id,
+                bot_credits_charged=charged,
+                refund_amount=single_price * refunded_units,
+                duration_ms=_ms_since(_vid_started), status="success",
+            )
             try:
                 await status_msg.delete()
             except Exception:
@@ -4342,6 +4624,14 @@ async def _video_generate_and_send(
         remaining = total_price - already_refunded
         if remaining > 0:
             credit_store.refund(user_id, remaining)
+        metrics.log_event("video_failed", user_id=user_id, source=vmode,
+                          payload={"model": model_id, "reason": "exception"})
+        metrics.log_flow_job(
+            user_id=user_id, account_id=FLOW_ACCOUNT_ID,
+            operation_type=f"video_{vmode}", model=model_id, bot_credits_charged=0,
+            refund_amount=total_price, duration_ms=_ms_since(_vid_started),
+            status="error", error_type="exception",
+        )
         try:
             await status_msg.edit_text(flow_copy.msg("vid_gen_failed"))
         except Exception:
@@ -4599,11 +4889,23 @@ async def on_successful_payment(message: types.Message):
     new_balance = credit_store.add(user_id, p["credits"])
     # Запоминаем платёж (charge_id) — нужен для возврата звёзд через /refund.
     charge_id = getattr(sp, "telegram_payment_charge_id", "") or ""
+    stars_paid = getattr(sp, "total_amount", p["stars"])
     if charge_id:
         try:
-            payment_store.add(user_id, charge_id, getattr(sp, "total_amount", p["stars"]), p["credits"], pack_id)
+            payment_store.add(user_id, charge_id, stars_paid, p["credits"], pack_id)
         except Exception:
             log.exception("payment_store.add failed")
+    # Метрики: идемпотентная запись транзакции (charge_id уникален) + событие.
+    metrics.record_transaction(
+        provider="telegram_stars",
+        provider_payment_id=charge_id or f"nocharge:{user_id}:{pack_id}",
+        user_id=user_id, package_id=pack_id,
+        amount_rub=round(stars_paid * STARS_TO_RUB, 2), stars_amount=stars_paid,
+        credits_issued=p["credits"], status="paid",
+    )
+    metrics.log_event("payment_success", user_id=user_id, username=_username(message),
+                      source="stars",
+                      payload={"pack": pack_id, "stars": stars_paid, "credits": p["credits"]})
     log.info(f"💳 Оплата: +{p['credits']} кр пользователю {user_id} (баланс {new_balance})")
     await message.answer(
         flow_copy.msg("topup_done", credits=p["credits"], balance=new_balance)

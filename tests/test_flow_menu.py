@@ -566,6 +566,32 @@ class BotMenuWiringTests(unittest.TestCase):
         # Temporary capture-driven logging to diagnose the фото+текст gen failure.
         self.assertIn("🎬 r2v req", self.source)
 
+    def test_metrics_wired_into_flow(self) -> None:
+        # Metrics import + init + key events + idempotent transaction recording.
+        self.assertIn("import metrics", self.source)
+        self.assertIn("metrics.init_db(", self.source)
+        for ev in (
+            '"user_started"', '"image_requested"', '"image_success"', '"image_failed"',
+            '"variations_requested"', '"upscale_requested"', '"image_edit_requested"',
+            '"video_requested"', '"video_success"', '"video_failed"',
+            '"credits_charged"', '"credits_refunded"', '"topup_opened"',
+            '"payment_success"', '"wizard_started"', '"wizard_completed"',
+        ):
+            self.assertIn(ev, self.source, ev)
+        self.assertIn("metrics.record_transaction(", self.source)
+        self.assertIn("metrics.log_flow_job(", self.source)
+
+    def test_admin_metrics_commands_registered(self) -> None:
+        for cmd in (
+            "admin_today", "admin_revenue", "admin_flow",
+            "admin_accounts", "admin_refs", "admin_errors",
+        ):
+            self.assertIn(f'Command("{cmd}")', self.source, cmd)
+        # All admin-gated (read-only for users).
+        self.assertIn("def _admin_only", self.source)
+        self.assertIn("metrics.report_today()", self.source)
+        self.assertIn("metrics.report_accounts()", self.source)
+
     def test_video_prompt_edit_clears_reference_mode_inputs(self) -> None:
         self.assertIn("def _vid_clear_reference_inputs", self.source)
         start = self.source.index("async def _video_prompt_edit_and_send")

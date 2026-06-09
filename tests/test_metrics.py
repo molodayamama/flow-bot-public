@@ -1,0 +1,309 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+import metrics
+
+
+class MetricsTestBase(unittest.TestCase):
+    """Each test runs against a fresh on-disk DB in its own temp directory.
+
+    ``metrics`` keeps a single module-global connection, so we always
+    ``close()`` it and re-``init_db`` against a brand new file per test to
+    guarantee isolation (mirrors the temp-dir-per-test style of the flow tests).
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db_path = str(Path(self._tmp.name) / "metrics.db")
+        metrics.close()
+        metrics.init_db(self.db_path)
+
+    def tearDown(self) -> None:
+        metrics.close()
+        self._tmp.cleanup()
+
+    # ── small query helpers (direct, bypassing the module lock for reads) ──
+    def _count(self, table: str) -> int:
+        conn = metrics._conn()
+        with conn:
+            return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+
+    def _one(self, sql: str, params: tuple = ()):  # noqa: ANN001
+        conn = metrics._conn()
+        return conn.execute(sql, params).fetchone()
+
+
+class EventTests(MetricsTestBase):
+    def test_log_event_inserts_row_and_roundtrips_payload(self) -> None:
+        metrics.log_event(
+            "image_requested",
+            user_id=7,
+            username="alice",
+            source="wizard",
+            payload={"prompt": "кот", "n": 4},
+        )
+        self.assertEqual(self._count("events"), 1)
+        row = self._one(
+            "SELECT event_name, user_id, username, source, payload_json FROM events"
+        )
+        self.assertEqual(row[0], "image_requested")
+        self.assertEqual(row[1], 7)
+        self.assertEqual(row[2], "alice")
+        self.assertEqual(row[3], "wizard")
+        # Payload round-trips through payload_json (ensure_ascii=False kept utf-8).
+        import json
+        self.assertEqual(json.loads(row[4]), {"prompt": "кот", "n": 4})
+
+    def test_log_event_optional_args_are_fine(self) -> None:
+        metrics.log_event("user_started")  # no user_id/username/source/payload
+        self.assertEqual(self._count("events"), 1)
+        row = self._one("SELECT user_id, username, source, payload_json FROM events")
+        self.assertEqual(tuple(row), (None, None, None, None))
+
+    def test_log_event_never_raises_on_bad_payload(self) -> None:
+        # A non-serializable payload must NOT raise; the event may be stored
+        # without its body (payload_json NULL).
+        try:
+            metrics.log_event("weird", user_id=1, payload={"x": {1, 2, 3}})
+        except Exception as exc:  # noqa: BLE001
+            self.fail(f"log_event raised on bad payload: {exc!r}")
+        row = self._one("SELECT event_name, payload_json FROM events")
+        self.assertEqual(row[0], "weird")
+        self.assertIsNone(row[1])
+
+    def test_log_event_never_raises_on_closed_db(self) -> None:
+        # Even if the DB is closed underneath it, logging must swallow the error.
+        metrics.close()
+        # Re-init against a path inside a now-deleted dir would still be handled,
+        # but the clearest "broken DB" is a closed connection during the call.
+        try:
+            # Point at a fresh DB so _conn lazily reopens, then break it.
+            metrics.init_db(self.db_path)
+            metrics._CONN.close()  # simulate a torn-down connection
+            metrics.log_event("after_close", user_id=1)
+        except Exception as exc:  # noqa: BLE001
+            self.fail(f"log_event raised on closed DB: {exc!r}")
+
+
+class FlowJobTests(MetricsTestBase):
+    def test_flow_job_roundtrip_computes_delta(self) -> None:
+        metrics.log_flow_job(
+            user_id=7,
+            account_id="acc-1",
+            operation_type="image_generate",
+            model="GEM_PIX_2",
+            bot_credits_charged=10,
+            flow_credits_before=1000,
+            flow_credits_after=993,
+            duration_ms=1234,
+            status="success",
+        )
+        row = self._one(
+            "SELECT flow_credits_before, flow_credits_after, flow_credits_delta, "
+            "bot_credits_charged, status FROM flow_jobs"
+        )
+        self.assertEqual(row[0], 1000)
+        self.assertEqual(row[1], 993)
+        self.assertEqual(row[2], -7)  # delta = after - before
+        self.assertEqual(row[3], 10)
+        self.assertEqual(row[4], "success")
+
+        # The same delta surfaces through report_flow.
+        rep = metrics.report_flow()
+        by_model = {m["model"]: m for m in rep["by_model_credits"]}
+        self.assertEqual(by_model["GEM_PIX_2"]["flow_credits_delta_sum"], -7)
+        self.assertEqual(rep["success_rate"], 1.0)
+
+    def test_flow_job_delta_null_when_one_side_missing(self) -> None:
+        metrics.log_flow_job(operation_type="edit", flow_credits_before=500)
+        row = self._one("SELECT flow_credits_delta FROM flow_jobs")
+        self.assertIsNone(row[0])
+
+    def test_log_flow_job_never_raises(self) -> None:
+        metrics.close()
+        metrics.init_db(self.db_path)
+        metrics._CONN.close()
+        try:
+            metrics.log_flow_job(operation_type="image_generate")
+        except Exception as exc:  # noqa: BLE001
+            self.fail(f"log_flow_job raised on broken DB: {exc!r}")
+
+
+class TransactionTests(MetricsTestBase):
+    def test_record_transaction_is_idempotent(self) -> None:
+        first = metrics.record_transaction(
+            provider="telegram",
+            provider_payment_id="charge_ABC",
+            user_id=7,
+            package_id="large",
+            stars_amount=450,
+            credits_issued=700,
+        )
+        second = metrics.record_transaction(
+            provider="telegram",
+            provider_payment_id="charge_ABC",  # same id → duplicate webhook
+            user_id=7,
+            package_id="large",
+            stars_amount=450,
+            credits_issued=700,
+        )
+        self.assertTrue(first)   # newly inserted
+        self.assertFalse(second)  # already existed, ignored
+        # Exactly one row; credits counted once.
+        self.assertEqual(self._count("transactions"), 1)
+        total = self._one(
+            "SELECT COALESCE(SUM(credits_issued),0) FROM transactions"
+        )[0]
+        self.assertEqual(total, 700)
+
+    def test_record_transaction_distinct_ids_make_two_rows(self) -> None:
+        self.assertTrue(metrics.record_transaction(
+            provider="telegram", provider_payment_id="chg_1", user_id=1,
+            stars_amount=35, credits_issued=45))
+        self.assertTrue(metrics.record_transaction(
+            provider="telegram", provider_payment_id="chg_2", user_id=1,
+            stars_amount=75, credits_issued=100))
+        self.assertEqual(self._count("transactions"), 2)
+
+    def test_paid_at_defaults_when_status_paid(self) -> None:
+        metrics.record_transaction(
+            provider="telegram", provider_payment_id="chg_paid", user_id=1,
+            stars_amount=35, credits_issued=45, status="paid")
+        row = self._one("SELECT status, paid_at FROM transactions")
+        self.assertEqual(row[0], "paid")
+        self.assertIsNotNone(row[1])  # auto-stamped
+
+
+class ReferralTests(MetricsTestBase):
+    def test_referral_join_idempotent_on_referred_user(self) -> None:
+        self.assertTrue(metrics.record_referral_join(referrer_user_id=1, referred_user_id=2))
+        # Same referred user again → ignored, even from a different referrer.
+        self.assertFalse(metrics.record_referral_join(referrer_user_id=9, referred_user_id=2))
+        self.assertEqual(self._count("referrals"), 1)
+        row = self._one("SELECT referrer_user_id, status FROM referrals")
+        self.assertEqual(row[0], 1)       # original referrer kept
+        self.assertEqual(row[1], "joined")
+
+    def test_self_referral_rejected_without_row(self) -> None:
+        self.assertFalse(metrics.record_referral_join(referrer_user_id=5, referred_user_id=5))
+        self.assertEqual(self._count("referrals"), 0)
+
+    def test_mark_referral_rewarded(self) -> None:
+        metrics.record_referral_join(referrer_user_id=1, referred_user_id=2)
+        metrics.mark_referral_rewarded(
+            referred_user_id=2, reward_credits=50, first_payment_transaction_id=11)
+        row = self._one(
+            "SELECT status, reward_credits, first_payment_transaction_id, rewarded_at "
+            "FROM referrals WHERE referred_user_id=2"
+        )
+        self.assertEqual(row[0], "rewarded")
+        self.assertEqual(row[1], 50)
+        self.assertEqual(row[2], 11)
+        self.assertIsNotNone(row[3])
+
+        rep = metrics.report_refs()
+        self.assertEqual(rep["total_referrals"], 1)
+        self.assertEqual(rep["rewarded"], 1)
+        self.assertEqual(rep["total_reward_credits"], 50)
+
+
+class ReportTodayTests(MetricsTestBase):
+    def test_report_today_empty_db_returns_zeros(self) -> None:
+        rep = metrics.report_today()
+        self.assertEqual(rep["new_users"], 0)
+        self.assertEqual(rep["active_users"], 0)
+        self.assertEqual(rep["paying_users"], 0)
+        self.assertEqual(rep["image_generations"], 0)
+        self.assertEqual(rep["video_generations"], 0)
+        self.assertEqual(rep["success_rate"], 0.0)
+        self.assertEqual(rep["revenue_rub"], 0.0)
+        self.assertEqual(rep["revenue_stars"], 0)
+        self.assertEqual(rep["credits_charged"], 0)
+        self.assertEqual(rep["credits_refunded"], 0)
+        self.assertEqual(rep["top_actions"], [])
+
+    def test_report_today_reflects_inserted_activity(self) -> None:
+        metrics.log_event("user_started", user_id=7)
+        metrics.log_event("image_success", user_id=7)
+        metrics.log_flow_job(
+            user_id=7, operation_type="image_generate",
+            bot_credits_charged=10, status="success")
+        metrics.record_transaction(
+            provider="telegram", provider_payment_id="chg_today", user_id=7,
+            package_id="small", amount_rub=99.0, stars_amount=75,
+            credits_issued=100, status="paid")
+
+        rep = metrics.report_today()
+        self.assertEqual(rep["new_users"], 1)
+        self.assertEqual(rep["active_users"], 1)
+        self.assertEqual(rep["paying_users"], 1)
+        self.assertEqual(rep["image_generations"], 1)
+        self.assertEqual(rep["paying_users"], 1)
+        self.assertEqual(rep["revenue_rub"], 99.0)
+        self.assertEqual(rep["revenue_stars"], 75)
+        self.assertEqual(rep["credits_charged"], 10)
+        self.assertEqual(rep["success_rate"], 1.0)
+        names = {a["event_name"] for a in rep["top_actions"]}
+        self.assertIn("user_started", names)
+        self.assertIn("image_success", names)
+
+
+class ReportResilienceTests(MetricsTestBase):
+    def test_all_reports_safe_on_empty_db(self) -> None:
+        # None of the reports may raise on a pristine DB.
+        self.assertIsInstance(metrics.report_today(), dict)
+        self.assertIsInstance(metrics.report_revenue(30), dict)
+        self.assertIsInstance(metrics.report_flow(), dict)
+        self.assertIsInstance(metrics.report_accounts(), dict)
+        self.assertIsInstance(metrics.report_refs(), dict)
+        self.assertIsInstance(metrics.report_errors(7), dict)
+
+    def test_report_accounts_tracks_remaining_and_last_error(self) -> None:
+        metrics.log_flow_job(
+            account_id="acc-1", operation_type="image_generate",
+            flow_credits_before=100, flow_credits_after=90, status="success")
+        metrics.log_flow_job(
+            account_id="acc-1", operation_type="image_generate",
+            status="error", error_type="quota_exceeded")
+        rep = metrics.report_accounts()
+        accounts = {a["account_id"]: a for a in rep["accounts"]}
+        self.assertIn("acc-1", accounts)
+        a = accounts["acc-1"]
+        self.assertEqual(a["jobs"], 2)
+        self.assertEqual(a["success"], 1)
+        self.assertEqual(a["fail"], 1)
+        self.assertEqual(a["last_error"], "quota_exceeded")
+        self.assertEqual(a["credits_remaining"], 90)
+
+    def test_report_errors_lists_recent_failures(self) -> None:
+        metrics.log_flow_job(operation_type="video", status="error", error_type="timeout")
+        metrics.log_flow_job(operation_type="image", status="success")
+        rep = metrics.report_errors(7)
+        self.assertEqual(len(rep["recent"]), 1)
+        self.assertEqual(rep["recent"][0]["error_type"], "timeout")
+        types = {e["error_type"]: e["count"] for e in rep["errors_by_type"]}
+        self.assertEqual(types.get("timeout"), 1)
+
+
+class LazyInitTests(unittest.TestCase):
+    def test_functions_work_without_explicit_init(self) -> None:
+        # _conn() lazily inits if the caller forgot. Use an env-driven temp path.
+        import os
+        with tempfile.TemporaryDirectory() as tmp:
+            metrics.close()
+            os.environ["METRICS_DB"] = str(Path(tmp) / "lazy.db")
+            try:
+                # No init_db() call at all.
+                metrics.log_event("lazy_event", user_id=1)
+                rep = metrics.report_today()
+                self.assertEqual(rep["active_users"], 1)
+            finally:
+                metrics.close()
+                os.environ.pop("METRICS_DB", None)
+
+
+if __name__ == "__main__":
+    unittest.main()
