@@ -328,13 +328,18 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("async def _send_original_file", self.source)
 
     def test_real_upscale_wired(self) -> None:
-        # The real upscale learns the request from the browser and replays it.
-        self.assertIn("def _maybe_capture_upscale", self.source)
-        self.assertIn("run_captured_request", self.source)
-        self.assertIn("build_request_capture", self.source)
-        self.assertIn("apply_request_capture", self.source)
+        # The real upscale uses the verified flow/upsampleImage contract (sync POST
+        # returning base64 encodedImage), NOT a prompt-based image-to-image enhance.
+        self.assertIn("async def upsample_image", self.source)
+        self.assertIn("result = await client.upsample_image", self.source)
+        self.assertIn("build_upsample_payload", self.source)
+        self.assertIn("parse_upsample_response", self.source)
         self.assertIn('b("realup", "realup")', self.source)
         self.assertIn('elif action == "realup"', self.source)
+        # realup must NOT silently fall back to the prompt enhance anymore.
+        real_start = self.source.index("async def _real_upscale_and_send")
+        real_block = self.source[real_start:real_start + 900]
+        self.assertNotIn("_enhance_and_send", real_block)
 
     def test_frames_and_ingredients_have_format_and_count(self) -> None:
         # Frames/Ingredients screens reuse the shared format+count picker rows.

@@ -710,6 +710,44 @@ def build_generation_payload(
     }
 
 
+# Real server-side image upscale — the UI's "Upscaled x2" download. Verified from
+# a real ``flow/upsampleImage`` capture (2026-06-09): a SYNCHRONOUS POST that
+# returns the upscaled image inline as base64 ``encodedImage`` (no polling, no new
+# media id). Costs 0 Google Flow credits like all image ops.
+IMAGE_UPSAMPLE_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1/flow/upsampleImage"
+IMAGE_UPSAMPLE_RESOLUTION = "UPSAMPLE_IMAGE_RESOLUTION_2K"  # captured "Upscaled x2"
+
+
+def build_upsample_payload(
+    *,
+    media_id: str,
+    project_id: str,
+    captcha_token: str,
+    session_id: str,
+    target_resolution: str = IMAGE_UPSAMPLE_RESOLUTION,
+) -> dict:
+    """Construct the ``flow/upsampleImage`` request body (verified shape)."""
+    return {
+        "mediaId": media_id,
+        "targetResolution": target_resolution,
+        "clientContext": {
+            "recaptchaContext": {
+                "token": captcha_token,
+                "applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB",
+            },
+            "projectId": project_id,
+            "tool": "PINHOLE",
+            "userPaygateTier": "PAYGATE_TIER_ONE",
+            "sessionId": session_id,
+        },
+    }
+
+
+def parse_upsample_response(data: dict) -> str | None:
+    """Return the base64 ``encodedImage`` from an upsampleImage response, or None."""
+    enc = data.get("encodedImage") if isinstance(data, dict) else None
+    return enc if isinstance(enc, str) and enc else None
+
 # ── video generation ──────────────────────────────────────────────────
 # Verified from a real captured request (tools/capture_video.py).
 # Endpoint: https://aisandbox-pa.googleapis.com/v1/video:batchAsyncGenerateVideoText

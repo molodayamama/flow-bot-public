@@ -22,6 +22,9 @@ from flow_core import (
     image_model_extra,
     IMAGE_MODELS,
     DEFAULT_IMAGE_MODEL,
+    build_upsample_payload,
+    parse_upsample_response,
+    IMAGE_UPSAMPLE_ENDPOINT,
 )
 
 
@@ -122,6 +125,27 @@ class PayloadTests(unittest.TestCase):
             aspect="landscape", num_images=1, seed=1, session_id=";1",
         )
         self.assertEqual(default["requests"][0]["imageModelName"], "GEM_PIX_2")
+
+    def test_upsample_payload_matches_capture(self) -> None:
+        # Verified from a real flow/upsampleImage capture (2026-06-09).
+        self.assertEqual(
+            IMAGE_UPSAMPLE_ENDPOINT,
+            "https://aisandbox-pa.googleapis.com/v1/flow/upsampleImage",
+        )
+        p = build_upsample_payload(
+            media_id="1f0d8870", project_id="proj", captcha_token="tok", session_id=";9",
+        )
+        self.assertEqual(p["mediaId"], "1f0d8870")
+        self.assertEqual(p["targetResolution"], "UPSAMPLE_IMAGE_RESOLUTION_2K")
+        self.assertEqual(p["clientContext"]["projectId"], "proj")
+        self.assertEqual(p["clientContext"]["tool"], "PINHOLE")
+        self.assertEqual(p["clientContext"]["recaptchaContext"]["token"], "tok")
+
+    def test_parse_upsample_response(self) -> None:
+        self.assertEqual(parse_upsample_response({"encodedImage": "QUJD"}), "QUJD")
+        self.assertIsNone(parse_upsample_response({}))
+        self.assertIsNone(parse_upsample_response({"encodedImage": ""}))
+        self.assertIsNone(parse_upsample_response("nope"))
 
     def test_build_image_inputs_uses_known_default_shape(self) -> None:
         # Derived from a REAL intercepted edit: BASE_IMAGE + name=mediaId.

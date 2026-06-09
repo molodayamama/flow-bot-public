@@ -55,6 +55,9 @@ from flow_core import (
     build_generation_payload,
     build_image_inputs,
     build_ingredients_inputs,
+    IMAGE_UPSAMPLE_ENDPOINT,
+    build_upsample_payload,
+    parse_upsample_response,
     IMAGE_MODELS,
     DEFAULT_IMAGE_MODEL,
     image_model_meta,
@@ -1559,6 +1562,79 @@ class FlowHttpClient:
             if status == 429:
                 return {"error": flow_copy.msg("rate_limited")}
             log.error(f"❌ UPSCALE статус {status}: {text[:200]}")
+            return {"error": flow_copy.msg("service_error", status=status)}
+
+        return {"error": flow_copy.msg("upscale_unavailable")}
+
+    async def upsample_image(
+        self, media_id: str, project_id: str | None, *, progress_cb=None
+    ) -> dict:
+        """Родной серверный апскейл картинки (UI «Upscaled x2»).
+
+        Синхронный POST ``flow/upsampleImage`` — ответ содержит готовую увеличенную
+        картинку base64 (``encodedImage``), поллинг не нужен. Возвращает
+        ``{"image_bytes": bytes}`` или ``{"error": ...}``. Контракт сверен из
+        реального захвата (а не промпт-доработка, как «Чёткость ×2»).
+        """
+        session = await self.keeper.get_session()
+        if not session["bearer"]:
+            return {"error": flow_copy.msg("upscale_unavailable")}
+        project_id = project_id or session["project_id"]
+        sess_id = f";{int(time.time() * 1000)}"
+
+        for idx, action in enumerate(SessionKeeper.RECAPTCHA_ACTIONS):
+            if progress_cb:
+                await progress_cb(flow_copy.msg("upscaling"))
+            captcha_token = await self.keeper.solve_captcha(action)
+            if not captcha_token:
+                continue
+            payload = build_upsample_payload(
+                media_id=media_id,
+                project_id=project_id or "",
+                captcha_token=captcha_token,
+                session_id=sess_id,
+            )
+            try:
+                async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
+                    proxy = _effective_proxy_url(API_PROXY_URL) or None
+                    async with http.post(
+                        IMAGE_UPSAMPLE_ENDPOINT,
+                        headers=self._build_headers(session),
+                        json=payload,
+                        proxy=proxy,
+                        timeout=aiohttp.ClientTimeout(total=180),
+                    ) as resp:
+                        status = resp.status
+                        text = await resp.text()
+                        log.info(f"📡 UPSAMPLE ответ: {status} (action={action})")
+            except Exception as e:
+                log.error(f"❌ UPSAMPLE сеть: {e}")
+                return {"error": flow_copy.msg("gen_failed")}
+
+            if status == 200:
+                import json as _json
+                import base64
+                try:
+                    data = _json.loads(text)
+                except Exception:
+                    return {"error": flow_copy.msg("parse_failed")}
+                enc = parse_upsample_response(data)
+                if not enc:
+                    return {"error": flow_copy.msg("upscale_unavailable")}
+                try:
+                    return {"image_bytes": base64.b64decode(enc)}
+                except Exception:
+                    return {"error": flow_copy.msg("parse_failed")}
+            if status == 401:
+                await self.keeper._refresh_bearer()
+                session = await self.keeper.get_session()
+                continue
+            if status == 403:
+                log.warning(f"⚠️ UPSAMPLE 403 ({idx+1}). Тело: {text[:200]}")
+                continue
+            if status == 429:
+                return {"error": flow_copy.msg("rate_limited")}
+            log.error(f"❌ UPSAMPLE статус {status}: {text[:200]}")
             return {"error": flow_copy.msg("service_error", status=status)}
 
         return {"error": flow_copy.msg("upscale_unavailable")}
@@ -3321,38 +3397,30 @@ async def _enhance_and_send(message: types.Message, ref: ImageRef):
 
 
 async def _real_upscale_and_send(message: types.Message, ref: ImageRef):
-    """🔍 Настоящий апскейл: воспроизводим изученный запрос апскейла сервиса.
+    """🔍 Настоящий апскейл сервиса (flow/upsampleImage → картинка в 2K).
 
-    В отличие от «Чёткости ×2» (доработка промптом) — это родной апскейл сервиса.
-    Формат запроса изучается один раз при перехвате реального апскейла в браузере;
-    до калибровки — мягко сообщаем, что функция временно недоступна.
+    В отличие от «Чёткости ×2» (доработка промптом) — это родной серверный
+    апскейл по сверенному контракту. Возвращает готовую увеличенную картинку.
     """
     user_id = ref.user_id
     media_id = ref.source.get("mediaId") if isinstance(ref.source, dict) else None
     if not media_id:
         media_id = id_from_media_url(ref.source.get("fifeUrl") if isinstance(ref.source, dict) else None)
-    capture = load_edit_capture(UPSCALE_CAPTURE_FILE)
-    if not media_id or not capture or not capture.get("resolved"):
-        # Родной апскейл сервиса ещё не откалиброван (его формат изучается при
-        # перехвате реального апскейла в браузере). Чтобы не отказывать
-        # пользователю, делаем апскейл через image-to-image — он работает всегда
-        # и стоит столько же. _enhance_and_send сам держит слот и списание.
-        await _enhance_and_send(message, ref)
+    if not media_id:
+        await message.answer(flow_copy.msg("upscale_unavailable"))
         return
 
     try:
         async with user_slot(user_id, message):
             async with credit_gate(user_id, "realup", message, 1) as charge:
-                charge.ok = await _do_real_upscale(message, ref, media_id, capture)
+                charge.ok = await _do_real_upscale(message, ref, media_id)
     except RateLimited:
         return
     except NotEnoughCredits:
         return
 
 
-async def _do_real_upscale(
-    message: types.Message, ref: ImageRef, media_id: str, capture: dict
-) -> bool:
+async def _do_real_upscale(message: types.Message, ref: ImageRef, media_id: str) -> bool:
     status_msg = await message.answer(flow_copy.msg("upscaling"))
 
     async def update_status(text: str):
@@ -3362,9 +3430,7 @@ async def _do_real_upscale(
             pass
 
     try:
-        result = await client.run_captured_request(
-            capture, media_id, ref.project_id, progress_cb=update_status
-        )
+        result = await client.upsample_image(media_id, ref.project_id, progress_cb=update_status)
     except Exception:
         log.exception("real upscale failed")
         await status_msg.edit_text(flow_copy.msg("gen_failed"))
@@ -3374,16 +3440,25 @@ async def _do_real_upscale(
         await status_msg.edit_text(f"❌ {result['error']}")
         return False
 
-    pairs = result_pairs(result)
-    if not pairs:
+    image_bytes = result.get("image_bytes")
+    if not image_bytes:
         await status_msg.edit_text(flow_copy.msg("nothing_returned"))
         return False
 
-    await _send_result_pairs(
-        message, pairs, user_id=ref.user_id, project_id=ref.project_id,
-        prompt=(ref.prompt or "upscale"), aspect_ratio=ref.aspect_ratio, emoji="🔍",
-    )
-    await status_msg.delete()
+    from aiogram.types import BufferedInputFile
+
+    # Отдаём документом (без сжатия Telegram), чтобы сохранить высокое разрешение.
+    ext = "png" if image_bytes[:8].startswith(b"\x89PNG") else "jpg"
+    try:
+        await message.answer_document(
+            BufferedInputFile(image_bytes, f"upscaled_{media_id[-8:]}.{ext}"),
+            caption="🔍 Картинка в высоком разрешении (2K).",
+        )
+        await status_msg.delete()
+    except Exception:
+        log.exception("upscaled image send failed")
+        await status_msg.edit_text("❌ Не удалось отправить файл.")
+        return False
     return True
 
 
