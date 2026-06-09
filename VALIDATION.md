@@ -312,6 +312,8 @@ Video Ingredients/Frames (Flow API):
   scene from the source `workflowId`. The bot must not charge for Extend until a
   usable `sceneId` exists; stale or incomplete video refs remain no-charge
   unavailable.
+- `VideoRef` is frozen. Extend must pass any prepared `sceneId` as
+  `source_scene_id` into generation and must not mutate the stored registry ref.
 - Offline native Edit/Extend checks:
   `python -m py_compile flow_core.py flow_bot.py tests\test_flow_video.py tests\test_flow_menu.py`,
   `python -m unittest discover -s tests -p "test_flow_video.py"`,

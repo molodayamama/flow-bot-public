@@ -3922,7 +3922,6 @@ async def _video_extend_and_send(
         except Exception:
             await message.answer(flow_copy.msg("vid_extend_unavailable"))
         return
-    ref.scene_id = scene_id
     try:
         await status_msg.delete()
     except Exception:

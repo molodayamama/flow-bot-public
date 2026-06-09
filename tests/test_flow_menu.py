@@ -367,6 +367,7 @@ class BotMenuWiringTests(unittest.TestCase):
         block = self.source[start:end]
         self.assertIn("client.prepare_video_extend_scene", block)
         self.assertIn("if not scene_id:", block)
+        self.assertNotIn("ref.scene_id =", block)
         self.assertIn('st["vmode"] = "extend"', block)
         self.assertIn('video_operation="extend"', block)
         self.assertIn("source_scene_id=scene_id", block)
