@@ -17,6 +17,11 @@ from flow_core import (
     parse_edit_callback,
     parse_result,
     result_pairs,
+    aspect_code,
+    image_model_key,
+    image_model_extra,
+    IMAGE_MODELS,
+    DEFAULT_IMAGE_MODEL,
 )
 
 
@@ -73,6 +78,50 @@ class PayloadTests(unittest.TestCase):
         )
         for req in payload["requests"]:
             self.assertEqual(req["imageInputs"], [])
+
+    def test_new_aspect_ratios_verified_enums(self) -> None:
+        # Verified from a real batchGenerateImages capture (2026-06-09).
+        self.assertEqual(aspect_code("4:3"), "IMAGE_ASPECT_RATIO_LANDSCAPE_FOUR_THREE")
+        self.assertEqual(aspect_code("3:4"), "IMAGE_ASPECT_RATIO_PORTRAIT_THREE_FOUR")
+        self.assertEqual(aspect_code("landscape_43"), "IMAGE_ASPECT_RATIO_LANDSCAPE_FOUR_THREE")
+        self.assertEqual(aspect_code("portrait_34"), "IMAGE_ASPECT_RATIO_PORTRAIT_THREE_FOUR")
+        # Existing ones unchanged.
+        self.assertEqual(aspect_code("1:1"), "IMAGE_ASPECT_RATIO_SQUARE")
+        # Unknown still falls back to landscape.
+        self.assertEqual(aspect_code("weird"), "IMAGE_ASPECT_RATIO_LANDSCAPE")
+
+    def test_image_model_catalog_and_keys(self) -> None:
+        # Verified imageModelName strings.
+        self.assertEqual(image_model_key("nb2"), "GEM_PIX_2")
+        self.assertEqual(image_model_key("nbpro"), "NARWHAL")
+        # Unknown / default falls back to the historical default model.
+        self.assertEqual(image_model_key("???"), "GEM_PIX_2")
+        self.assertEqual(image_model_key(DEFAULT_IMAGE_MODEL), "GEM_PIX_2")
+        # Pro carries a +5 retail surcharge; default model is free of it.
+        self.assertEqual(image_model_extra("nb2"), 0)
+        self.assertEqual(image_model_extra("nbpro"), 5)
+        self.assertEqual(image_model_extra("unknown"), 0)
+
+    def test_generation_payload_threads_model_and_aspect(self) -> None:
+        payload = build_generation_payload(
+            prompt="cat",
+            project_id="proj-1",
+            captcha_token="tok",
+            aspect="3:4",
+            num_images=2,
+            seed=5,
+            session_id=";1",
+            image_model="nbpro",
+        )
+        for req in payload["requests"]:
+            self.assertEqual(req["imageModelName"], "NARWHAL")
+            self.assertEqual(req["imageAspectRatio"], "IMAGE_ASPECT_RATIO_PORTRAIT_THREE_FOUR")
+        # Default call still uses the default model (back-compat).
+        default = build_generation_payload(
+            prompt="x", project_id="p", captcha_token="t",
+            aspect="landscape", num_images=1, seed=1, session_id=";1",
+        )
+        self.assertEqual(default["requests"][0]["imageModelName"], "GEM_PIX_2")
 
     def test_build_image_inputs_uses_known_default_shape(self) -> None:
         # Derived from a REAL intercepted edit: BASE_IMAGE + name=mediaId.

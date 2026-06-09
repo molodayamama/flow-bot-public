@@ -55,6 +55,10 @@ from flow_core import (
     build_generation_payload,
     build_image_inputs,
     build_ingredients_inputs,
+    IMAGE_MODELS,
+    DEFAULT_IMAGE_MODEL,
+    image_model_meta,
+    image_model_extra,
     build_request_capture,
     clamp_num_images,
     describe_schema,
@@ -1376,6 +1380,7 @@ class FlowHttpClient:
         project_id: str | None = None,
         image_inputs: list | None = None,
         allow_browser_fallback: bool = True,
+        image_model: str = DEFAULT_IMAGE_MODEL,
     ) -> dict:
         """Сгенерировать (или, при ``image_inputs``, отредактировать) изображения.
 
@@ -1424,6 +1429,7 @@ class FlowHttpClient:
                 seed=seed,
                 session_id=sess_id,
                 image_inputs=image_inputs,
+                image_model=image_model,
             )
 
             if image_inputs:
@@ -2026,7 +2032,13 @@ def _ws(user_id: int) -> dict:
 
 
 def _fmt_to_aspect(fmt: str) -> str:
-    return {"land": "landscape", "port": "portrait", "sq": "square"}.get(fmt, "landscape")
+    return {
+        "land": "landscape",
+        "port": "portrait",
+        "sq": "square",
+        "f43": "landscape_43",
+        "f34": "portrait_34",
+    }.get(fmt, "landscape")
 
 # Авто-отключение per-user проектов после серии неудач (откат на общий проект).
 _project_creation_failures = 0
@@ -2084,14 +2096,17 @@ class _Charge:
 
 
 @asynccontextmanager
-async def credit_gate(user_id: int, action: str, message: types.Message, num_images: int = 1):
+async def credit_gate(
+    user_id: int, action: str, message: types.Message, num_images: int = 1, *, surcharge: int = 0
+):
     """Списать кредиты за действие; вернуть при неуспехе (charge-on-success).
 
     Резервируем стоимость на входе; если тело не выставило ``charge.ok``, делаем
     рефанд. Бесплатные действия (цена 0) проходят без списания. При нехватке
     средств показываем экран пополнения и поднимаем ``NotEnoughCredits``.
+    ``surcharge`` — доплата сверх базовой цены (например, премиум-модель картинки).
     """
-    price = action_price(action, num_images)
+    price = action_price(action, num_images) + max(0, int(surcharge))
     if price <= 0:
         yield _Charge()  # бесплатно — без списания
         return
@@ -2198,15 +2213,27 @@ def main_menu_kb(show_repeat: bool = False) -> types.InlineKeyboardMarkup:
 
 DEFAULT_COUNT = 1
 DEFAULT_FMT = "land"
-_FMT_NAMES = {"land": "16:9", "port": "9:16", "sq": "1:1"}
+_FMT_NAMES = {"land": "16:9", "port": "9:16", "sq": "1:1", "f43": "4:3", "f34": "3:4"}
 
 
 def _sel(label: str, chosen: bool) -> str:
     return (flow_copy.SELECTED + label) if chosen else label
 
 
-def wizard_kb(count: int, fmt: str) -> types.InlineKeyboardMarkup:
-    """Один экран: количество + формат + «Сгенерировать» (выбор помечен ✅)."""
+def _imodel_row(selected: str) -> list:
+    """Ряд выбора модели картинки (Nano Banana 2 / Pro) с наценкой в подписи."""
+    B = types.InlineKeyboardButton
+    row = []
+    for mid, meta in IMAGE_MODELS.items():
+        label = meta["label"]
+        if meta["extra"]:
+            label = f"{label} +{meta['extra']}"
+        row.append(B(text=_sel(label, mid == selected), callback_data=f"w:imodel:{mid}"))
+    return row
+
+
+def wizard_kb(count: int, fmt: str, imodel: str = DEFAULT_IMAGE_MODEL) -> types.InlineKeyboardMarkup:
+    """Один экран: количество + формат + модель + «Сгенерировать» (выбор ✅)."""
     B = types.InlineKeyboardButton
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
@@ -2217,9 +2244,14 @@ def wizard_kb(count: int, fmt: str) -> types.InlineKeyboardMarkup:
             ],
             [
                 B(text=_sel(L("fmt:land"), fmt == "land"), callback_data="w:fmt:land"),
-                B(text=_sel(L("fmt:port"), fmt == "port"), callback_data="w:fmt:port"),
+                B(text=_sel(L("fmt:f43"), fmt == "f43"), callback_data="w:fmt:f43"),
                 B(text=_sel(L("fmt:sq"), fmt == "sq"), callback_data="w:fmt:sq"),
             ],
+            [
+                B(text=_sel(L("fmt:f34"), fmt == "f34"), callback_data="w:fmt:f34"),
+                B(text=_sel(L("fmt:port"), fmt == "port"), callback_data="w:fmt:port"),
+            ],
+            _imodel_row(imodel),
             [_menu_button("go", "w:go")],
             [_menu_button("cancel", "w:cancel")],
         ]
@@ -2244,11 +2276,13 @@ def _wizard_text(user_id: int) -> str:
     st = _ws(user_id)
     count = st.get("count", DEFAULT_COUNT)
     fmt = st.get("fmt", DEFAULT_FMT)
+    imodel = st.get("imodel", DEFAULT_IMAGE_MODEL)
+    total_price = price_gen(count) + image_model_extra(imodel) * count
     text = flow_copy.msg(
         "wizard_screen",
         count=count,
         fmt=_FMT_NAMES.get(fmt, fmt),
-        price=price_gen(count),
+        price=total_price,
         credits=credit_store.balance(user_id),
     )
     # Если пользователь уже прислал промпт в чат — показываем его над настройками.
@@ -2262,8 +2296,9 @@ async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
     st = _ws(user_id)
     st.setdefault("count", DEFAULT_COUNT)
     st.setdefault("fmt", DEFAULT_FMT)
+    st.setdefault("imodel", DEFAULT_IMAGE_MODEL)
     st["step"] = "wizard"
-    kb = wizard_kb(st["count"], st["fmt"])
+    kb = wizard_kb(st["count"], st["fmt"], st["imodel"])
     text = _wizard_text(user_id)
     try:
         if edit:
@@ -2798,6 +2833,7 @@ async def _generate_and_send(
     aspect_ratio: str = "landscape",
     actor_id: int | None = None,
     action: str = "gen",
+    image_model: str = DEFAULT_IMAGE_MODEL,
 ):
     user_id = actor_id or message.from_user.id
 
@@ -2806,13 +2842,17 @@ async def _generate_and_send(
         return
 
     # Запоминаем настройки для «🔁 Повторить».
-    _ws(user_id)["last"] = {"prompt": prompt, "count": num_images, "aspect": aspect_ratio}
+    _ws(user_id)["last"] = {
+        "prompt": prompt, "count": num_images, "aspect": aspect_ratio, "imodel": image_model,
+    }
 
+    # Премиум-модель (Nano Banana Pro) добавляет наценку на каждую картинку.
+    surcharge = image_model_extra(image_model) * max(1, num_images)
     try:
         async with user_slot(user_id, message):
-            async with credit_gate(user_id, action, message, num_images) as charge:
+            async with credit_gate(user_id, action, message, num_images, surcharge=surcharge) as charge:
                 ok = await _do_generate_and_send(
-                    message, prompt, num_images, aspect_ratio, user_id
+                    message, prompt, num_images, aspect_ratio, user_id, image_model=image_model
                 )
                 charge.ok = ok
     except RateLimited:
@@ -2827,6 +2867,7 @@ async def _do_generate_and_send(
     num_images: int,
     aspect_ratio: str,
     user_id: int,
+    image_model: str = DEFAULT_IMAGE_MODEL,
 ) -> bool:
     status_msg = await message.answer(flow_copy.msg("generating"))
 
@@ -2847,6 +2888,7 @@ async def _do_generate_and_send(
             num_images=num_images,
             progress_cb=update_status,
             project_id=project_id,
+            image_model=image_model,
         )
     except Exception:
         log.exception("Generation failed")
@@ -3450,11 +3492,18 @@ async def on_wizard_action(callback: types.CallbackQuery):
         await callback.answer()
         await show_wizard(msg, user_id=user_id, edit=True)
         return
+    if data.startswith("w:imodel:"):
+        choice = data.split(":")[2]
+        if image_model_meta(choice):
+            st["imodel"] = choice
+        await callback.answer()
+        await show_wizard(msg, user_id=user_id, edit=True)
+        return
     if data == "w:go":
         pending = st.get("pending_prompt")
         if pending:
             # Промпт уже прислан в чат — генерируем сразу с выбранными
-            # количеством и форматом, второй раз текст не спрашиваем.
+            # количеством, форматом и моделью; второй раз текст не спрашиваем.
             st["pending_prompt"] = None
             count = st.get("count", DEFAULT_COUNT)
             fmt = st.get("fmt", DEFAULT_FMT)
@@ -3462,6 +3511,7 @@ async def on_wizard_action(callback: types.CallbackQuery):
             await _generate_and_send(
                 callback.message, pending, num_images=count,
                 aspect_ratio=_fmt_to_aspect(fmt), actor_id=user_id,
+                image_model=st.get("imodel", DEFAULT_IMAGE_MODEL),
             )
             return
         st["await"] = "prompt"
@@ -3707,7 +3757,13 @@ async def on_video_action(callback: types.CallbackQuery):
 
 
 def _aspect_to_fmt(aspect: str) -> str:
-    return {"landscape": "land", "portrait": "port", "square": "sq"}.get(aspect, "land")
+    return {
+        "landscape": "land",
+        "portrait": "port",
+        "square": "sq",
+        "landscape_43": "f43",
+        "portrait_34": "f34",
+    }.get(aspect, "land")
 
 
 async def _video_delivery_bytes(
@@ -3743,6 +3799,7 @@ async def _repeat_last(callback: types.CallbackQuery, user_id: int):
         num_images=last["count"],
         aspect_ratio=last["aspect"],
         actor_id=user_id,
+        image_model=last.get("imodel", DEFAULT_IMAGE_MODEL),
     )
 
 
@@ -4549,6 +4606,7 @@ async def handle_plain_text(message: types.Message):
         await _generate_and_send(
             message, text, num_images=count,
             aspect_ratio=_fmt_to_aspect(fmt), actor_id=user_id,
+            image_model=st.get("imodel", DEFAULT_IMAGE_MODEL),
         )
         return
 

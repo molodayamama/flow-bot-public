@@ -28,9 +28,11 @@ LABELS = {
     "cnt:2": "2 фото",
     "cnt:4": "4 фото",
     # wizard: format
-    "fmt:land": "🖥 Альбом 16:9",
-    "fmt:port": "📱 Портрет 9:16",
-    "fmt:sq": "⬜ Квадрат 1:1",
+    "fmt:land": "🖥 16:9",
+    "fmt:port": "📱 9:16",
+    "fmt:sq": "⬜ 1:1",
+    "fmt:f43": "🖼 4:3",
+    "fmt:f34": "📷 3:4",
     # wizard: confirm / nav
     "go": "✨ Сгенерировать",
     "back": "← Назад",

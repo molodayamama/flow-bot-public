@@ -33,16 +33,54 @@ from typing import Any
 
 # ── Google Flow constants ─────────────────────────────────────────────
 
+# Default image model (the bot's historical hardcode). Friendly ids live in
+# IMAGE_MODELS below; this is the raw fallback enum.
 IMAGE_MODEL_NAME = "GEM_PIX_2"
 
+# Image model catalog (friendly id -> Google enum + RU label + credit surcharge).
+# Verified imageModelName strings from a real batchGenerateImages capture
+# (2026-06-09): GEM_PIX_2 = "Nano Banana 2" (default), NARWHAL = "Nano Banana Pro".
+# Both cost 0 Google Flow credits; the surcharge is a pure retail upsell.
+IMAGE_MODELS: "OrderedDict[str, dict]" = OrderedDict([
+    ("nb2",   {"key": "GEM_PIX_2", "label": "Nano Banana 2",  "extra": 0}),
+    ("nbpro", {"key": "NARWHAL",   "label": "Nano Banana Pro", "extra": 5}),
+])
+DEFAULT_IMAGE_MODEL = "nb2"
+
+# Aspect ratios. Enums verified from real batchGenerateImages requests; 4:3 and
+# 3:4 confirmed 2026-06-09 (LANDSCAPE_FOUR_THREE / PORTRAIT_THREE_FOUR).
 ASPECT_MAP = {
     "landscape": "IMAGE_ASPECT_RATIO_LANDSCAPE",
     "portrait": "IMAGE_ASPECT_RATIO_PORTRAIT",
     "square": "IMAGE_ASPECT_RATIO_SQUARE",
+    "landscape_43": "IMAGE_ASPECT_RATIO_LANDSCAPE_FOUR_THREE",
+    "portrait_34": "IMAGE_ASPECT_RATIO_PORTRAIT_THREE_FOUR",
     "16:9": "IMAGE_ASPECT_RATIO_LANDSCAPE",
     "9:16": "IMAGE_ASPECT_RATIO_PORTRAIT",
     "1:1": "IMAGE_ASPECT_RATIO_SQUARE",
+    "4:3": "IMAGE_ASPECT_RATIO_LANDSCAPE_FOUR_THREE",
+    "3:4": "IMAGE_ASPECT_RATIO_PORTRAIT_THREE_FOUR",
 }
+
+
+def image_model_meta(model_id: str) -> dict | None:
+    """Return the catalog entry for a friendly image-model id, or ``None``."""
+    return IMAGE_MODELS.get((model_id or "").lower().strip())
+
+
+def image_model_key(model_id: str) -> str:
+    """Map a friendly image-model id to Google's ``imageModelName`` enum.
+
+    Unknown ids fall back to the default model so generation never breaks.
+    """
+    meta = image_model_meta(model_id)
+    return meta["key"] if meta else IMAGE_MODEL_NAME
+
+
+def image_model_extra(model_id: str) -> int:
+    """Per-image credit surcharge for the chosen model (0 for the default)."""
+    meta = image_model_meta(model_id)
+    return int(meta["extra"]) if meta else 0
 
 # Сколько изображений можно просить за один запрос (защита от абуза/квоты).
 MIN_NUM_IMAGES = 1
@@ -639,13 +677,16 @@ def build_generation_payload(
     seed: int,
     session_id: str,
     image_inputs: list[dict] | None = None,
+    image_model: str = DEFAULT_IMAGE_MODEL,
 ) -> dict:
     """Construct the ``flowMedia:batchGenerateImages`` request body.
 
     ``image_inputs`` is empty for a fresh generation and references a prior
-    image (see :func:`build_image_inputs`) when editing.
+    image (see :func:`build_image_inputs`) when editing. ``image_model`` is a
+    friendly id from :data:`IMAGE_MODELS` (resolved to ``imageModelName``).
     """
     inputs = list(image_inputs or [])
+    model_name = image_model_key(image_model)
     return {
         "clientContext": {
             "recaptchaContext": {
@@ -659,7 +700,7 @@ def build_generation_payload(
         "requests": [
             {
                 "seed": seed + i,
-                "imageModelName": IMAGE_MODEL_NAME,
+                "imageModelName": model_name,
                 "imageAspectRatio": aspect_code(aspect),
                 "prompt": prompt,
                 "imageInputs": [dict(entry) for entry in inputs],
