@@ -15,7 +15,7 @@ HTTP-клиент делает запросы с этими свежими да�
     API_PROXY_URL=                    # optional: proxy for Flow HTTP only; off/none/direct disables it
     CAPMONSTER_PROXY_URL=             # optional: proxy for CapMonster only; off/none/direct disables it
     TG_PROXY_URL=                     # optional Telegram SOCKS5 proxy URL
-    OWNER_ID=                         # опционально: твой Telegram ID для /update_token
+    OWNER_ID=                         # опционально: один или несколько Telegram ID через запятую
     ADMIN_IDS=                        # ID админов через запятую — могут /grant <id> <кредиты>
     USER_CREDITS_FILE=user_credits.json   # опц.: путь к файлу балансов
     TWOCAPTCHA_KEY=                   # ключ 2captcha (включает платный фолбэк решения капчи)
@@ -149,12 +149,19 @@ try:
     CAPMONSTER_SOLVE_TIMEOUT = int(os.getenv("CAPMONSTER_SOLVE_TIMEOUT", "120"))
 except ValueError:
     CAPMONSTER_SOLVE_TIMEOUT = 120
-OWNER_ID = os.getenv("OWNER_ID", "")
-# Админы бота (через запятую в .env) — могут начислять кредиты командой /grant.
-ADMIN_IDS = {
-    int(x) for x in os.getenv("ADMIN_IDS", os.getenv("OWNER_ID", "")).replace(";", ",").split(",")
-    if x.strip().isdigit()
-}
+def _parse_ids(raw: str) -> set[int]:
+    """Разобрать список Telegram ID из строки (разделители — запятая/точка с запятой)."""
+    return {
+        int(x) for x in (raw or "").replace(";", ",").split(",")
+        if x.strip().isdigit()
+    }
+
+
+# OWNER_ID и ADMIN_IDS оба поддерживают НЕСКОЛЬКО ID через запятую/точку с запятой.
+OWNER_IDS = _parse_ids(os.getenv("OWNER_ID", ""))
+# Админы бота — могут начислять кредиты командой /grant и видят тест-пакет.
+# Объединяем с владельцами: каждый owner — администратор.
+ADMIN_IDS = _parse_ids(os.getenv("ADMIN_IDS", "")) | OWNER_IDS
 FLOW_URL = "https://labs.google/fx/tools/flow"
 # Файл с картой telegram_user_id -> flow_project_id (каждый юзер = свой проект).
 USER_PROJECTS_FILE = os.getenv("USER_PROJECTS_FILE", "user_projects.json")
@@ -4738,15 +4745,31 @@ async def handle_plain_text(message: types.Message):
             return
         pending_edits.pop(user_id, None)
 
-    # Иначе пользователь прислал промпт прямо в чат, не нажав «Создать».
-    # Не генерируем вслепую: показываем выбор количества и формата с уже
-    # сохранённым промптом — после «Сгенерировать» сразу пойдёт генерация.
+    # Визард уже открыт и пользователь выбрал настройки — промпт из чата запускает
+    # генерацию сразу, с текущими количеством/форматом/моделью (без «Сгенерировать»).
+    if st.get("step") == "wizard":
+        count = st.get("count", DEFAULT_COUNT)
+        fmt = st.get("fmt", DEFAULT_FMT)
+        imodel = st.get("imodel", DEFAULT_IMAGE_MODEL)
+        st["step"] = None  # экран отработал — случайный текст потом не сгенерит повторно
+        st.pop("pending_prompt", None)
+        await _generate_and_send(
+            message, text, num_images=count,
+            aspect_ratio=_fmt_to_aspect(fmt), actor_id=user_id,
+            image_model=imodel,
+        )
+        return
+
+    # Иначе пользователь прислал промпт «вхолодную», не открыв визард. Не генерируем
+    # вслепую: показываем выбор количества/формата/модели с уже сохранённым
+    # промптом — после «Сгенерировать» сразу пойдёт генерация.
     last = st.get("last")
     st.clear()
     if last:  # сохраняем прошлые настройки как дефолт визарда
         st["last"] = last
         st["count"] = last.get("count", DEFAULT_COUNT)
         st["fmt"] = _aspect_to_fmt(last.get("aspect", "landscape"))
+        st["imodel"] = last.get("imodel", DEFAULT_IMAGE_MODEL)
     st["pending_prompt"] = text
     await show_wizard(message, user_id=user_id, edit=False)
 

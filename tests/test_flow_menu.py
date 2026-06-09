@@ -530,6 +530,9 @@ class BotImportSmokeTests(unittest.TestCase):
             self.assertEqual(fb.credit_store.balance(987654321), 30)
             # Admin IDs parse from env.
             self.assertIsInstance(fb.ADMIN_IDS, set)
+            # Multiple OWNER_ID values parse, and owners are admins.
+            self.assertEqual(fb._parse_ids("111, 222; 333 ,bad"), {111, 222, 333})
+            self.assertEqual(fb._parse_ids(""), set())
 
 
 if __name__ == "__main__":
