@@ -2320,8 +2320,22 @@ DEFAULT_FMT = "land"
 _FMT_NAMES = {"land": "16:9", "port": "9:16", "sq": "1:1", "f43": "4:3", "f34": "3:4"}
 
 
-def _sel(label: str, chosen: bool) -> str:
-    return (flow_copy.SELECTED + label) if chosen else label
+SELECT_STYLE = "success"  # green — Bot API 9.4 colour for the chosen wizard option
+
+
+def _sel_btn(label: str, chosen: bool, callback_data: str) -> types.InlineKeyboardButton:
+    """Wizard-option button; the chosen one turns green via Bot API 9.4 ``style``.
+
+    ``style="success"`` (Bot API 9.4, Feb 2026) colours the button green on the
+    client. aiogram 3.24 doesn't type the field, but pydantic forwards it in the
+    outgoing JSON, so we pass it as an extra kwarg only when selected. Clients
+    older than 9.4 simply ignore the unknown field — the label stays readable, just
+    without the colour (graceful degradation), so no checkmark prefix is needed.
+    """
+    kwargs = {"text": label, "callback_data": callback_data}
+    if chosen:
+        kwargs["style"] = SELECT_STYLE
+    return types.InlineKeyboardButton(**kwargs)
 
 
 def _imodel_row(selected: str, prefix: str = "w:imodel") -> list:
@@ -2332,7 +2346,7 @@ def _imodel_row(selected: str, prefix: str = "w:imodel") -> list:
         label = meta["label"]
         if meta["extra"]:
             label = f"{label} +{meta['extra']}"
-        row.append(B(text=_sel(label, mid == selected), callback_data=f"{prefix}:{mid}"))
+        row.append(_sel_btn(label, mid == selected, f"{prefix}:{mid}"))
     return row
 
 
@@ -2341,7 +2355,7 @@ def _fmt_rows(fmt: str, prefix: str = "w:fmt") -> list:
     B = types.InlineKeyboardButton
 
     def fb(code: str, key: str):
-        return B(text=_sel(L(key), fmt == code), callback_data=f"{prefix}:{code}")
+        return _sel_btn(L(key), fmt == code, f"{prefix}:{code}")
 
     return [
         [fb("land", "fmt:land"), fb("f43", "fmt:f43"), fb("sq", "fmt:sq")],
@@ -2350,14 +2364,14 @@ def _fmt_rows(fmt: str, prefix: str = "w:fmt") -> list:
 
 
 def wizard_kb(count: int, fmt: str, imodel: str = DEFAULT_IMAGE_MODEL) -> types.InlineKeyboardMarkup:
-    """Один экран: количество + формат + модель + «Сгенерировать» (выбор ✅)."""
+    """Один экран: количество + формат + модель + «Сгенерировать» (выбор — зелёная кнопка)."""
     B = types.InlineKeyboardButton
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                B(text=_sel(L("cnt:1"), count == 1), callback_data="w:cnt:1"),
-                B(text=_sel(L("cnt:2"), count == 2), callback_data="w:cnt:2"),
-                B(text=_sel(L("cnt:4"), count == 4), callback_data="w:cnt:4"),
+                _sel_btn(L("cnt:1"), count == 1, "w:cnt:1"),
+                _sel_btn(L("cnt:2"), count == 2, "w:cnt:2"),
+                _sel_btn(L("cnt:4"), count == 4, "w:cnt:4"),
             ],
             *_fmt_rows(fmt, "w:fmt"),
             _imodel_row(imodel, "w:imodel"),
@@ -2525,9 +2539,8 @@ def video_variant_kb(family: str, selected_model: str | None) -> types.InlineKey
     for model_id, meta in video_models_in_family(family):
         name = L(f"vid_model_name:{model_id}")
         label = f"{name} · {meta['price']}⭐"
-        rows.append([B(
-            text=_sel(label, model_id == selected_model),
-            callback_data=f"v:model:{model_id}",
+        rows.append([_sel_btn(
+            label, model_id == selected_model, f"v:model:{model_id}",
         )])
     rows.append([B(text=L("vid_back:fam"), callback_data="v:back:fam")])
     rows.append([B(text=L("cancel"), callback_data="v:cancel")])
@@ -2539,11 +2552,11 @@ def video_wizard_kb(vfmt: str, vcount: int) -> types.InlineKeyboardMarkup:
     B = types.InlineKeyboardButton
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [
-            B(text=_sel(L("fmt:land"), vfmt == "land"), callback_data="v:fmt:land"),
-            B(text=_sel(L("fmt:port"), vfmt == "port"), callback_data="v:fmt:port"),
+            _sel_btn(L("fmt:land"), vfmt == "land", "v:fmt:land"),
+            _sel_btn(L("fmt:port"), vfmt == "port", "v:fmt:port"),
         ],
         [
-            B(text=_sel(f"{n}", vcount == n), callback_data=f"v:cnt:{n}")
+            _sel_btn(f"{n}", vcount == n, f"v:cnt:{n}")
             for n in (1, 2, 3, 4)
         ],
         [_menu_button("vid_go", "v:go")],
@@ -2596,7 +2609,7 @@ def _vid_model_row(mode: str, selected: str | None) -> list:
     for mid in VID_REF_VARIANTS:
         price = video_price(mid, 1, mode)
         label = f"{L('vid_model_name:' + mid)} {price}⭐"
-        row.append(B(text=_sel(label, mid == selected), callback_data=f"v:vmod:{mid}"))
+        row.append(_sel_btn(label, mid == selected, f"v:vmod:{mid}"))
     return [row]
 
 
@@ -2605,11 +2618,11 @@ def _vid_fmt_count_rows(vfmt: str, vcount: int) -> list:
     B = types.InlineKeyboardButton
     return [
         [
-            B(text=_sel(L("fmt:land"), vfmt == "land"), callback_data="v:fmt:land"),
-            B(text=_sel(L("fmt:port"), vfmt == "port"), callback_data="v:fmt:port"),
+            _sel_btn(L("fmt:land"), vfmt == "land", "v:fmt:land"),
+            _sel_btn(L("fmt:port"), vfmt == "port", "v:fmt:port"),
         ],
         [
-            B(text=_sel(f"{n}", vcount == n), callback_data=f"v:cnt:{n}")
+            _sel_btn(f"{n}", vcount == n, f"v:cnt:{n}")
             for n in (1, 2, 3, 4)
         ],
     ]

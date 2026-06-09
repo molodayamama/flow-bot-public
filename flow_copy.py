@@ -86,9 +86,11 @@ LABELS = {
     "vid_model_name:veo-quality": "Veo Quality",
 }
 
-# ── selection markers for the single-screen picker ─────────────────────
-
-SELECTED = "🟢 "  # prefix shown on the currently chosen count/format button
+# ── selection marker (legacy) ──────────────────────────────────────────
+# The chosen wizard option is now coloured green natively via the Bot API 9.4
+# ``style="success"`` field (see flow_bot._sel_btn), so no text prefix is used.
+# Kept only as a fallback string for any caller that still wants a glyph marker.
+SELECTED = "🟢 "
 
 # ── screen / status / error messages (key -> template) ─────────────────
 

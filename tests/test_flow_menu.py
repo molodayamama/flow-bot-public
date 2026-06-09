@@ -267,7 +267,7 @@ class BotMenuWiringTests(unittest.TestCase):
         start = self.source.index("def wizard_kb")
         end = self.source.index("def reply_menu_kb")
         block = self.source[start:end]
-        self.assertIn('callback_data="w:cnt:1"', block)
+        self.assertIn('"w:cnt:1"', block)
         # Format + model rows come from shared helpers (also reused by edit).
         self.assertIn('_fmt_rows(fmt, "w:fmt")', block)
         self.assertIn('_imodel_row(imodel, "w:imodel")', block)
@@ -353,11 +353,17 @@ class BotMenuWiringTests(unittest.TestCase):
         import flow_copy
         self.assertEqual(flow_copy.label("realup"), "🔍 Улучшить качество")
 
-    def test_selection_marker_is_green(self) -> None:
-        import flow_copy
-        # Telegram inline buttons can't have a background colour, so the chosen
-        # wizard option is marked with a green circle instead of a checkmark.
-        self.assertEqual(flow_copy.SELECTED, "🟢 ")
+    def test_selected_option_is_colored_green(self) -> None:
+        # The chosen wizard option turns the BUTTON green natively via the Bot API
+        # 9.4 `style="success"` field (not a text marker). (Live build asserted in
+        # the smoke test, which sets up a temp credits file before importing.)
+        self.assertIn('SELECT_STYLE = "success"', self.source)
+        self.assertIn("def _sel_btn", self.source)
+        helper_start = self.source.index("def _sel_btn")
+        helper = self.source[helper_start:helper_start + 900]
+        self.assertIn('kwargs["style"] = SELECT_STYLE', helper)
+        # The old text-prefix selector must be gone everywhere.
+        self.assertNotIn("text=_sel(", self.source)
 
     def test_wizard_swallows_not_modified_no_duplicate_panel(self) -> None:
         # Re-tapping an already-selected wizard option must NOT post a second
@@ -599,6 +605,12 @@ class BotImportSmokeTests(unittest.TestCase):
             fb.topup_kb()                  # public packs (no test pack)
             fb.topup_kb(is_admin=True)     # includes the 1-star test pack
             fb._image_keyboard("abcd1234")
+            # Bot API 9.4 green-button: selected option carries style=success in
+            # the outgoing JSON; the unselected one omits it (graceful on old apps).
+            chosen = fb._sel_btn("X", True, "w:cnt:1").model_dump(exclude_none=True)
+            plain = fb._sel_btn("Y", False, "w:cnt:2").model_dump(exclude_none=True)
+            self.assertEqual(chosen.get("style"), "success")
+            self.assertNotIn("style", plain)
             # New user receives the starter grant.
             self.assertEqual(fb.credit_store.balance(987654321), 30)
             # Admin IDs parse from env.
