@@ -2220,7 +2220,7 @@ def _sel(label: str, chosen: bool) -> str:
     return (flow_copy.SELECTED + label) if chosen else label
 
 
-def _imodel_row(selected: str) -> list:
+def _imodel_row(selected: str, prefix: str = "w:imodel") -> list:
     """Ряд выбора модели картинки (Nano Banana 2 / Pro) с наценкой в подписи."""
     B = types.InlineKeyboardButton
     row = []
@@ -2228,8 +2228,21 @@ def _imodel_row(selected: str) -> list:
         label = meta["label"]
         if meta["extra"]:
             label = f"{label} +{meta['extra']}"
-        row.append(B(text=_sel(label, mid == selected), callback_data=f"w:imodel:{mid}"))
+        row.append(B(text=_sel(label, mid == selected), callback_data=f"{prefix}:{mid}"))
     return row
+
+
+def _fmt_rows(fmt: str, prefix: str = "w:fmt") -> list:
+    """Два ряда выбора формата картинки (16:9 / 4:3 / 1:1 / 3:4 / 9:16)."""
+    B = types.InlineKeyboardButton
+
+    def fb(code: str, key: str):
+        return B(text=_sel(L(key), fmt == code), callback_data=f"{prefix}:{code}")
+
+    return [
+        [fb("land", "fmt:land"), fb("f43", "fmt:f43"), fb("sq", "fmt:sq")],
+        [fb("f34", "fmt:f34"), fb("port", "fmt:port")],
+    ]
 
 
 def wizard_kb(count: int, fmt: str, imodel: str = DEFAULT_IMAGE_MODEL) -> types.InlineKeyboardMarkup:
@@ -2242,18 +2255,25 @@ def wizard_kb(count: int, fmt: str, imodel: str = DEFAULT_IMAGE_MODEL) -> types.
                 B(text=_sel(L("cnt:2"), count == 2), callback_data="w:cnt:2"),
                 B(text=_sel(L("cnt:4"), count == 4), callback_data="w:cnt:4"),
             ],
-            [
-                B(text=_sel(L("fmt:land"), fmt == "land"), callback_data="w:fmt:land"),
-                B(text=_sel(L("fmt:f43"), fmt == "f43"), callback_data="w:fmt:f43"),
-                B(text=_sel(L("fmt:sq"), fmt == "sq"), callback_data="w:fmt:sq"),
-            ],
-            [
-                B(text=_sel(L("fmt:f34"), fmt == "f34"), callback_data="w:fmt:f34"),
-                B(text=_sel(L("fmt:port"), fmt == "port"), callback_data="w:fmt:port"),
-            ],
-            _imodel_row(imodel),
+            *_fmt_rows(fmt, "w:fmt"),
+            _imodel_row(imodel, "w:imodel"),
             [_menu_button("go", "w:go")],
             [_menu_button("cancel", "w:cancel")],
+        ]
+    )
+
+
+def edit_settings_kb(fmt: str, imodel: str) -> types.InlineKeyboardMarkup:
+    """Формат + модель для редактирования фото (правку пользователь вводит текстом).
+
+    Callback-префикс ``es:`` намеренно не пересекается с ``edit:`` (кнопка
+    «Изменить» под картинкой), иначе хендлер перехватил бы её.
+    """
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            *_fmt_rows(fmt, "es:fmt"),
+            _imodel_row(imodel, "es:imodel"),
+            [_menu_button("cancel", "es:cancel")],
         ]
     )
 
@@ -3012,12 +3032,21 @@ def _is_rate_limit_error(result: dict) -> bool:
     )
 
 
-async def _edit_and_send(message: types.Message, ref: ImageRef, instruction: str) -> bool:
+async def _edit_and_send(
+    message: types.Message,
+    ref: ImageRef,
+    instruction: str,
+    *,
+    aspect_ratio: str | None = None,
+    image_model: str = DEFAULT_IMAGE_MODEL,
+) -> bool:
     """Применить правку ``instruction`` к конкретной картинке ``ref``.
 
     Правка уходит именно этому изображению (через ``imageInputs``) в проекте
     того же пользователя. Браузерный фолбэк отключён, чтобы вместо правки не
-    прислать несвязанную картинку.
+    прислать несвязанную картинку. ``aspect_ratio`` / ``image_model`` позволяют
+    сменить формат и модель прямо при редактировании (по умолчанию — как у
+    исходной картинки и базовая модель).
     """
     user_id = message.from_user.id
 
@@ -3034,11 +3063,14 @@ async def _edit_and_send(message: types.Message, ref: ImageRef, instruction: str
         )
         return False
 
+    aspect = aspect_ratio or ref.aspect_ratio
+    surcharge = image_model_extra(image_model)
     try:
         async with user_slot(user_id, message):
-            async with credit_gate(user_id, "edit", message, 1) as charge:
+            async with credit_gate(user_id, "edit", message, 1, surcharge=surcharge) as charge:
                 charge.ok = await _do_edit_and_send(
-                    message, ref, instruction, image_inputs, user_id
+                    message, ref, instruction, image_inputs, user_id,
+                    aspect_ratio=aspect, image_model=image_model,
                 )
                 return charge.ok
     except RateLimited:
@@ -3054,10 +3086,14 @@ async def _do_edit_and_send(
     instruction: str,
     image_inputs: list,
     user_id: int,
+    *,
+    aspect_ratio: str | None = None,
+    image_model: str = DEFAULT_IMAGE_MODEL,
 ) -> bool:
     status_msg = await message.answer(
         f"✏️ Редактирую изображение...\n📝 {instruction[:80]}"
     )
+    aspect = aspect_ratio or ref.aspect_ratio
 
     async def update_status(text: str):
         try:
@@ -3068,12 +3104,13 @@ async def _do_edit_and_send(
     try:
         result = await client.generate_images(
             instruction,
-            aspect_ratio=ref.aspect_ratio,
+            aspect_ratio=aspect,
             num_images=1,
             progress_cb=update_status,
             project_id=ref.project_id,
             image_inputs=image_inputs,
             allow_browser_fallback=False,
+            image_model=image_model,
         )
     except Exception:
         log.exception("Edit failed")
@@ -3096,7 +3133,7 @@ async def _do_edit_and_send(
     await update_status(flow_copy.msg("sending"))
     await _send_result_pairs(
         message, pairs, user_id=user_id, project_id=ref.project_id,
-        prompt=instruction, aspect_ratio=ref.aspect_ratio, emoji="✏️",
+        prompt=instruction, aspect_ratio=aspect, emoji="✏️",
     )
     await status_msg.delete()
     return True
@@ -3467,6 +3504,45 @@ async def on_menu_action(callback: types.CallbackQuery):
         await show_main_menu(msg, user_id=user_id, edit=True)
     else:
         await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("es:"))
+async def on_edit_settings(callback: types.CallbackQuery):
+    """Пикер формата/модели на экране редактирования фото."""
+    user_id = callback.from_user.id
+    data = callback.data or ""
+    st = _ws(user_id)
+
+    if data == "es:cancel":
+        st["await"] = None
+        pending_edits.pop(user_id, None)
+        await callback.answer("Отменено")
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        return
+
+    changed = False
+    if data.startswith("es:fmt:"):
+        st["edit_fmt"] = data.split(":")[2]
+        changed = True
+    elif data.startswith("es:imodel:"):
+        choice = data.split(":")[2]
+        if image_model_meta(choice):
+            st["edit_imodel"] = choice
+            changed = True
+    await callback.answer()
+    if changed:
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=edit_settings_kb(
+                    st.get("edit_fmt", DEFAULT_FMT),
+                    st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
+                )
+            )
+        except Exception:
+            pass
 
 
 @dp.callback_query(F.data.startswith("w:"))
@@ -4271,9 +4347,16 @@ async def on_image_action(callback: types.CallbackQuery):
 
     if action == "edit":
         pending_edits[user_id] = token
-        _ws(user_id)["await"] = "edit"
+        st = _ws(user_id)
+        st["await"] = "edit"
+        # Формат по умолчанию = формат исходной картинки; модель — последняя выбранная.
+        st["edit_fmt"] = _aspect_to_fmt(ref.aspect_ratio)
+        st.setdefault("edit_imodel", DEFAULT_IMAGE_MODEL)
         await callback.answer()
-        await callback.message.answer(flow_copy.msg("ask_edit_prompt"))
+        await callback.message.answer(
+            flow_copy.msg("ask_edit_prompt"),
+            reply_markup=edit_settings_kb(st["edit_fmt"], st["edit_imodel"]),
+        )
     elif action == "revary":
         pending_edits[user_id] = token
         _ws(user_id)["await"] = "revary"
@@ -4622,7 +4705,11 @@ async def handle_plain_text(message: types.Message):
                     fail_text=flow_copy.msg("nothing_returned"),
                 )
             else:
-                ok = await _edit_and_send(message, ref, text)
+                ok = await _edit_and_send(
+                    message, ref, text,
+                    aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", _aspect_to_fmt(ref.aspect_ratio))),
+                    image_model=st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
+                )
             if ok:
                 st["await"] = None
                 pending_edits.pop(user_id, None)

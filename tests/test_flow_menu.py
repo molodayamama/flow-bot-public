@@ -233,8 +233,30 @@ class BotMenuWiringTests(unittest.TestCase):
         end = self.source.index("def reply_menu_kb")
         block = self.source[start:end]
         self.assertIn('callback_data="w:cnt:1"', block)
-        self.assertIn('callback_data="w:fmt:land"', block)
+        # Format + model rows come from shared helpers (also reused by edit).
+        self.assertIn('_fmt_rows(fmt, "w:fmt")', block)
+        self.assertIn('_imodel_row(imodel, "w:imodel")', block)
         self.assertIn('"w:go"', block)
+
+    def test_fmt_rows_cover_five_formats(self) -> None:
+        start = self.source.index("def _fmt_rows")
+        block = self.source[start:start + 700]
+        for code in ("land", "f43", "sq", "f34", "port"):
+            self.assertIn(f'"{code}"', block)
+        self.assertIn('f"{prefix}:{code}"', block)
+
+    def test_edit_settings_kb_offers_format_and_model(self) -> None:
+        start = self.source.index("def edit_settings_kb")
+        block = self.source[start:start + 500]
+        self.assertIn('_fmt_rows(fmt, "es:fmt")', block)
+        self.assertIn('_imodel_row(imodel, "es:imodel")', block)
+
+    def test_edit_settings_prefix_does_not_collide_with_edit_button(self) -> None:
+        # The image "Изменить" button uses the "edit:" callback prefix; the edit
+        # settings picker must use "es:" so its handler never hijacks it.
+        self.assertIn('F.data.startswith("es:")', self.source)
+        self.assertFalse("edit:".startswith("es:"))  # the actual guarantee
+        self.assertNotIn('startswith("e:")', self.source)  # no over-broad filter
 
     def test_persistent_reply_keyboard_present(self) -> None:
         self.assertIn("def reply_menu_kb", self.source)
@@ -488,6 +510,8 @@ class BotImportSmokeTests(unittest.TestCase):
             # Keyboards build without error.
             fb.main_menu_kb()
             fb.wizard_kb(2, "sq")          # single-screen count+format
+            fb.wizard_kb(4, "f43", "nbpro")  # new format + model picker
+            fb.edit_settings_kb("f34", "nbpro")  # edit-flow format/model picker
             fb.reply_menu_kb()             # persistent bottom keyboard
             fb.topup_kb()
             fb._image_keyboard("abcd1234")
