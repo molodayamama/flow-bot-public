@@ -192,6 +192,31 @@ class CreditStoreTests(unittest.TestCase):
             self.assertEqual(s.balance(1), 10)
 
 
+class PaymentStoreTests(unittest.TestCase):
+    def test_records_lookup_and_refund_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "payments.json"
+            ps = flow_core.PaymentStore(path)
+            ps.add(7, "chg_A", 35, 45, "trial")
+            ps.add(7, "chg_B", 1, 10, "test")
+            # last_for_user returns the most recent non-refunded payment.
+            last = ps.last_for_user(7)
+            self.assertEqual(last["charge_id"], "chg_B")
+            self.assertEqual(ps.find_by_charge("chg_A")["stars"], 35)
+            self.assertIsNone(ps.last_for_user(999))
+            # Marking refunded hides it from last_for_user.
+            ps.mark_refunded("chg_B")
+            self.assertTrue(ps.find_by_charge("chg_B")["refunded"])
+            self.assertEqual(ps.last_for_user(7)["charge_id"], "chg_A")
+
+    def test_persists_across_reload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "payments.json"
+            flow_core.PaymentStore(path).add(5, "chg_X", 75, 100, "small")
+            reloaded = flow_core.PaymentStore(path)
+            self.assertEqual(reloaded.find_by_charge("chg_X")["credits"], 100)
+
+
 class CopyTests(unittest.TestCase):
     def test_every_button_key_has_label(self) -> None:
         for key in (

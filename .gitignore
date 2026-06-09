@@ -22,6 +22,9 @@ user_projects.json
 # Per-user credits / balances (runtime state)
 user_credits.json
 
+# Stars payment log (charge ids for refunds — runtime state, sensitive)
+payments.json
+
 # Learned Google Flow edit-request shape + calibration runtime state
 edit_capture.json
 edit_capture_raw.json

@@ -73,6 +73,7 @@ from flow_core import (
 )
 from flow_core import (
     CreditStore,
+    PaymentStore,
     STARS_PACKS,
     action_price,
     pack as credit_pack,
@@ -2028,6 +2029,7 @@ MIX_MAX = 4
 
 # Баланс кредитов на пользователя (монетизация).
 credit_store = CreditStore(os.getenv("USER_CREDITS_FILE", "user_credits.json"))
+payment_store = PaymentStore(os.getenv("PAYMENTS_FILE", "payments.json"))
 
 # ── состояние кнопочного визарда генерации (в памяти) ──────────────────
 # user_id -> {"step", "count", "fmt", "msg_id", "await": "prompt|edit|revary|photo",
@@ -2849,6 +2851,60 @@ async def cmd_grant(message: types.Message):
         try:
             await bot.send_message(
                 target, flow_copy.msg("topup_done", credits=amount, balance=new_balance)
+            )
+        except Exception:
+            pass
+
+
+@dp.message(Command("refund"))
+async def cmd_refund(message: types.Message):
+    """Админ: вернуть звёзды за платёж. `/refund <user_id>` (последний платёж)
+    или `/refund <user_id> <charge_id>`. Возвращает Stars через Telegram и
+    списывает ранее начисленные кредиты.
+    """
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
+        await message.answer("Использование: /refund <user_id> [charge_id]")
+        return
+    target = int(parts[1])
+    if len(parts) >= 3:
+        rec = payment_store.find_by_charge(parts[2])
+    else:
+        rec = payment_store.last_for_user(target)
+    if not rec:
+        await message.answer("Платёж не найден (или уже возвращён).")
+        return
+    if rec.get("refunded"):
+        await message.answer("Этот платёж уже возвращён.")
+        return
+
+    try:
+        await bot.refund_star_payment(
+            user_id=rec["user_id"],
+            telegram_payment_charge_id=rec["charge_id"],
+        )
+    except Exception:
+        log.exception("refund_star_payment failed")
+        await message.answer("⚠️ Telegram отклонил возврат (срок/ID). Проверьте charge_id.")
+        return
+
+    payment_store.mark_refunded(rec["charge_id"])
+    # Снимаем начисленные кредиты (не уходим в минус).
+    take = min(rec["credits"], credit_store.balance(rec["user_id"]))
+    if take > 0:
+        credit_store.charge(rec["user_id"], take)
+    log.info(f"↩️ Рефанд {rec['stars']}⭐ пользователю {rec['user_id']} (charge {rec['charge_id']})")
+    await message.answer(
+        f"↩️ Возвращено {rec['stars']}⭐ пользователю {rec['user_id']}. "
+        f"Списано {take} кр (начислялось {rec['credits']})."
+    )
+    if target != message.from_user.id:
+        try:
+            await bot.send_message(
+                target, f"↩️ Возврат {rec['stars']}⭐ выполнен. Списано {take} кредитов."
             )
         except Exception:
             pass
@@ -4336,6 +4392,13 @@ async def on_successful_payment(message: types.Message):
         await message.answer("Платёж получен, но пакет не распознан. Напишите в поддержку.")
         return
     new_balance = credit_store.add(user_id, p["credits"])
+    # Запоминаем платёж (charge_id) — нужен для возврата звёзд через /refund.
+    charge_id = getattr(sp, "telegram_payment_charge_id", "") or ""
+    if charge_id:
+        try:
+            payment_store.add(user_id, charge_id, getattr(sp, "total_amount", p["stars"]), p["credits"], pack_id)
+        except Exception:
+            log.exception("payment_store.add failed")
     log.info(f"💳 Оплата: +{p['credits']} кр пользователю {user_id} (баланс {new_balance})")
     await message.answer(
         flow_copy.msg("topup_done", credits=p["credits"], balance=new_balance)

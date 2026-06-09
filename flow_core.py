@@ -1885,3 +1885,75 @@ class CreditStore:
                 pass
             raise
 
+
+class PaymentStore:
+    """Persisted log of Telegram Stars payments, for refunds (atomic JSON).
+
+    Each record keeps the ``telegram_payment_charge_id`` needed by
+    ``refundStarPayment`` plus the credited amount, so an admin refund can both
+    return the stars and claw back the granted credits.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self._path = Path(path)
+        self._records: list[dict] = []
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            parsed = json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if isinstance(parsed, dict):
+            recs = parsed.get("payments", [])
+            if isinstance(recs, list):
+                self._records = [r for r in recs if isinstance(r, dict)]
+
+    def add(self, user_id: int, charge_id: str, stars: int, credits: int, pack_id: str) -> dict:
+        rec = {
+            "user_id": int(user_id),
+            "charge_id": str(charge_id),
+            "stars": int(stars),
+            "credits": int(credits),
+            "pack": str(pack_id),
+            "refunded": False,
+        }
+        self._records.append(rec)
+        self._save()
+        return rec
+
+    def last_for_user(self, user_id: int) -> dict | None:
+        """Most recent non-refunded payment by ``user_id`` (or None)."""
+        for rec in reversed(self._records):
+            if rec.get("user_id") == int(user_id) and not rec.get("refunded"):
+                return rec
+        return None
+
+    def find_by_charge(self, charge_id: str) -> dict | None:
+        for rec in self._records:
+            if rec.get("charge_id") == str(charge_id):
+                return rec
+        return None
+
+    def mark_refunded(self, charge_id: str) -> dict | None:
+        rec = self.find_by_charge(charge_id)
+        if rec is not None:
+            rec["refunded"] = True
+            self._save()
+        return rec
+
+    def _save(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"payments": self._records}
+        fd, tmp_name = tempfile.mkstemp(dir=str(self._path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+            os.replace(tmp_name, self._path)
+        except BaseException:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+
