@@ -2288,8 +2288,8 @@ def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
             [b("edit", "edit"), b("vary", "revary")],
-            [b("regen", "regen"), b("up2x", "up2x")],
-            [b("realup", "realup"), b("download", "dl_raw")],
+            [b("regen", "regen"), b("realup", "realup")],
+            [b("download", "dl_raw")],
         ]
     )
 
@@ -2416,6 +2416,24 @@ def _wizard_text(user_id: int) -> str:
     return text
 
 
+async def _edit_or_answer(message: types.Message, text: str, kb) -> types.Message | None:
+    """Edit the wizard message in place; swallow the harmless "not modified" error.
+
+    Re-tapping an already-selected wizard button rebuilds an identical screen, and
+    Telegram rejects ``edit_text`` with "message is not modified". We must NOT fall
+    back to ``answer`` there — that posts a duplicate panel. Only a genuine edit
+    failure (message too old / deleted) falls through to a fresh ``answer``.
+    Returns the message that now carries the wizard (edited or freshly sent), or
+    ``None`` when the no-op edit was swallowed.
+    """
+    try:
+        return await message.edit_text(text, reply_markup=kb)
+    except Exception as exc:
+        if "not modified" in str(exc).lower():
+            return None
+        return await message.answer(text, reply_markup=kb)
+
+
 async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
     st = _ws(user_id)
     st.setdefault("count", DEFAULT_COUNT)
@@ -2424,12 +2442,9 @@ async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
     st["step"] = "wizard"
     kb = wizard_kb(st["count"], st["fmt"], st["imodel"])
     text = _wizard_text(user_id)
-    try:
-        if edit:
-            await message.edit_text(text, reply_markup=kb)
-        else:
-            await message.answer(text, reply_markup=kb)
-    except Exception:
+    if edit:
+        await _edit_or_answer(message, text, kb)
+    else:
         await message.answer(text, reply_markup=kb)
 
 
@@ -2709,10 +2724,17 @@ def _vid_settings_text(user_id: int) -> str:
 
 
 async def _vid_edit(message: types.Message, text: str, kb, user_id: int):
-    """Отрисовать видео-экран: редактируем активное сообщение визарда."""
+    """Отрисовать видео-экран: редактируем активное сообщение визарда.
+
+    Повторный тап по уже выбранному параметру даёт идентичный экран — Telegram
+    отвечает "message is not modified". Глотаем эту ошибку, иначе в чат улетает
+    дубль панели. Настоящий сбой редактирования откатываемся на новый ``answer``.
+    """
     try:
         await message.edit_text(text, reply_markup=kb)
-    except Exception:
+    except Exception as exc:
+        if "not modified" in str(exc).lower():
+            return
         sent = await message.answer(text, reply_markup=kb)
         wizard_state[user_id]["vmsg_id"] = sent.message_id
 

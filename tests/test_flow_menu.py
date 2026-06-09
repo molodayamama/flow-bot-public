@@ -343,9 +343,30 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_image_keyboard_has_no_mix_button_and_star_prices(self) -> None:
         start = self.source.index("def _image_keyboard")
-        block = self.source[start:start + 700]
+        block = self.source[start:start + 900]
         self.assertNotIn('b("mix"', block)          # «В микс» removed from results
+        self.assertNotIn('b("up2x"', block)         # «Чёткость ×2» removed from results
+        self.assertIn('b("realup", "realup")', block)  # HD-upscale button kept
         self.assertIn('· {price}⭐', block)          # price tags carry the star emoji
+
+    def test_realup_label_is_improve_quality(self) -> None:
+        import flow_copy
+        self.assertEqual(flow_copy.label("realup"), "🔍 Улучшить качество")
+
+    def test_selection_marker_is_green(self) -> None:
+        import flow_copy
+        # Telegram inline buttons can't have a background colour, so the chosen
+        # wizard option is marked with a green circle instead of a checkmark.
+        self.assertEqual(flow_copy.SELECTED, "🟢 ")
+
+    def test_wizard_swallows_not_modified_no_duplicate_panel(self) -> None:
+        # Re-tapping an already-selected wizard option must NOT post a second
+        # panel: the "message is not modified" edit error is swallowed.
+        self.assertIn("async def _edit_or_answer", self.source)
+        helper_start = self.source.index("async def _edit_or_answer")
+        helper = self.source[helper_start:helper_start + 1100]
+        self.assertIn('"not modified" in str(exc).lower()', helper)
+        self.assertIn("await _edit_or_answer(message, text, kb)", self.source)
 
     def test_star_price_tags_on_action_buttons(self) -> None:
         # Video result / model rows show the credit cost with a star emoji.
