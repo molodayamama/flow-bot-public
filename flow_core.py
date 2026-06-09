@@ -1147,6 +1147,23 @@ def flow_scene_workflows_url(scene_id: str, project_id: str) -> str:
     return f"https://aisandbox-pa.googleapis.com/v1/flow/scene/{scene}/workflows?{query}"
 
 
+def parse_scene_primary_media_id(
+    data: dict, *, exclude_workflow_id: str | None = None
+) -> str | None:
+    """Return the primaryMediaId of the first workflow not matching exclude_workflow_id."""
+    for item in data.get("sceneWorkflows", []) or []:
+        if not isinstance(item, dict):
+            continue
+        wf = item.get("workflow") or {}
+        if exclude_workflow_id and wf.get("name") == exclude_workflow_id:
+            continue
+        meta = wf.get("metadata") or {}
+        pmid = meta.get("primaryMediaId")
+        if isinstance(pmid, str) and pmid:
+            return pmid
+    return None
+
+
 def parse_video_scene_id(data: dict) -> str | None:
     """Extract ``sceneId`` from Flow scene-create / scene-workflows responses."""
     scene = data.get("scene")
@@ -1460,6 +1477,7 @@ class VideoRef:
     prompt_edited: bool = False
     workflow_id: str | None = None
     scene_id: str | None = None
+    segment_media_id: str | None = None  # extension-only segment after extend (from scene workflows)
 
 
 class ImageRegistry:

@@ -60,7 +60,8 @@ LABELS = {
     "vid_back:model": "← Изменить вариант",
     "vid_repeat_last": "🔁 Повторить",
     # video: per-video actions
-    "vid_dl": "⬇ Скачать оригинал",
+    "vid_dl": "⬇ Скачать видео",
+    "vid_dl_seg": "✂️ Только новый фрагмент",
     "vid_edit": "✏️ Изменить",
     "vid_extend": "⏩ Продлить",
     "vid_retry": "🔄 Попробовать снова",

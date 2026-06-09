@@ -372,14 +372,13 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('video_operation="extend"', block)
         self.assertIn("source_scene_id=scene_id", block)
 
-    def test_video_extend_delivery_attempts_local_merge(self) -> None:
-        self.assertIn("async def _concat_video_bytes", self.source)
+    def test_video_extend_delivery_uses_service_video(self) -> None:
+        self.assertNotIn("async def _concat_video_bytes", self.source)
+        self.assertNotIn("asyncio.create_subprocess_exec", self.source)
         self.assertIn("async def _video_delivery_bytes", self.source)
-        self.assertIn("asyncio.create_subprocess_exec", self.source)
-        self.assertIn('ref.mode != "extend" or not ref.source_media_id', self.source)
-        self.assertIn("source_bytes = await client.fetch_video_bytes(ref.source_media_id)", self.source)
-        self.assertIn("merged = await _concat_video_bytes(source_bytes, video_bytes)", self.source)
-        self.assertIn("return video_bytes, False", self.source)
+        self.assertIn('is_full = ref.mode == "extend"', self.source)
+        self.assertIn("fetch_scene_extension_segment", self.source)
+        self.assertIn("segment_media_id", self.source)
 
     def test_video_extend_result_keeps_source_media_id(self) -> None:
         start = self.source.index("vref = VideoRef(")

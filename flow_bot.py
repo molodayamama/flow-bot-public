@@ -105,6 +105,7 @@ from flow_core import (
     flow_scene_workflows_url,
     parse_video_gen_response,
     parse_video_scene_id,
+    parse_scene_primary_media_id,
     check_video_poll_status,
     video_media_redirect_url,
 )
@@ -1589,6 +1590,35 @@ class FlowHttpClient:
             log.warning(f"video scene prep failed: {exc}")
             return None
 
+    async def fetch_scene_extension_segment(
+        self, scene_id: str, project_id: str, *, source_workflow_id: str | None = None
+    ) -> str | None:
+        """Re-fetch scene workflows and return primaryMediaId of the extension workflow.
+
+        Skips the source workflow (identified by source_workflow_id) to return only
+        the newly added extension segment's media id.
+        """
+        session = await self.keeper.get_session()
+        if not session["bearer"]:
+            return None
+        headers = self._build_headers(session)
+        proxy = _effective_proxy_url(API_PROXY_URL) or None
+        try:
+            async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
+                async with http.get(
+                    flow_scene_workflows_url(scene_id, project_id),
+                    headers=headers,
+                    proxy=proxy,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json(content_type=None)
+            return parse_scene_primary_media_id(data, exclude_workflow_id=source_workflow_id)
+        except Exception as exc:
+            log.warning(f"fetch_scene_extension_segment failed: {exc}")
+            return None
+
     async def generate_video(
         self,
         prompt: str,
@@ -2304,6 +2334,8 @@ def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
     rows = [
         [B(text=L("vid_dl"), callback_data=f"v:dl:{vtoken}")],
     ]
+    if ref and ref.mode == "extend" and ref.segment_media_id:
+        rows.append([B(text=L("vid_dl_seg"), callback_data=f"v:dl_seg:{vtoken}")])
     if _video_can_edit(ref):
         rows.append([B(text=L("vid_edit"), callback_data=f"v:edit:{vtoken}")])
     if _video_can_extend(ref):
@@ -3381,7 +3413,7 @@ async def on_video_action(callback: types.CallbackQuery):
     msg = callback.message
 
     # Идёт генерация — блокируем любые нажатия визарда.
-    if st.get("vstep") == "vgenerating" and data != "v:dl" and not data.startswith("v:dl:"):
+    if st.get("vstep") == "vgenerating" and data != "v:dl" and not data.startswith("v:dl:") and not data.startswith("v:dl_seg:"):
         await callback.answer(flow_copy.msg("vid_busy"), show_alert=True)
         return
 
@@ -3395,6 +3427,9 @@ async def on_video_action(callback: types.CallbackQuery):
     # Скачать готовое видео по токену.
     if data.startswith("v:dl:"):
         await _video_download(callback, user_id, data.split(":", 2)[2])
+        return
+    if data.startswith("v:dl_seg:"):
+        await _video_segment_download(callback, user_id, data.split(":", 2)[2])
         return
     if data.startswith("v:edit:"):
         await _video_edit_start(callback, user_id, data.split(":", 2)[2])
@@ -3607,97 +3642,19 @@ def _aspect_to_fmt(aspect: str) -> str:
     return {"landscape": "land", "portrait": "port", "square": "sq"}.get(aspect, "land")
 
 
-async def _concat_video_bytes(first_video: bytes, second_video: bytes) -> bytes | None:
-    """Return ``first_video + second_video`` as one MP4, or ``None`` on failure."""
-    if not first_video or not second_video:
-        return None
-
-    import shutil
-    import tempfile
-    from pathlib import Path
-
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        log.warning("ffmpeg is not available; sending Extend segment only")
-        return None
-
-    with tempfile.TemporaryDirectory(prefix="flow_extend_") as tmpdir:
-        tmp = Path(tmpdir)
-        (tmp / "source.mp4").write_bytes(first_video)
-        (tmp / "extension.mp4").write_bytes(second_video)
-        (tmp / "concat.txt").write_text(
-            "file 'source.mp4'\nfile 'extension.mp4'\n",
-            encoding="utf-8",
-        )
-        output_path = tmp / "merged.mp4"
-
-        proc = await asyncio.create_subprocess_exec(
-            ffmpeg,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            "concat.txt",
-            "-c",
-            "copy",
-            "-movflags",
-            "+faststart",
-            "merged.mp4",
-            cwd=str(tmp),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            log.warning("ffmpeg concat timed out; sending Extend segment only")
-            return None
-
-        if proc.returncode != 0:
-            details = stderr.decode("utf-8", "replace").strip()
-            if details:
-                log.warning("ffmpeg concat failed; sending Extend segment only: %s", details[-500:])
-            else:
-                log.warning("ffmpeg concat failed; sending Extend segment only")
-            return None
-
-        try:
-            merged = output_path.read_bytes()
-        except OSError:
-            log.exception("ffmpeg concat output could not be read")
-            return None
-        return merged or None
-
-
 async def _video_delivery_bytes(
     ref: VideoRef, *, fetched_bytes: bytes | None = None
 ) -> tuple[bytes | None, bool]:
-    """Fetch bytes for delivery; Extend refs are best-effort merged locally."""
+    """Fetch bytes for delivery.
+
+    For Extend refs media_id is the full service-merged video — returned with
+    is_full=True so callers can name the file accordingly.
+    """
     video_bytes = fetched_bytes
     if video_bytes is None:
         video_bytes = await client.fetch_video_bytes(ref.media_id)
-    if not video_bytes:
-        return None, False
-
-    if ref.mode != "extend" or not ref.source_media_id:
-        return video_bytes, False
-
-    source_bytes = await client.fetch_video_bytes(ref.source_media_id)
-    if not source_bytes:
-        log.warning("source video download failed; sending Extend segment only")
-        return video_bytes, False
-
-    merged = await _concat_video_bytes(source_bytes, video_bytes)
-    if not merged:
-        return video_bytes, False
-    return merged, True
+    is_full = ref.mode == "extend"
+    return video_bytes, is_full
 
 
 async def _repeat_last(callback: types.CallbackQuery, user_id: int):
@@ -3828,6 +3785,17 @@ async def _video_generate_and_send(
                     await message.answer(flow_copy.msg("vid_gen_failed"), reply_markup=fail_kb)
                 return
 
+            segment_media_id = None
+            if video_operation == "extend" and source_video:
+                eff_scene_id = result.get("scene_id") or source_scene_id
+                eff_project_id = result.get("project_id")
+                if eff_scene_id and eff_project_id:
+                    segment_media_id = await client.fetch_scene_extension_segment(
+                        eff_scene_id,
+                        eff_project_id,
+                        source_workflow_id=source_video.workflow_id,
+                    )
+
             vref = VideoRef(
                 user_id=user_id,
                 project_id=result.get("project_id"),
@@ -3840,6 +3808,7 @@ async def _video_generate_and_send(
                 prompt_edited=prompt_edited,
                 workflow_id=result.get("workflow_id"),
                 scene_id=result.get("scene_id"),
+                segment_media_id=segment_media_id,
             )
             vtoken = video_registry.add(vref)
 
@@ -3934,6 +3903,40 @@ async def _video_download(callback: types.CallbackQuery, user_id: int, token: st
         await status_msg.delete()
     except Exception:
         log.exception("video download send failed")
+        await status_msg.edit_text("❌ Не удалось отправить файл.")
+
+
+async def _video_segment_download(
+    callback: types.CallbackQuery, user_id: int, token: str
+) -> None:
+    """Скачать только новый фрагмент (extension segment) без источника."""
+    ref = video_registry.get(token)
+    if ref is None or ref.user_id != user_id:
+        await callback.answer(flow_copy.msg("expired"), show_alert=True)
+        return
+    if not ref.segment_media_id:
+        await callback.answer(flow_copy.msg("expired"), show_alert=True)
+        return
+
+    await callback.answer()
+    status_msg = await callback.message.answer(flow_copy.msg("preparing_file"))
+    video_bytes = await client.fetch_video_bytes(ref.segment_media_id)
+
+    if not video_bytes:
+        await status_msg.edit_text("❌ Не удалось скачать фрагмент. Попробуйте позже.")
+        return
+
+    from aiogram.types import BufferedInputFile
+
+    filename = f"video_segment_{ref.segment_media_id[-8:]}.mp4"
+    try:
+        await callback.message.answer_document(
+            BufferedInputFile(video_bytes, filename),
+            caption="⬇️ Только новый фрагмент.",
+        )
+        await status_msg.delete()
+    except Exception:
+        log.exception("video segment download send failed")
         await status_msg.edit_text("❌ Не удалось отправить файл.")
 
 
