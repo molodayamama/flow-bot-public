@@ -27,6 +27,7 @@ HTTP-клиент делает запросы с этими свежими да�
 """
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -1839,6 +1840,15 @@ class FlowHttpClient:
             gen_endpoint = VIDEO_GEN_ENDPOINT
             endpoint_name = "Text"
 
+        # TEMP (capture-driven): trace r2v/frames request shape to diagnose the
+        # "ingredients video never generates" bug. No secrets — endpoint/model/aspect only.
+        if is_reference or is_frames:
+            log.info(
+                "🎬 r2v req endpoint=%s model_key=%s aspect=%s ref_images=%d frames=%s",
+                endpoint_name, model_key, aspect, len(reference_images),
+                bool(start_image or end_image),
+            )
+
         # ── Шаг 1: капча + отправка с авто-перебором video-action ───────
         # Видео-эндпоинт отклоняет (403) reCAPTCHA-токен, выданный под action
         # картинок. Точный video-action не зафиксирован, поэтому перебираем
@@ -1922,6 +1932,9 @@ class FlowHttpClient:
         if gen_status == 403:
             return {"error": "Сервис отклонил запрос видео (403) на всех action."}
         if gen_status != 200:
+            # TEMP (capture-driven): log the real API error body (no auth headers).
+            log.warning("🎬 video %s non-200 status=%s body=%s",
+                        endpoint_name, gen_status, gen_text[:300])
             return {"error": f"HTTP {gen_status}: {gen_text[:200]}"}
 
         try:
@@ -1932,6 +1945,9 @@ class FlowHttpClient:
 
         media_info = parse_video_gen_response(gen_data)
         if not media_info:
+            # TEMP (capture-driven): 200 OK but no media id — log a snippet of the body.
+            log.warning("🎬 video %s 200 but no media_id; body=%s",
+                        endpoint_name, gen_text[:300])
             return {"error": "media_id не найден в ответе"}
 
         media_id   = media_info["media_id"]
@@ -2222,7 +2238,8 @@ async def credit_gate(
             inline_keyboard=[[_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]]
         )
         await message.answer(
-            flow_copy.msg("low_balance", needed=price, have=have), reply_markup=kb
+            flow_copy.msg("low_balance", needed=price, have=have), reply_markup=kb,
+            parse_mode="HTML",
         )
         raise NotEnoughCredits
 
@@ -2426,11 +2443,14 @@ def _wizard_text(user_id: int) -> str:
     # Если пользователь уже прислал промпт в чат — показываем его над настройками.
     pending = st.get("pending_prompt")
     if pending:
-        return flow_copy.msg("wizard_prompt_note", prompt=pending[:80]) + text
+        # HTML screen → escape the echoed user prompt (could contain < > &).
+        return flow_copy.msg("wizard_prompt_note", prompt=html.escape(pending[:80])) + text
     return text
 
 
-async def _edit_or_answer(message: types.Message, text: str, kb) -> types.Message | None:
+async def _edit_or_answer(
+    message: types.Message, text: str, kb, *, parse_mode: str | None = None
+) -> types.Message | None:
     """Edit the wizard message in place; swallow the harmless "not modified" error.
 
     Re-tapping an already-selected wizard button rebuilds an identical screen, and
@@ -2441,11 +2461,11 @@ async def _edit_or_answer(message: types.Message, text: str, kb) -> types.Messag
     ``None`` when the no-op edit was swallowed.
     """
     try:
-        return await message.edit_text(text, reply_markup=kb)
+        return await message.edit_text(text, reply_markup=kb, parse_mode=parse_mode)
     except Exception as exc:
         if "not modified" in str(exc).lower():
             return None
-        return await message.answer(text, reply_markup=kb)
+        return await message.answer(text, reply_markup=kb, parse_mode=parse_mode)
 
 
 async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
@@ -2457,9 +2477,9 @@ async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
     kb = wizard_kb(st["count"], st["fmt"], st["imodel"])
     text = _wizard_text(user_id)
     if edit:
-        await _edit_or_answer(message, text, kb)
+        await _edit_or_answer(message, text, kb, parse_mode="HTML")
     else:
-        await message.answer(text, reply_markup=kb)
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 # ── видео-визард (кнопочный UX, префикс v:) ────────────────────────────
@@ -2478,14 +2498,13 @@ _VID_FMT_NAMES = {"land": "16:9", "port": "9:16"}
 
 
 def _vid_clear(user_id: int) -> None:
-    """Очистить только видео-ключи (сохранив vlast для повтора)."""
+    """Очистить только видео-ключи (сохранив vlast для повтора и vretry для ретрая)."""
     st = wizard_state[user_id]
-    vlast = st.get("vlast")
+    keep = {k: st.get(k) for k in ("vlast", "vretry") if k in st}
     for key in list(st):
-        if key.startswith("v") and key != "vlast":
+        if key.startswith("v") and key not in keep:
             st.pop(key, None)
-    if vlast is not None:
-        st["vlast"] = vlast
+    st.update(keep)
 
 
 def _vid_clear_reference_inputs(user_id: int) -> None:
@@ -2516,14 +2535,34 @@ def _video_plain_text_ready(st: dict) -> bool:
     return clamp_num_videos(vcount) == vcount
 
 
+def _vid_family_min_price(code: str) -> int:
+    """Минимальная цена в семействе — для подписи кнопки «· от N⭐» (без хардкода)."""
+    if code == "omni":
+        return min(video_price(m, 1, "text") for m, _ in video_models_in_family("omni-flash"))
+    if code == "veo":
+        return min(video_price(m, 1, "text") for m, _ in video_models_in_family("veo"))
+    if code == "ing":
+        return min(video_price(m, 1, "ingredients") for m in VID_REF_VARIANTS)
+    if code == "frm":
+        return min(video_price(m, 1, "frames") for m in VID_REF_VARIANTS)
+    return 0
+
+
 def video_family_kb() -> types.InlineKeyboardMarkup:
     B = types.InlineKeyboardButton
+
+    def fam(code: str) -> types.InlineKeyboardButton:
+        return B(
+            text=f"{L('vid_fam:' + code)} · от {_vid_family_min_price(code)}⭐",
+            callback_data=f"v:fam:{code}",
+        )
+
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [B(text=L("vid_fam:omni"), callback_data="v:fam:omni")],
-        [B(text=L("vid_fam:veo"),  callback_data="v:fam:veo")],
-        [B(text=L("vid_fam:ing"), callback_data="v:fam:ing")],
-        [B(text=L("vid_fam:frm"), callback_data="v:fam:frm")],
-        [B(text=L("cancel"),      callback_data="v:cancel")],
+        [fam("omni")],
+        [fam("veo")],
+        [fam("ing")],
+        [fam("frm")],
+        [B(text=L("cancel"), callback_data="v:cancel")],
     ])
 
 
@@ -2569,13 +2608,19 @@ def _video_can_edit(ref: VideoRef | None) -> bool:
     return bool(ref and ref.media_id and ref.project_id and ref.workflow_id)
 
 
+# Модели, у которых подтверждён рабочий Extend (родной concat проверен на veo-lite).
+# Расширять до veo-fast/quality ТОЛЬКО после захвата, подтверждающего, что
+# veo_3_1_extension_{tier} принимается сервисом и для r2v-origin видео тоже.
+_VID_EXTENDABLE_MODELS = {"veo-lite"}
+
+
 def _video_can_extend(ref: VideoRef | None) -> bool:
     return bool(
         ref
         and ref.media_id
         and ref.project_id
         and ref.workflow_id
-        and ref.model_id == "veo-lite"
+        and ref.model_id in _VID_EXTENDABLE_MODELS
         and not ref.prompt_edited
     )
 
@@ -2628,12 +2673,17 @@ def _vid_fmt_count_rows(vfmt: str, vcount: int) -> list:
     ]
 
 
-def ingredients_kb(n: int, vfmt: str, vcount: int, vmodel: str | None) -> types.InlineKeyboardMarkup:
+def ingredients_kb(
+    n: int, vfmt: str, vcount: int, vmodel: str | None, has_caption: bool = False
+) -> types.InlineKeyboardMarkup:
     B = types.InlineKeyboardButton
     rows = _vid_model_row("ingredients", vmodel) + _vid_fmt_count_rows(vfmt, vcount)
     if n >= 1:
-        rows.append([B(text=L("vid_ing_done"), callback_data="v:ing:done")])
+        # Подпись к фото уже задаёт описание → кнопка ведёт сразу на генерацию.
+        done_key = "vid_ing_done_ready" if has_caption else "vid_ing_done"
+        rows.append([B(text=L(done_key), callback_data="v:ing:done")])
     rows.append([B(text=L("vid_ing_clear"), callback_data="v:ing:clear")])
+    rows.append([B(text=L("vid_back:fam"),  callback_data="v:back:fam")])
     rows.append([B(text=L("cancel"),        callback_data="v:cancel")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -2644,6 +2694,7 @@ def frames_kb(has_start: bool, has_end: bool, vfmt: str, vcount: int, vmodel: st
     if has_start and has_end:
         rows.append([B(text=L("vid_frm_go"), callback_data="v:frm:go")])
     rows.append([B(text=L("vid_frm_clear"), callback_data="v:frm:clear")])
+    rows.append([B(text=L("vid_back:fam"),  callback_data="v:back:fam")])
     rows.append([B(text=L("cancel"),        callback_data="v:cancel")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -2669,11 +2720,17 @@ async def show_video_ingredients(message: types.Message, *, user_id: int, edit: 
         price=video_price(model_id, vcount, "ingredients"),
         credits=credit_store.balance(user_id),
     )
-    kb = ingredients_kb(n, vfmt, vcount, model_id)
+    # Подпись к фото уже задаёт описание — показываем её и меняем подпись кнопки.
+    caption = st.get("vcaption_prompt")
+    if caption:
+        text += "\n\n" + flow_copy.msg(
+            "vid_ing_ready_with_caption", prompt=html.escape(caption[:300])
+        )
+    kb = ingredients_kb(n, vfmt, vcount, model_id, has_caption=bool(caption))
     if edit:
-        await _vid_edit(message, text, kb, user_id)
+        await _vid_edit(message, text, kb, user_id, parse_mode="HTML")
     else:
-        sent = await message.answer(text, reply_markup=kb)
+        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
         st["vmsg_id"] = sent.message_id
 
 
@@ -2708,15 +2765,17 @@ async def show_video_frames(message: types.Message, *, user_id: int, edit: bool 
     else:
         caption = st.get("vcaption_prompt")
         if caption:
-            text += "\n\n" + flow_copy.msg("vid_frm_ready_next_with_caption", prompt=caption[:300])
+            text += "\n\n" + flow_copy.msg(
+                "vid_frm_ready_next_with_caption", prompt=html.escape(caption[:300])
+            )
         else:
             text += "\n\n" + flow_copy.msg("vid_frm_ready_next")
         st["vawait"] = None
     kb = frames_kb(has_start, has_end, vfmt, vcount, model_id)
     if edit:
-        await _vid_edit(message, text, kb, user_id)
+        await _vid_edit(message, text, kb, user_id, parse_mode="HTML")
     else:
-        sent = await message.answer(text, reply_markup=kb)
+        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
         st["vmsg_id"] = sent.message_id
 
 
@@ -2736,7 +2795,7 @@ def _vid_settings_text(user_id: int) -> str:
     )
 
 
-async def _vid_edit(message: types.Message, text: str, kb, user_id: int):
+async def _vid_edit(message: types.Message, text: str, kb, user_id: int, *, parse_mode: str | None = None):
     """Отрисовать видео-экран: редактируем активное сообщение визарда.
 
     Повторный тап по уже выбранному параметру даёт идентичный экран — Telegram
@@ -2744,11 +2803,11 @@ async def _vid_edit(message: types.Message, text: str, kb, user_id: int):
     дубль панели. Настоящий сбой редактирования откатываемся на новый ``answer``.
     """
     try:
-        await message.edit_text(text, reply_markup=kb)
+        await message.edit_text(text, reply_markup=kb, parse_mode=parse_mode)
     except Exception as exc:
         if "not modified" in str(exc).lower():
             return
-        sent = await message.answer(text, reply_markup=kb)
+        sent = await message.answer(text, reply_markup=kb, parse_mode=parse_mode)
         wizard_state[user_id]["vmsg_id"] = sent.message_id
 
 
@@ -2766,6 +2825,7 @@ async def _vid_rerender_settings(message: types.Message, *, user_id: int):
 async def show_video_family(message: types.Message, *, user_id: int, edit: bool):
     _vid_clear(user_id)
     st = wizard_state[user_id]
+    st.pop("vretry", None)  # свежий визард — забываем прошлый ретрай-снимок
     st["vstep"] = "vfam"
     st.setdefault("vfmt", VID_DEFAULT_FMT)
     st.setdefault("vcount", VID_DEFAULT_COUNT)
@@ -2799,7 +2859,7 @@ async def show_video_settings(message: types.Message, *, user_id: int):
     st.setdefault("vcount", VID_DEFAULT_COUNT)
     text = _vid_settings_text(user_id)
     kb = video_wizard_kb(st["vfmt"], st["vcount"])
-    await _vid_edit(message, text, kb, user_id)
+    await _vid_edit(message, text, kb, user_id, parse_mode="HTML")
 
 
 def _aspect_to_vfmt(aspect: str) -> str:
@@ -2847,11 +2907,11 @@ async def show_balance(message: types.Message, *, user_id: int, edit: bool = Tru
     )
     try:
         if edit:
-            await message.edit_text(text, reply_markup=kb)
+            await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         else:
-            await message.answer(text, reply_markup=kb)
+            await message.answer(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        await message.answer(text, reply_markup=kb)
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 async def _send_one_image(
@@ -3130,15 +3190,22 @@ async def _do_generate_and_send(
 
 
 async def _after_result(message: types.Message, user_id: int):
-    """Короткое меню-продолжение под результатом (повтор/новое/баланс)."""
+    """Короткое меню-продолжение под результатом: баланс + повтор/новое/видео/меню."""
+    credits = credit_store.balance(user_id)
     kb = types.InlineKeyboardMarkup(
         inline_keyboard=[
-            [_menu_button("repeat_last", "m:repeat"), _menu_button("gen", "m:gen")],
+            [_menu_button("repeat_last", "m:repeat")],
+            [_menu_button("gen", "m:gen"), _menu_button("vid_gen", "m:vid")],
             [_menu_button("balance", "m:balance")],
+            [_menu_button("menu", "m:menu")],
         ]
     )
     try:
-        await message.answer(flow_copy.msg("menu_title"), reply_markup=kb)
+        await message.answer(
+            flow_copy.msg("after_image_screen", credits=credits),
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
     except Exception:
         pass
 
@@ -3876,6 +3943,7 @@ async def on_video_action(callback: types.CallbackQuery):
             await msg.answer(
                 flow_copy.msg("low_balance", needed=price, have=credit_store.balance(user_id)),
                 reply_markup=kb,
+                parse_mode="HTML",
             )
             return
         # Подпись к фото уже задаёт описание — генерируем сразу.
@@ -3912,6 +3980,7 @@ async def on_video_action(callback: types.CallbackQuery):
             await msg.answer(
                 flow_copy.msg("low_balance", needed=price, have=credit_store.balance(user_id)),
                 reply_markup=kb,
+                parse_mode="HTML",
             )
             return
         caption = st.pop("vcaption_prompt", None)
@@ -3980,14 +4049,17 @@ async def on_video_action(callback: types.CallbackQuery):
 
     # Повтор после ошибки — снова просим промпт с теми же настройками.
     if data == "v:retry":
-        if not st.get("vmodel"):
+        snap = st.get("vretry")
+        if not snap or not snap.get("vmodel"):
             await callback.answer(flow_copy.msg("vid_expired_wizard"), show_alert=True)
             await show_main_menu(msg, user_id=user_id, edit=True)
             return
+        # Восстанавливаем настройки и фото из снимка и повторяем тот же запрос.
+        for k, v in snap.items():
+            if k != "prompt" and v is not None:
+                st[k] = v
         await callback.answer()
-        st["vawait"] = "vprompt"
-        st["vstep"] = "vprompt"
-        await msg.answer(flow_copy.msg("vid_ask_prompt"))
+        await _video_generate_and_send(msg, snap["prompt"], user_id=user_id)
         return
 
     # Подтверждение → промпт или сразу генерация (если промпт уже есть).
@@ -4008,6 +4080,7 @@ async def on_video_action(callback: types.CallbackQuery):
                 msg,
                 flow_copy.msg("low_balance", needed=price, have=credit_store.balance(user_id)),
                 kb, user_id,
+                parse_mode="HTML",
             )
             return
         pending = st.get("vpending_prompt")
@@ -4120,7 +4193,8 @@ async def _video_generate_and_send(
             [_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]
         ])
         await message.answer(
-            flow_copy.msg("low_balance", needed=total_price, have=have), reply_markup=kb
+            flow_copy.msg("low_balance", needed=total_price, have=have), reply_markup=kb,
+            parse_mode="HTML",
         )
         return
 
@@ -4135,6 +4209,32 @@ async def _video_generate_and_send(
             await status_msg.edit_text(f"{text}\n📝 {prompt[:80]}")
         except Exception:
             pass
+
+    def _stash_retry():
+        # Снимок состояния, чтобы «Попробовать снова» повторил ТОТ ЖЕ запрос.
+        # Без этого finally → _vid_clear сотрёт vmodel, и ретрай решит «кнопки устарели».
+        st["vretry"] = {
+            "vmodel": model_id, "vmode": vmode, "vfmt": vfmt, "vcount": vcount,
+            "vfamily": st.get("vfamily"),
+            "ving_photos": st.get("ving_photos"),
+            "vfrm_start": st.get("vfrm_start"), "vfrm_end": st.get("vfrm_end"),
+            "vcaption_prompt": st.get("vcaption_prompt"),
+            "prompt": prompt,
+        }
+
+    async def _fail_retry(i: int):
+        nonlocal refunded_units
+        credit_store.refund(user_id, single_price * (vcount - i))
+        refunded_units += vcount - i
+        _stash_retry()
+        fail_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [_menu_button("vid_retry", "v:retry")],
+            [_menu_button("menu", "m:menu")],
+        ])
+        try:
+            await status_msg.edit_text(flow_copy.msg("vid_gen_failed"), reply_markup=fail_kb)
+        except Exception:
+            await message.answer(flow_copy.msg("vid_gen_failed"), reply_markup=fail_kb)
 
     sent_count = 0
     try:
@@ -4157,16 +4257,12 @@ async def _video_generate_and_send(
             )
 
             if "error" in result:
-                credit_store.refund(user_id, single_price * (vcount - i))
-                refunded_units += vcount - i
-                fail_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                    [_menu_button("vid_retry", "v:retry")],
-                    [_menu_button("menu", "m:menu")],
-                ])
-                try:
-                    await status_msg.edit_text(flow_copy.msg("vid_gen_failed"), reply_markup=fail_kb)
-                except Exception:
-                    await message.answer(flow_copy.msg("vid_gen_failed"), reply_markup=fail_kb)
+                # TEMP (capture-driven): surface why r2v/ingredients gen fails.
+                log.warning(
+                    "🎬 gen failed: mode=%s model=%s aspect=%s err=%s",
+                    vmode, model_id, aspect, str(result.get("error"))[:300],
+                )
+                await _fail_retry(i)
                 return
 
             media_id = result["media_id"]
@@ -4174,16 +4270,7 @@ async def _video_generate_and_send(
             video_bytes = await client.fetch_video_bytes(media_id)
 
             if not video_bytes:
-                credit_store.refund(user_id, single_price * (vcount - i))
-                refunded_units += vcount - i
-                fail_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                    [_menu_button("vid_retry", "v:retry")],
-                    [_menu_button("menu", "m:menu")],
-                ])
-                try:
-                    await status_msg.edit_text(flow_copy.msg("vid_gen_failed"), reply_markup=fail_kb)
-                except Exception:
-                    await message.answer(flow_copy.msg("vid_gen_failed"), reply_markup=fail_kb)
+                await _fail_retry(i)
                 return
 
             vref = VideoRef(
@@ -4212,16 +4299,7 @@ async def _video_generate_and_send(
                 caption = f"{caption}\n\n{flow_copy.msg('vid_result_actions_hint', edit=action_price('video_prompt_edit'), extend=video_extend_price(vref.model_id, vref.extend_index + 1))}"
             delivery_bytes, merged_video = await _video_delivery_bytes(vref, fetched_bytes=video_bytes)
             if not delivery_bytes:
-                credit_store.refund(user_id, single_price * (vcount - i))
-                refunded_units += vcount - i
-                fail_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                    [_menu_button("vid_retry", "v:retry")],
-                    [_menu_button("menu", "m:menu")],
-                ])
-                try:
-                    await status_msg.edit_text(flow_copy.msg("vid_gen_failed"), reply_markup=fail_kb)
-                except Exception:
-                    await message.answer(flow_copy.msg("vid_gen_failed"), reply_markup=fail_kb)
+                await _fail_retry(i)
                 return
 
             filename = f"video_{i + 1}{'_full' if merged_video else ''}.mp4"
@@ -4247,6 +4325,7 @@ async def _video_generate_and_send(
                     refunded_units += 1
 
         st["vlast"] = {"model": model_id, "aspect": aspect, "count": vcount, "prompt": prompt}
+        st.pop("vretry", None)  # успех — снимок для ретрая больше не нужен
 
         if sent_count:
             try:

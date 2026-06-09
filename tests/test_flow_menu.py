@@ -45,6 +45,15 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.video_price("veo-fast", mode="ingredients"), 70)
         self.assertEqual(flow_core.video_price("veo-fast", mode="frames"), 80)
 
+    def test_family_picker_min_prices(self) -> None:
+        # Drives the "· от N⭐" hint on the video family buttons (no hardcoding).
+        variants = ("veo-lite", "veo-fast", "veo-quality")
+        omni = min(flow_core.video_price(m, 1, "text") for m, _ in flow_core.video_models_in_family("omni-flash"))
+        veo = min(flow_core.video_price(m, 1, "text") for m, _ in flow_core.video_models_in_family("veo"))
+        ing = min(flow_core.video_price(m, 1, "ingredients") for m in variants)
+        frm = min(flow_core.video_price(m, 1, "frames") for m in variants)
+        self.assertEqual((omni, veo, ing, frm), (20, 30, 40, 50))
+
     def test_extend_price_escalates_by_step(self) -> None:
         base = flow_core.video_price("veo-lite", 1, "text")  # 30
         step = flow_core.VIDEO_EXTEND_STEP                    # 5
@@ -245,6 +254,28 @@ class CopyTests(unittest.TestCase):
         self.assertEqual(flow_copy.label("no_such_key"), "no_such_key")
         self.assertEqual(flow_copy.msg("no_such_key"), "no_such_key")
 
+    # ── Phase 1 copy ───────────────────────────────────────────────────
+    def test_back_labels_unified_to_nazad(self) -> None:
+        self.assertEqual(flow_copy.label("vid_back:fam"), "← Назад")
+        self.assertEqual(flow_copy.label("vid_back:model"), "← Назад")
+
+    def test_ingredients_caption_copy_present(self) -> None:
+        self.assertEqual(flow_copy.label("vid_ing_done_ready"), "✅ Готово — на генерацию")
+        self.assertIn("vid_ing_ready_with_caption", flow_copy.MESSAGES)
+        self.assertIn("{prompt}", flow_copy.MESSAGES["vid_ing_ready_with_caption"])
+
+    def test_price_screens_bold_the_price(self) -> None:
+        for key in (
+            "wizard_screen", "balance_screen", "low_balance", "vid_settings_screen",
+            "vid_ing_screen", "vid_frm_screen", "after_image_screen",
+        ):
+            self.assertIn("<b>", flow_copy.MESSAGES[key], key)
+
+    def test_after_image_screen_copy(self) -> None:
+        msg = flow_copy.msg("after_image_screen", credits=42)
+        self.assertIn("42", msg)
+        self.assertIn("<b>", flow_copy.MESSAGES["after_image_screen"])
+
 
 class BotMenuWiringTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -372,7 +403,7 @@ class BotMenuWiringTests(unittest.TestCase):
         helper_start = self.source.index("async def _edit_or_answer")
         helper = self.source[helper_start:helper_start + 1100]
         self.assertIn('"not modified" in str(exc).lower()', helper)
-        self.assertIn("await _edit_or_answer(message, text, kb)", self.source)
+        self.assertIn("await _edit_or_answer(message, text, kb", self.source)
 
     def test_star_price_tags_on_action_buttons(self) -> None:
         # Video result / model rows show the credit cost with a star emoji.
@@ -394,7 +425,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # Frames/Ingredients screens reuse the shared format+count picker rows.
         self.assertIn("def _vid_fmt_count_rows", self.source)
         self.assertIn("def frames_kb(has_start: bool, has_end: bool, vfmt: str, vcount: int, vmodel", self.source)
-        self.assertIn("def ingredients_kb(n: int, vfmt: str, vcount: int, vmodel", self.source)
+        self.assertIn("def ingredients_kb(", self.source)
         # Format/count callbacks re-render the active video screen by mode.
         self.assertIn("def _vid_rerender_settings", self.source)
         self.assertIn("await _vid_rerender_settings(msg, user_id=user_id)", self.source)
@@ -475,7 +506,8 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("def _video_can_edit", self.source)
         self.assertIn("def _video_can_extend", self.source)
         self.assertIn("ref.workflow_id", self.source)
-        self.assertIn('ref.model_id == "veo-lite"', self.source)
+        self.assertIn("ref.model_id in _VID_EXTENDABLE_MODELS", self.source)
+        self.assertIn('_VID_EXTENDABLE_MODELS = {"veo-lite"}', self.source)
         self.assertIn("not ref.prompt_edited", self.source)
         self.assertIn('callback_data=f"v:edit:{vtoken}"', self.source)
         self.assertIn('callback_data=f"v:extend:{vtoken}"', self.source)
@@ -487,6 +519,52 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('video_operation="edit"', self.source)
         self.assertIn('video_operation="extend"', self.source)
         self.assertIn("prepare_video_extend_scene", self.source)
+
+    # ── Phase 1 upgrades ───────────────────────────────────────────────
+    def test_ingredients_and_frames_have_back_to_family(self) -> None:
+        ing = self.source[self.source.index("def ingredients_kb"):][:900]
+        frm = self.source[self.source.index("def frames_kb"):][:900]
+        self.assertIn('"v:back:fam"', ing)
+        self.assertIn('"v:back:fam"', frm)
+
+    def test_family_picker_shows_min_prices(self) -> None:
+        self.assertIn("def _vid_family_min_price", self.source)
+        block = self.source[self.source.index("def video_family_kb"):][:600]
+        self.assertIn("от ", block)
+        self.assertIn("⭐", block)
+        self.assertIn("_vid_family_min_price", block)
+
+    def test_ingredients_done_label_is_dynamic(self) -> None:
+        block = self.source[self.source.index("def ingredients_kb"):][:600]
+        self.assertIn("has_caption", block)
+        self.assertIn("vid_ing_done_ready", block)
+        # screen shows the pending caption like frames mode does
+        self.assertIn("vid_ing_ready_with_caption", self.source)
+
+    def test_video_retry_rehydrates_from_snapshot(self) -> None:
+        # The retry button must re-run the SAME request, not report "expired".
+        self.assertIn('st["vretry"]', self.source)
+        self.assertIn('snap = st.get("vretry")', self.source)
+        clear = self.source[self.source.index("def _vid_clear"):][:400]
+        self.assertIn('"vretry"', clear)  # snapshot survives the finally-clear
+
+    def test_after_result_offers_video_balance_and_menu(self) -> None:
+        block = self.source[self.source.index("async def _after_result"):][:700]
+        for cb in ('"m:repeat"', '"m:gen"', '"m:vid"', '"m:balance"', '"m:menu"'):
+            self.assertIn(cb, block)
+        self.assertIn("after_image_screen", block)
+        self.assertIn("credit_store.balance", block)
+
+    def test_price_screens_use_html_and_escape_user_text(self) -> None:
+        self.assertIn("import html", self.source)
+        self.assertIn('parse_mode="HTML"', self.source)
+        # every echoed user prompt on an HTML screen is escaped
+        self.assertIn("html.escape(pending", self.source)
+        self.assertIn("html.escape(caption", self.source)
+
+    def test_ingredients_diagnostic_logging_present(self) -> None:
+        # Temporary capture-driven logging to diagnose the фото+текст gen failure.
+        self.assertIn("🎬 r2v req", self.source)
 
     def test_video_prompt_edit_clears_reference_mode_inputs(self) -> None:
         self.assertIn("def _vid_clear_reference_inputs", self.source)
@@ -605,6 +683,20 @@ class BotImportSmokeTests(unittest.TestCase):
             fb.topup_kb()                  # public packs (no test pack)
             fb.topup_kb(is_admin=True)     # includes the 1-star test pack
             fb._image_keyboard("abcd1234")
+            fb.video_family_kb()           # family buttons now carry "· от N⭐"
+            fb.ingredients_kb(1, "land", 1, "veo-fast", has_caption=True)
+            # Family buttons show a min-price hint.
+            fam_first = fb.video_family_kb().inline_keyboard[0][0].text
+            self.assertIn("⭐", fam_first)
+            # Extend gating: veo-lite ingredients clip IS extendable; veo-fast is
+            # NOT (pending capture confirmation), regardless of mode.
+            VR = fb.VideoRef
+            lite = VR(user_id=1, project_id="p", media_id="m", workflow_id="w",
+                      model_id="veo-lite", mode="ingredients")
+            fast = VR(user_id=1, project_id="p", media_id="m", workflow_id="w",
+                      model_id="veo-fast", mode="ingredients")
+            self.assertTrue(fb._video_can_extend(lite))
+            self.assertFalse(fb._video_can_extend(fast))
             # Bot API 9.4 green-button: selected option carries style=success in
             # the outgoing JSON; the unselected one omits it (graceful on old apps).
             chosen = fb._sel_btn("X", True, "w:cnt:1").model_dump(exclude_none=True)
