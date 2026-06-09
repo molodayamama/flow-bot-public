@@ -1,0 +1,28 @@
+# purpose: Advertising banner — an eye-catching promo visual with room for copy.
+# inputs:
+#   {subject}       = the hero subject of the banner (free text)
+#   {vibe}          = mood (choice: яркий / премиум / минимал / динамичный)
+#   {text_on_image} = optional headline/text to place on the banner (free text, optional)
+# outputs: a detailed English image-generation prompt for an advertising banner.
+#
+# example_dialog_1:
+#   subject: новый смартфон
+#   vibe: премиум
+#   text_on_image: (skipped)
+#   result: Advertising banner featuring новый смартфон, premium and elegant mood with
+#           refined lighting, ... bold composition with clear focal point, ...
+#
+# example_dialog_2:
+#   subject: летняя распродажа обуви
+#   vibe: яркий
+#   text_on_image: -50%
+#   result: Advertising banner featuring летняя распродажа обуви, bright vivid energetic
+#           mood, ... with clear space for the headline text "-50%", ...
+#
+# example_dialog_3:
+#   subject: фитнес-клуб
+#   vibe: динамичный
+#   text_on_image: Запишись сейчас
+#   result: Advertising banner featuring фитнес-клуб, dynamic high-energy motion mood,
+#           ... headline area for the text "Запишись сейчас", ...
+Advertising banner featuring {subject}, {vibe}, bold composition with a clear focal point, strong contrast, marketing visual, {text_on_image}, professional commercial quality, high detail, 8k.

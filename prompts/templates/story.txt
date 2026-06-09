@@ -1,0 +1,28 @@
+# purpose: Story — a vertical 9:16 full-screen visual for stories/reels.
+# inputs:
+#   {subject}     = the focus of the story (free text)
+#   {format_hint} = aspect hint (choice: вертикаль 9:16)
+#   {style}       = visual style (choice: тренд / минимал / глянец)
+# outputs: a detailed English image-generation prompt for a vertical story image.
+#
+# example_dialog_1:
+#   subject: новая коллекция украшений
+#   format_hint: вертикаль 9:16
+#   style: глянец
+#   result: Vertical 9:16 full-screen story visual of новая коллекция украшений, glossy
+#           polished magazine style, ... designed for mobile full-bleed, ...
+#
+# example_dialog_2:
+#   subject: рецепт смузи
+#   format_hint: вертикаль 9:16
+#   style: тренд
+#   result: Vertical 9:16 full-screen story visual of рецепт смузи, trendy modern
+#           social style, ... designed for mobile full-bleed, ...
+#
+# example_dialog_3:
+#   subject: анонс вебинара
+#   format_hint: вертикаль 9:16
+#   style: минимал
+#   result: Vertical 9:16 full-screen story visual of анонс вебинара, clean minimalist
+#           style with breathing room, ... designed for mobile full-bleed, ...
+Vertical 9:16 full-screen story visual of {subject}, {format_hint}, {style}, designed for mobile full-bleed, bold central focus, room at top and bottom for UI, high detail, vibrant.

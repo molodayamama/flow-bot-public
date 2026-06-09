@@ -1,0 +1,28 @@
+# purpose: UGC-style creative — an authentic, user-generated-looking product shot.
+# inputs:
+#   {product} = the product being shown (free text)
+#   {scene}   = where it is shown (choice: дома / на улице / в кафе / в руках)
+#   {mood}    = emotional tone (choice: естественный / радостный / спокойный)
+# outputs: a detailed English image-generation prompt for a UGC-style creative.
+#
+# example_dialog_1:
+#   product: крем для рук
+#   scene: дома
+#   mood: естественный
+#   result: Authentic UGC-style photo of крем для рук, at home in a cozy everyday
+#           setting, natural candid mood, shot on a phone, ... realistic, ...
+#
+# example_dialog_2:
+#   product: кофе навынос
+#   scene: в руках
+#   mood: радостный
+#   result: Authentic UGC-style photo of кофе навынос, held in hands close-up, joyful
+#           upbeat mood, shot on a phone, ... realistic, ...
+#
+# example_dialog_3:
+#   product: книга
+#   scene: в кафе
+#   mood: спокойный
+#   result: Authentic UGC-style photo of книга, in a cozy cafe, calm relaxed mood,
+#           shot on a phone, casual framing, natural light, realistic, ...
+Authentic UGC-style photo of {product}, {scene}, {mood}, shot on a phone, casual natural framing, soft realistic lighting, true-to-life colors, candid and relatable, high detail.

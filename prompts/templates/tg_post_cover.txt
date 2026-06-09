@@ -1,0 +1,28 @@
+# purpose: Telegram post cover — a scroll-stopping header image for a channel post.
+# inputs:
+#   {topic}         = what the post is about (free text)
+#   {style}         = visual style (choice: bold / минимал / неон / коллаж)
+#   {text_on_image} = optional title to place on the cover (free text, optional)
+# outputs: a detailed English image-generation prompt for a Telegram post cover.
+#
+# example_dialog_1:
+#   topic: как накопить на отпуск
+#   style: минимал
+#   text_on_image: (skipped)
+#   result: Telegram post cover about как накопить на отпуск, clean minimalist style
+#           with lots of negative space, ... eye-catching header image, ...
+#
+# example_dialog_2:
+#   topic: новый выпуск подкаста
+#   style: неон
+#   text_on_image: Слушай сейчас
+#   result: Telegram post cover about новый выпуск подкаста, vibrant neon style with
+#           glowing accents on dark, ... space for the title text "Слушай сейчас", ...
+#
+# example_dialog_3:
+#   topic: подборка книг
+#   style: коллаж
+#   text_on_image: ТОП-10
+#   result: Telegram post cover about подборка книг, playful collage style mixing
+#           elements, ... title area for the text "ТОП-10", ...
+Telegram post cover about {topic}, {style}, eye-catching social media header image, balanced composition, strong visual hook, {text_on_image}, high detail, crisp and modern.

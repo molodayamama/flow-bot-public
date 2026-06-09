@@ -1,0 +1,29 @@
+# purpose: Guided picker — a generic image prompt assembled from 3 quick choices.
+# inputs:
+#   {what}   = what we are making (mapped phrase from: image/ad/avatar/product/video)
+#   {style}  = visual style (mapped phrase from: realism/3d/luxury/anime/cinematic/minimal/mktclean)
+#   {format} = aspect/use (mapped phrase from: square/story/banner/avatar)
+# outputs: a detailed English image-generation prompt built from the three choices.
+# version: 1
+#
+# example_dialog_1:
+#   what: image  -> "a striking image"
+#   style: realism -> "photorealistic, lifelike detail"
+#   format: square -> "square 1:1 composition"
+#   result: A striking image, photorealistic, lifelike detail, square 1:1 composition,
+#           professional quality, high detail, sharp focus.
+#
+# example_dialog_2:
+#   what: ad -> "an advertising creative"
+#   style: luxury -> "luxury premium aesthetic, elegant"
+#   format: banner -> "wide 16:9 banner composition"
+#   result: An advertising creative, luxury premium aesthetic, elegant, wide 16:9 banner
+#           composition, professional quality, high detail, sharp focus.
+#
+# example_dialog_3:
+#   what: avatar -> "a brand avatar"
+#   style: minimal -> "clean minimalist style, lots of negative space"
+#   format: avatar -> "centered square avatar composition"
+#   result: A brand avatar, clean minimalist style, lots of negative space, centered
+#           square avatar composition, professional quality, high detail, sharp focus.
+{what}, {style}, {format}, professional quality, high detail, sharp focus.

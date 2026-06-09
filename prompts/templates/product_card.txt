@@ -1,0 +1,34 @@
+# purpose: Marketplace product card — a clean, conversion-ready catalog image.
+# inputs:
+#   {product}    = what the product is (free text)
+#   {background} = background style (choice: Белый / lifestyle / luxury / минимализм)
+#   {audience}   = target audience (free text, optional — blank => dropped)
+#   {need_text}  = whether a text/label overlay area is wanted (choice: Да / Нет)
+# outputs: a detailed English image-generation prompt for a marketplace product card.
+#
+# example_dialog_1:
+#   product: керамическая кружка
+#   background: Белый
+#   audience: (skipped)
+#   need_text: Нет
+#   result: Marketplace product card photo of керамическая кружка, pure white seamless
+#           background, soft studio lighting, sharp focus on the product, e-commerce
+#           catalog style, high detail, photorealistic, 8k.
+#
+# example_dialog_2:
+#   product: кожаный кошелёк
+#   background: luxury
+#   audience: мужчины 30-50
+#   need_text: Да
+#   result: Marketplace product card photo of кожаный кошелёк, premium luxury setting
+#           with rich textures and warm bokeh, ... for мужчины 30-50, ... clear space
+#           reserved for a text or price label, ...
+#
+# example_dialog_3:
+#   product: кроссовки
+#   background: lifestyle
+#   audience: молодёжь
+#   need_text: Нет
+#   result: Marketplace product card photo of кроссовки, lifestyle scene with natural
+#           context and props, ... aimed at молодёжь, ... no text overlay, ...
+Marketplace product card photo of {product}, {background}, soft studio lighting, sharp focus on the product, e-commerce catalog style, {audience}, {need_text}, high detail, photorealistic, clean composition, 8k.

@@ -1,0 +1,24 @@
+# purpose: Product on a beautiful background — a hero product shot on a styled surface.
+# inputs:
+#   {product}    = the product to feature (free text)
+#   {background} = background surface (choice: студия / природа / мрамор / неон / дерево)
+# outputs: a detailed English image-generation prompt for a styled product hero shot.
+#
+# example_dialog_1:
+#   product: флакон духов
+#   background: мрамор
+#   result: Hero product shot of флакон духов on an elegant marble surface, soft
+#           reflections, studio lighting, premium feel, sharp focus, photorealistic, 8k.
+#
+# example_dialog_2:
+#   product: банка кофе
+#   background: дерево
+#   result: Hero product shot of банка кофе on warm natural wood, cozy soft light,
+#           shallow depth of field, ... photorealistic, 8k.
+#
+# example_dialog_3:
+#   product: косметика
+#   background: неон
+#   result: Hero product shot of косметика on a vibrant neon-lit backdrop, glowing
+#           accents, moody reflections, ... photorealistic, 8k.
+Hero product shot of {product} on {background}, soft cinematic lighting, shallow depth of field, beautiful reflections, premium feel, sharp focus on the product, photorealistic, high detail, 8k.

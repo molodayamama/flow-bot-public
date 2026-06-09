@@ -138,6 +138,7 @@ from flow_core import (
 )
 import flow_copy
 import metrics
+import prompts_lib
 
 # ───────────────────────────────────────────
 load_dotenv(".env")
@@ -2460,6 +2461,7 @@ def _menu_button(copy_key: str, data: str) -> types.InlineKeyboardButton:
 def main_menu_kb(show_repeat: bool = False) -> types.InlineKeyboardMarkup:
     rows = [
         [_menu_button("gen", "m:gen")],
+        [_menu_button("ideas", "m:ideas")],
         [_menu_button("vid_gen", "m:vid")],
         [_menu_button("animate", "m:animate")],
         [_menu_button("myphoto", "m:myphoto"), _menu_button("balance", "m:balance")],
@@ -4132,6 +4134,10 @@ async def on_menu_action(callback: types.CallbackQuery):
         st["vmodel"] = VID_REF_DEFAULT_MODEL
         st["vcount"] = 1
         await show_video_ingredients(msg, user_id=user_id, edit=True)
+    elif data == "m:ideas":
+        await callback.answer()
+        _reset_image_flow(user_id)
+        await _show_ideas_root(msg, user_id=user_id, edit=True)
     elif data == "m:repeat":
         await callback.answer("Повторяю 🔁")
         await _repeat_last(callback, user_id)
@@ -4208,6 +4214,212 @@ async def on_animate_action(callback: types.CallbackQuery):
         await show_video_ingredients(msg, user_id=user_id, edit=False)
         return
     await callback.answer()
+
+
+# ── «Идеи и шаблоны»: готовые шаблоны (tp:) + подбор по шагам (gp:) ────
+
+async def _show_ideas_root(message: types.Message, *, user_id: int, edit: bool):
+    _ws(user_id).pop("tp_tpl", None)
+    _ws(user_id).pop("gp_step", None)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [_menu_button("ideas_templates", "ih:templates")],
+        [_menu_button("ideas_guided", "ih:guided")],
+        [_menu_button("menu", "m:menu")],
+    ])
+    text = flow_copy.msg("ideas_root")
+    if edit:
+        await _edit_or_answer(message, text, kb)
+    else:
+        await message.answer(text, reply_markup=kb)
+
+
+def _templates_picker_kb() -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    rows = [[B(text=prompts_lib.get_template(tid)["title"], callback_data=f"tp:tpl:{tid}")]
+            for tid in prompts_lib.template_ids()]
+    rows.append([_menu_button("back", "ih:root")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _render_template_step(message: types.Message, *, user_id: int):
+    """Показать текущий вопрос шаблона (или скомпоновать промпт и уйти в визард)."""
+    st = _ws(user_id)
+    tid = st.get("tp_tpl")
+    questions = prompts_lib.template_questions(tid) if tid else []
+    step = st.get("tp_step", 0)
+    if not tid or step >= len(questions):
+        # Все ответы собраны → компонуем промпт и открываем экран генерации.
+        prompt = prompts_lib.compose_template_prompt(tid, st.get("tp_answers", {}))
+        metrics.log_event("template_used", user_id=user_id, source="ideas",
+                          payload={"template": tid})
+        for k in ("tp_tpl", "tp_step", "tp_answers", "tp_await"):
+            st.pop(k, None)
+        st["pending_prompt"] = prompt or "high quality image"
+        await show_wizard(message, user_id=user_id, edit=True)
+        return
+    q = questions[step]
+    B = types.InlineKeyboardButton
+    rows = []
+    if q["type"] == "choice":
+        st["tp_await"] = None
+        for i, opt in enumerate(q["options"]):
+            rows.append([B(text=opt["label"], callback_data=f"tp:ans:{i}")])
+    else:
+        st["tp_await"] = "text"  # ждём свободный текст в чат
+    if q.get("optional"):
+        rows.append([_menu_button("skip", "tp:skip")])
+    nav = [_menu_button("back", "tp:back")] if step > 0 else []
+    nav.append(_menu_button("cancel", "tp:cancel"))
+    rows.append(nav)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=rows)
+    text = flow_copy.msg("ideas_qa_step", n=step + 1, total=len(questions), q=q["text"])
+    if q["type"] == "text":
+        text += "\n\n" + flow_copy.msg("ideas_type_hint")
+    await _edit_or_answer(message, text, kb)
+
+
+def _tp_store_answer(st: dict, value: str):
+    tid = st.get("tp_tpl")
+    questions = prompts_lib.template_questions(tid) if tid else []
+    step = st.get("tp_step", 0)
+    if step < len(questions):
+        st.setdefault("tp_answers", {})[questions[step]["key"]] = value
+    st["tp_step"] = step + 1
+    st["tp_await"] = None
+
+
+@dp.callback_query(F.data.startswith("ih:"))
+async def on_ideas_hub_action(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    data = callback.data or ""
+    msg = callback.message
+    await callback.answer()
+    if data == "ih:root":
+        await _show_ideas_root(msg, user_id=user_id, edit=True)
+    elif data == "ih:templates":
+        await _edit_or_answer(msg, flow_copy.msg("ideas_templates_title"), _templates_picker_kb())
+    elif data == "ih:guided":
+        _ws(user_id)["gp_step"] = 0
+        _ws(user_id)["gp_answers"] = {}
+        await _render_guided_step(msg, user_id=user_id)
+
+
+@dp.callback_query(F.data.startswith("tp:"))
+async def on_template_action(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    data = callback.data or ""
+    msg = callback.message
+    st = _ws(user_id)
+    if data.startswith("tp:tpl:"):
+        tid = data.split(":", 2)[2]
+        if not prompts_lib.get_template(tid):
+            await callback.answer(flow_copy.msg("expired"), show_alert=True)
+            return
+        st["tp_tpl"] = tid
+        st["tp_step"] = 0
+        st["tp_answers"] = {}
+        metrics.log_event("template_opened", user_id=user_id, source="ideas",
+                          payload={"template": tid})
+        await callback.answer()
+        await _render_template_step(msg, user_id=user_id)
+        return
+    if not st.get("tp_tpl"):
+        await callback.answer(flow_copy.msg("expired"), show_alert=True)
+        await _show_ideas_root(msg, user_id=user_id, edit=True)
+        return
+    if data.startswith("tp:ans:"):
+        idx = int(data.split(":")[2])
+        questions = prompts_lib.template_questions(st["tp_tpl"])
+        step = st.get("tp_step", 0)
+        opts = questions[step]["options"] if step < len(questions) else []
+        value = opts[idx]["value"] if 0 <= idx < len(opts) else ""
+        _tp_store_answer(st, value)
+        await callback.answer()
+        await _render_template_step(msg, user_id=user_id)
+    elif data == "tp:skip":
+        _tp_store_answer(st, "")
+        await callback.answer()
+        await _render_template_step(msg, user_id=user_id)
+    elif data == "tp:back":
+        st["tp_step"] = max(0, st.get("tp_step", 0) - 1)
+        st["tp_await"] = None
+        await callback.answer()
+        await _render_template_step(msg, user_id=user_id)
+    elif data == "tp:cancel":
+        for k in ("tp_tpl", "tp_step", "tp_answers", "tp_await"):
+            st.pop(k, None)
+        await callback.answer("Отменено")
+        await _show_ideas_root(msg, user_id=user_id, edit=True)
+    else:
+        await callback.answer()
+
+
+def _guided_step_kb(step: int) -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    s = prompts_lib.guided_steps()[step]
+    rows = [[B(text=opt["label"], callback_data=f"gp:opt:{i}")]
+            for i, opt in enumerate(s["options"])]
+    nav = [_menu_button("back", "gp:back")] if step > 0 else [_menu_button("back", "ih:root")]
+    nav.append(_menu_button("cancel", "gp:cancel"))
+    rows.append(nav)
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _render_guided_step(message: types.Message, *, user_id: int):
+    st = _ws(user_id)
+    steps = prompts_lib.guided_steps()
+    step = st.get("gp_step", 0)
+    if step >= len(steps):
+        answers = st.get("gp_answers", {})
+        # Ветка «видео» уводит в видео-визард, остальное — в генерацию картинки.
+        if answers.get("what") == "video":
+            for k in ("gp_step", "gp_answers"):
+                st.pop(k, None)
+            await show_video_family(message, user_id=user_id, edit=True)
+            return
+        prompt = prompts_lib.compose_guided_prompt(answers)
+        metrics.log_event("guided_completed", user_id=user_id, source="ideas")
+        for k in ("gp_step", "gp_answers"):
+            st.pop(k, None)
+        st["pending_prompt"] = prompt or "high quality image"
+        await show_wizard(message, user_id=user_id, edit=True)
+        return
+    s = steps[step]
+    text = flow_copy.msg("ideas_qa_step", n=step + 1, total=len(steps), q=s["text"])
+    await _edit_or_answer(message, text, _guided_step_kb(step))
+
+
+@dp.callback_query(F.data.startswith("gp:"))
+async def on_guided_picker_action(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    data = callback.data or ""
+    msg = callback.message
+    st = _ws(user_id)
+    if "gp_step" not in st:
+        await callback.answer(flow_copy.msg("expired"), show_alert=True)
+        await _show_ideas_root(msg, user_id=user_id, edit=True)
+        return
+    if data.startswith("gp:opt:"):
+        idx = int(data.split(":")[2])
+        step = st.get("gp_step", 0)
+        steps = prompts_lib.guided_steps()
+        opts = steps[step]["options"] if step < len(steps) else []
+        if 0 <= idx < len(opts):
+            st.setdefault("gp_answers", {})[steps[step]["key"]] = opts[idx]["value"]
+        st["gp_step"] = step + 1
+        await callback.answer()
+        await _render_guided_step(msg, user_id=user_id)
+    elif data == "gp:back":
+        st["gp_step"] = max(0, st.get("gp_step", 0) - 1)
+        await callback.answer()
+        await _render_guided_step(msg, user_id=user_id)
+    elif data == "gp:cancel":
+        for k in ("gp_step", "gp_answers"):
+            st.pop(k, None)
+        await callback.answer("Отменено")
+        await _show_ideas_root(msg, user_id=user_id, edit=True)
+    else:
+        await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("es:"))
@@ -5417,6 +5629,12 @@ async def handle_plain_text(message: types.Message):
         if vlast:
             st["vlast"] = vlast
         await show_video_family(message, user_id=user_id, edit=False)
+        return
+
+    # Свободный текстовый ответ в Q&A готового шаблона («Идеи и шаблоны»).
+    if st.get("tp_await") == "text" and st.get("tp_tpl"):
+        _tp_store_answer(st, text)
+        await _render_template_step(message, user_id=user_id)
         return
 
     # Видео-правка ждёт инструкцию к уже готовому ролику.

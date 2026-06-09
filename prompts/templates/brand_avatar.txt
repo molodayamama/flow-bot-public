@@ -1,0 +1,28 @@
+# purpose: Brand avatar — a clean, recognizable square logo/avatar for a brand.
+# inputs:
+#   {brand}  = brand name or concept (free text)
+#   {style}  = avatar style (choice: леттеринг / иконка / маскот / градиент)
+#   {colors} = optional preferred colors (free text, optional)
+# outputs: a detailed English image-generation prompt for a square brand avatar.
+#
+# example_dialog_1:
+#   brand: кофейня "Зерно"
+#   style: иконка
+#   colors: (skipped)
+#   result: Brand avatar for кофейня "Зерно", flat icon style, simple memorable symbol,
+#           centered square composition, ... clean vector look, ...
+#
+# example_dialog_2:
+#   brand: студия дизайна
+#   style: градиент
+#   colors: фиолетовый и синий
+#   result: Brand avatar for студия дизайна, smooth modern gradient style, ... color
+#           palette: фиолетовый и синий, ... centered square composition, ...
+#
+# example_dialog_3:
+#   brand: зоомагазин
+#   style: маскот
+#   colors: зелёный
+#   result: Brand avatar for зоомагазин, friendly mascot character style, ... color
+#           palette: зелёный, ... centered square composition, ...
+Brand avatar for {brand}, {style}, simple memorable design, centered square composition, clean and scalable, {colors}, flat modern look, crisp edges, high detail.

@@ -636,6 +636,38 @@ class BotMenuWiringTests(unittest.TestCase):
             self.source.index("async def on_image_action"),
         )
 
+    def test_ideas_hub_wired(self) -> None:
+        # Menu entry + hub root + both branches (templates Q&A, guided picker).
+        self.assertIn("import prompts_lib", self.source)
+        self.assertIn('data == "m:ideas"', self.source)
+        self.assertIn('@dp.callback_query(F.data.startswith("ih:"))', self.source)
+        self.assertIn('@dp.callback_query(F.data.startswith("tp:"))', self.source)
+        self.assertIn('@dp.callback_query(F.data.startswith("gp:"))', self.source)
+        self.assertIn("prompts_lib.compose_template_prompt(", self.source)
+        self.assertIn("prompts_lib.compose_guided_prompt(", self.source)
+        # Composed prompt feeds the existing wizard via pending_prompt.
+        self.assertIn('st["pending_prompt"] = prompt', self.source)
+        self.assertIn('"template_opened"', self.source)
+        self.assertIn('"template_used"', self.source)
+        # Free-text Q&A answers are captured in the text handler.
+        self.assertIn('st.get("tp_await") == "text"', self.source)
+        # New prefixes register before the catch-all image handler.
+        for pfx in ('startswith("ih:")', 'startswith("tp:")', 'startswith("gp:")'):
+            self.assertLess(self.source.index(pfx),
+                            self.source.index("async def on_image_action"), pfx)
+
+    def test_prompts_lib_templates_complete(self) -> None:
+        import prompts_lib
+        self.assertEqual(len(prompts_lib.template_ids()), 7)
+        # Composing never leaks placeholders or header-comment lines.
+        p = prompts_lib.compose_template_prompt(
+            "product_card",
+            {"product": "кружка", "background": "white", "need_text": "no"},
+        )
+        self.assertNotIn("{", p)
+        self.assertNotIn("#", p)
+        self.assertEqual(prompts_lib.compose_template_prompt("nope", {}), "")
+
     def test_video_prompt_edit_clears_reference_mode_inputs(self) -> None:
         self.assertIn("def _vid_clear_reference_inputs", self.source)
         start = self.source.index("async def _video_prompt_edit_and_send")
