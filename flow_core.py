@@ -681,6 +681,16 @@ VIDEO_EDIT_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1/video:batchAsyncGe
 VIDEO_EXTEND_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1/video:batchAsyncGenerateVideoExtendVideo"
 VIDEO_POLL_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1/video:batchCheckAsyncVideoGenerationStatus"
 
+# Server-side full-video stitching (the service's REAL "download full" path).
+# Verified from a real capture of Flow's download action on an extended video:
+#   POST v1:runVideoFxConcatenation { inputVideos:[{mediaGenerationId, length(ns),
+#        startTimeOffset, endTimeOffset}, ...] } -> { operation:{operation:{name}} }
+#   POST v1:runVideoFxCheckConcatenationStatus { operation:{operation:{name}} } ->
+#        { status, encodedVideo(base64 of the full mp4) } when SUCCESSFUL.
+# The browser base64-decodes encodedVideo into a blob: URL — no local ffmpeg needed.
+VIDEO_CONCAT_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1:runVideoFxConcatenation"
+VIDEO_CONCAT_STATUS_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1:runVideoFxCheckConcatenationStatus"
+
 # Video download: the front-end (labs.google, NOT the API host) resolves a media
 # id to the actual file via a tRPC redirect endpoint. Confirmed from the page's
 # <video> src: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=<media_id>
@@ -1147,21 +1157,101 @@ def flow_scene_workflows_url(scene_id: str, project_id: str) -> str:
     return f"https://aisandbox-pa.googleapis.com/v1/flow/scene/{scene}/workflows?{query}"
 
 
-def parse_scene_primary_media_id(
-    data: dict, *, exclude_workflow_id: str | None = None
-) -> str | None:
-    """Return the primaryMediaId of the first workflow not matching exclude_workflow_id."""
+# ── full-video concatenation (server-side stitch) ──────────────────────
+
+# Poll cadence for runVideoFxCheckConcatenationStatus. The real job completed
+# within a few seconds; keep the ceiling generous for long timelines.
+VIDEO_CONCAT_POLL_INTERVAL = 3.0
+VIDEO_CONCAT_POLL_MAX = 40  # ~120s ceiling
+
+
+def _duration_to_seconds(value: str | None) -> float:
+    """Parse a Google duration string like ``"3.500s"`` / ``"8s"`` into seconds."""
+    if not value:
+        return 0.0
+    try:
+        return float(str(value).rstrip("s") or 0)
+    except ValueError:
+        return 0.0
+
+
+def _seconds_to_offset(seconds: float) -> str:
+    """Format seconds as a trimmed offset string, e.g. 3.5 -> ``"3.5s"``."""
+    return f"{seconds:g}s"
+
+
+def parse_scene_segments(data: dict) -> list[dict]:
+    """Return ordered timeline segments from a scene-workflows response.
+
+    Each entry: ``{"position", "media_id", "total", "start", "end"}``.
+    Sorted by ``sceneWorkflowMetadata.position`` (missing position sorts as 0,
+    matching the real concat request order). Verified from a real capture.
+    """
+    segments: list[dict] = []
     for item in data.get("sceneWorkflows", []) or []:
         if not isinstance(item, dict):
             continue
-        wf = item.get("workflow") or {}
-        if exclude_workflow_id and wf.get("name") == exclude_workflow_id:
+        meta = (item.get("workflow") or {}).get("metadata") or {}
+        media_id = meta.get("primaryMediaId")
+        if not isinstance(media_id, str) or not media_id:
             continue
-        meta = wf.get("metadata") or {}
-        pmid = meta.get("primaryMediaId")
-        if isinstance(pmid, str) and pmid:
-            return pmid
-    return None
+        swm = item.get("sceneWorkflowMetadata") or {}
+        try:
+            position = int(swm.get("position", 0) or 0)
+        except (TypeError, ValueError):
+            position = 0
+        total = swm.get("totalDuration") or "0s"
+        segments.append({
+            "position": position,
+            "media_id": media_id,
+            "total": total,
+            "start": swm.get("startTime") or "0s",
+            "end": swm.get("endTime") or total,
+        })
+    segments.sort(key=lambda s: s["position"])
+    return segments
+
+
+def build_concat_payload(segments: list[dict]) -> dict:
+    """Build the ``runVideoFxConcatenation`` request body from ordered segments.
+
+    ``length`` is the segment's full duration in nanoseconds; the offsets trim
+    each segment. Verified field shapes from a real capture.
+    """
+    inputs = []
+    for seg in segments:
+        total_sec = _duration_to_seconds(seg.get("total"))
+        inputs.append({
+            "mediaGenerationId": seg["media_id"],
+            "length": str(int(round(total_sec * 1_000_000_000))),
+            "startTimeOffset": _seconds_to_offset(_duration_to_seconds(seg.get("start"))),
+            "endTimeOffset": _seconds_to_offset(_duration_to_seconds(seg.get("end"))),
+        })
+    return {"inputVideos": inputs}
+
+
+def parse_concat_operation_name(data: dict) -> str | None:
+    """Extract the long-running operation name from a concat-start response."""
+    name = ((data.get("operation") or {}).get("operation") or {}).get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def build_concat_status_payload(operation_name: str) -> dict:
+    """Build the ``runVideoFxCheckConcatenationStatus`` request body."""
+    return {"operation": {"operation": {"name": operation_name}}}
+
+
+def parse_concat_status(data: dict) -> tuple[str, str | None]:
+    """Return ``(status, encoded_video_b64)`` from a concat-status response.
+
+    ``encoded_video_b64`` is present (base64 of the full mp4) only when the
+    status is SUCCESSFUL.
+    """
+    status = data.get("status", "") or ""
+    encoded = data.get("encodedVideo")
+    if not isinstance(encoded, str):
+        encoded = None
+    return status, encoded
 
 
 def parse_video_scene_id(data: dict) -> str | None:
@@ -1477,7 +1567,6 @@ class VideoRef:
     prompt_edited: bool = False
     workflow_id: str | None = None
     scene_id: str | None = None
-    segment_media_id: str | None = None  # extension-only segment after extend (from scene workflows)
 
 
 class ImageRegistry:

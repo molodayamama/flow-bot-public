@@ -90,6 +90,10 @@ from flow_core import (
     VIDEO_REFERENCE_ENDPOINT,
     VIDEO_EDIT_ENDPOINT,
     VIDEO_EXTEND_ENDPOINT,
+    VIDEO_CONCAT_ENDPOINT,
+    VIDEO_CONCAT_STATUS_ENDPOINT,
+    VIDEO_CONCAT_POLL_INTERVAL,
+    VIDEO_CONCAT_POLL_MAX,
     VIDEO_POLL_ENDPOINT,
     VIDEO_POLL_INTERVAL,
     VIDEO_POLL_TIMEOUT,
@@ -105,7 +109,11 @@ from flow_core import (
     flow_scene_workflows_url,
     parse_video_gen_response,
     parse_video_scene_id,
-    parse_scene_primary_media_id,
+    parse_scene_segments,
+    build_concat_payload,
+    parse_concat_operation_name,
+    build_concat_status_payload,
+    parse_concat_status,
     check_video_poll_status,
     video_media_redirect_url,
 )
@@ -1590,13 +1598,15 @@ class FlowHttpClient:
             log.warning(f"video scene prep failed: {exc}")
             return None
 
-    async def fetch_scene_extension_segment(
-        self, scene_id: str, project_id: str, *, source_workflow_id: str | None = None
-    ) -> str | None:
-        """Re-fetch scene workflows and return primaryMediaId of the extension workflow.
+    async def fetch_full_extended_video(
+        self, scene_id: str, project_id: str
+    ) -> bytes | None:
+        """Return the full stitched video for an extended scene, or None.
 
-        Skips the source workflow (identified by source_workflow_id) to return only
-        the newly added extension segment's media id.
+        Replays the service's own "download full" path: GET scene workflows to
+        learn the ordered segment timeline, POST runVideoFxConcatenation, poll
+        runVideoFxCheckConcatenationStatus, and base64-decode the resulting
+        ``encodedVideo``. No local ffmpeg involved.
         """
         session = await self.keeper.get_session()
         if not session["bearer"]:
@@ -1614,9 +1624,57 @@ class FlowHttpClient:
                     if resp.status != 200:
                         return None
                     data = await resp.json(content_type=None)
-            return parse_scene_primary_media_id(data, exclude_workflow_id=source_workflow_id)
+
+                segments = parse_scene_segments(data)
+                if len(segments) < 2:
+                    return None  # nothing to stitch; caller falls back to the segment
+
+                async with http.post(
+                    VIDEO_CONCAT_ENDPOINT,
+                    headers=headers,
+                    json=build_concat_payload(segments),
+                    proxy=proxy,
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as resp:
+                    if resp.status != 200:
+                        log.warning(f"concat start -> {resp.status}")
+                        return None
+                    op_data = await resp.json(content_type=None)
+
+                op_name = parse_concat_operation_name(op_data)
+                if not op_name:
+                    return None
+
+                status_payload = build_concat_status_payload(op_name)
+                for _ in range(VIDEO_CONCAT_POLL_MAX):
+                    await asyncio.sleep(VIDEO_CONCAT_POLL_INTERVAL)
+                    async with http.post(
+                        VIDEO_CONCAT_STATUS_ENDPOINT,
+                        headers=headers,
+                        json=status_payload,
+                        proxy=proxy,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    ) as resp:
+                        if resp.status != 200:
+                            continue
+                        st_data = await resp.json(content_type=None)
+                    status, encoded = parse_concat_status(st_data)
+                    if status == VIDEO_STATUS_SUCCESSFUL:
+                        if not encoded:
+                            return None
+                        import base64
+                        try:
+                            return base64.b64decode(encoded)
+                        except Exception:
+                            log.exception("concat encodedVideo decode failed")
+                            return None
+                    if status == VIDEO_STATUS_FAILED:
+                        log.warning("concat job failed")
+                        return None
+                log.warning("concat polling timed out")
+                return None
         except Exception as exc:
-            log.warning(f"fetch_scene_extension_segment failed: {exc}")
+            log.warning(f"fetch_full_extended_video failed: {exc}")
             return None
 
     async def generate_video(
@@ -2334,7 +2392,7 @@ def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
     rows = [
         [B(text=L("vid_dl"), callback_data=f"v:dl:{vtoken}")],
     ]
-    if ref and ref.mode == "extend" and ref.segment_media_id:
+    if ref and ref.mode == "extend" and ref.media_id:
         rows.append([B(text=L("vid_dl_seg"), callback_data=f"v:dl_seg:{vtoken}")])
     if _video_can_edit(ref):
         rows.append([B(text=L("vid_edit"), callback_data=f"v:edit:{vtoken}")])
@@ -3647,14 +3705,21 @@ async def _video_delivery_bytes(
 ) -> tuple[bytes | None, bool]:
     """Fetch bytes for delivery.
 
-    For Extend refs media_id is the full service-merged video — returned with
-    is_full=True so callers can name the file accordingly.
+    For an Extend result the default is the FULL stitched video (the service's
+    own server-side concatenation). ``ref.media_id`` is only the newly added
+    segment, so we fall back to it (is_full=False) if stitching is unavailable.
+    Returns ``(bytes, is_full)``.
     """
+    if ref.mode == "extend" and ref.scene_id and ref.project_id:
+        full_bytes = await client.fetch_full_extended_video(ref.scene_id, ref.project_id)
+        if full_bytes:
+            return full_bytes, True
+        log.warning("full stitched video unavailable; falling back to extension segment")
+
     video_bytes = fetched_bytes
     if video_bytes is None:
         video_bytes = await client.fetch_video_bytes(ref.media_id)
-    is_full = ref.mode == "extend"
-    return video_bytes, is_full
+    return video_bytes, False
 
 
 async def _repeat_last(callback: types.CallbackQuery, user_id: int):
@@ -3785,17 +3850,6 @@ async def _video_generate_and_send(
                     await message.answer(flow_copy.msg("vid_gen_failed"), reply_markup=fail_kb)
                 return
 
-            segment_media_id = None
-            if video_operation == "extend" and source_video:
-                eff_scene_id = result.get("scene_id") or source_scene_id
-                eff_project_id = result.get("project_id")
-                if eff_scene_id and eff_project_id:
-                    segment_media_id = await client.fetch_scene_extension_segment(
-                        eff_scene_id,
-                        eff_project_id,
-                        source_workflow_id=source_video.workflow_id,
-                    )
-
             vref = VideoRef(
                 user_id=user_id,
                 project_id=result.get("project_id"),
@@ -3807,8 +3861,8 @@ async def _video_generate_and_send(
                 mode=video_operation if video_operation != "generate" else vmode,
                 prompt_edited=prompt_edited,
                 workflow_id=result.get("workflow_id"),
-                scene_id=result.get("scene_id"),
-                segment_media_id=segment_media_id,
+                # Extend needs the scene id to stitch the full timeline on download.
+                scene_id=result.get("scene_id") or (source_scene_id if video_operation == "extend" else None),
             )
             vtoken = video_registry.add(vref)
 
@@ -3909,18 +3963,18 @@ async def _video_download(callback: types.CallbackQuery, user_id: int, token: st
 async def _video_segment_download(
     callback: types.CallbackQuery, user_id: int, token: str
 ) -> None:
-    """Скачать только новый фрагмент (extension segment) без источника."""
+    """Скачать только новый фрагмент Extend (сам результат, без склейки таймлайна)."""
     ref = video_registry.get(token)
     if ref is None or ref.user_id != user_id:
         await callback.answer(flow_copy.msg("expired"), show_alert=True)
         return
-    if not ref.segment_media_id:
+    if not ref.media_id:
         await callback.answer(flow_copy.msg("expired"), show_alert=True)
         return
 
     await callback.answer()
     status_msg = await callback.message.answer(flow_copy.msg("preparing_file"))
-    video_bytes = await client.fetch_video_bytes(ref.segment_media_id)
+    video_bytes = await client.fetch_video_bytes(ref.media_id)
 
     if not video_bytes:
         await status_msg.edit_text("❌ Не удалось скачать фрагмент. Попробуйте позже.")
@@ -3928,7 +3982,7 @@ async def _video_segment_download(
 
     from aiogram.types import BufferedInputFile
 
-    filename = f"video_segment_{ref.segment_media_id[-8:]}.mp4"
+    filename = f"video_fragment_{ref.media_id[-8:]}.mp4"
     try:
         await callback.message.answer_document(
             BufferedInputFile(video_bytes, filename),
@@ -3936,7 +3990,7 @@ async def _video_segment_download(
         )
         await status_msg.delete()
     except Exception:
-        log.exception("video segment download send failed")
+        log.exception("video fragment download send failed")
         await status_msg.edit_text("❌ Не удалось отправить файл.")
 
 

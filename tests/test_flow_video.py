@@ -33,6 +33,13 @@ from flow_core import (
     check_video_poll_status,
     parse_video_batch_id,
     parse_video_result,
+    VIDEO_CONCAT_ENDPOINT,
+    VIDEO_CONCAT_STATUS_ENDPOINT,
+    parse_scene_segments,
+    build_concat_payload,
+    parse_concat_operation_name,
+    build_concat_status_payload,
+    parse_concat_status,
 )
 
 FAKE_BATCH_ID = "619ce05f-5416-4ca4-8840-0a74a1f669f2"
@@ -477,6 +484,80 @@ class TestCheckVideoPollStatus(unittest.TestCase):
     def test_status_progression_is_terminal_only_at_end(self):
         self.assertNotIn(VIDEO_STATUS_SCHEDULED, VIDEO_TERMINAL_STATUSES)
         self.assertNotIn(VIDEO_STATUS_ACTIVE, VIDEO_TERMINAL_STATUSES)
+
+
+class TestVideoConcatenation(unittest.TestCase):
+    """Verified against a real capture of Flow's 'download full' action."""
+
+    # Real scene-workflows payload (unordered, mixed/missing positions).
+    SCENE = {"sceneWorkflows": [
+        {"workflow": {"metadata": {"primaryMediaId": "a291413d-c10b-4820-acd6-66c14e5eb7e1"}},
+         "sceneWorkflowMetadata": {"totalDuration": "4s", "startTime": "0s", "endTime": "3.500s"}},
+        {"workflow": {"metadata": {"primaryMediaId": "e4762c8f-6582-4ed5-987d-a99836e8b67a"}},
+         "sceneWorkflowMetadata": {"position": 2, "totalDuration": "8s", "startTime": "0s", "endTime": "8s"}},
+        {"workflow": {"metadata": {"primaryMediaId": "758cc5aa-f381-4900-a3bb-3def6264a557"}},
+         "sceneWorkflowMetadata": {"position": 3, "totalDuration": "8s", "startTime": "0s", "endTime": "8s"}},
+        {"workflow": {"metadata": {"primaryMediaId": "0d21b79c-2762-453c-aac0-f82dd642b1ea"}},
+         "sceneWorkflowMetadata": {"position": 1, "totalDuration": "8s", "startTime": "0s", "endTime": "8s"}},
+    ]}
+
+    def test_endpoints_match_captured_routes(self):
+        self.assertEqual(VIDEO_CONCAT_ENDPOINT,
+                         "https://aisandbox-pa.googleapis.com/v1:runVideoFxConcatenation")
+        self.assertEqual(VIDEO_CONCAT_STATUS_ENDPOINT,
+                         "https://aisandbox-pa.googleapis.com/v1:runVideoFxCheckConcatenationStatus")
+
+    def test_segments_sorted_by_position_missing_is_zero(self):
+        segs = parse_scene_segments(self.SCENE)
+        self.assertEqual(
+            [s["media_id"][:8] for s in segs],
+            ["a291413d", "0d21b79c", "e4762c8f", "758cc5aa"],
+        )
+
+    def test_segments_skip_entries_without_media_id(self):
+        data = {"sceneWorkflows": [{"workflow": {"metadata": {}}, "sceneWorkflowMetadata": {}}]}
+        self.assertEqual(parse_scene_segments(data), [])
+
+    def test_concat_payload_matches_real_request(self):
+        payload = build_concat_payload(parse_scene_segments(self.SCENE))
+        inputs = payload["inputVideos"]
+        # First (trimmed 4s -> 3.5s) segment, byte-exact to the captured request.
+        self.assertEqual(inputs[0], {
+            "mediaGenerationId": "a291413d-c10b-4820-acd6-66c14e5eb7e1",
+            "length": "4000000000",
+            "startTimeOffset": "0s",
+            "endTimeOffset": "3.5s",
+        })
+        # 8s segment expressed in nanoseconds.
+        self.assertEqual(inputs[1]["length"], "8000000000")
+        self.assertEqual(inputs[1]["endTimeOffset"], "8s")
+        self.assertEqual(len(inputs), 4)
+
+    def test_parse_operation_name(self):
+        resp = {"operation": {"operation": {"name": "projects/365941595420/locations/us-east4/jobs/b54e0835"}}}
+        self.assertEqual(parse_concat_operation_name(resp),
+                         "projects/365941595420/locations/us-east4/jobs/b54e0835")
+
+    def test_parse_operation_name_missing(self):
+        self.assertIsNone(parse_concat_operation_name({}))
+        self.assertIsNone(parse_concat_operation_name({"operation": {}}))
+
+    def test_status_payload_roundtrip(self):
+        name = "projects/x/locations/us-east4/jobs/abc"
+        self.assertEqual(build_concat_status_payload(name),
+                         {"operation": {"operation": {"name": name}}})
+
+    def test_parse_status_active_has_no_video(self):
+        status, enc = parse_concat_status(
+            {"status": "MEDIA_GENERATION_STATUS_ACTIVE", "outputUri": "", "mediaGenerationId": ""})
+        self.assertEqual(status, "MEDIA_GENERATION_STATUS_ACTIVE")
+        self.assertIsNone(enc)
+
+    def test_parse_status_successful_carries_encoded_video(self):
+        status, enc = parse_concat_status(
+            {"status": "MEDIA_GENERATION_STATUS_SUCCESSFUL", "inputsCount": 5, "encodedVideo": "QUJD"})
+        self.assertEqual(status, "MEDIA_GENERATION_STATUS_SUCCESSFUL")
+        self.assertEqual(enc, "QUJD")
 
 
 if __name__ == "__main__":

@@ -372,13 +372,19 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('video_operation="extend"', block)
         self.assertIn("source_scene_id=scene_id", block)
 
-    def test_video_extend_delivery_uses_service_video(self) -> None:
+    def test_video_extend_delivery_uses_service_concat(self) -> None:
+        # No local ffmpeg merge anywhere.
         self.assertNotIn("async def _concat_video_bytes", self.source)
         self.assertNotIn("asyncio.create_subprocess_exec", self.source)
+        self.assertNotIn("segment_media_id", self.source)
+        # Default extend delivery = the service's server-side stitched full video.
         self.assertIn("async def _video_delivery_bytes", self.source)
-        self.assertIn('is_full = ref.mode == "extend"', self.source)
-        self.assertIn("fetch_scene_extension_segment", self.source)
-        self.assertIn("segment_media_id", self.source)
+        self.assertIn("async def fetch_full_extended_video", self.source)
+        self.assertIn("full_bytes = await client.fetch_full_extended_video", self.source)
+        self.assertIn('if ref.mode == "extend" and ref.scene_id and ref.project_id', self.source)
+        # The new fragment button downloads the extend result media_id itself.
+        self.assertIn("async def _video_segment_download", self.source)
+        self.assertIn("v:dl_seg:", self.source)
 
     def test_video_extend_result_keeps_source_media_id(self) -> None:
         start = self.source.index("vref = VideoRef(")
