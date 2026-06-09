@@ -2442,6 +2442,7 @@ def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
         inline_keyboard=[
             [b("edit", "edit"), b("vary", "revary")],
             [b("regen", "regen"), b("realup", "realup")],
+            [B(text=L("animate"), callback_data=f"an:img:{token}")],
             [b("download", "dl_raw")],
         ]
     )
@@ -2460,6 +2461,7 @@ def main_menu_kb(show_repeat: bool = False) -> types.InlineKeyboardMarkup:
     rows = [
         [_menu_button("gen", "m:gen")],
         [_menu_button("vid_gen", "m:vid")],
+        [_menu_button("animate", "m:animate")],
         [_menu_button("myphoto", "m:myphoto"), _menu_button("balance", "m:balance")],
         [_menu_button("invite", "m:invite")],
         [_menu_button("help", "m:help")],
@@ -4120,6 +4122,16 @@ async def on_menu_action(callback: types.CallbackQuery):
         await callback.answer()
         pending_edits.pop(user_id, None)  # бросаем залипшее фото-правку при переходе в видео
         await show_video_family(msg, user_id=user_id, edit=True)
+    elif data == "m:animate":
+        # «Оживить фото» из меню = видео из фото+текст (r2v): просим фото.
+        await callback.answer()
+        pending_edits.pop(user_id, None)
+        _vid_clear(user_id)
+        st = _ws(user_id)
+        st["vmode"] = "ingredients"
+        st["vmodel"] = VID_REF_DEFAULT_MODEL
+        st["vcount"] = 1
+        await show_video_ingredients(msg, user_id=user_id, edit=True)
     elif data == "m:repeat":
         await callback.answer("Повторяю 🔁")
         await _repeat_last(callback, user_id)
@@ -4169,6 +4181,33 @@ async def on_menu_action(callback: types.CallbackQuery):
         await show_main_menu(msg, user_id=user_id, edit=True)
     else:
         await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("an:"))
+async def on_animate_action(callback: types.CallbackQuery):
+    """«Оживить фото»: взять сгенерированную картинку как референс для r2v-видео."""
+    data = callback.data or ""
+    user_id = callback.from_user.id
+    msg = callback.message
+    if data.startswith("an:img:"):
+        token = data.split(":", 2)[2]
+        ref = image_registry.get(token)
+        if ref is None or ref.user_id != user_id:
+            await callback.answer(flow_copy.msg("expired"), show_alert=True)
+            return
+        await callback.answer()
+        pending_edits.pop(user_id, None)
+        _vid_clear(user_id)
+        st = _ws(user_id)
+        st["vmode"] = "ingredients"
+        st["vmodel"] = VID_REF_DEFAULT_MODEL
+        st["vcount"] = 1
+        st["ving_photos"] = [ref.source]  # картинка уже задана как референс
+        metrics.log_event("animate_started", user_id=user_id, source="image")
+        # Новый экран настроек под картинкой (можно добавить ещё фото или жать «Готово»).
+        await show_video_ingredients(msg, user_id=user_id, edit=False)
+        return
+    await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("es:"))

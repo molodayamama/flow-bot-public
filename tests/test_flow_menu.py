@@ -620,6 +620,22 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("referral_milestone_bonus(", self.source)
         self.assertIn("referral_ongoing_bonus(", self.source)
 
+    def test_animate_image_to_video_wired(self) -> None:
+        # "Оживить фото" button under images + main-menu entry → r2v pipeline.
+        kb = self.source[self.source.index("def _image_keyboard"):][:900]
+        self.assertIn('f"an:img:{token}"', kb)
+        self.assertIn('@dp.callback_query(F.data.startswith("an:"))', self.source)
+        self.assertIn('data == "m:animate"', self.source)
+        # Seeds the generated image as the single r2v reference, then reuses the
+        # existing ingredients flow.
+        self.assertIn('st["ving_photos"] = [ref.source]', self.source)
+        self.assertIn('st["vmode"] = "ingredients"', self.source)
+        # The animate prefix handler is registered before the catch-all image one.
+        self.assertLess(
+            self.source.index('startswith("an:")'),
+            self.source.index("async def on_image_action"),
+        )
+
     def test_video_prompt_edit_clears_reference_mode_inputs(self) -> None:
         self.assertIn("def _vid_clear_reference_inputs", self.source)
         start = self.source.index("async def _video_prompt_edit_and_send")
