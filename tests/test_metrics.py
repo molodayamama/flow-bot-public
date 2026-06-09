@@ -209,6 +209,37 @@ class ReferralTests(MetricsTestBase):
         self.assertEqual(rep["rewarded"], 1)
         self.assertEqual(rep["total_reward_credits"], 50)
 
+    def test_referral_query_helpers(self) -> None:
+        metrics.record_referral_join(referrer_user_id=1, referred_user_id=2)
+        self.assertEqual(metrics.get_referrer_of(2), 1)
+        self.assertIsNone(metrics.get_referrer_of(999))
+        self.assertEqual(metrics.referral_status(2), "joined")
+        self.assertIsNone(metrics.referral_status(999))
+        stats = metrics.referral_stats(1)
+        self.assertEqual(stats["invited"], 1)
+        self.assertEqual(stats["earned"], 0)
+
+    def test_ongoing_reward_idempotent_and_capped_lookup(self) -> None:
+        # First insert wins; duplicate payment id is ignored (no double reward).
+        self.assertTrue(metrics.record_ongoing_reward(1, 2, 29, "charge-A"))
+        self.assertFalse(metrics.record_ongoing_reward(1, 2, 29, "charge-A"))
+        self.assertEqual(self._count("referral_ongoing_rewards"), 1)
+        row = metrics.get_ongoing_reward_by_payment("charge-A")
+        self.assertEqual(row["referrer_user_id"], 1)
+        self.assertEqual(row["reward_credits"], 29)
+        self.assertIsNone(metrics.get_ongoing_reward_by_payment("nope"))
+        # Counts toward the referrer's daily total (for cap enforcement).
+        self.assertEqual(metrics.get_referral_credits_today(1), 29)
+
+    def test_referral_clawback_reset(self) -> None:
+        metrics.record_referral_join(referrer_user_id=1, referred_user_id=2)
+        metrics.mark_referral_rewarded(referred_user_id=2, reward_credits=30)
+        m = metrics.get_milestone_by_referred(2)
+        self.assertEqual(m["status"], "rewarded")
+        self.assertEqual(m["reward_credits"], 30)
+        metrics.reset_referral_to_joined(2)
+        self.assertEqual(metrics.referral_status(2), "joined")
+
 
 class ReportTodayTests(MetricsTestBase):
     def test_report_today_empty_db_returns_zeros(self) -> None:

@@ -1836,6 +1836,36 @@ def pack_label(pack_id: str) -> str:
     return text
 
 
+# ── Referral program (economics in docs/REFERRAL.md) ──────────────────
+# Mutually-exclusive first-payment tiers (only the highest applicable fires),
+# then an ongoing % of every later top-up. State lives in metrics.db.
+REFERRAL_PARAM_PREFIX = "ref_"
+REFERRAL_TIER1_BONUS = 20      # credits — any first purchase below TIER2 stars
+REFERRAL_TIER2_STARS = 200     # >100₽ ≈ medium pack
+REFERRAL_TIER2_BONUS = 30
+REFERRAL_TIER3_STARS = 450     # >500₽ ≈ large pack
+REFERRAL_TIER3_BONUS = 50
+REFERRAL_ONGOING_PCT = 0.10    # fraction of credits_issued (floor), every later top-up
+REFERRAL_DAILY_CAP_CREDITS = 500  # max referral credits to one referrer per day
+
+
+def referral_milestone_bonus(stars_paid: int) -> int:
+    """First-payment milestone bonus for the referrer (single highest tier)."""
+    stars = max(0, int(stars_paid or 0))
+    if stars >= REFERRAL_TIER3_STARS:
+        return REFERRAL_TIER3_BONUS
+    if stars >= REFERRAL_TIER2_STARS:
+        return REFERRAL_TIER2_BONUS
+    if stars > 0:
+        return REFERRAL_TIER1_BONUS
+    return 0
+
+
+def referral_ongoing_bonus(credits_issued: int) -> int:
+    """Ongoing referral reward = floor(REFERRAL_ONGOING_PCT * credits_issued)."""
+    return int(max(0, int(credits_issued or 0)) * REFERRAL_ONGOING_PCT)
+
+
 class CreditStore:
     """Persisted per-user credit balances (atomic JSON, like UserProjectStore).
 

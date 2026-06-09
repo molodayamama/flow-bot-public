@@ -54,6 +54,20 @@ class PricingTests(unittest.TestCase):
         frm = min(flow_core.video_price(m, 1, "frames") for m in variants)
         self.assertEqual((omni, veo, ing, frm), (20, 30, 40, 50))
 
+    def test_referral_milestone_tiers(self) -> None:
+        # Single highest applicable tier per first payment (no stacking).
+        self.assertEqual(flow_core.referral_milestone_bonus(35), 20)   # trial
+        self.assertEqual(flow_core.referral_milestone_bonus(75), 20)   # small
+        self.assertEqual(flow_core.referral_milestone_bonus(200), 30)  # medium
+        self.assertEqual(flow_core.referral_milestone_bonus(450), 50)  # large
+        self.assertEqual(flow_core.referral_milestone_bonus(900), 50)  # xl
+        self.assertEqual(flow_core.referral_milestone_bonus(0), 0)
+
+    def test_referral_ongoing_is_floored_ten_percent(self) -> None:
+        self.assertEqual(flow_core.referral_ongoing_bonus(290), 29)
+        self.assertEqual(flow_core.referral_ongoing_bonus(1500), 150)
+        self.assertEqual(flow_core.referral_ongoing_bonus(5), 0)  # floor < 1 → 0
+
     def test_extend_price_escalates_by_step(self) -> None:
         base = flow_core.video_price("veo-lite", 1, "text")  # 30
         step = flow_core.VIDEO_EXTEND_STEP                    # 5
@@ -591,6 +605,20 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("def _admin_only", self.source)
         self.assertIn("metrics.report_today()", self.source)
         self.assertIn("metrics.report_accounts()", self.source)
+
+    def test_referral_wired(self) -> None:
+        # Deep-link join, payment reward, menu entry, invite buttons, clawback.
+        self.assertIn("REFERRAL_PARAM_PREFIX", self.source)
+        self.assertIn("metrics.record_referral_join(", self.source)
+        self.assertIn('"referral_joined"', self.source)
+        self.assertIn("_maybe_apply_referral_rewards(", self.source)
+        self.assertIn('"referral_reward_paid"', self.source)
+        self.assertIn('data == "m:invite"', self.source)
+        self.assertIn("_invite_button(", self.source)
+        self.assertIn("_clawback_referral_rewards(", self.source)
+        # Reward must be applied only after a recorded (idempotent) payment.
+        self.assertIn("referral_milestone_bonus(", self.source)
+        self.assertIn("referral_ongoing_bonus(", self.source)
 
     def test_video_prompt_edit_clears_reference_mode_inputs(self) -> None:
         self.assertIn("def _vid_clear_reference_inputs", self.source)

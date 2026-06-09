@@ -126,11 +126,22 @@ CREATE TABLE IF NOT EXISTS referrals (
     rewarded_at                 TEXT
 );
 
+CREATE TABLE IF NOT EXISTS referral_ongoing_rewards (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    referrer_user_id    INTEGER NOT NULL,
+    referred_user_id    INTEGER NOT NULL,
+    reward_credits      INTEGER NOT NULL,
+    provider_payment_id TEXT UNIQUE,
+    created_at          TEXT DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_name        ON events(event_name);
 CREATE INDEX IF NOT EXISTS idx_events_created      ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_flow_jobs_created   ON flow_jobs(created_at);
 CREATE INDEX IF NOT EXISTS idx_flow_jobs_account   ON flow_jobs(account_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at);
+CREATE INDEX IF NOT EXISTS idx_referrals_referrer  ON referrals(referrer_user_id);
+CREATE INDEX IF NOT EXISTS idx_ror_referrer        ON referral_ongoing_rewards(referrer_user_id, created_at);
 """
 
 
@@ -373,6 +384,158 @@ def mark_referral_rewarded(
             conn.commit()
     except Exception:  # noqa: BLE001
         log.warning("mark_referral_rewarded failed for %r", referred_user_id, exc_info=True)
+
+
+def get_referrer_of(referred_user_id: int) -> int | None:
+    """Return the referrer's user_id for ``referred_user_id`` (or None)."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT referrer_user_id FROM referrals WHERE referred_user_id=?",
+                (referred_user_id,),
+            ).fetchone()
+            return int(row[0]) if row and row[0] is not None else None
+    except Exception:  # noqa: BLE001
+        log.warning("get_referrer_of failed", exc_info=True)
+        return None
+
+
+def referral_status(referred_user_id: int) -> str | None:
+    """Return 'joined' | 'rewarded' | None for ``referred_user_id``."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT status FROM referrals WHERE referred_user_id=?",
+                (referred_user_id,),
+            ).fetchone()
+            return row[0] if row else None
+    except Exception:  # noqa: BLE001
+        log.warning("referral_status failed", exc_info=True)
+        return None
+
+
+def get_referral_credits_today(referrer_user_id: int) -> int:
+    """Total referral credits granted to ``referrer_user_id`` today (cap check)."""
+    try:
+        today = "date(created_at,'localtime') = date('now','localtime')"
+        with _LOCK:
+            conn = _conn()
+            milestone = conn.execute(
+                f"SELECT COALESCE(SUM(reward_credits),0) FROM referrals "
+                f"WHERE referrer_user_id=? AND status='rewarded' "
+                f"AND date(rewarded_at,'localtime') = date('now','localtime')",
+                (referrer_user_id,),
+            ).fetchone()[0] or 0
+            ongoing = conn.execute(
+                f"SELECT COALESCE(SUM(reward_credits),0) FROM referral_ongoing_rewards "
+                f"WHERE referrer_user_id=? AND {today}",
+                (referrer_user_id,),
+            ).fetchone()[0] or 0
+            return int(milestone) + int(ongoing)
+    except Exception:  # noqa: BLE001
+        log.warning("get_referral_credits_today failed", exc_info=True)
+        return 0
+
+
+def record_ongoing_reward(
+    referrer_user_id: int, referred_user_id: int, reward_credits: int,
+    provider_payment_id: str,
+) -> bool:
+    """Record an ongoing referral reward. Idempotent on provider_payment_id."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO referral_ongoing_rewards "
+                "(referrer_user_id, referred_user_id, reward_credits, provider_payment_id) "
+                "VALUES (?, ?, ?, ?)",
+                (referrer_user_id, referred_user_id, reward_credits, provider_payment_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    except Exception:  # noqa: BLE001
+        log.warning("record_ongoing_reward failed", exc_info=True)
+        return False
+
+
+def get_ongoing_reward_by_payment(provider_payment_id: str) -> dict | None:
+    """Look up an ongoing reward row by triggering payment (for refund clawback)."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT referrer_user_id, referred_user_id, reward_credits "
+                "FROM referral_ongoing_rewards WHERE provider_payment_id=?",
+                (provider_payment_id,),
+            ).fetchone()
+            if not row:
+                return None
+            return {"referrer_user_id": row[0], "referred_user_id": row[1],
+                    "reward_credits": row[2]}
+    except Exception:  # noqa: BLE001
+        log.warning("get_ongoing_reward_by_payment failed", exc_info=True)
+        return None
+
+
+def get_milestone_by_referred(referred_user_id: int) -> dict | None:
+    """Return the milestone referral row for refund clawback (or None)."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT referrer_user_id, reward_credits, status "
+                "FROM referrals WHERE referred_user_id=?",
+                (referred_user_id,),
+            ).fetchone()
+            if not row:
+                return None
+            return {"referrer_user_id": row[0], "reward_credits": row[1], "status": row[2]}
+    except Exception:  # noqa: BLE001
+        log.warning("get_milestone_by_referred failed", exc_info=True)
+        return None
+
+
+def reset_referral_to_joined(referred_user_id: int) -> None:
+    """Reset a refunded referral back to 'joined' so a later payment can re-trigger."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                "UPDATE referrals SET status='joined', reward_credits=0, "
+                "first_payment_transaction_id=NULL, rewarded_at=NULL "
+                "WHERE referred_user_id=?",
+                (referred_user_id,),
+            )
+            conn.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("reset_referral_to_joined failed", exc_info=True)
+
+
+def referral_stats(referrer_user_id: int) -> dict:
+    """For the user's own referral screen: invited count + total credits earned."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            invited = conn.execute(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id=?",
+                (referrer_user_id,),
+            ).fetchone()[0] or 0
+            earned_m = conn.execute(
+                "SELECT COALESCE(SUM(reward_credits),0) FROM referrals "
+                "WHERE referrer_user_id=? AND status='rewarded'",
+                (referrer_user_id,),
+            ).fetchone()[0] or 0
+            earned_o = conn.execute(
+                "SELECT COALESCE(SUM(reward_credits),0) FROM referral_ongoing_rewards "
+                "WHERE referrer_user_id=?",
+                (referrer_user_id,),
+            ).fetchone()[0] or 0
+            return {"invited": int(invited), "earned": int(earned_m) + int(earned_o)}
+    except Exception:  # noqa: BLE001
+        log.warning("referral_stats failed", exc_info=True)
+        return {"invited": 0, "earned": 0}
 
 
 # ── report helpers ─────────────────────────────────────────────────────

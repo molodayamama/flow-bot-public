@@ -84,6 +84,13 @@ from flow_core import (
     pack_label,
     public_pack_ids,
     price_gen,
+    REFERRAL_PARAM_PREFIX,
+    REFERRAL_DAILY_CAP_CREDITS,
+    REFERRAL_TIER1_BONUS,
+    REFERRAL_TIER2_BONUS,
+    REFERRAL_TIER3_BONUS,
+    referral_milestone_bonus,
+    referral_ongoing_bonus,
 )
 from flow_core import (
     VIDEO_MODELS,
@@ -143,6 +150,8 @@ try:
     STARS_TO_RUB = float(os.getenv("STARS_TO_RUB", "1.3"))  # ~₽ за 1 Star, best-effort
 except (TypeError, ValueError):
     STARS_TO_RUB = 1.3
+# Имя бота для реферальных ссылок (берётся из get_me() на старте; env — фолбэк).
+BOT_USERNAME = os.getenv("BOT_USERNAME", "")
 PROXY_URL = os.getenv("PROXY_URL", "")          # общий прокси по умолчанию (http/socks5)
 BROWSER_PROXY_URL = os.getenv("BROWSER_PROXY_URL")
 API_PROXY_URL = os.getenv("API_PROXY_URL")
@@ -2145,6 +2154,111 @@ def _username(message_or_user) -> str | None:
     except Exception:
         return None
 
+
+# ── реферальная программа (экономика в docs/REFERRAL.md) ───────────────
+
+def _referral_link(user_id: int) -> str:
+    """Личная реферальная ссылка пользователя (deep-link /start ref_<id>)."""
+    if BOT_USERNAME:
+        return f"https://t.me/{BOT_USERNAME}?start={REFERRAL_PARAM_PREFIX}{user_id}"
+    return f"{REFERRAL_PARAM_PREFIX}{user_id}"
+
+
+def _invite_button(user_id: int) -> types.InlineKeyboardButton:
+    """Кнопка «поделиться» под результатом — открывает диалог пересылки."""
+    from urllib.parse import quote
+    link = _referral_link(user_id)
+    share = (
+        "https://t.me/share/url?url=" + quote(link, safe="")
+        + "&text=" + quote(flow_copy.msg("invite_share_text"), safe="")
+    )
+    return types.InlineKeyboardButton(text=flow_copy.label("invite_friend"), url=share)
+
+
+def _maybe_apply_referral_rewards(
+    referred_user_id: int, *, stars_paid: int, credits_issued: int,
+    pack_id: str, provider_payment_id: str,
+) -> None:
+    """Начислить рефереру награду за платёж приглашённого (идемпотентно, с кэпом).
+
+    Никогда не бросает в вызывающего: реферальная логика не должна ломать оплату.
+    """
+    try:
+        referrer_id = metrics.get_referrer_of(referred_user_id)
+        if not referrer_id or referrer_id == referred_user_id:
+            return
+        status = metrics.referral_status(referred_user_id)
+        cap = REFERRAL_DAILY_CAP_CREDITS
+
+        if status == "joined":
+            bonus = referral_milestone_bonus(stars_paid)
+            if bonus > 0 and metrics.get_referral_credits_today(referrer_id) + bonus <= cap:
+                credit_store.add(referrer_id, bonus)
+                metrics.mark_referral_rewarded(
+                    referred_user_id=referred_user_id, reward_credits=bonus
+                )
+                metrics.log_event("referral_reward_paid", user_id=referrer_id,
+                                  payload={"tier": "milestone", "bonus": bonus,
+                                           "referred": referred_user_id})
+                _notify_referrer(referrer_id, bonus)
+            return
+
+        if status == "rewarded":
+            ongoing = referral_ongoing_bonus(credits_issued)
+            if ongoing <= 0:
+                return
+            if metrics.get_ongoing_reward_by_payment(provider_payment_id):
+                return  # дубль вебхука
+            if metrics.get_referral_credits_today(referrer_id) + ongoing > cap:
+                return
+            if metrics.record_ongoing_reward(referrer_id, referred_user_id, ongoing,
+                                             provider_payment_id):
+                credit_store.add(referrer_id, ongoing)
+                metrics.log_event("referral_reward_paid", user_id=referrer_id,
+                                  payload={"tier": "ongoing", "bonus": ongoing,
+                                           "referred": referred_user_id})
+                _notify_referrer(referrer_id, ongoing)
+    except Exception:
+        log.warning("referral reward failed", exc_info=True)
+
+
+def _clawback_referral_rewards(referred_user_id: int, charge_id: str) -> None:
+    """Откатить реферальные награды по возвращённому платежу (best-effort)."""
+    try:
+        ongoing = metrics.get_ongoing_reward_by_payment(charge_id)
+        if ongoing:
+            credit_store.charge(ongoing["referrer_user_id"],
+                                min(ongoing["reward_credits"],
+                                    credit_store.balance(ongoing["referrer_user_id"])))
+            metrics.log_event("referral_reward_clawback", user_id=ongoing["referrer_user_id"],
+                              payload={"amount": ongoing["reward_credits"], "tier": "ongoing"})
+        milestone = metrics.get_milestone_by_referred(referred_user_id)
+        if milestone and milestone.get("status") == "rewarded":
+            credit_store.charge(milestone["referrer_user_id"],
+                                min(milestone["reward_credits"],
+                                    credit_store.balance(milestone["referrer_user_id"])))
+            metrics.reset_referral_to_joined(referred_user_id)
+            metrics.log_event("referral_reward_clawback", user_id=milestone["referrer_user_id"],
+                              payload={"amount": milestone["reward_credits"], "tier": "milestone"})
+    except Exception:
+        log.warning("referral clawback failed", exc_info=True)
+
+
+def _notify_referrer(referrer_id: int, bonus: int) -> None:
+    """Best-effort уведомление реферера о начислении (не блокирует оплату)."""
+    async def _send():
+        try:
+            await bot.send_message(
+                referrer_id, flow_copy.msg("referral_reward_got", bonus=bonus),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+    try:
+        asyncio.create_task(_send())
+    except Exception:
+        pass
+
 # ── состояние кнопочного визарда генерации (в памяти) ──────────────────
 # user_id -> {"step", "count", "fmt", "msg_id", "await": "prompt|edit|revary|photo",
 #             "ref_token": <для edit/revary>, "last": {...настройки повтора...}}
@@ -2347,6 +2461,7 @@ def main_menu_kb(show_repeat: bool = False) -> types.InlineKeyboardMarkup:
         [_menu_button("gen", "m:gen")],
         [_menu_button("vid_gen", "m:vid")],
         [_menu_button("myphoto", "m:myphoto"), _menu_button("balance", "m:balance")],
+        [_menu_button("invite", "m:invite")],
         [_menu_button("help", "m:help")],
     ]
     if show_repeat:
@@ -2663,6 +2778,8 @@ def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
         # Extension is always veo-lite, so price off veo-lite regardless of source.
         next_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
         rows.append([B(text=f"{L('vid_extend')} · {next_price}⭐", callback_data=f"v:extend:{vtoken}")])
+    if ref:
+        rows.append([_invite_button(ref.user_id)])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -2992,9 +3109,22 @@ async def _send_one_image(
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
+    is_new = user_id not in credit_store._granted if hasattr(credit_store, "_granted") else True
     credit_store.balance(user_id)  # начисляем стартовые кредиты при первом старте
     metrics.log_event("user_started", user_id=user_id,
                       username=_username(message), source="command")
+    # Deep-link приглашение: /start ref_<id> — фиксируем рефералку (один раз).
+    parts = (message.text or "").split(maxsplit=1)
+    payload = parts[1].strip() if len(parts) > 1 else ""
+    if payload.startswith(REFERRAL_PARAM_PREFIX) and not getattr(message.from_user, "is_bot", False):
+        raw = payload[len(REFERRAL_PARAM_PREFIX):]
+        if raw.isdigit():
+            referrer_id = int(raw)
+            if referrer_id != user_id and is_new and metrics.record_referral_join(
+                referrer_user_id=referrer_id, referred_user_id=user_id
+            ):
+                metrics.log_event("referral_joined", user_id=user_id,
+                                  payload={"referrer": referrer_id})
     # Показываем приветствие вместе с постоянной нижней клавиатурой.
     await message.answer(flow_copy.msg("welcome"), reply_markup=reply_menu_kb())
     await show_main_menu(message, user_id=user_id)
@@ -3110,6 +3240,10 @@ async def cmd_refund(message: types.Message):
     take = min(rec["credits"], credit_store.balance(rec["user_id"]))
     if take > 0:
         credit_store.charge(rec["user_id"], take)
+    metrics.log_event("credits_refunded", user_id=rec["user_id"], source="admin_refund",
+                      payload={"amount": take, "charge_id": rec["charge_id"]})
+    # Откатываем реферальные награды, привязанные к этому платежу.
+    _clawback_referral_rewards(rec["user_id"], rec["charge_id"])
     log.info(f"↩️ Рефанд {rec['stars']}⭐ пользователю {rec['user_id']} (charge {rec['charge_id']})")
     await message.answer(
         f"↩️ Возвращено {rec['stars']}⭐ пользователю {rec['user_id']}. "
@@ -3405,6 +3539,7 @@ async def _after_result(message: types.Message, user_id: int):
         inline_keyboard=[
             [_menu_button("repeat_last", "m:repeat")],
             [_menu_button("gen", "m:gen"), _menu_button("vid_gen", "m:vid")],
+            [_invite_button(user_id)],
             [_menu_button("balance", "m:balance")],
             [_menu_button("menu", "m:menu")],
         ]
@@ -4006,6 +4141,22 @@ async def on_menu_action(callback: types.CallbackQuery):
             inline_keyboard=[[_menu_button("menu", "m:menu")]]
         )
         await msg.edit_text(flow_copy.msg("help"), reply_markup=kb)
+    elif data == "m:invite":
+        await callback.answer()
+        stats = metrics.referral_stats(user_id)
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [_invite_button(user_id)],
+            [_menu_button("menu", "m:menu")],
+        ])
+        await msg.edit_text(
+            flow_copy.msg(
+                "referral_screen",
+                link=html.escape(_referral_link(user_id)),
+                invited=stats["invited"], earned=stats["earned"],
+                t1=REFERRAL_TIER1_BONUS, t2=REFERRAL_TIER2_BONUS, t3=REFERRAL_TIER3_BONUS,
+            ),
+            reply_markup=kb, parse_mode="HTML",
+        )
     elif data == "m:myphoto":
         await callback.answer()
         _reset_image_flow(user_id, keep_last=False)
@@ -4906,6 +5057,11 @@ async def on_successful_payment(message: types.Message):
     metrics.log_event("payment_success", user_id=user_id, username=_username(message),
                       source="stars",
                       payload={"pack": pack_id, "stars": stars_paid, "credits": p["credits"]})
+    # Реферальная награда пригласившему (идемпотентно; не ломает оплату).
+    _maybe_apply_referral_rewards(
+        user_id, stars_paid=stars_paid, credits_issued=p["credits"],
+        pack_id=pack_id, provider_payment_id=charge_id or f"nocharge:{user_id}:{pack_id}",
+    )
     log.info(f"💳 Оплата: +{p['credits']} кр пользователю {user_id} (баланс {new_balance})")
     await message.answer(
         flow_copy.msg("topup_done", credits=p["credits"], balance=new_balance)
@@ -5347,6 +5503,15 @@ async def main():
     if TELEGRAM_TOKEN == "PASTE_YOUR_TOKEN_HERE":
         log.error("❌ Укажите TELEGRAM_TOKEN в .env или прямо в коде!")
         return
+
+    # Узнаём собственный @username — нужен для реферальных deep-link.
+    global BOT_USERNAME
+    try:
+        me = await bot.get_me()
+        if me.username:
+            BOT_USERNAME = me.username
+    except Exception:
+        log.warning("get_me failed; referral links use the env fallback")
 
     # Нативное меню команд Telegram (синяя кнопка «Меню» у поля ввода).
     try:
