@@ -507,7 +507,9 @@ class FlowBotWiringStaticTests(unittest.TestCase):
     def test_photo_upload_and_edit_wired(self) -> None:
         self.assertIn("@dp.message(F.photo)", self.source)
         self.assertIn("async def handle_photo", self.source)
-        self.assertIn("keeper.upload_image", self.source)
+        # Загрузка идёт через keeper аккаунта юзера (multi-account роутинг).
+        self.assertIn("_keeper_for_acc(acc_id).upload_image", self.source)
+        self.assertIn("_keeper_for(user_id).upload_image", self.source)
         self.assertIn("async def upload_image", self.source)
         self.assertIn("set_input_files", self.source)
         self.assertIn("media_source_from_response", self.source)
@@ -572,7 +574,7 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         # Edit must replay a captured real request, never a hardcoded guess.
         self.assertIn("def _maybe_capture_edit", self.source)
         self.assertIn("def note_image", self.source)
-        self.assertIn("keeper.note_image(img)", self.source)
+        self.assertIn("_keeper_for_acc(account_id).note_image(img)", self.source)
         self.assertIn("capture = load_edit_capture(EDIT_CAPTURE_FILE)", self.source)
         self.assertIn("build_image_inputs(ref.source, capture)", self.source)
 

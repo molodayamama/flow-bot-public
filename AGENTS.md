@@ -18,32 +18,32 @@ Observed stack:
 
 - Python scripts using `aiogram`, `python-telegram-bot`, `aiohttp`,
   `aiohttp-socks`, `playwright`, `python-dotenv`, `twocaptcha`, and `requests`.
-- Node.js Telegram bot in `bot.js` using `node-telegram-bot-api`,
-  `@openrouter/sdk`, `openai`, `socks-proxy-agent`, `cross-spawn`, `dotenv`,
-  and Node built-ins.
+- `bot.js` (Node) — legacy, удалён из проекта (2026-06-10); Node-стека больше
+  нет.
 - Browser automation through Playwright with persistent Chrome profile in
   `google_profile/`.
-- External APIs: Telegram Bot API, OpenRouter, ImageRouter, Google Labs Flow
-  web/API surface, 2Captcha.
-- No package manifest was found: no `package.json`, no `requirements.txt`.
+- External APIs: Telegram Bot API, Google Labs Flow web/API surface, 2Captcha.
+- Python dependency manifest: `requirements.txt` (moderate version floors,
+  derived from imports). No Node manifest needed.
 - Git **is** initialized (branch `main`); initial import committed 2026-06-08.
   Commit per new feature/change going forward. `.gitignore` excludes all
   secrets/runtime state — keep it that way.
-- No application database schema was found. Runtime state is file-based.
+- No external application database service is configured. Runtime state is local
+  JSON plus SQLite `metrics.db` managed by `metrics.py`.
 
 Important files:
 
-- `bot.js` - large Node.js Telegram bot with chat personas, image generation,
-  payments, state files, admin/server commands.
+- `bot.js` - legacy, удалён из проекта (2026-06-10).
 - `flow_bot.py` - current-looking aiogram Google Flow bot using Playwright for
   session capture and HTTP API calls for image generation.
-- `google_labs_flow_bot.py` - python-telegram-bot Google Flow HTTP client using
-  bearer token/cookies and 2Captcha.
-- `gemini_bot.py` - aiogram + Playwright bot that drives Google Flow through the
-  browser UI.
+- `google_labs_flow_bot.py` - historical strategy mentioned in older notes; not
+  present in the current tree.
+- `gemini_bot.py` - historical strategy mentioned in older notes; not present in
+  the current tree.
 - `login.py` - manual Chrome profile login helper; deletes/recreates
   `google_profile/`.
-- `checker.py` - proxy checker script.
+- `checker.py` - historical proxy checker mentioned in older notes; not present
+  in the current tree.
 - `find_recaptcha_params.py` - helper that prints browser-console JS for
   reCAPTCHA parameter discovery.
 - `test_recaptcha_params.py` - interactive 2Captcha parameter test script.
@@ -109,8 +109,6 @@ Important files:
   task explicitly asks for it and the operator accepts the cost/risk.
 - Do not run `login.py` unless the task explicitly requires recreating the
   Chrome profile; it removes `google_profile/`.
-- Do not run admin/server commands exposed by `bot.js` from Telegram or shell
-  during development validation unless explicitly requested.
 - Do not invent commands. If a command is inferred from code or comments rather
   than a manifest, label it `assumption`.
 - Prefer small, reviewable changes. Keep runtime behavior changes separate from
@@ -199,11 +197,11 @@ one focused commit per feature/change. Before committing, run `git status` and
 confirm no secret/runtime files are staged (they should be `.gitignore`d).
 End commit messages with a `Co-Authored-By:` line when AI-authored.
 
-**Hardcoded-secret caveat:** `checker.py` still carries hardcoded token/proxy
-material. `login.py` was cleaned (proxy is now optional via `BROWSER_PROXY_URL`,
-no secrets), but the **initial commit** `e0c2cd3` still contains its old hardcoded
-proxy line in history. Scrub + rotate before adding any git remote or pushing —
-the repo is local-only until then.
+**Hardcoded-secret caveat:** removed/historical files may still carry
+hardcoded material in git history. `login.py` was cleaned (proxy is now optional
+via `BROWSER_PROXY_URL`, no secrets), but the **initial commit** `e0c2cd3` still
+contains its old hardcoded proxy line in history. Scrub + rotate before adding
+any git remote or pushing — the repo is local-only until then.
 
 Required output:
 
@@ -232,18 +230,15 @@ Next role:
 
 ## Danger Zones
 
-- `api_config.json` currently contains live-looking bearer/cookie material and
-  is not excluded by `.gitignore`.
+- `api_config.json` may contain live-looking bearer/cookie material and is
+  ignored by `.gitignore`; never print or commit it.
 - `.env_flow` contains token/captcha/proxy configuration and should never be
   printed or committed.
-- `gemini_bot.py` and `checker.py` contain hardcoded token/proxy configuration.
-  (`login.py` was de-proxied/cleaned — no hardcoded secrets there anymore.)
+- Historical removed files may contain secrets in git history.
 - `labs.google.har` is a captured browser archive and may contain tokens,
   cookies, request bodies, and headers.
 - `google_profile/` contains browser profile databases, cookies, account state,
   caches, and IndexedDB data.
-- `bot.js` exposes server/admin commands through Telegram and can run shell
-  commands via `exec`.
 - `login.py` deletes `google_profile/` before recreating it.
 - `test_recaptcha_params.py` can spend 2Captcha balance.
 - `test_tokens.py` and bot scripts can call external APIs and generate media.

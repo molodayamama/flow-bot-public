@@ -1,514 +1,135 @@
-# MONETIZATION.md — финальная модель Flow-бота
+# MONETIZATION.md - current pricing model
 
-Последнее обновление: 2026-06-09.
+Last sync: 2026-06-11.
 
-## 0. Главные правки
+This document is the business/pricing view. Runtime prices live in
+`flow_core.py`; if a value here disagrees with code, fix the doc or the code in
+one reviewed change.
 
-1. **Image generation / edit / myphoto / variations = 0 Google Flow credits.** Это фиксируем как факт модели.
-2. Google One activation стоит **240 ₽ за 12 месяцев**, а не 240 ₽/мес.
-3. Один аккаунт даёт **12 000 Google Flow credits в год**: 1 000 credits/month × 12.
-4. Себестоимость Google Flow credit только по Google One activation: **240 / 12 000 = 0.02 ₽/G-credit**.
-5. Если учитывать покупку аккаунта 300 ₽ и shared-карту, то blended first-year cost для флота из 5 аккаунтов: **~0.053 ₽/G-credit**.
-6. Базовый лимит флота: **до 5 аккаунтов**. 10–15 аккаунтов не нужны до фактической нагрузки.
-7. Residential proxy — **optional fallback**, а не обязательная статья расходов. Сначала тестируем работу без proxy, потому что Google Flow уже работает с RU IP при текущем окружении.
-8. Антидетект не закладывается как обязательная инфраструктура. Главный фокус: account routing, health checks, cooldown, retry, refund, метрики.
-9. Progressive Extend уже реализован в коде: `video_extend_price(model, n) = base + 5 × n`, `VideoRef.extend_index` копит глубину цепочки.
+## Core Principles
 
----
+- Bot credits are the user-facing currency.
+- Google Flow credits are provider quota and must not be treated as bot credits
+  1:1.
+- Images are the low-friction entry product because current image operations do
+  not consume Google Flow credits.
+- Videos are premium because a single Flow account has about 1,000 provider
+  credits/month, which is only about 142 Omni Flash 4s videos.
+- Telegram Stars introduce payout friction, so retail packs must be priced for
+  conversion and quota protection, not just raw compute margin.
 
-## 1. Две разные валюты
+## Provider Economics
 
-В проекте есть две независимые валюты.
+Current operating assumptions:
 
-| Валюта | Что это | Где используется |
-|---|---|---|
-| **Google Flow credits** | внутренняя квота Google Flow | себестоимость видео и некоторых тяжёлых Flow-операций |
-| **Кредиты бота** | розничная валюта пользователя в Telegram-боте | цены в `flow_core.py`, списания с пользователя, пакеты через Telegram Stars |
-
-Их нельзя приравнивать 1:1. 10 кредитов бота — это не 10 Google Flow credits.
-
----
-
-## 2. Проверенные вводные
-
-### Google One / Flow
-
-| Параметр | Значение |
+| Item | Value |
 |---|---:|
-| Google One activation | 240 ₽ |
-| Срок активации | 12 месяцев |
-| Flow quota на аккаунт | 1 000 G-credits/month |
-| Flow quota на аккаунт в год | 12 000 G-credits/year |
-| Себестоимость 1 G-credit только по активации | 0.02 ₽ |
+| Google One activation | 240 RUB / 12 months |
+| Flow quota per account | 1,000 G-credits/month |
+| Flow quota per account/year | 12,000 G-credits |
+| Activation-only cost | about 0.02 RUB / G-credit |
+| First-year blended account/card cost | about 0.053 RUB / G-credit |
+| MVP account fleet | up to 5 accounts before real demand proves need |
 
-### Аккаунты
+Proxy/antidetect is not baseline cost. Use direct access first, then add proxy
+only if account health or availability data requires it.
 
-| Параметр | Значение |
+## Retail Prices
+
+### Images
+
+Current code baseline:
+
+| Action | Bot credits |
 |---|---:|
-| Normal Google/Gmail USA account | ~300 ₽ |
-| Premium account | ~1000 ₽, не берём в базу |
-| Shared payment card | ~500 ₽ one-time |
-| Первый технический тест | 2 аккаунта |
-| Базовый production-MVP лимит | 5 аккаунтов |
+| Generate 1 image | 10 |
+| First-start grant | 30 |
+| Prompt enhance / service upscale | 5 |
+| Original download | 0 |
 
-### IP / proxy
+Image edit, variation, regeneration, and upscale prices are resolved through
+`action_price(...)` in `flow_core.py`. Keep user-facing labels dynamic.
 
-| Параметр | Модель |
-|---|---|
-| RU IP | рабочий вариант, потому что Flow уже работает с русского IP |
-| DNS | текущая рабочая среда с заменённым DNS оставляется как baseline |
-| Gmail USA | вероятно, важнее IP для доступности Flow |
-| Residential proxy USA | optional fallback, покупать только при реальных проблемах |
-| Антидетект | не считать обязательной частью бизнеса |
+Image format/model expansion is implemented in code, not "future only":
 
----
+- supported aspect choices include 16:9, 4:3, 1:1, 3:4, 9:16 where the relevant
+  flow exposes them;
+- model selection includes the current image model choices in `flow_core.py`;
+- edit flows can preserve selected format/model where supported.
 
-## 3. Розничные цены в боте
+Because image operations are currently 0 provider credits, they are the safest
+acquisition and retention surface.
 
-### 3.1. Изображения
+### Videos
 
-Картинки — главный маржинальный продукт, потому что они стоят **0 Google Flow credits**.
+Current video prices in `flow_core.VIDEO_MODELS`:
 
-| Действие | Рекомендуемая цена в кредитах бота | Google Flow credits | Комментарий |
-|---|---:|---:|---|
-| 1 image generation | 10 | 0 | дешёвый входной продукт |
-| edit / myphoto | 15–20 | 0 | дороже обычной генерации, потому что выше ценность |
-| vary / variations | 20–30 | 0 | можно продавать как пакет вариантов |
-| up2x / realup | 5–10 | 0 | сервисная доплата |
-| original download | 0 | 0 | бесплатно |
-
-Рекомендация по старту:
-
-- оставить **10 credits/image** как low-friction entry;
-- `edit / myphoto` поставить **15–20 credits**;
-- variations не делать слишком дешёвыми, чтобы пользователи не забивали очередь;
-- если очередь начнёт перегружаться, поднять обычную картинку с 10 до 15 credits.
-
-**Расширение картинок (в разработке, всё так же 0 G-credits):**
-- Форматы: **16:9, 4:3, 1:1, 3:4, 9:16** (сейчас в боте только 16:9 / 1:1 / 9:16 — добавляются 4:3 и 3:4).
-- Выбор модели: **Nano Banana 2** и **Nano Banana Pro** (сейчас захардкожена одна, `GEM_PIX_2`).
-- В редактировании фото тоже можно менять формат и модель.
-- Так как любой image-запрос = 0 G-credits, расширение форматов/моделей **не меняет себестоимость** — это чистый UX/ценностный апселл без роста расходов. Можно дифференцировать цену: например, Nano Banana Pro дороже на 5 кр как «премиум-качество», не неся доп. G-cost.
-- Технически требует сверки точных строк API (`imageModelName`, `imageAspectRatio`) через capture — см. план реализации.
-
-### 3.2. Видео
-
-Видео — premium-фича, потому что оно расходует Google Flow credits.
-
-G-credit стоимости ниже — **сверено вручную на самом сайте Flow (оператор, 2026-06-09)**, не оценка. При запросе 2/3/4 видео стоимость просто умножается (3 × Omni 6s = 30 G-cr).
-
-| Режим | Кредиты бота | Google Flow credits | Cost по 0.02 ₽/G-credit | Cost blended ~0.053 ₽/G-credit |
-|---|---:|---:|---:|---:|
-| Omni Flash 4s | 20–25 | 7 | 0.14 ₽ | 0.37 ₽ |
-| Omni Flash 6s | 30–35 | 10 | 0.20 ₽ | 0.53 ₽ |
-| Omni Flash 8s | 35–40 | 12 | 0.24 ₽ | 0.64 ₽ |
-| Omni Flash 10s | 45–50 | 15 | 0.30 ₽ | 0.80 ₽ |
-| Veo Lite | 30 | 10 | 0.20 ₽ | 0.53 ₽ |
-| Veo Fast | 60 | 20 | 0.40 ₽ | 1.07 ₽ |
-| Veo Quality | 290 | 100 | 2.00 ₽ | 5.33 ₽ |
-| Video Prompt Edit | 40 | 40 *(оценка, не сверено)* | 0.80 ₽ | 2.13 ₽ |
-
-Вывод: видео остаётся очень маржинальным, но оно ограничено месячной квотой Flow credits. Его нельзя раздавать слишком дёшево, потому что видео может быстро выжечь квоту аккаунтов. Реальные стоимости (7/10/12/15 для Omni, 10/20/100 для Veo) **ниже** прежних оценок — маржа видео ещё выше, а квоты хватает на больше генераций.
-
----
-
-## 4. Progressive Extend
-
-Статус: **реализовано и закоммичено в `5bf60e5` по отчёту Claude.**
-
-Формула:
-
-```text
-video_extend_price(model, n) = base_video_price(model) + 5 × n
-```
-
-Для `veo-lite`:
-
-| Extend | Цена в кредитах бота | Google Flow credits |
+| Model | Bot credits | Provider credits |
 |---|---:|---:|
-| #1 | 35 | 10 |
-| #2 | 40 | 10 |
-| #3 | 45 | 10 |
-| #4 | 50 | 10 |
+| Omni Flash 4s | 100 | 7 |
+| Omni Flash 6s | 140 | 10 |
+| Omni Flash 8s | 170 | 12 |
+| Omni Flash 10s | 210 | 15 |
+| Veo Lite | 150 | 10 |
+| Veo Fast | 300 | 20 |
+| Veo Quality | 1200 | 100 |
 
-Почему прогрессивная цена нормальная:
+Reference and edit surcharges:
 
-1. Google Flow cost не растёт, но растёт операционный риск длинной цепочки.
-2. Длинные chain-запросы чаще могут ловить ошибки, cooldown или ручные проверки.
-3. Пользователь, который делает 2–4 extend подряд, уже вовлечён и готов платить больше.
-4. Это повышает LTV без ухудшения входной цены на первое видео.
-
-Что проверить после реализации:
-
-- `VideoRef.extend_index` сохраняется в результате нового extend.
-- При extend от extend-видео цена считается от `source.extend_index + 1`.
-- Refund возвращает именно списанную прогрессивную цену.
-- UI показывает текущую цену до списания.
-
----
-
-## 5. Fleet economics v3 — максимум 5 аккаунтов
-
-### 5.1. Годовой capex
-
-| Флот | Аккаунты | Google One activation | Shared card | Итого за 12 мес | Credits/year |
-|---|---:|---:|---:|---:|---:|
-| 1 аккаунт | 300 ₽ | 240 ₽ | 500 ₽ | 1 040 ₽ | 12 000 |
-| 2 аккаунта | 600 ₽ | 480 ₽ | 500 ₽ | 1 580 ₽ | 24 000 |
-| 5 аккаунтов | 1 500 ₽ | 1 200 ₽ | 500 ₽ | 3 200 ₽ | 60 000 |
-
-Важно: shared-карта искажаeт расчёт для одного аккаунта, потому что вся стоимость карты ложится на один аккаунт. На 5 аккаунтах эта стоимость нормально размазывается.
-
-### 5.2. Monthly amortized cost без proxy
-
-| Флот | Итого/year | Амортизация/month | Credits/month | Blended cost/G-credit |
-|---|---:|---:|---:|---:|
-| 1 аккаунт | 1 040 ₽ | 86.7 ₽ | 1 000 | 0.0867 ₽ |
-| 2 аккаунта | 1 580 ₽ | 131.7 ₽ | 2 000 | 0.0658 ₽ |
-| 5 аккаунтов | 3 200 ₽ | 266.7 ₽ | 5 000 | 0.0533 ₽ |
-
-Если считать только Google One activation, без покупки аккаунта и карты, то себестоимость всегда:
-
-```text
-240 ₽ / 12 000 G-credits = 0.02 ₽/G-credit
-```
-
----
-
-## 6. Инфраструктурные сценарии
-
-### Scenario A — local / existing VPS, no proxy
-
-Используется на самом раннем этапе. Расходы: только аккаунты + активация + карта.
-
-| Флот | Расход/month | Break-even при net 7.38 ₽/image | Break-even при net 10 ₽/image | Break-even при net 15 ₽/image |
-|---|---:|---:|---:|---:|
-| 2 аккаунта | ~132 ₽ | ~18 images/month | ~14 images/month | ~9 images/month |
-| 5 аккаунтов | ~267 ₽ | ~37 images/month | ~27 images/month | ~18 images/month |
-
-Вывод: если proxy не нужен и VPS уже есть, экономика почти бесплатная.
-
-### Scenario B — browser VPS, no proxy
-
-Осторожная база для 5 аккаунтов: один VPS около $30/month = 2700 ₽ при курсе 90.
-
-| Флот | Аккаунты+activation/month | VPS/month | Итого/month | Break-even при net 10 ₽/image |
-|---|---:|---:|---:|---:|
-| 5 аккаунтов | ~267 ₽ | ~2700 ₽ | ~2967 ₽ | ~297 images/month |
-
-Вывод: production-MVP без proxy окупается примерно на 10 платных картинках в день.
-
-### Scenario C — browser VPS + residential proxy fallback
-
-Proxy не базовый, но если понадобится, старая оценка остаётся:
-
-- NodeMaven: $5 / 2 GB = $2.50/GB.
-- Если тратить 4.5 GB/account/month, то 5 аккаунтов = $56.25/month = ~5063 ₽.
-
-| Флот | Без proxy | Proxy | Итого/month | Break-even при net 10 ₽/image |
-|---|---:|---:|---:|---:|
-| 5 аккаунтов | ~2967 ₽ | ~5063 ₽ | ~8030 ₽ | ~803 images/month |
-
-Вывод: даже с proxy схема живёт, но proxy съедает основную часть расходов. Поэтому proxy покупается только после фактических проблем, а не заранее.
-
----
-
-## 7. Capacity для 5 аккаунтов
-
-5 аккаунтов дают:
-
-- **5 000 Google Flow credits/month**;
-- **60 000 Google Flow credits/year**;
-- бесплатную по Flow credits image generation capacity, ограниченную не credits, а стабильностью аккаунтов и очередью.
-
-### 7.1. Image capacity
-
-Так как картинки стоят 0 G-credits (**подтверждено оператором вручную на сайте Flow**), потолок упирается не в квоту, а в rate limit аккаунта.
-
-**Эмпирический замер (оператор, 1 аккаунт, задержка 5 с между запросами):**
-- ~20 картинок сгенерировано в прогреве, затем серия — **429 пришёл около 55-й** картинки (итого ~75 за окно);
-- после **~20 минут паузы** ещё **60 картинок** прошли без проблем.
-- Грубая модель пропускной способности: **~60–75 картинок на «окно», затем ~20 мин cooldown** на аккаунт. Для 5 аккаунтов с ротацией это ~300–375 картинок на цикл, т.е. ориентировочно **>10 000 картинок/сутки** при равномерной нагрузке (верхняя оценка — упрётся раньше в стабильность сессий и Telegram-лимиты).
-
-| Лимит | Что означает |
-|---|---|
-| rate limit Flow | **429 около 55–75 запросов/окно, ~20 мин cooldown (замерено)** |
-| стабильность сессии | не слетают ли cookies/session |
-| CAPTCHA / verification | не просит ли Google ручную проверку |
-| очередь | сколько задач одновременно можно держать |
-| Telegram limits | сколько файлов/сообщений можно отправлять пользователям |
-| failure-rate | сколько генераций падает и требует retry/refund |
-
-Практический вывод: на 5 аккаунтах с round-robin и backoff по 429 потолок картинок измеряется тысячами в сутки — это снимает прежний флаг «потолок выручки по картинкам неизвестен». Узкое место — не квота, а ротация при 429.
-
-### 7.2. Video capacity по 5 000 G-credits/month
-
-G-credits/gen — сверено на сайте Flow. На 5 аккаунтах = 5 000 G-cr/month.
-
-| Модель | G-credits/gen | Генераций/month на 5 аккаунтах |
-|---|---:|---:|
-| Omni Flash 4s | 7 | ~714 |
-| Omni Flash 6s | 10 | 500 |
-| Omni Flash 8s | 12 | ~416 |
-| Omni Flash 10s | 15 | ~333 |
-| Veo Lite | 10 | 500 |
-| Veo Fast | 20 | 250 |
-| Veo Quality | 100 | 50 |
-| Video Prompt Edit | 40 *(оценка)* | 125 |
-
----
-
-## 8. Unit economics: images
-
-Плановая ставка из текущей модели: **$0.0082 за 1 кредит бота**. При курсе 90 ₽/$ это примерно **0.738 ₽ за 1 кредит бота**.
-
-| Цена операции | Net revenue | Google Flow cost | Gross margin до fixed costs |
-|---:|---:|---:|---:|
-| 10 bot credits | ~7.38 ₽ | 0 ₽ | ~100% |
-| 15 bot credits | ~11.07 ₽ | 0 ₽ | ~100% |
-| 20 bot credits | ~14.76 ₽ | 0 ₽ | ~100% |
-| 30 bot credits | ~22.14 ₽ | 0 ₽ | ~100% |
-
-Практический вывод:
-
-- 10 credits/image — хороший входной продукт.
-- 15 credits/image — более здоровая цена, если появляется нагрузка.
-- 20 credits/edit — нормальная цена за работу с изображением.
-- 30 credits/variations — нормальная цена за несколько вариантов.
-
----
-
-## 9. Unit economics: video
-
-При blended first-year cost **0.053 ₽/G-credit** для 5 аккаунтов:
-
-| Модель | G-cr | Cost ₽ | Bot credits | Net ₽ | Gross margin |
-|---|---:|---:|---:|---:|---:|
-| Omni Flash 4s | 7 | ~0.37 | 20 | ~14.76 | ~97% |
-| Omni Flash 6s | 10 | ~0.53 | 30 | ~22.14 | ~98% |
-| Omni Flash 8s | 12 | ~0.64 | 35 | ~25.83 | ~98% |
-| Omni Flash 10s | 15 | ~0.80 | 45 | ~33.21 | ~98% |
-| Veo Lite | 10 | ~0.53 | 30 | ~22.14 | ~98% |
-| Veo Fast | 20 | ~1.07 | 60 | ~44.28 | ~98% |
-| Veo Quality | 100 | ~5.33 | 290 | ~214.0 | ~97% |
-| Video Prompt Edit | 40 *(оценка)* | ~2.13 | 40 | ~29.52 | ~93% |
-
-Video Prompt Edit должен стоить **40 bot credits**, а не 20, чтобы не быть слабым местом в экономике (его G-cost = 40 пока не сверен — проверить на сайте).
-
----
-
-## 10. Telegram Stars packages
-
-Текущая модель пакетов:
-
-| ID | Stars | Кредиты бота | Кр/Star | Роль |
-|---|---:|---:|---:|---|
-| small | 75 | 100 | 1.33 | низкий порог входа |
-| medium | 200 | 290 | 1.45 | примерно одно Veo Quality |
-| large | 450 | 700 | 1.56 | best value |
-| xl | 900 | 1500 | 1.67 | для активных пользователей |
-
-Рекомендация:
-
-| ID | Stars | Кредиты | Комментарий |
-|---|---:|---:|---|
-| trial | 35 | 45 | показывать только первой покупке / low balance |
-| small | 75 | 100 | оставить |
-| medium | 200 | 290–295 | оставить как anchor под Quality |
-| large | 450 | 700–710 | главный пакет |
-| xl | 900 | 1500–1530 | максимальная скидка |
-
-При image price = 10 credits:
-
-| Пакет | Примерно картинок |
+| Mode | Bot credits |
 |---|---:|
-| small | ~10 |
-| medium | ~29 |
-| large | ~70 |
-| xl | ~150 |
+| Ingredients / reference-to-video | base video price + 50 |
+| Frames / start-end interpolation | base video price + 80 |
+| Video prompt edit | 400 |
+| Extend step | base video price + 50 * chain depth |
 
-При image price = 15 credits:
+The old cheap-video grid is retired. At 100 bot credits for Omni Flash 4s, one
+account's monthly 142-video quota costs users about 14,200 bot credits instead
+of being drained by a few low-priced users.
 
-| Пакет | Примерно картинок |
-|---|---:|
-| small | ~6 |
-| medium | ~19 |
-| large | ~46 |
-| xl | ~100 |
+## Packs
 
----
+Pack labels are built by `pack_label(pid)` and must show:
 
-## 11. Стартовые кредиты и anti-abuse
+- bot credits;
+- approximate number of image generations;
+- Telegram Stars price;
+- optional "best value" marker.
 
-### Стартовый грант
+Do not promise a fixed number of videos in a pack unless the UI names the exact
+model/mode; video prices vary widely.
 
-Старый грант 50 credits можно оставить только если есть защита от абьюза. При цене 10 credits/image это 5 бесплатных картинок.
+## Product Positioning
 
-Рекомендация:
+Use images as the mass-market hook:
 
-| Вариант | Значение | Когда использовать |
-|---|---:|---|
-| aggressive growth | 50 credits | если нужен быстрый приток и не страшна нагрузка |
-| balanced | 30 credits | оптимально для старта |
-| conservative | 20 credits | если начнут абьюзить |
+- marketplace product card on white background;
+- profile/avatar/social content;
+- quick ad creatives and variations;
+- "try it now" low-cost templates.
 
-Практически лучше начать с **30 starter credits**:
+Use video as a paid upgrade:
 
-- 3 обычные картинки по 10 credits;
-- или 2 картинки + остаток;
-- этого хватает, чтобы попробовать бот;
-- но этого мало для долгого бесплатного использования.
+- pet/photo animation;
+- reference-to-video from a product/person/photo;
+- before/after or start/end frame interpolation;
+- premium Veo outputs for users who already understand the value.
 
-### Anti-abuse правила
+## Operational Guardrails
 
-| Правило | Детали |
-|---|---|
-| Starter credits once | выдавать один раз на Telegram user_id |
-| No bot users | не выдавать `message.from_user.is_bot` |
-| Image rate limit | например, 10 image generations/user/hour |
-| Video rate limit | например, 3–5 video generations/user/hour |
-| Per-account queue | ограничить параллельные jobs на аккаунт |
-| Refund idempotency | один failure event = один refund |
-| Admin grant log | логировать actor_id, target_id, amount, timestamp |
+- Do not give enough free starter credits for the cheapest video.
+- Do not discount videos until account routing, quotas, cooldowns, and refund
+  behavior have real metrics.
+- Track conversion separately for image users and video users.
+- Keep failed paid actions refundable.
+- Do not run live quota or generation experiments without explicit approval.
 
----
+## Metrics To Watch
 
-## 12. Второй аккаунт сейчас
-
-Цель второго аккаунта — **не масштабирование**, а проверка архитектуры.
-
-Что нужно проверить:
-
-1. Два аккаунта живут параллельно без конфликтов cookies/session.
-2. У каждого аккаунта есть свой `account_id`.
-3. У каждого аккаунта есть status: `active`, `cooldown`, `failed`, `needs_manual_check`, `disabled`.
-4. Routing выбирает здоровый аккаунт.
-5. Если аккаунт падает, job не теряется.
-6. Если аккаунт падает до списания ресурса, пользователь не теряет кредиты.
-7. Если аккаунт падает после списания bot credits, срабатывает корректный refund.
-8. Логируется account_id у каждой генерации.
-9. Можно вручную отключить аккаунт.
-10. Видно, какой аккаунт даёт больше ошибок.
-
-Минимальная схема account pool:
-
-```text
-Account:
-  id
-  label
-  status
-  current_jobs
-  last_success_at
-  last_error_at
-  error_count
-  cooldown_until
-  proxy_enabled
-  notes
-```
-
-Минимальная схема job routing:
-
-```text
-1. User creates job.
-2. Bot charges bot credits.
-3. Router selects first healthy account.
-4. Job runs on selected account.
-5. If success: save result, mark account success.
-6. If account error: mark cooldown, retry on next account if retry budget exists.
-7. If all accounts unavailable: refund user and show temporary-unavailable message.
-```
-
----
-
-## 13. Правила масштабирования
-
-### С 1 до 2 аккаунтов
-
-Можно делать сейчас. Цель — проверить routing/fallback.
-
-### С 2 до 5 аккаунтов
-
-Переходить только после условий:
-
-- минимум 100 успешных image generations;
-- минимум 20 успешных video generations;
-- failure-rate < 10%;
-- нет ручных проверок/банов 72 часа;
-- логи показывают, что account routing работает;
-- есть ручное отключение проблемного аккаунта.
-
-### Выше 5 аккаунтов
-
-Не делать до live-метрик:
-
-- минимум 5 платящих пользователей в день;
-- 7-дневная выручка покрывает 30 дней инфраструктуры;
-- load factor флота > 70% минимум 3 дня;
-- есть admin-панель для account health;
-- понятен реальный proxy traffic, даже если proxy не используется;
-- понятен реальный Stars payout.
-
----
-
-## 14. Что мониторить с первого дня
-
-| Метрика | Зачем |
-|---|---|
-| `account_id` per job | видеть качество каждого аккаунта |
-| `job_type` | image/video/edit/extend |
-| `g_credits_before` | проверка списаний Flow |
-| `g_credits_after` | проверка списаний Flow |
-| `bot_credits_charged` | сверка экономики |
-| `duration_sec` | скорость генерации |
-| `success/fail` | failure-rate |
-| `error_code/error_text` | классификация проблем |
-| `refund_amount` | контроль денег |
-| `proxy_enabled` | сравнение proxy/no-proxy |
-| `ip_region` грубо | понять, влияет ли IP |
-| `manual_check_required` | ранний сигнал риска аккаунта |
-| `queue_wait_sec` | понять, хватает ли аккаунтов |
-
-Даже если image generation = 0 G-credits, `g_credits_before/after` всё равно стоит логировать как regression check: если Google изменит правила списания, это будет видно сразу.
-
----
-
-## 15. Что проверить live
-
-1. Второй аккаунт работает без пересечения cookies/session.
-2. Routing корректно отправляет job на здоровый аккаунт.
-3. Cooldown корректно выключает проблемный аккаунт.
-4. Refund корректно работает при падении job.
-5. RU IP / текущий DNS дают нормальный failure-rate.
-6. Proxy реально не нужен на старте.
-7. Сколько image generations/day выдерживает один аккаунт.
-8. Сколько video generations/day выдерживает один аккаунт.
-9. Сколько Telegram Stars реально приходит после вывода.
-10. Какой процент пользователей покупает после starter credits.
-
----
-
-## 16. Итоговый вердикт
-
-Финальная модель сильная, потому что картинки стоят **0 Google Flow credits**.
-
-При 5 аккаунтах:
-
-- first-year capex: **~3 200 ₽**;
-- monthly amortized cost без proxy: **~267 ₽**;
-- с VPS без proxy: **~2 967 ₽/мес**;
-- с VPS + residential proxy: **~8 030 ₽/мес**;
-- Flow quota: **60 000 G-credits/year**;
-- картинки — почти чистая маржа;
-- видео — premium upsell с очень высокой маржей, но ограниченный квотой.
-
-Рациональная стратегия:
-
-1. Сейчас взять второй аккаунт.
-2. Проверить account routing/fallback/health/refund.
-3. Не покупать proxy заранее.
-4. Не идти выше 5 аккаунтов без live-метрик.
-5. Картинки держать как дешёвый входной продукт.
-6. Видео держать как premium-функцию.
-7. Video Prompt Edit держать 40 bot credits.
-8. Progressive Extend оставить как уже реализовано.
-9. Логировать Flow credits до/после даже для картинок, чтобы сразу поймать будущие изменения правил.
+- activation: `/start` -> first image;
+- first paid intent: top-up opened, invoice created, invoice paid;
+- video funnel: video menu -> model selected -> prompt sent -> success/fail;
+- quota burn per Flow account;
+- refund count and refund reason;
+- repeat generation within 24 hours;
+- template usage and paid conversion by template id.

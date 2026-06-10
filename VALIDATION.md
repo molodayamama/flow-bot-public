@@ -13,9 +13,9 @@ Use for documentation, packaging, and pure refactors.
 - Inspect file list: `rg --files`
 - Check git status if git exists: `git status --short`
 - Python syntax check, assumption:
-  `python -m py_compile flow_bot.py google_labs_flow_bot.py gemini_bot.py checker.py find_recaptcha_params.py login.py test_recaptcha_params.py test_tokens.py`
-- Node syntax check, assumption:
-  `node --check bot.js`
+  `python -m py_compile flow_bot.py flow_core.py flow_copy.py metrics.py prompts_lib.py find_recaptcha_params.py live_test.py login.py test_recaptcha_params.py test_tokens.py telegram_bot_tester.py flow_quota_profiler.py`
+- Full offline unit suite, assumption:
+  `python -m unittest discover -s tests -p "test_*.py"`
 - Search for accidental secret patterns before commit without printing matched
   lines, assumption:
   `rg -l "Bearer |TELEGRAM_TOKEN=|TWOCAPTCHA|session-token|ya29\\.|socks5h?://|http://[^\\s]+:[^\\s]+@"`
@@ -23,15 +23,10 @@ Use for documentation, packaging, and pure refactors.
 Notes:
 
 - `python -m py_compile` is an assumption because Python version is not pinned.
-- `node --check` is an assumption because Node version is not pinned and there
-  is no `package.json`.
 - Secret scans must not print secret values in command output or final reports.
   Use file-only output such as `rg -l` / `--files-with-matches`, or a dedicated
   redaction tool. Do not use `rg -n`, `-o`, `-C`, `-A`, or `-B` for secret
   scans in this repository.
-- `node --check bot.js` was observed to pass as a syntax-only check, but
-  runtime Node dependencies are not installed in this workspace because
-  `node_modules/` and `package.json` are absent.
 
 ### Local Browser/Stateful
 
@@ -50,22 +45,17 @@ Risks:
 
 Requires explicit approval.
 
-- `python checker.py`
+- `python live_test.py`
 - `python test_tokens.py`
 - `python test_recaptcha_params.py`
 - `python flow_bot.py`
-- `python google_labs_flow_bot.py`
-- `python gemini_bot.py`
 - `python telegram_bot_tester.py --mode telegram-smoke --approve-external-action`
 - `python telegram_bot_tester.py --mode telegram-generation --prompt "simple safe landscape test" --approve-external-action`
 - `python telegram_bot_tester.py --mode telegram-ramp --prompt "simple safe landscape test" --max-steps 3 --delay-sec 90 --approve-external-action`
-- `node bot.js` - inferred entry point only; do not run until Node dependencies
-  are installed and external Telegram/API startup is explicitly approved.
 
 Risks:
 
-- Calls Telegram, Google, OpenRouter, ImageRouter, 2Captcha, proxy services, or
-  IP APIs.
+- Calls Telegram, Google, 2Captcha, proxy services, or IP APIs.
 - May spend API/captcha balance.
 - May generate media.
 - May trigger provider rate limits or account security checks.
@@ -82,24 +72,21 @@ Found in comments/docstrings:
 Found as executable entry points:
 
 - `python flow_bot.py`
-- `python google_labs_flow_bot.py`
-- `python gemini_bot.py`
 - `python login.py`
-- `python checker.py`
 - `python find_recaptcha_params.py`
+- `python live_test.py`
 - `python test_recaptcha_params.py`
 - `python test_tokens.py`
 - `python telegram_bot_tester.py`
 
 Assumptions:
 
-- `node bot.js` - inferred entry point only; currently blocked by missing
-  dependency manifest/installed Node modules.
-- `pip install python-telegram-bot twocaptcha requests`
-- `npm install node-telegram-bot-api @openrouter/sdk openai socks-proxy-agent cross-spawn dotenv`
+- `pip install -r requirements.txt`
 - `python -m py_compile ...`
-- `node --check bot.js`
 - `python -m py_compile telegram_bot_tester.py tg_e2e/config.py tg_e2e/runner.py tg_e2e/telethon_client.py`
+
+(`node bot.js` / `node --check bot.js` / npm install удалены из списка:
+`bot.js` — legacy, удалён из проекта 2026-06-10.)
 
 ## Validation By Change Type
 
@@ -119,9 +106,9 @@ Secret hygiene:
 
 Dependency manifests:
 
-- Parse/install validation depends on selected tooling.
-- Since no manifests exist yet, first manifest task must document exact install
-  commands and lockfile policy.
+- `requirements.txt` is the current Python manifest.
+- Installing dependencies or Playwright browsers is not routine validation; run
+  it only when the operator approves environment setup.
 
 Python code change:
 
@@ -265,9 +252,8 @@ Image features beyond video (all five):
 
 Node code change:
 
-- `node --check bot.js` - assumption.
-- Add package scripts once `package.json` exists.
-- Avoid starting Telegram bot unless explicitly approved.
+- Неактуально: `bot.js` (единственный Node-код) — legacy, удалён из проекта
+  (2026-06-10).
 
 Google Flow API/client change:
 
@@ -312,13 +298,11 @@ Video Ingredients/Frames (Flow API):
   scene from the source `workflowId`. The bot must not charge for Extend until a
   usable `sceneId` exists; stale or incomplete video refs remain no-charge
   unavailable.
-- Extend delivery is locally post-processed: if an Extend result has
-  `source_media_id`, the bot downloads the source segment and generated
-  continuation, concatenates them with local `ffmpeg`, and sends the merged MP4.
-  If source download, `ffmpeg`, temp files, or sending fail before merge, it must
-  fall back to the generated continuation segment so the paid result is not lost.
-  Validate this offline with syntax/source tests; live Telegram validation is
-  still required to confirm provider media files concatenate cleanly.
+- Extend delivery uses the provider's full stitched video path: scene workflows
+  -> `v1:runVideoFxConcatenation` -> `v1:runVideoFxCheckConcatenationStatus`.
+  If stitching fails, delivery falls back to the generated continuation segment
+  so the paid result is not lost. Validate concat payload/status helpers offline;
+  live Telegram validation is still approval-required.
 - `VideoRef` is frozen. Extend must pass any prepared `sceneId` as
   `source_scene_id` into generation and must not mutate the stored registry ref.
 - Offline native Edit/Extend checks:

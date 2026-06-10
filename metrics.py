@@ -44,13 +44,17 @@ __all__ = [
     "log_event",
     "log_flow_job",
     "record_transaction",
+    "record_transaction_status",
     "record_referral_join",
     "mark_referral_rewarded",
+    "grant_milestone_if_joined",
+    "record_acquisition",
     "report_today",
     "report_revenue",
     "report_flow",
     "report_accounts",
     "report_refs",
+    "report_channels",
     "report_errors",
 ]
 
@@ -67,6 +71,18 @@ _DB_PATH: str | None = None
 def _default_path() -> str:
     """Resolve the DB path from ``METRICS_DB`` (default ``metrics.db``)."""
     return os.getenv("METRICS_DB", "metrics.db")
+
+
+def _events_retention_days() -> int:
+    """How long to keep ``events`` rows (they carry usernames = PII).
+
+    ``METRICS_EVENTS_RETENTION_DAYS`` env, default 90; ``0`` disables the purge.
+    Financial tables (transactions/referrals/flow_jobs) are never purged.
+    """
+    try:
+        return max(0, int(os.getenv("METRICS_EVENTS_RETENTION_DAYS", "90")))
+    except ValueError:
+        return 90
 
 
 # ── schema ─────────────────────────────────────────────────────────────
@@ -135,6 +151,13 @@ CREATE TABLE IF NOT EXISTS referral_ongoing_rewards (
     created_at          TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS acquisitions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER UNIQUE,
+    channel     TEXT NOT NULL,
+    created_at  TEXT DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_name        ON events(event_name);
 CREATE INDEX IF NOT EXISTS idx_events_created      ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_flow_jobs_created   ON flow_jobs(created_at);
@@ -142,6 +165,7 @@ CREATE INDEX IF NOT EXISTS idx_flow_jobs_account   ON flow_jobs(account_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at);
 CREATE INDEX IF NOT EXISTS idx_referrals_referrer  ON referrals(referrer_user_id);
 CREATE INDEX IF NOT EXISTS idx_ror_referrer        ON referral_ongoing_rewards(referrer_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_acquisitions_channel ON acquisitions(channel);
 """
 
 
@@ -169,6 +193,17 @@ def init_db(path: str | None = None) -> None:
         conn = sqlite3.connect(target, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.executescript(_SCHEMA)
+        # PII-ретеншн: username в events — персональные данные; чистим старое
+        # при каждом старте. Денежные таблицы не трогаем (нужны для сверки).
+        days = _events_retention_days()
+        if days:
+            try:
+                conn.execute(
+                    "DELETE FROM events WHERE created_at < datetime('now', ?)",
+                    (f"-{days} day",),
+                )
+            except sqlite3.Error:
+                log.warning("events retention purge failed", exc_info=True)
         conn.commit()
         _CONN = conn
         _DB_PATH = target
@@ -285,7 +320,7 @@ def log_flow_job(
         log.warning("log_flow_job failed for op=%r", operation_type, exc_info=True)
 
 
-def record_transaction(
+def record_transaction_status(
     *,
     provider: str,
     provider_payment_id: str,
@@ -296,16 +331,14 @@ def record_transaction(
     credits_issued: int | None = None,
     status: str = "paid",
     paid_at: str | None = None,
-) -> bool:
-    """Idempotently record a payment, returning True only on a *new* row.
+) -> str:
+    """Idempotently record a payment; return ``'new' | 'duplicate' | 'error'``.
 
+    Tri-state так, чтобы платёжный хендлер мог различать подтверждённый дубль
+    (кредиты НЕ зачислять) и сбой метрик-БД (кредиты зачислить — пользователь
+    заплатил звёзды, недоступность аналитики не повод их не отдавать).
     Idempotency is enforced by the ``provider_payment_id UNIQUE`` constraint plus
-    ``INSERT OR IGNORE``: a duplicate webhook delivery is silently ignored and
-    returns ``False``, so credits are never granted twice. ``paid_at`` defaults to
-    now when ``status == "paid"`` and no explicit timestamp is supplied.
-
-    On any unexpected DB error this returns ``False`` (the safe default: do not
-    treat a failed record as a fresh, credit-granting transaction).
+    ``INSERT OR IGNORE``. ``paid_at`` defaults to now when ``status == "paid"``.
     """
     try:
         with _LOCK:
@@ -330,10 +363,36 @@ def record_transaction(
                 params,
             )
             conn.commit()
-            return cur.rowcount > 0
+            return "new" if cur.rowcount > 0 else "duplicate"
     except Exception:  # noqa: BLE001
         log.warning("record_transaction failed for %r", provider_payment_id, exc_info=True)
-        return False
+        return "error"
+
+
+def record_transaction(
+    *,
+    provider: str,
+    provider_payment_id: str,
+    user_id: int,
+    package_id: str | None = None,
+    amount_rub: float | None = None,
+    stars_amount: int | None = None,
+    credits_issued: int | None = None,
+    status: str = "paid",
+    paid_at: str | None = None,
+) -> bool:
+    """Idempotently record a payment, returning True only on a *new* row.
+
+    Thin bool wrapper over :func:`record_transaction_status` (kept for old
+    callers/tests). On a DB error this returns ``False`` (the safe default: do
+    not treat a failed record as a fresh, credit-granting transaction).
+    """
+    return record_transaction_status(
+        provider=provider, provider_payment_id=provider_payment_id,
+        user_id=user_id, package_id=package_id, amount_rub=amount_rub,
+        stars_amount=stars_amount, credits_issued=credits_issued,
+        status=status, paid_at=paid_at,
+    ) == "new"
 
 
 def record_referral_join(*, referrer_user_id: int, referred_user_id: int) -> bool:
@@ -357,6 +416,60 @@ def record_referral_join(*, referrer_user_id: int, referred_user_id: int) -> boo
             return cur.rowcount > 0
     except Exception:  # noqa: BLE001
         log.warning("record_referral_join failed for %r", referred_user_id, exc_info=True)
+        return False
+
+
+def record_acquisition(*, user_id: int, channel: str) -> bool:
+    """First-touch атрибуция: запомнить, с какого канала пришёл ``user_id``.
+
+    Идемпотентно по ``user_id`` (UNIQUE + INSERT OR IGNORE) — первый канал,
+    приведший юзера, и остаётся источником; повторные клики по другим ссылкам
+    его не перезаписывают. Возвращает ``True`` только при новой строке (т.е. это
+    реально новый привлечённый юзер). Никогда не бросает в вызывающего.
+    """
+    try:
+        channel = (channel or "").strip()
+        if not channel:
+            return False
+        with _LOCK:
+            conn = _conn()
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO acquisitions (user_id, channel) VALUES (?, ?)",
+                (user_id, channel),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    except Exception:  # noqa: BLE001
+        log.warning("record_acquisition failed for %r", user_id, exc_info=True)
+        return False
+
+
+def grant_milestone_if_joined(
+    *,
+    referred_user_id: int,
+    reward_credits: int,
+    first_payment_transaction_id: int | None = None,
+) -> bool:
+    """Атомарно «забрать» milestone-награду: joined → rewarded одним UPDATE.
+
+    Возвращает ``True`` только если строка реально перешла из ``joined`` в
+    ``rewarded`` (rowcount > 0). Двум конкурентным платежам приглашённого SQLite
+    отдаст переход ровно одному — без TOCTOU-окна между чтением статуса и
+    начислением. Начислять кредиты рефереру следует ТОЛЬКО при ``True``.
+    """
+    try:
+        with _LOCK:
+            conn = _conn()
+            cur = conn.execute(
+                "UPDATE referrals SET status='rewarded', reward_credits=?, "
+                "first_payment_transaction_id=?, rewarded_at=datetime('now') "
+                "WHERE referred_user_id=? AND status='joined'",
+                (reward_credits, first_payment_transaction_id, referred_user_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    except Exception:  # noqa: BLE001
+        log.warning("grant_milestone_if_joined failed for %r", referred_user_id, exc_info=True)
         return False
 
 
@@ -886,6 +999,44 @@ def report_refs() -> dict:
             "total_referrals": 0, "joined": 0, "rewarded": 0,
             "total_reward_credits": 0, "top_referrers": [],
         }
+
+
+def report_channels() -> dict:
+    """Атрибуция трафика по рекламным каналам (deep-link ``seed_<канал>``).
+
+    Для каждого канала: сколько юзеров привлечено (all-time), сколько из них
+    заплатили хоть раз и суммарная выручка (звёзды + ₽), приписанная их
+    платежам. Выручка считается по платящим юзерам канала (LEFT JOIN
+    acquisitions→transactions), поэтому ноль платежей даёт нули, а не пропуск.
+    """
+    try:
+        with _LOCK:
+            conn = _conn()
+            total_acquired = _scalar(conn, "SELECT COUNT(*) FROM acquisitions") or 0
+            channels = [
+                {
+                    "channel": r["channel"],
+                    "users": int(r["users"]),
+                    "paid_users": int(r["paid_users"]),
+                    "revenue_stars": int(r["revenue_stars"] or 0),
+                    "revenue_rub": float(r["revenue_rub"] or 0.0),
+                }
+                for r in _rows(
+                    conn,
+                    "SELECT a.channel AS channel, "
+                    "COUNT(DISTINCT a.user_id) AS users, "
+                    "COUNT(DISTINCT CASE WHEN t.status='paid' THEN t.user_id END) AS paid_users, "
+                    "COALESCE(SUM(CASE WHEN t.status='paid' THEN t.stars_amount END),0) AS revenue_stars, "
+                    "COALESCE(SUM(CASE WHEN t.status='paid' THEN t.amount_rub END),0) AS revenue_rub "
+                    "FROM acquisitions a "
+                    "LEFT JOIN transactions t ON t.user_id = a.user_id "
+                    "GROUP BY a.channel ORDER BY users DESC, revenue_stars DESC",
+                )
+            ]
+            return {"total_acquired": int(total_acquired), "channels": channels}
+    except Exception:  # noqa: BLE001
+        log.warning("report_channels failed", exc_info=True)
+        return {"total_acquired": 0, "channels": []}
 
 
 def report_errors(days: int = 7) -> dict:

@@ -40,6 +40,11 @@ from flow_core import (
     parse_concat_operation_name,
     build_concat_status_payload,
     parse_concat_status,
+    upload_video_ids_from_response,
+    VIDEO_UPLOAD_START_URL,
+    VIDEO_UPLOAD_PUT_URL,
+    video_edit_end_frame,
+    video_duration_from_poll_item,
 )
 
 FAKE_BATCH_ID = "619ce05f-5416-4ca4-8840-0a74a1f669f2"
@@ -560,6 +565,128 @@ class TestVideoConcatenation(unittest.TestCase):
             {"status": "MEDIA_GENERATION_STATUS_SUCCESSFUL", "inputsCount": 5, "encodedVideo": "QUJD"})
         self.assertEqual(status, "MEDIA_GENERATION_STATUS_SUCCESSFUL")
         self.assertEqual(enc, "QUJD")
+
+
+class TestUploadVideoIds(unittest.TestCase):
+    """Verified against tools/capture_video.py --upload-edit (seq 18 PUT response)."""
+
+    # Exact body the resumable PUT returned for a user-uploaded video.
+    REAL_PUT_RESPONSE = {
+        "status": "final",
+        "mediaServerId": "1e123e08-456e-49ea-9a17-ad8fe288168e",
+        "workflowServerId": "af25b4f5-a6a2-4a9d-ad5c-2d9ebd251a08",
+        "workflowDisplayName": "",
+        "videoWidth": 1280,
+        "videoHeight": 720,
+    }
+
+    def test_proxy_urls_match_capture(self):
+        self.assertEqual(VIDEO_UPLOAD_START_URL, "/fx/api/upload-video?action=start")
+        self.assertEqual(VIDEO_UPLOAD_PUT_URL, "/fx/api/upload-video?action=upload")
+
+    def test_extracts_media_and_workflow_from_real_response(self):
+        ids = upload_video_ids_from_response(self.REAL_PUT_RESPONSE)
+        self.assertIsNotNone(ids)
+        self.assertEqual(ids["mediaId"], "1e123e08-456e-49ea-9a17-ad8fe288168e")
+        self.assertEqual(ids["workflowId"], "af25b4f5-a6a2-4a9d-ad5c-2d9ebd251a08")
+        self.assertEqual(ids["width"], 1280)
+        self.assertEqual(ids["height"], 720)
+
+    def test_edit_payload_consumes_uploaded_ids(self):
+        # The edit request must carry the uploaded video's mediaId + workflowId.
+        ids = upload_video_ids_from_response(self.REAL_PUT_RESPONSE)
+        payload = build_video_edit_payload(
+            prompt="убери скакалку",
+            project_id=REAL_PROJECT_ID,
+            captcha_token="tok",
+            aspect="landscape",
+            session_id=";1",
+            batch_id=FAKE_BATCH_ID,
+            source_media_id=ids["mediaId"],
+            source_workflow_id=ids["workflowId"],
+        )
+        req = payload["requests"][0]
+        self.assertEqual(req["videoModelKey"], "abra_edit")
+        self.assertEqual(req["videoInput"]["mediaId"], ids["mediaId"])
+        self.assertEqual(req["metadata"]["workflowId"], ids["workflowId"])
+
+    def test_workflow_id_optional(self):
+        ids = upload_video_ids_from_response(
+            {"status": "final", "mediaServerId": "1e123e08-456e-49ea-9a17-ad8fe288168e"})
+        self.assertEqual(ids["mediaId"], "1e123e08-456e-49ea-9a17-ad8fe288168e")
+        self.assertNotIn("workflowId", ids)
+
+    def test_none_when_no_media_id(self):
+        self.assertIsNone(upload_video_ids_from_response({"status": "active"}))
+        self.assertIsNone(upload_video_ids_from_response(None))
+        self.assertIsNone(upload_video_ids_from_response("not-json"))
+
+    def test_falls_back_to_generic_extractor(self):
+        # An unexpected shape (no *ServerId keys) still yields the id via the
+        # generic image extractor — here a bare mediaId-bearing nested dict.
+        ids = upload_video_ids_from_response(
+            {"result": {"mediaId": "1e123e08-456e-49ea-9a17-ad8fe288168e"}})
+        self.assertIsNotNone(ids)
+        self.assertEqual(ids["mediaId"], "1e123e08-456e-49ea-9a17-ad8fe288168e")
+        self.assertNotIn("workflowId", ids)
+
+
+class TestEditEndFrame(unittest.TestCase):
+    """endFrameIndex = clip duration × 30 fps (web-app bundle: Math.round(d*30)).
+
+    Captures agree: uploaded 4s clip → 120, generated 8s clip → 240. Frames past
+    the clip's end make the edit job go ACTIVE → FAILED server-side.
+    """
+
+    # Real poll item shape from the upload-edit capture (seq 19/21).
+    READY_POLL_ITEM = {
+        "video": {
+            "dimensions": {"width": 1280, "height": 720, "length": "4s"},
+            "videoOffset": {"startOffset": "0s", "endOffset": "4s"},
+        }
+    }
+
+    def test_end_frame_from_duration(self):
+        self.assertEqual(video_edit_end_frame(4), 120)
+        self.assertEqual(video_edit_end_frame(8.0), 240)
+        self.assertEqual(video_edit_end_frame(4.5), 135)
+
+    def test_default_when_duration_unknown(self):
+        self.assertEqual(video_edit_end_frame(None), 240)
+        self.assertEqual(video_edit_end_frame(0), 240)
+        self.assertEqual(video_edit_end_frame(-1), 240)
+
+    def test_duration_from_real_poll_item(self):
+        self.assertEqual(video_duration_from_poll_item(self.READY_POLL_ITEM), 4.0)
+
+    def test_duration_handles_fractional_and_missing(self):
+        item = {"video": {"videoOffset": {"endOffset": "4.5s"}}}
+        self.assertEqual(video_duration_from_poll_item(item), 4.5)
+        self.assertIsNone(video_duration_from_poll_item({}))
+        self.assertIsNone(video_duration_from_poll_item(None))
+        self.assertIsNone(video_duration_from_poll_item({"video": {}}))
+
+    def test_edit_payload_carries_real_end_frame(self):
+        payload = build_video_edit_payload(
+            prompt="убери скакалку",
+            project_id=REAL_PROJECT_ID,
+            captcha_token="tok",
+            aspect="landscape",
+            session_id=";1",
+            batch_id=FAKE_BATCH_ID,
+            source_media_id=REAL_MEDIA_ID,
+            source_workflow_id=REAL_WORKFLOW_ID,
+            end_frame_index=video_edit_end_frame(4.0),
+        )
+        self.assertEqual(
+            payload["requests"][0]["videoInput"]["endFrameIndex"], 120)
+
+    def test_videoref_carries_duration(self):
+        ref = VideoRef(user_id=1, project_id=REAL_PROJECT_ID,
+                       media_id=REAL_MEDIA_ID, duration_s=4.0)
+        self.assertEqual(ref.duration_s, 4.0)
+        bare = VideoRef(user_id=1, project_id=REAL_PROJECT_ID, media_id=REAL_MEDIA_ID)
+        self.assertIsNone(bare.duration_s)
 
 
 if __name__ == "__main__":

@@ -57,6 +57,22 @@ class EventTests(MetricsTestBase):
         import json
         self.assertEqual(json.loads(row[4]), {"prompt": "кот", "n": 4})
 
+    def test_events_retention_purges_old_rows_on_init(self) -> None:
+        # PII-ретеншн: username в events — персональные данные; init_db чистит
+        # строки старше METRICS_EVENTS_RETENTION_DAYS (деф. 90), свежие остаются.
+        metrics.log_event("fresh", user_id=1, username="alice")
+        conn = metrics._conn()
+        with conn:
+            conn.execute(
+                "INSERT INTO events (event_name, username, created_at) "
+                "VALUES ('ancient', 'bob', datetime('now', '-365 day'))"
+            )
+        self.assertEqual(self._count("events"), 2)
+        metrics.close()
+        metrics.init_db(self.db_path)  # re-open → purge runs
+        self.assertEqual(self._count("events"), 1)
+        self.assertEqual(self._one("SELECT event_name FROM events")[0], "fresh")
+
     def test_log_event_optional_args_are_fine(self) -> None:
         metrics.log_event("user_started")  # no user_id/username/source/payload
         self.assertEqual(self._count("events"), 1)
@@ -176,6 +192,25 @@ class TransactionTests(MetricsTestBase):
         self.assertEqual(row[0], "paid")
         self.assertIsNotNone(row[1])  # auto-stamped
 
+    def test_record_transaction_status_tri_state(self) -> None:
+        # 'new' → 'duplicate' on the same id; 'error' on a broken DB. The payment
+        # handler credits on 'new', skips on 'duplicate', credits-but-logs on
+        # 'error' (paid stars must not be hostage to a metrics outage).
+        first = metrics.record_transaction_status(
+            provider="telegram", provider_payment_id="chg_tri", user_id=3,
+            stars_amount=75, credits_issued=100)
+        second = metrics.record_transaction_status(
+            provider="telegram", provider_payment_id="chg_tri", user_id=3,
+            stars_amount=75, credits_issued=100)
+        self.assertEqual(first, "new")
+        self.assertEqual(second, "duplicate")
+        metrics._CONN.close()  # simulate metrics outage
+        broken = metrics.record_transaction_status(
+            provider="telegram", provider_payment_id="chg_tri2", user_id=3,
+            stars_amount=75, credits_issued=100)
+        self.assertEqual(broken, "error")
+        metrics.close()  # reset for tearDown
+
 
 class ReferralTests(MetricsTestBase):
     def test_referral_join_idempotent_on_referred_user(self) -> None:
@@ -209,6 +244,23 @@ class ReferralTests(MetricsTestBase):
         self.assertEqual(rep["rewarded"], 1)
         self.assertEqual(rep["total_reward_credits"], 50)
 
+    def test_grant_milestone_if_joined_claims_exactly_once(self) -> None:
+        # Атомарный joined→rewarded: второй конкурентный платёж бонус не получает.
+        metrics.record_referral_join(referrer_user_id=1, referred_user_id=2)
+        first = metrics.grant_milestone_if_joined(referred_user_id=2, reward_credits=50)
+        second = metrics.grant_milestone_if_joined(referred_user_id=2, reward_credits=50)
+        self.assertTrue(first)
+        self.assertFalse(second)
+        row = self._one(
+            "SELECT status, reward_credits FROM referrals WHERE referred_user_id=2"
+        )
+        self.assertEqual(row[0], "rewarded")
+        self.assertEqual(row[1], 50)
+
+    def test_grant_milestone_without_join_is_noop(self) -> None:
+        self.assertFalse(metrics.grant_milestone_if_joined(referred_user_id=99, reward_credits=50))
+        self.assertEqual(self._count("referrals"), 0)
+
     def test_referral_query_helpers(self) -> None:
         metrics.record_referral_join(referrer_user_id=1, referred_user_id=2)
         self.assertEqual(metrics.get_referrer_of(2), 1)
@@ -239,6 +291,55 @@ class ReferralTests(MetricsTestBase):
         self.assertEqual(m["reward_credits"], 30)
         metrics.reset_referral_to_joined(2)
         self.assertEqual(metrics.referral_status(2), "joined")
+
+
+class AcquisitionTests(MetricsTestBase):
+    def test_acquisition_first_touch_is_idempotent(self) -> None:
+        # Первый канал «забивает» юзера; повторные клики его не перезаписывают.
+        self.assertTrue(metrics.record_acquisition(user_id=7, channel="kanal_a"))
+        self.assertFalse(metrics.record_acquisition(user_id=7, channel="kanal_b"))
+        self.assertEqual(self._count("acquisitions"), 1)
+        row = self._one("SELECT channel FROM acquisitions WHERE user_id=7")
+        self.assertEqual(row[0], "kanal_a")  # first-touch сохранён
+
+    def test_acquisition_blank_channel_rejected(self) -> None:
+        self.assertFalse(metrics.record_acquisition(user_id=1, channel="  "))
+        self.assertEqual(self._count("acquisitions"), 0)
+
+    def test_acquisition_never_raises_on_broken_db(self) -> None:
+        metrics.close()
+        metrics.init_db(self.db_path)
+        metrics._CONN.close()
+        try:
+            ok = metrics.record_acquisition(user_id=1, channel="x")
+        except Exception as exc:  # noqa: BLE001
+            self.fail(f"record_acquisition raised on broken DB: {exc!r}")
+        self.assertFalse(ok)
+        metrics.close()
+
+    def test_report_channels_counts_users_paid_and_revenue(self) -> None:
+        # Канал A: 2 юзера, один заплатил. Канал B: 1 юзер, без оплат.
+        metrics.record_acquisition(user_id=1, channel="A")
+        metrics.record_acquisition(user_id=2, channel="A")
+        metrics.record_acquisition(user_id=3, channel="B")
+        metrics.record_transaction(
+            provider="telegram", provider_payment_id="chg_a1", user_id=1,
+            package_id="small", amount_rub=99.0, stars_amount=75,
+            credits_issued=100, status="paid")
+        rep = metrics.report_channels()
+        self.assertEqual(rep["total_acquired"], 3)
+        by_ch = {c["channel"]: c for c in rep["channels"]}
+        self.assertEqual(by_ch["A"]["users"], 2)
+        self.assertEqual(by_ch["A"]["paid_users"], 1)
+        self.assertEqual(by_ch["A"]["revenue_stars"], 75)
+        self.assertEqual(by_ch["A"]["revenue_rub"], 99.0)
+        self.assertEqual(by_ch["B"]["users"], 1)
+        self.assertEqual(by_ch["B"]["paid_users"], 0)
+        self.assertEqual(by_ch["B"]["revenue_stars"], 0)
+
+    def test_report_channels_empty_db(self) -> None:
+        rep = metrics.report_channels()
+        self.assertEqual(rep, {"total_acquired": 0, "channels": []})
 
 
 class ReportTodayTests(MetricsTestBase):
@@ -290,6 +391,7 @@ class ReportResilienceTests(MetricsTestBase):
         self.assertIsInstance(metrics.report_flow(), dict)
         self.assertIsInstance(metrics.report_accounts(), dict)
         self.assertIsInstance(metrics.report_refs(), dict)
+        self.assertIsInstance(metrics.report_channels(), dict)
         self.assertIsInstance(metrics.report_errors(7), dict)
 
     def test_report_accounts_tracks_remaining_and_last_error(self) -> None:

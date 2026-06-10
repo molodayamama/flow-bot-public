@@ -1,0 +1,25 @@
+# purpose: Pet photo-to-video prompt for the mass-market "animate my pet" use case.
+# inputs:
+#   {pet}     = pet visible in the uploaded/source photo
+#   {emotion} = emotional tone
+#   {motion}  = short action to animate
+#   {detail}  = identity/details to preserve, optional
+# outputs: a concise English prompt for an image-to-video / reference-to-video flow.
+#
+# example_dialog_1:
+#   pet: рыжий кот
+#   emotion: Милота
+#   motion: Наклонить голову
+#   detail: цвет глаз и рисунок шерсти
+#   result: Photo-to-video prompt: animate the uploaded pet photo. The рыжий кот
+#           slowly tilts the head, heartwarming cute emotion, preserve exactly:
+#           цвет глаз и рисунок шерсти, keep identity and background stable.
+#
+# example_dialog_2:
+#   pet: корги
+#   emotion: Играет
+#   motion: Вильнуть хвостом
+#   detail: (skipped)
+#   result: Photo-to-video prompt: animate the uploaded pet photo. The корги gently
+#           wags the tail, playful joyful energy, natural lifelike motion.
+Photo-to-video prompt: animate the uploaded pet photo. The {pet} {motion}, {emotion}, {detail}, preserve the exact pet identity, face, fur pattern, body shape, and original photo context, natural lifelike motion, warm emotional moment, short social video, no morphing, no extra animals, no text overlay, stable camera, high quality.

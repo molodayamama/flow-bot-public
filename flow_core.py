@@ -26,6 +26,7 @@ import os
 import re
 import secrets
 import tempfile
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -302,6 +303,58 @@ def media_source_from_response(obj: Any) -> dict | None:
 def find_media_source(obj: Any) -> dict | None:
     """Backwards-compatible alias returning an editable image source dict."""
     return media_source_from_response(obj)
+
+
+# Resumable video-upload proxy used by Flow's web app (NOT the image file-input):
+#   POST {VIDEO_UPLOAD_START_URL} (action=start)  -> {"sessionUrl", "status"}
+#   PUT  {VIDEO_UPLOAD_PUT_URL}  (action=upload, raw bytes)
+#       -> {"status":"final","mediaServerId":<uuid>,"workflowServerId":<uuid>,
+#           "videoWidth":..,"videoHeight":..}
+# Contract verified by tools/capture_video.py --upload-edit (seq 17–18).
+VIDEO_UPLOAD_START_URL = "/fx/api/upload-video?action=start"
+VIDEO_UPLOAD_PUT_URL = "/fx/api/upload-video?action=upload"
+
+
+def upload_video_ids_from_response(obj: Any) -> dict | None:
+    """Recover ``{mediaId, workflowId?, width?, height?}`` from a video-upload reply.
+
+    Flow's resumable video upload finishes with a body that names the uploaded
+    clip via ``mediaServerId`` and its workflow via ``workflowServerId`` — keys
+    the image parser does not know (which is why ``upload_image`` returned 0).
+    Falls back to the generic image extractor so an unexpected shape still yields
+    a media id when one is present. Returns ``None`` if no media id is found.
+    """
+    media_id: str | None = None
+    workflow_id: str | None = None
+    width = height = None
+    if isinstance(obj, dict):
+        for key in ("mediaServerId", "mediaId", "mediaID", "media_id"):
+            value = obj.get(key)
+            if isinstance(value, str) and _UUID_RE.fullmatch(value):
+                media_id = value
+                break
+        for key in ("workflowServerId", "workflowId", "workflow_id"):
+            value = obj.get(key)
+            if isinstance(value, str) and _UUID_RE.fullmatch(value):
+                workflow_id = value
+                break
+        w, h = obj.get("videoWidth"), obj.get("videoHeight")
+        if isinstance(w, int):
+            width = w
+        if isinstance(h, int):
+            height = h
+    if not media_id:
+        media_id = extract_media_id(obj)
+    if not media_id:
+        return None
+    out: dict[str, Any] = {"mediaId": media_id}
+    if workflow_id:
+        out["workflowId"] = workflow_id
+    if width is not None:
+        out["width"] = width
+    if height is not None:
+        out["height"] = height
+    return out
 
 
 def download_url(img: dict) -> str | None:
@@ -902,24 +955,24 @@ def video_aspect_code(aspect_ratio: str) -> str:
 # ``family`` groups the two-tier picker: choose family → choose variant.
 VIDEO_MODELS: "OrderedDict[str, dict]" = OrderedDict([
     # Omni Flash — fast/cheap, duration is the variant axis.
-    ("omni-flash-4s",  {"key": "abra_t2v_4s",  "family": "omni-flash", "duration": 4,  "price": 20,  "confirmed": True}),
-    ("omni-flash-6s",  {"key": "abra_t2v_6s",  "family": "omni-flash", "duration": 6,  "price": 30,  "confirmed": False}),
-    ("omni-flash-8s",  {"key": "abra_t2v_8s",  "family": "omni-flash", "duration": 8,  "price": 35,  "confirmed": False}),
-    ("omni-flash-10s", {"key": "abra_t2v_10s", "family": "omni-flash", "duration": 10, "price": 45,  "confirmed": False}),
+    ("omni-flash-4s",  {"key": "abra_t2v_4s",  "family": "omni-flash", "duration": 4,  "price": 100,  "confirmed": True}),
+    ("omni-flash-6s",  {"key": "abra_t2v_6s",  "family": "omni-flash", "duration": 6,  "price": 140,  "confirmed": False}),
+    ("omni-flash-8s",  {"key": "abra_t2v_8s",  "family": "omni-flash", "duration": 8,  "price": 170,  "confirmed": False}),
+    ("omni-flash-10s", {"key": "abra_t2v_10s", "family": "omni-flash", "duration": 10, "price": 210,  "confirmed": False}),
     # Veo 3.1 — quality tiers, fixed duration (8s observed for lite).
-    ("veo-lite",       {"key": "veo_3_1_t2v_lite",    "family": "veo", "duration": 8, "price": 30,  "confirmed": True}),
-    ("veo-fast",       {"key": "veo_3_1_t2v_fast",    "family": "veo", "duration": 8, "price": 60,  "confirmed": False}),
-    ("veo-quality",    {"key": "veo_3_1_t2v_quality", "family": "veo", "duration": 8, "price": 290, "confirmed": False}),
+    ("veo-lite",       {"key": "veo_3_1_t2v_lite",    "family": "veo", "duration": 8, "price": 150,  "confirmed": True}),
+    ("veo-fast",       {"key": "veo_3_1_t2v_fast",    "family": "veo", "duration": 8, "price": 300,  "confirmed": False}),
+    ("veo-quality",    {"key": "veo_3_1_t2v_quality", "family": "veo", "duration": 8, "price": 1200, "confirmed": False}),
 ])
 
-VIDEO_INGREDIENTS_SURCHARGE = 10
-VIDEO_FRAMES_SURCHARGE = 20
-VIDEO_PROMPT_EDIT_PRICE = 40  # = its real Google Flow cost (40 G-cr); was 20 (below cost)
+VIDEO_INGREDIENTS_SURCHARGE = 50
+VIDEO_FRAMES_SURCHARGE = 80
+VIDEO_PROMPT_EDIT_PRICE = 400  # assumed 40 G-cr; keep at premium-video ratio
 
 # Each successive Extend in a chain costs this many MORE credits than the
 # previous one (on top of the base video price). Longer chains cost more to
 # stitch and burn more provider quota, so the escalation tracks real cost/risk.
-VIDEO_EXTEND_STEP = 5
+VIDEO_EXTEND_STEP = 50
 
 # Limits for "how many videos at once".
 MIN_NUM_VIDEOS = 1
@@ -954,7 +1007,7 @@ def video_extend_price(model_id: str, extend_index: int) -> int:
     """Credits for the ``extend_index``-th Extend of a chain (1-based).
 
     Price = base video price + ``VIDEO_EXTEND_STEP`` × extend_index, so the
-    1st extend costs base+5, the 2nd base+10, the 3rd base+15, … Each extend is
+    1st extend costs base+50, the 2nd base+100, the 3rd base+150, … Each extend is
     exactly ``VIDEO_EXTEND_STEP`` credits dearer than the one before it.
     """
     base = video_price(model_id, 1, "text")
@@ -1129,6 +1182,46 @@ def build_video_payload(
     }
 
 
+VIDEO_EDIT_FPS = 30  # web app: endFrameIndex = round(duration * 30); 4s clip → 120
+
+
+def video_edit_end_frame(duration_s: float | None, default: int = 240) -> int:
+    """endFrameIndex for a video edit: clip duration × 30 fps.
+
+    The web-app bundle computes ``Math.round(duration * 30)`` from the clip's
+    real duration. An endFrameIndex past the clip's end makes the edit job go
+    ACTIVE → FAILED server-side, so the hardcoded 240 default is only safe for
+    8s+ clips; pass the real duration whenever it is known.
+    """
+    if isinstance(duration_s, (int, float)) and duration_s > 0:
+        return max(1, round(duration_s * VIDEO_EDIT_FPS))
+    return default
+
+
+_DURATION_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)s")
+
+
+def video_duration_from_poll_item(item: Any) -> float | None:
+    """Clip duration in seconds from a ``batchCheckAsyncVideoGenerationStatus`` item.
+
+    Verified shape (upload-edit capture): ``video.videoOffset.endOffset`` and
+    ``video.dimensions.length`` are both ``"4s"``-style strings.
+    """
+    if not isinstance(item, dict):
+        return None
+    video = item.get("video")
+    if not isinstance(video, dict):
+        return None
+    for outer, inner in (("videoOffset", "endOffset"), ("dimensions", "length")):
+        node = video.get(outer)
+        value = node.get(inner) if isinstance(node, dict) else None
+        if isinstance(value, str):
+            m = _DURATION_RE.fullmatch(value.strip())
+            if m:
+                return float(m.group(1))
+    return None
+
+
 def build_video_edit_payload(
     *,
     prompt: str,
@@ -1139,13 +1232,15 @@ def build_video_edit_payload(
     batch_id: str,
     source_media_id: str,
     source_workflow_id: str,
+    end_frame_index: int = 240,
 ) -> dict:
     """Construct the native Flow video Edit request body.
 
     Shape captured by ``tools/capture_video.py --edit``:
     endpoint ``video:batchAsyncGenerateVideoEditVideo``, model ``abra_edit``,
     source video under ``videoInput.mediaId``, and original workflow under
-    ``metadata.workflowId``.
+    ``metadata.workflowId``. ``end_frame_index`` must not exceed the clip's
+    real frame count — see :func:`video_edit_end_frame`.
     """
     return {
         "mediaGenerationContext": {
@@ -1176,7 +1271,7 @@ def build_video_edit_payload(
                 "videoInput": {
                     "mediaId": source_media_id,
                     "startFrameIndex": 0,
-                    "endFrameIndex": 240,
+                    "endFrameIndex": end_frame_index,
                 },
             }
         ],
@@ -1641,6 +1736,7 @@ class ImageRef:
     source: dict = field(default_factory=dict)
     prompt: str = ""
     aspect_ratio: str = "landscape"
+    account_id: str | None = None  # аккаунт пула, где живёт project/media
 
 
 @dataclass(frozen=True)
@@ -1663,6 +1759,8 @@ class VideoRef:
     workflow_id: str | None = None
     scene_id: str | None = None
     extend_index: int = 0  # how many extends produced this clip (base video = 0)
+    duration_s: float | None = None  # real clip length (uploads); drives edit endFrameIndex
+    account_id: str | None = None  # аккаунт пула, где живёт project/media
 
 
 class ImageRegistry:
@@ -1750,6 +1848,235 @@ class UserProjectStore:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(self._data, handle, ensure_ascii=False, indent=2)
+            os.replace(tmp_name, self._path)
+        except BaseException:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+
+
+# ── account pool (multi-account routing; см. docs/MONETIZATION.md §12) ─
+
+
+@dataclass(frozen=True)
+class FlowAccount:
+    """Один Google-аккаунт пула: id + путь к его Chrome-профилю."""
+
+    id: str
+    profile_dir: str
+
+
+def parse_flow_accounts(
+    raw: str | None,
+    *,
+    default_id: str = "default",
+    default_dir: str = "./google_profile",
+) -> list[FlowAccount]:
+    """Разобрать env ``FLOW_ACCOUNTS`` в список аккаунтов.
+
+    Формат: записи через ``;`` или ``,``, каждая — ``id=путь_к_chrome_профилю``
+    (разделитель именно ``=``: в Windows-путях есть ``:``). Запись без ``=`` —
+    просто путь, id генерится ``accN``. Пустая/отсутствующая переменная — один
+    аккаунт ``default_id``/``default_dir`` (поведение одиночного бота).
+    Дубль id — выигрывает первая запись.
+    """
+    accounts: list[FlowAccount] = []
+    seen: set[str] = set()
+    for chunk in re.split(r"[;,]", raw or ""):
+        entry = chunk.strip()
+        if not entry:
+            continue
+        if "=" in entry:
+            acc_id, _, path = entry.partition("=")
+            acc_id, path = acc_id.strip(), path.strip()
+        else:
+            acc_id, path = "", entry
+        if not path:
+            continue
+        if not acc_id:
+            acc_id = f"acc{len(accounts) + 1}"
+        if acc_id in seen:
+            continue
+        seen.add(acc_id)
+        accounts.append(FlowAccount(id=acc_id, profile_dir=path))
+    if not accounts:
+        accounts.append(FlowAccount(id=default_id, profile_dir=default_dir))
+    return accounts
+
+
+class AccountPool:
+    """Sticky-роутинг юзеров по аккаунтам + health/cooldown/failover.
+
+    Контракт (docs/MONETIZATION.md §12): у каждого аккаунта есть статус, роутер
+    выбирает здоровый, упавший уходит в кулдаун, аккаунт можно отключить
+    вручную. Привязка user→account персистится (atomic JSON, как остальные
+    сторы) — проекты юзера живут на «его» аккаунте. Health — в памяти:
+    после рестарта все аккаунты считаются здоровыми (cooldown заново).
+
+    Чистый класс: часы инжектируются (``clock``), I/O — только собственный
+    JSON-стор. Один аккаунт в пуле никогда не блокируется кулдауном (падения
+    единственного аккаунта почти наверняка системные: лучше попытаться, чем
+    молча отказывать всем).
+    """
+
+    def __init__(
+        self,
+        accounts: list[FlowAccount],
+        store_path: str | Path | None = None,
+        *,
+        max_failures: int = 3,
+        cooldown_sec: float = 600.0,
+        clock=time.monotonic,
+    ) -> None:
+        if not accounts:
+            raise ValueError("AccountPool needs at least one account")
+        self._accounts: "OrderedDict[str, FlowAccount]" = OrderedDict(
+            (a.id, a) for a in accounts
+        )
+        self._max_failures = max(1, int(max_failures))
+        self._cooldown_sec = float(cooldown_sec)
+        self._clock = clock
+        self._path = Path(store_path) if store_path else None
+        self._assign: dict[str, str] = {}
+        self._health: dict[str, dict] = {
+            a.id: {"fails": 0, "cooldown_until": 0.0, "disabled": False}
+            for a in accounts
+        }
+        self._load()
+
+    # ── состав пула ────────────────────────────────────────────────────
+
+    def account_ids(self) -> list[str]:
+        return list(self._accounts)
+
+    def get(self, account_id: str) -> FlowAccount | None:
+        return self._accounts.get(account_id)
+
+    def __len__(self) -> int:
+        return len(self._accounts)
+
+    # ── health ─────────────────────────────────────────────────────────
+
+    def is_available(self, account_id: str) -> bool:
+        h = self._health.get(account_id)
+        if h is None:
+            return False
+        if h["disabled"]:
+            return False
+        return self._clock() >= h["cooldown_until"]
+
+    def mark_success(self, account_id: str) -> None:
+        h = self._health.get(account_id)
+        if h is not None:
+            h["fails"] = 0
+            h["cooldown_until"] = 0.0
+
+    def mark_failure(self, account_id: str) -> bool:
+        """Учесть сбой; вернуть True, если аккаунт ушёл в кулдаун."""
+        h = self._health.get(account_id)
+        if h is None:
+            return False
+        h["fails"] += 1
+        if h["fails"] >= self._max_failures:
+            h["cooldown_until"] = self._clock() + self._cooldown_sec
+            h["fails"] = 0
+            return True
+        return False
+
+    def set_disabled(self, account_id: str, disabled: bool) -> bool:
+        """Ручное отключение/включение аккаунта; True если id известен."""
+        h = self._health.get(account_id)
+        if h is None:
+            return False
+        h["disabled"] = bool(disabled)
+        if not disabled:
+            h["fails"] = 0
+            h["cooldown_until"] = 0.0
+        return True
+
+    # ── роутинг ────────────────────────────────────────────────────────
+
+    def assigned_to(self, user_id: int | str) -> str | None:
+        return self._assign.get(str(user_id))
+
+    def pick_for(self, user_id: int | str) -> str | None:
+        """Аккаунт для джобы юзера (sticky) или None, если весь пул недоступен.
+
+        Один аккаунт в пуле возвращается всегда (см. docstring класса).
+        Sticky-привязка переезжает на наименее загруженный живой аккаунт,
+        только когда «свой» недоступен (failover; проект пересоздаётся там).
+        """
+        key = str(user_id)
+        if len(self._accounts) == 1:
+            only = next(iter(self._accounts))
+            if self._assign.get(key) != only:
+                self._assign[key] = only
+                self._save()
+            return only
+        sticky = self._assign.get(key)
+        if sticky and self.is_available(sticky):
+            return sticky
+        candidates = [aid for aid in self._accounts if self.is_available(aid)]
+        if not candidates:
+            return None
+        loads: dict[str, int] = {aid: 0 for aid in self._accounts}
+        for assigned in self._assign.values():
+            if assigned in loads:
+                loads[assigned] += 1
+        best = min(candidates, key=lambda aid: loads[aid])
+        self._assign[key] = best
+        self._save()
+        return best
+
+    def status(self) -> list[dict]:
+        """Срез состояния пула для админ-отчёта (без секретов)."""
+        now = self._clock()
+        loads: dict[str, int] = {aid: 0 for aid in self._accounts}
+        for assigned in self._assign.values():
+            if assigned in loads:
+                loads[assigned] += 1
+        out = []
+        for aid in self._accounts:
+            h = self._health[aid]
+            out.append({
+                "id": aid,
+                "disabled": h["disabled"],
+                "cooldown_left": max(0, int(h["cooldown_until"] - now)),
+                "fails": h["fails"],
+                "users": loads[aid],
+            })
+        return out
+
+    # ── персистентность привязок ───────────────────────────────────────
+
+    def _load(self) -> None:
+        if self._path is None:
+            return
+        try:
+            parsed = json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if isinstance(parsed, dict):
+            assign = parsed.get("assignments", {})
+            if isinstance(assign, dict):
+                # Привязки к выбывшим из конфига аккаунтам отбрасываем — юзер
+                # просто получит новый аккаунт (и новый проект) при следующей джобе.
+                self._assign = {
+                    str(k): str(v) for k, v in assign.items()
+                    if str(v) in self._accounts
+                }
+
+    def _save(self) -> None:
+        if self._path is None:
+            return
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"assignments": self._assign}
+        fd, tmp_name = tempfile.mkstemp(dir=str(self._path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
             os.replace(tmp_name, self._path)
         except BaseException:
             try:
@@ -1866,6 +2193,27 @@ def referral_ongoing_bonus(credits_issued: int) -> int:
     return int(max(0, int(credits_issued or 0)) * REFERRAL_ONGOING_PCT)
 
 
+# ── Channel attribution (рекламные deep-link'и) ───────────────────────
+# Каждому каналу — своя ссылка t.me/bot?start=seed_<канал>. По ней считаем,
+# откуда пришёл юзер (first-touch). Это НЕ рефералка: денег никому не начисляет,
+# только атрибуция трафика. Слаг — ярлык канала, который выбирает оператор.
+CHANNEL_PARAM_PREFIX = "seed_"
+_CHANNEL_SEED_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+
+
+def parse_channel_seed(payload: str) -> str | None:
+    """Достать ярлык канала из start-пэйлоада ``seed_<канал>`` (или None).
+
+    Telegram разрешает в start-параметре только ``[A-Za-z0-9_-]`` (≤64). Слаг
+    канонизируем в нижний регистр (чтобы «Kanal» и «kanal» считались одним
+    каналом) и валидируем — мусор/пустой/слишком длинный → None (не атрибутируем).
+    """
+    if not payload or not payload.startswith(CHANNEL_PARAM_PREFIX):
+        return None
+    slug = payload[len(CHANNEL_PARAM_PREFIX):].strip().lower()
+    return slug if _CHANNEL_SEED_RE.match(slug) else None
+
+
 class CreditStore:
     """Persisted per-user credit balances (atomic JSON, like UserProjectStore).
 
@@ -1977,6 +2325,11 @@ class PaymentStore:
                 self._records = [r for r in recs if isinstance(r, dict)]
 
     def add(self, user_id: int, charge_id: str, stars: int, credits: int, pack_id: str) -> dict:
+        # Идемпотентность: редоставленный Telegram-апдейт несёт тот же charge_id —
+        # второй записи не создаём (иначе /refund мог бы вернуть звёзды дважды).
+        existing = self.find_by_charge(charge_id)
+        if existing is not None:
+            return existing
         rec = {
             "user_id": int(user_id),
             "charge_id": str(charge_id),

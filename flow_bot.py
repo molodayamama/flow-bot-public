@@ -27,6 +27,7 @@ HTTP-клиент делает запросы с этими свежими да�
 """
 
 import asyncio
+import base64
 import html
 import json
 import logging
@@ -74,6 +75,9 @@ from flow_core import (
     parse_action_callback,
     result_pairs,
     save_edit_capture,
+    upload_video_ids_from_response,
+    VIDEO_UPLOAD_START_URL,
+    VIDEO_UPLOAD_PUT_URL,
 )
 from flow_core import (
     CreditStore,
@@ -91,6 +95,8 @@ from flow_core import (
     REFERRAL_TIER3_BONUS,
     referral_milestone_bonus,
     referral_ongoing_bonus,
+    CHANNEL_PARAM_PREFIX,
+    parse_channel_seed,
 )
 from flow_core import (
     VIDEO_MODELS,
@@ -135,6 +141,13 @@ from flow_core import (
     parse_concat_status,
     check_video_poll_status,
     video_media_redirect_url,
+    video_edit_end_frame,
+    video_duration_from_poll_item,
+)
+from flow_core import (
+    FlowAccount,
+    parse_flow_accounts,
+    AccountPool,
 )
 import flow_copy
 import metrics
@@ -147,6 +160,11 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "PASTE_YOUR_TOKEN_HERE")
 USER_DATA_DIR = os.getenv("USER_DATA_DIR", "./google_profile")
 # Метрики: ярлык Flow-аккаунта (для flow_jobs) и курс Stars→₽ для выручки.
 FLOW_ACCOUNT_ID = os.getenv("FLOW_ACCOUNT_ID", "default")
+# Пул Flow-аккаунтов: записи "id=путь_к_chrome_профилю" через ';' (или ',').
+# Пусто — один аккаунт FLOW_ACCOUNT_ID на USER_DATA_DIR (одиночный режим, как
+# раньше). Второй аккаунт = вторая запись в env, код менять не нужно.
+FLOW_ACCOUNTS_RAW = os.getenv("FLOW_ACCOUNTS", "")
+FLOW_ACCOUNTS_STATE_FILE = os.getenv("FLOW_ACCOUNTS_STATE_FILE", "flow_accounts_state.json")
 try:
     STARS_TO_RUB = float(os.getenv("STARS_TO_RUB", "1.3"))  # ~₽ за 1 Star, best-effort
 except (TypeError, ValueError):
@@ -293,7 +311,11 @@ class SessionKeeper:
     Затем передаёт всё это в HTTP-клиент для повторного использования.
     """
 
-    def __init__(self):
+    def __init__(self, account_id: str = "", profile_dir: str | None = None):
+        # Пул аккаунтов: у каждого keeper'а свой Chrome-профиль (и свой Google-
+        # аккаунт). Без аргументов — одиночный режим на USER_DATA_DIR.
+        self.account_id = account_id
+        self._profile_dir = profile_dir
         self._pw = None
         self._context: BrowserContext = None
         self._page = None
@@ -328,7 +350,7 @@ class SessionKeeper:
             self._pw = await async_playwright().start()
 
             launch_kwargs = dict(
-                user_data_dir=USER_DATA_DIR,
+                user_data_dir=self._profile_dir or USER_DATA_DIR,
                 channel="chrome",
                 headless=False,  # False — обязательно, иначе Google блокирует
                 args=[
@@ -1210,13 +1232,14 @@ class SessionKeeper:
 
                 if resp.status != 200:
                     text = await resp.text()
-                    return {"error": f"HTTP {resp.status}: {text[:200]}"}
+                    log.warning("📡 Браузерная генерация не-200: %s тело=%s", resp.status, text[:300])
+                    return {"error": flow_copy.msg("service_error", status=resp.status)}
 
                 return await resp.json()
 
             except Exception as e:
                 log.error(f"❌ generate_via_browser: {e}")
-                return {"error": str(e)}
+                return {"error": flow_copy.msg("gen_failed")}
 
     async def upload_image(self, data: bytes, filename: str = "upload.png") -> dict | None:
         """Загрузить присланное фото в Flow через файловый input браузера.
@@ -1326,19 +1349,129 @@ class SessionKeeper:
                     except OSError:
                         pass
 
-    async def upload_video(self, data: bytes, filename: str = "upload.mp4") -> dict | None:
+    async def upload_video(
+        self,
+        data: bytes,
+        filename: str = "upload.mp4",
+        project_id: str | None = None,
+        content_type: str = "video/mp4",
+    ) -> dict | None:
         """Загрузить пользовательское видео в Flow (для редактирования промптом).
 
-        Использует ту же файловую загрузку, что и ``upload_image`` — input[type=file]
-        у Flow обычно принимает и видео, а media-id извлекается структурно. Может
-        вернуть ``workflowId`` (нужен для video-edit), если он есть в ответе.
-        Контракт video-upload+edit для пользовательских видео ещё не сверен
-        захватом — см. HANDOFF.md.
+        Контракт сверен захватом (``tools/capture_video.py --upload-edit``) и
+        кодом веб-приложения Flow (чанк ``_app``): видео грузится НЕ через
+        ``input[type=file]``, а через same-origin proxy Flow с обязательными
+        ``X-Upload-*`` заголовками:
+            POST /fx/api/upload-video?action=start
+                 X-Upload-Project-Id / -Content-Length / -Content-Type / -File-Name
+                 → {sessionUrl, status:"active"}
+            PUT  /fx/api/upload-video?action=upload   (чанки по 2 МБ)
+                 X-Upload-Session-Url: <sessionUrl из start>  ← без него PUT → 400
+                 X-Upload-Offset, X-Upload-Command: "upload" | "upload, finalize",
+                 X-Upload-Project-Id, X-Upload-File-Name,
+                 Content-Type: application/octet-stream
+                 → последний чанк: {status:"final", mediaServerId,
+                    workflowServerId, videoWidth, videoHeight}
+        ``mediaServerId``/``workflowServerId`` и есть нужные id для video-edit.
+        Запрос выполняем из контекста страницы (``page.evaluate``+``fetch``),
+        чтобы cookies/origin/авторизация совпадали с веб-приложением. Фолбэка
+        через ``upload_image`` нет: файловый input принимает только картинки
+        («Unsupported image format» для .mp4).
+
+        Возвращает ``{mediaId, workflowId?, _project_id, width?, height?}`` или
+        ``None``.
         """
-        src = await self.upload_image(data, filename=filename)
-        if src and src.get("mediaId"):
-            log.info("⬆️ Видео загружено в Flow: mediaId=%s…", str(src["mediaId"])[:8])
-        return src
+        await self._ready.wait()
+        async with self._lock:
+            await self._ensure_browser_locked()
+            pid = project_id or self._project_id
+            try:
+                # Видео в браузер передаём как base64 (JSON-safe), внутри страницы
+                # декодируем в bytes и заливаем чанками, как делает само веб-приложение.
+                b64 = base64.b64encode(data).decode("ascii")
+                result = await self._page.evaluate(
+                    """async ({b64, startUrl, putUrl, projectId, fileName, contentType, chunkSize}) => {
+                        const bin = atob(b64);
+                        const bytes = new Uint8Array(bin.length);
+                        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                        const s = await fetch(startUrl, {
+                            method: 'POST',
+                            credentials: 'include',
+                            headers: {
+                                'X-Upload-Project-Id': projectId || '',
+                                'X-Upload-Content-Length': String(bytes.length),
+                                'X-Upload-Content-Type': contentType,
+                                'X-Upload-File-Name': encodeURIComponent(fileName),
+                            },
+                        });
+                        const startText = await s.text();
+                        if (!s.ok) return { startStatus: s.status, status: 0, text: startText };
+                        let sessionUrl = null;
+                        try { sessionUrl = JSON.parse(startText).sessionUrl; } catch (e) {}
+                        if (!sessionUrl) return { startStatus: s.status, status: 0, text: startText };
+                        let out = null;
+                        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+                            const isFinal = offset + chunkSize >= bytes.length;
+                            const chunk = bytes.slice(offset, Math.min(offset + chunkSize, bytes.length));
+                            const r = await fetch(putUrl, {
+                                method: 'PUT',
+                                credentials: 'include',
+                                headers: {
+                                    'X-Upload-Session-Url': sessionUrl,
+                                    'X-Upload-Offset': String(offset),
+                                    'X-Upload-Command': isFinal ? 'upload, finalize' : 'upload',
+                                    'X-Upload-Project-Id': projectId || '',
+                                    'X-Upload-File-Name': encodeURIComponent(fileName),
+                                    'Content-Type': 'application/octet-stream',
+                                },
+                                body: chunk,
+                            });
+                            const text = await r.text();
+                            out = { startStatus: s.status, status: r.status, text };
+                            if (!r.ok) return out;
+                        }
+                        return out;
+                    }""",
+                    {
+                        "b64": b64,
+                        "startUrl": VIDEO_UPLOAD_START_URL,
+                        "putUrl": VIDEO_UPLOAD_PUT_URL,
+                        "projectId": pid,
+                        "fileName": filename,
+                        "contentType": content_type,
+                        "chunkSize": 2 * 1024 * 1024,
+                    },
+                )
+            except Exception as e:
+                if self._is_target_closed_error(e):
+                    await self._start_locked()
+                log.error(f"❌ upload_video (page fetch): {e}")
+                return None
+
+            if not isinstance(result, dict):
+                return None
+            if result.get("status") != 200:
+                log.warning(
+                    "⚠️ upload_video: start → %s, PUT → %s",
+                    result.get("startStatus"),
+                    result.get("status"),
+                )
+                return None
+            body = loads_xssi(result.get("text") or "")
+            ids = upload_video_ids_from_response(body) if body is not None else None
+            if ids and ids.get("mediaId"):
+                ids.setdefault("_project_id", pid)
+                log.info(
+                    "⬆️ Видео загружено в Flow: mediaId=%s… workflowId=%s",
+                    str(ids["mediaId"])[:8],
+                    "есть" if ids.get("workflowId") else "нет",
+                )
+                return ids
+            log.warning(
+                "⚠️ upload_video: ответ 200, но id не распознаны (schema=%s)",
+                describe_schema(body) if body is not None else "не-JSON",
+            )
+            return None
 
     async def _page_media_ids(self) -> set[str]:
         """Множество media-UUID, присутствующих в DOM страницы (src/href/srcset)."""
@@ -1498,7 +1631,8 @@ class FlowHttpClient:
 
             except Exception as e:
                 log.error(f"❌ HTTP ошибка: {e}")
-                return {"error": f"Сетевая ошибка: {e}"}
+                # Текст исключения может содержать хосты бэкенда — юзеру нейтрально.
+                return {"error": flow_copy.msg("gen_failed")}
 
             # 200 — успех
             if status == 200:
@@ -1815,6 +1949,7 @@ class FlowHttpClient:
         source_media_id: str | None = None,
         source_workflow_id: str | None = None,
         source_scene_id: str | None = None,
+        source_duration_s: float | None = None,
         progress_cb=None,
     ) -> dict:
         """Сгенерировать видео через асинхронный Flow video API.
@@ -1907,6 +2042,7 @@ class FlowHttpClient:
                     batch_id=batch_id,
                     source_media_id=source_media_id or "",
                     source_workflow_id=source_workflow_id or "",
+                    end_frame_index=video_edit_end_frame(source_duration_s),
                 )
             elif is_extend:
                 payload = build_video_extend_payload(
@@ -1945,7 +2081,8 @@ class FlowHttpClient:
                         gen_status = resp.status
                         gen_text   = await resp.text()
             except Exception as exc:
-                return {"error": f"Сетевая ошибка при запуске видео: {exc}"}
+                log.error("🎬 video network error: %s", exc)
+                return {"error": flow_copy.msg("vid_gen_failed")}
 
             if gen_status == 403:
                 log.warning(f"🎬 video → 403 (action={action}), пробую следующий action")
@@ -1966,7 +2103,7 @@ class FlowHttpClient:
             # TEMP (capture-driven): log the real API error body (no auth headers).
             log.warning("🎬 video %s non-200 status=%s body=%s",
                         endpoint_name, gen_status, gen_text[:300])
-            return {"error": f"HTTP {gen_status}: {gen_text[:200]}"}
+            return {"error": flow_copy.msg("service_error", status=gen_status)}
 
         try:
             import json as _json
@@ -2037,9 +2174,75 @@ class FlowHttpClient:
                     "status":     "ok",
                 }
             if status == VIDEO_STATUS_FAILED:
+                # TEMP (capture-driven): тело FAILED-итема — там бывает причина
+                # (policy, бэкенд-ошибка); без него отказ неотличим от транскода.
+                try:
+                    log.warning("🎬 FAILED item: %s", _json.dumps(poll_item, ensure_ascii=False)[:600])
+                except Exception:
+                    pass
                 return {"error": "Генерация видео завершилась с ошибкой на стороне Google"}
 
         return {"error": f"Таймаут ({VIDEO_POLL_TIMEOUT}с): видео не готово"}
+
+    async def wait_video_ready(
+        self,
+        media_id: str,
+        project_id: str,
+        timeout: float = 120,
+        interval: float = 3,
+    ) -> dict | None:
+        """Дождаться готовности ЗАГРУЖЕННОГО видео (серверный транскод).
+
+        Веб-приложение после upload поллит ``batchCheckAsyncVideoGenerationStatus``
+        (PENDING → SUCCESSFUL, см. захват --upload-edit, seq 19/21) и лишь потом
+        разрешает Edit. Правка до готовности завершается
+        ``MEDIA_GENERATION_STATUS_FAILED`` на стороне сервиса.
+
+        Возвращает poll-итем готового видео (в нём ``video.dimensions.length`` —
+        реальная длительность клипа для endFrameIndex) или ``None``.
+        """
+        session = await self.keeper.get_session()
+        if not session["bearer"] or not project_id:
+            return None
+        headers = self._build_headers(session)
+        proxy = _effective_proxy_url(API_PROXY_URL) or None
+        payload = build_video_poll_payload(media_id, project_id)
+        deadline = time.time() + timeout
+        poll_num = 0
+        while time.time() < deadline:
+            poll_num += 1
+            try:
+                async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
+                    async with http.post(
+                        VIDEO_POLL_ENDPOINT,
+                        headers=headers,
+                        json=payload,
+                        proxy=proxy,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    ) as resp:
+                        if resp.status != 200:
+                            log.warning(f"⚠️ upload-ready poll {poll_num} → {resp.status}")
+                        else:
+                            data = await resp.json(content_type=None)
+                            status, item = check_video_poll_status(data)
+                            log.info(f"⬆️ upload-ready poll {poll_num}: {status}")
+                            if status == VIDEO_STATUS_SUCCESSFUL:
+                                if not isinstance(item, dict):
+                                    # Молчаливый {} маскировал бы битый ответ: без
+                                    # poll-итема не узнать длительность клипа.
+                                    log.warning(
+                                        "⚠️ upload-ready: SUCCESSFUL, но poll-итем не dict (%s)",
+                                        type(item).__name__,
+                                    )
+                                    return {}
+                                return item
+                            if status == VIDEO_STATUS_FAILED:
+                                return None
+            except Exception as exc:
+                log.warning(f"⚠️ upload-ready poll {poll_num} ошибка: {exc}")
+            await asyncio.sleep(interval)
+        log.warning("⚠️ upload-ready: таймаут %sс (media_id=%s…)", timeout, str(media_id)[:8])
+        return None
 
     async def fetch_video_bytes(self, media_id: str) -> bytes | None:
         """Скачать готовое видео по ``media_id``.
@@ -2129,8 +2332,47 @@ def _make_bot() -> Bot:
     return Bot(token=TELEGRAM_TOKEN)
 
 
-keeper = SessionKeeper()
-client = FlowHttpClient(keeper)
+# Пул аккаунтов: каждый со своим Chrome-профилем, keeper'ом и HTTP-клиентом.
+# Без FLOW_ACCOUNTS — ровно один аккаунт (FLOW_ACCOUNT_ID/USER_DATA_DIR), и всё
+# работает как раньше. `keeper`/`client` остаются алиасами первого аккаунта
+# (диагностика, захваты, одиночные пути).
+FLOW_ACCOUNTS = parse_flow_accounts(
+    FLOW_ACCOUNTS_RAW, default_id=FLOW_ACCOUNT_ID, default_dir=USER_DATA_DIR
+)
+account_pool = AccountPool(FLOW_ACCOUNTS, FLOW_ACCOUNTS_STATE_FILE)
+keepers: dict[str, SessionKeeper] = {
+    acc.id: SessionKeeper(account_id=acc.id, profile_dir=acc.profile_dir)
+    for acc in FLOW_ACCOUNTS
+}
+clients: dict[str, FlowHttpClient] = {
+    acc_id: FlowHttpClient(kp) for acc_id, kp in keepers.items()
+}
+DEFAULT_ACCOUNT_ID = FLOW_ACCOUNTS[0].id
+keeper = keepers[DEFAULT_ACCOUNT_ID]
+client = clients[DEFAULT_ACCOUNT_ID]
+
+
+def _account_for(user_id: int) -> str | None:
+    """Аккаунт пула для джобы юзера (sticky), None — весь пул недоступен."""
+    return account_pool.pick_for(user_id)
+
+
+def _keeper_for_acc(account_id: str | None) -> SessionKeeper:
+    return keepers.get(account_id or "", keeper)
+
+
+def _client_for_acc(account_id: str | None) -> FlowHttpClient:
+    return clients.get(account_id or "", client)
+
+
+def _keeper_for(user_id: int) -> SessionKeeper:
+    return _keeper_for_acc(_account_for(user_id))
+
+
+def _client_for(user_id: int) -> FlowHttpClient:
+    return _client_for_acc(_account_for(user_id))
+
+
 bot = _make_bot()
 dp = Dispatcher()
 
@@ -2208,14 +2450,16 @@ def _maybe_apply_referral_rewards(
         if status == "joined":
             bonus = referral_milestone_bonus(stars_paid)
             if bonus > 0 and metrics.get_referral_credits_today(referrer_id) + bonus <= cap:
-                credit_store.add(referrer_id, bonus)
-                metrics.mark_referral_rewarded(
+                # Атомарный клейм joined→rewarded: из двух конкурентных платежей
+                # приглашённого бонус получит ровно один (без TOCTOU-окна).
+                if metrics.grant_milestone_if_joined(
                     referred_user_id=referred_user_id, reward_credits=bonus
-                )
-                metrics.log_event("referral_reward_paid", user_id=referrer_id,
-                                  payload={"tier": "milestone", "bonus": bonus,
-                                           "referred": referred_user_id})
-                _notify_referrer(referrer_id, bonus)
+                ):
+                    credit_store.add(referrer_id, bonus)
+                    metrics.log_event("referral_reward_paid", user_id=referrer_id,
+                                      payload={"tier": "milestone", "bonus": bonus,
+                                               "referred": referred_user_id})
+                    _notify_referrer(referrer_id, bonus)
             return
 
         if status == "rewarded":
@@ -2403,8 +2647,17 @@ async def credit_gate(
             credit_store.refund(user_id, price)
 
 
+def _project_key(account_id: str, user_id: int) -> str:
+    """Ключ проекта в сторе: проект юзера живёт на конкретном аккаунте пула."""
+    return f"{account_id}:{user_id}"
+
+
 async def ensure_user_project(user_id: int) -> str | None:
     """Вернуть Flow-проект пользователя, создав его при первом обращении.
+
+    Проект привязан к аккаунту пула (sticky): при failover на другой аккаунт
+    юзеру создаётся новый проект там. Старые записи без префикса аккаунта
+    мигрируются на ключ дефолтного аккаунта при первом чтении.
 
     При неудаче создания (или при выключенной фиче) возвращает ``None`` —
     вызывающий код тогда использует общий проект сессии (старое поведение),
@@ -2413,22 +2666,29 @@ async def ensure_user_project(user_id: int) -> str | None:
     """
     global _project_creation_failures, _per_user_projects_enabled
 
-    existing = project_store.get(user_id)
+    acc_id = _account_for(user_id) or DEFAULT_ACCOUNT_ID
+    key = _project_key(acc_id, user_id)
+    existing = project_store.get(key)
     if existing:
         return existing
+    if acc_id == DEFAULT_ACCOUNT_ID:
+        legacy = project_store.get(user_id)  # записи времён одного аккаунта
+        if legacy:
+            project_store.set(key, legacy)
+            return legacy
     if not _per_user_projects_enabled:
         return None
 
     try:
-        pid = await keeper.create_new_project()
+        pid = await _keeper_for_acc(acc_id).create_new_project()
     except Exception:
         log.exception("create_new_project failed")
         pid = None
 
     if pid:
         _project_creation_failures = 0
-        project_store.set(user_id, pid)
-        log.info(f"📋 Пользователю {user_id} выдан проект {pid}")
+        project_store.set(key, pid)
+        log.info(f"📋 Пользователю {user_id} выдан проект {pid} (аккаунт {acc_id})")
         return pid
 
     _project_creation_failures += 1
@@ -2457,7 +2717,8 @@ def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
         inline_keyboard=[
             [b("edit", "edit"), b("vary", "revary")],
             [b("regen", "regen"), b("realup", "realup")],
-            [B(text=L("animate"), callback_data=f"an:img:{token}")],
+            [B(text=f"{L('animate')} · от {_vid_family_min_price('ing')}⭐",
+               callback_data=f"an:img:{token}")],
             [b("download", "dl_raw")],
         ]
     )
@@ -2475,10 +2736,10 @@ def _menu_button(copy_key: str, data: str) -> types.InlineKeyboardButton:
 def main_menu_kb(show_repeat: bool = False) -> types.InlineKeyboardMarkup:
     rows = [
         [_menu_button("gen", "m:gen")],
-        [_menu_button("ideas", "m:ideas")],
         [_menu_button("vid_gen", "m:vid")],
-        [_menu_button("animate", "m:animate")],
-        [_menu_button("myphoto", "m:myphoto"), _menu_button("balance", "m:balance")],
+        [_menu_button("ideas", "m:ideas")],
+        [_menu_button("myphoto", "m:myphoto")],
+        [_menu_button("balance", "m:balance")],
         [_menu_button("invite", "m:invite")],
         [_menu_button("help", "m:help")],
     ]
@@ -2652,6 +2913,13 @@ VID_FRAMES_DEFAULT_MODEL = "veo-lite"
 _VID_FMT_TO_ASPECT = {"land": "landscape", "port": "portrait"}
 _VID_FMT_NAMES = {"land": "16:9", "port": "9:16"}
 
+# Правка ЗАГРУЖЕННОГО пользователем видео временно отключена: сервис нестабильно
+# отдаёт результат («Oops, something went wrong!» / видео недогружается) — судя по
+# всему, проблема на стороне сервиса. Видео, СГЕНЕРИРОВАННЫЕ в самом сервисе,
+# редактируются штатно (кнопка ✏️ под роликом). Весь upload-код сохранён:
+# вернуть фичу = поставить True (и обратно проверить через capture). См. HANDOFF.
+UPLOAD_VIDEO_EDIT_ENABLED = False
+
 
 def _vid_clear(user_id: int) -> None:
     """Очистить только видео-ключи (сохранив vlast для повтора и vretry для ретрая)."""
@@ -2661,6 +2929,18 @@ def _vid_clear(user_id: int) -> None:
         if key.startswith("v") and key not in keep:
             st.pop(key, None)
     st.update(keep)
+
+
+def _clear_image_flow_keys(st: dict) -> None:
+    """Снять image-визард (await/step/pending_prompt), не трогая видео-ключи.
+
+    Нужно при входе в видео-из-фото («Оживить фото»): иначе залипший
+    ``step=="wizard"`` после прошлой генерации картинок перехватывал промпт из
+    чата и генерил картинки вместо видео.
+    """
+    st["await"] = None
+    st["step"] = None
+    st.pop("pending_prompt", None)
 
 
 def _vid_clear_reference_inputs(user_id: int) -> None:
@@ -2718,7 +2998,11 @@ def video_family_kb() -> types.InlineKeyboardMarkup:
         [fam("veo")],
         [fam("ing")],
         [fam("frm")],
-        [B(text=L("vid_upload_edit"), callback_data="vu:start")],
+    ] + (
+        [[B(text=f"{L('vid_upload_edit')} · {action_price('video_prompt_edit')}⭐",
+            callback_data="vu:start")]]
+        if UPLOAD_VIDEO_EDIT_ENABLED else []
+    ) + [
         [B(text=L("cancel"), callback_data="v:cancel")],
     ])
 
@@ -3085,10 +3369,11 @@ async def _send_one_image(
     project_id: str | None,
     prompt: str,
     aspect_ratio: str,
+    account_id: str | None = None,
 ) -> None:
     """Отправить одну картинку с кнопкой «Редактировать», привязанной к ней."""
     # Запоминаем сырой объект картинки, чтобы бот мог изучить формат правки.
-    keeper.note_image(img)
+    _keeper_for_acc(account_id).note_image(img)
     token = image_registry.add(
         ImageRef(
             user_id=user_id,
@@ -3096,6 +3381,7 @@ async def _send_one_image(
             source=img,
             prompt=prompt,
             aspect_ratio=aspect_ratio,
+            account_id=account_id,
         )
     )
     keyboard = _image_keyboard(token)
@@ -3144,8 +3430,14 @@ async def cmd_start(message: types.Message):
             ):
                 metrics.log_event("referral_joined", user_id=user_id,
                                   payload={"referrer": referrer_id})
+    # Рекламный deep-link: /start seed_<канал> — first-touch атрибуция канала.
+    channel = parse_channel_seed(payload)
+    if channel and not getattr(message.from_user, "is_bot", False):
+        if metrics.record_acquisition(user_id=user_id, channel=channel):
+            metrics.log_event("acquired_from_channel", user_id=user_id,
+                              username=_username(message), payload={"channel": channel})
     # Показываем приветствие вместе с постоянной нижней клавиатурой.
-    await message.answer(flow_copy.msg("welcome"), reply_markup=reply_menu_kb())
+    await message.answer(flow_copy.msg("welcome"), reply_markup=reply_menu_kb(), parse_mode="HTML")
     await show_main_menu(message, user_id=user_id)
 
 
@@ -3289,6 +3581,11 @@ def _admin_only(message: types.Message) -> bool:
     return True
 
 
+def _owner_only(message: types.Message) -> bool:
+    """Гейт для команд уровня владельца (OWNER_ID в .env), строго ⊆ ADMIN_IDS."""
+    return message.from_user.id in OWNER_IDS
+
+
 @dp.message(Command("admin_today"))
 async def cmd_admin_today(message: types.Message):
     if not _admin_only(message):
@@ -3363,18 +3660,66 @@ async def cmd_admin_accounts(message: types.Message):
     if not _admin_only(message):
         await message.answer(flow_copy.msg("admin_denied"))
         return
-    accounts = metrics.report_accounts().get("accounts", [])
-    if not accounts:
-        await message.answer("🧮 <b>Аккаунты</b>\nСегодня заданий не было.", parse_mode="HTML")
-        return
-    lines = []
-    for a in accounts:
-        rem = f" · остаток G {a['credits_remaining']}" if a["credits_remaining"] is not None else ""
-        err = f" · ⚠️ {a['last_error']}" if a["last_error"] else ""
-        lines.append(
-            f"  • <b>{a['account_id']}</b>: {a['jobs']}× · ✅{a['success']}/❌{a['fail']}{rem}{err}"
+    # Живое состояние пула (роутинг/health) + статистика jobs за сегодня.
+    pool_lines = []
+    for s in account_pool.status():
+        state = "⛔ выключен" if s["disabled"] else (
+            f"🧊 кулдаун {s['cooldown_left']}с" if s["cooldown_left"] else "✅ активен"
         )
-    await message.answer("🧮 <b>Аккаунты (сегодня)</b>\n" + "\n".join(lines), parse_mode="HTML")
+        pool_lines.append(
+            f"  • <b>{html.escape(s['id'])}</b>: {state} · 👥{s['users']} · сбоев {s['fails']}"
+        )
+    text = "🧮 <b>Пул аккаунтов</b>\n" + "\n".join(pool_lines)
+    accounts = metrics.report_accounts().get("accounts", [])
+    if accounts:
+        lines = []
+        for a in accounts:
+            rem = f" · остаток G {a['credits_remaining']}" if a["credits_remaining"] is not None else ""
+            err = f" · ⚠️ {html.escape(str(a['last_error']))}" if a["last_error"] else ""
+            lines.append(
+                f"  • <b>{html.escape(str(a['account_id']))}</b>: "
+                f"{a['jobs']}× · ✅{a['success']}/❌{a['fail']}{rem}{err}"
+            )
+        text += "\n\n🧮 <b>Задания (сегодня)</b>\n" + "\n".join(lines)
+    else:
+        text += "\n\nСегодня заданий не было."
+    await message.answer(text, parse_mode="HTML")
+
+
+@dp.message(Command("acc_off"))
+async def cmd_acc_off(message: types.Message):
+    """Ручное отключение аккаунта пула: /acc_off <id> (admin)."""
+    if not _admin_only(message):
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    parts = (message.text or "").split()
+    acc_id = parts[1] if len(parts) > 1 else ""
+    if account_pool.set_disabled(acc_id, True):
+        metrics.log_event("account_disabled", user_id=message.from_user.id,
+                          payload={"account": acc_id})
+        await message.answer(f"⛔ Аккаунт {html.escape(acc_id)} отключён.")
+    else:
+        await message.answer(
+            "Не нашёл такой аккаунт. Известные: " + ", ".join(account_pool.account_ids())
+        )
+
+
+@dp.message(Command("acc_on"))
+async def cmd_acc_on(message: types.Message):
+    """Включить аккаунт пула обратно: /acc_on <id> (admin)."""
+    if not _admin_only(message):
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    parts = (message.text or "").split()
+    acc_id = parts[1] if len(parts) > 1 else ""
+    if account_pool.set_disabled(acc_id, False):
+        metrics.log_event("account_enabled", user_id=message.from_user.id,
+                          payload={"account": acc_id})
+        await message.answer(f"✅ Аккаунт {html.escape(acc_id)} включён.")
+    else:
+        await message.answer(
+            "Не нашёл такой аккаунт. Известные: " + ", ".join(account_pool.account_ids())
+        )
 
 
 @dp.message(Command("admin_refs"))
@@ -3396,6 +3741,56 @@ async def cmd_admin_refs(message: types.Message):
     )
 
 
+@dp.message(Command("admin_channels"))
+async def cmd_admin_channels(message: types.Message):
+    """Рекламные каналы: привлечено / платящие / выручка по каждой deep-link.
+
+    Без аргумента — сводка по всем каналам. С аргументом
+    (`/admin_channels <ярлык>`) — готовая ссылка для этого канала.
+    """
+    if not _admin_only(message):
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    parts = (message.text or "").split()
+    if len(parts) > 1:
+        slug = parse_channel_seed(CHANNEL_PARAM_PREFIX + parts[1])
+        if not slug:
+            await message.answer(
+                "Ярлык канала: латиница/цифры/_/-, до 32 символов. "
+                "Пример: <code>/admin_channels my_channel</code>",
+                parse_mode="HTML",
+            )
+            return
+        username = BOT_USERNAME or "&lt;bot&gt;"
+        link = f"https://t.me/{username}?start={CHANNEL_PARAM_PREFIX}{slug}"
+        await message.answer(
+            f"🔗 Ссылка для канала <b>{html.escape(slug)}</b>:\n<code>{html.escape(link)}</code>",
+            parse_mode="HTML",
+        )
+        return
+    r = metrics.report_channels()
+    if not r["channels"]:
+        await message.answer(
+            "📡 <b>Каналы</b>\nПока никто не пришёл по рекламным ссылкам.\n"
+            "Ссылка для канала: <code>/admin_channels &lt;ярлык&gt;</code>",
+            parse_mode="HTML",
+        )
+        return
+    lines = []
+    for c in r["channels"]:
+        rub = f" · {c['revenue_rub']:.0f}₽" if c["revenue_rub"] else ""
+        lines.append(
+            f"  • <b>{html.escape(str(c['channel']))}</b>: 👥{c['users']} · "
+            f"💳{c['paid_users']} · ⭐{c['revenue_stars']}{rub}"
+        )
+    await message.answer(
+        f"📡 <b>Каналы</b> (привлечено всего: <b>{r['total_acquired']}</b>)\n"
+        + "\n".join(lines)
+        + "\n\nСсылка для канала: <code>/admin_channels &lt;ярлык&gt;</code>",
+        parse_mode="HTML",
+    )
+
+
 @dp.message(Command("admin_errors"))
 async def cmd_admin_errors(message: types.Message):
     if not _admin_only(message):
@@ -3413,6 +3808,57 @@ async def cmd_admin_errors(message: types.Message):
         f"Последние:\n{recent}",
         parse_mode="HTML",
     )
+
+
+# Справочник команд для /admin_help. Угловые скобки экранированы (HTML parse_mode).
+# Держим единым местом, чтобы при добавлении команды правка была одна.
+_HELP_SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    ("👤 Пользовательские", (
+        ("/start", "запуск и главное меню"),
+        ("/menu", "главное меню"),
+        ("/balance", "баланс и пополнение через Stars"),
+        ("/status", "состояние сессии (токен / проект / капча)"),
+        ("/img &lt;промпт&gt;", "4 картинки по тексту"),
+        ("/one &lt;промпт&gt;", "1 картинка"),
+        ("/portrait &lt;промпт&gt;", "2 вертикальные картинки"),
+        ("/square &lt;промпт&gt;", "2 квадратные картинки"),
+        ("/imgn N &lt;промпт&gt;", "N картинок (1–8)"),
+        ("/mix &lt;промпт&gt;", "собрать картинку из выбранных «ингредиентов»"),
+    )),
+    ("🛡 Админские (ADMIN_IDS)", (
+        ("/grant &lt;user_id&gt; &lt;кредиты&gt;", "начислить пользователю кредиты"),
+        ("/refund &lt;user_id&gt; [charge_id]", "вернуть Stars за платёж (по умолчанию последний)"),
+        ("/admin_today", "сводка за сегодня (юзеры/выручка/успехи)"),
+        ("/admin_revenue", "выручка за 30 дней (пакеты, по дням)"),
+        ("/admin_flow", "нагрузка по моделям и бэкенду"),
+        ("/admin_accounts", "состояние пула аккаунтов + задания за сегодня"),
+        ("/acc_off &lt;id&gt;", "вручную отключить аккаунт пула"),
+        ("/acc_on &lt;id&gt;", "вернуть аккаунт пула в работу"),
+        ("/admin_refs", "рефералы: приглашения/награды/топ"),
+        ("/admin_channels [ярлык]", "каналы (атрибуция); с ярлыком — выдать ссылку"),
+        ("/admin_errors", "ошибки бэкенда за 7 дней"),
+    )),
+    ("👑 Владелец (OWNER_ID)", (
+        ("/admin_help", "этот справочник команд"),
+    )),
+)
+
+
+def _render_admin_help() -> str:
+    blocks = ["🧭 <b>Команды бота</b>"]
+    for title, rows in _HELP_SECTIONS:
+        lines = "\n".join(f"  <code>{cmd}</code> — {desc}" for cmd, desc in rows)
+        blocks.append(f"<b>{title}</b>\n{lines}")
+    return "\n\n".join(blocks)
+
+
+@dp.message(Command("admin_help"))
+async def cmd_admin_help(message: types.Message):
+    """Справочник команд (синтаксис + описание). Только для OWNER_ID из .env."""
+    if not _owner_only(message):
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    await message.answer(_render_admin_help(), parse_mode="HTML")
 
 
 # Метрики: действие → имя события запроса / тип операции для flow_jobs.
@@ -3447,6 +3893,13 @@ async def _generate_and_send(
     _ws(user_id)["last"] = {
         "prompt": prompt, "count": num_images, "aspect": aspect_ratio, "imodel": image_model,
     }
+
+    # Весь пул аккаунтов недоступен — отказ ДО credit_gate (ничего не списываем,
+    # без цикла «списали-вернули»). Внутри _do_generate_and_send есть та же
+    # проверка (защита остальных входов), но здесь она до денег.
+    if _account_for(user_id) is None:
+        await message.answer(flow_copy.msg("accounts_unavailable"))
+        return
 
     metrics.log_event(_IMG_REQUEST_EVENT.get(action, "image_requested"),
                       user_id=user_id, username=_username(message), source=action,
@@ -3488,7 +3941,8 @@ def _ms_since(started: float) -> int:
 def _log_image_job(user_id, action, image_model, started, *, ok, charged=0, error=None):
     """flow_jobs-запись для картиночной операции (никогда не бросает)."""
     metrics.log_flow_job(
-        user_id=user_id, account_id=FLOW_ACCOUNT_ID,
+        user_id=user_id,
+        account_id=account_pool.assigned_to(user_id) or FLOW_ACCOUNT_ID,
         operation_type=_IMG_OP.get(action, "image"), model=image_model,
         bot_credits_charged=charged, duration_ms=_ms_since(started),
         status="success" if ok else "fail",
@@ -3514,10 +3968,15 @@ async def _do_generate_and_send(
 
     # Каждый Telegram-пользователь работает в своём проекте на сайте.
     await update_status("📂 Готовлю ваш проект...")
+    acc_id = _account_for(user_id)
+    if acc_id is None:
+        # Весь пул аккаунтов в кулдауне/отключён — отказ ДО списания кредитов.
+        await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
+        return False
     project_id = await ensure_user_project(user_id)
 
     try:
-        result = await client.generate_images(
+        result = await _client_for_acc(acc_id).generate_images(
             prompt,
             aspect_ratio=aspect_ratio,
             num_images=num_images,
@@ -3527,11 +3986,15 @@ async def _do_generate_and_send(
         )
     except Exception:
         log.exception("Generation failed")
+        account_pool.mark_failure(acc_id)
         await status_msg.edit_text(flow_copy.msg("gen_failed"))
         return False
 
     if "error" in result:
-        await status_msg.edit_text(f"❌ {result['error']}")
+        account_pool.mark_failure(acc_id)
+        # Тексты ошибок здесь — наша копия из flow_copy, но эскейпим на случай
+        # сырого текста от бэкенда (защита разметки от инъекции).
+        await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
         return False
 
     pairs = result_pairs(result)
@@ -3541,10 +4004,11 @@ async def _do_generate_and_send(
         await status_msg.edit_text(flow_copy.msg("nothing_returned"))
         return False
 
+    account_pool.mark_success(acc_id)
     await update_status(flow_copy.msg("sending"))
     await _send_result_pairs(
         message, pairs, user_id=user_id, project_id=project_id,
-        prompt=prompt, aspect_ratio=aspect_ratio, emoji="🎨",
+        prompt=prompt, aspect_ratio=aspect_ratio, emoji="🎨", account_id=acc_id,
     )
     await status_msg.delete()
     await _after_result(message, user_id)
@@ -3582,6 +4046,7 @@ async def _send_result_pairs(
     prompt: str,
     aspect_ratio: str,
     emoji: str,
+    account_id: str | None = None,
 ):
     """Отправить набор картинок с кнопками действий (общий для всех режимов)."""
     total = len(pairs)
@@ -3597,6 +4062,7 @@ async def _send_result_pairs(
             project_id=project_id,
             prompt=prompt,
             aspect_ratio=aspect_ratio,
+            account_id=account_id,
         )
         await asyncio.sleep(0.3)
 
@@ -3738,7 +4204,7 @@ async def _do_edit_and_send(
             pass
 
     try:
-        result = await client.generate_images(
+        result = await _client_for_acc(ref.account_id).generate_images(
             instruction,
             aspect_ratio=aspect,
             num_images=1,
@@ -3757,7 +4223,7 @@ async def _do_edit_and_send(
         if _is_rate_limit_error(result):
             await status_msg.edit_text(flow_copy.msg("image_edit_rate_limited"))
         else:
-            await status_msg.edit_text(f"❌ {result['error']}")
+            await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
         return False
 
     pairs = result_pairs(result)
@@ -3770,6 +4236,7 @@ async def _do_edit_and_send(
     await _send_result_pairs(
         message, pairs, user_id=user_id, project_id=ref.project_id,
         prompt=instruction, aspect_ratio=aspect, emoji="✏️",
+        account_id=ref.account_id,
     )
     await status_msg.delete()
     return True
@@ -3849,7 +4316,7 @@ async def _do_run_i2i(
             pass
 
     try:
-        result = await client.generate_images(
+        result = await _client_for_acc(ref.account_id).generate_images(
             prompt,
             aspect_ratio=ref.aspect_ratio,
             num_images=num_images,
@@ -3867,7 +4334,7 @@ async def _do_run_i2i(
         if _is_rate_limit_error(result):
             await status_msg.edit_text(flow_copy.msg("image_edit_rate_limited"))
         else:
-            await status_msg.edit_text(f"❌ {result['error']}")
+            await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
         return False
 
     pairs = result_pairs(result)
@@ -3878,6 +4345,7 @@ async def _do_run_i2i(
     await _send_result_pairs(
         message, pairs, user_id=user_id, project_id=ref.project_id,
         prompt=prompt, aspect_ratio=ref.aspect_ratio, emoji=emoji,
+        account_id=ref.account_id,
     )
     await status_msg.delete()
     return True
@@ -3941,7 +4409,9 @@ async def _real_upscale_and_send(message: types.Message, ref: ImageRef):
         metrics.log_event("credits_charged", user_id=user_id, source="realup",
                           payload={"amount": charged, "action": "realup"})
     metrics.log_flow_job(
-        user_id=user_id, account_id=FLOW_ACCOUNT_ID, operation_type="upscale",
+        user_id=user_id,
+        account_id=(ref.account_id or account_pool.assigned_to(user_id) or FLOW_ACCOUNT_ID),
+        operation_type="upscale",
         model=None, bot_credits_charged=charged, duration_ms=_ms_since(started),
         status="success" if ok else "fail", error_type=None if ok else "upscale_failed",
     )
@@ -3957,14 +4427,18 @@ async def _do_real_upscale(message: types.Message, ref: ImageRef, media_id: str)
             pass
 
     try:
-        result = await client.upsample_image(media_id, ref.project_id, progress_cb=update_status)
+        result = await _client_for_acc(ref.account_id).upsample_image(
+            media_id, ref.project_id, progress_cb=update_status
+        )
     except Exception:
         log.exception("real upscale failed")
         await status_msg.edit_text(flow_copy.msg("gen_failed"))
         return False
 
     if "error" in result:
-        await status_msg.edit_text(f"❌ {result['error']}")
+        # Тексты ошибок здесь — наша копия из flow_copy, но эскейпим на случай
+        # сырого текста от бэкенда (защита разметки от инъекции).
+        await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
         return False
 
     image_bytes = result.get("image_bytes")
@@ -4092,8 +4566,9 @@ async def _do_mix_and_send(
             pass
 
     project_id = await ensure_user_project(user_id)
+    acc_id = _account_for(user_id)
     try:
-        result = await client.generate_images(
+        result = await _client_for_acc(acc_id).generate_images(
             prompt,
             aspect_ratio="landscape",
             num_images=2,
@@ -4108,7 +4583,7 @@ async def _do_mix_and_send(
         return
 
     if "error" in result:
-        await status_msg.edit_text(f"❌ {result['error']}")
+        await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
         return
 
     pairs = result_pairs(result)
@@ -4119,7 +4594,7 @@ async def _do_mix_and_send(
     mix_baskets[user_id] = []  # корзина израсходована
     await _send_result_pairs(
         message, pairs, user_id=user_id, project_id=project_id,
-        prompt=prompt, aspect_ratio="landscape", emoji="🧩",
+        prompt=prompt, aspect_ratio="landscape", emoji="🧩", account_id=acc_id,
     )
     await status_msg.delete()
 
@@ -4145,6 +4620,7 @@ async def on_menu_action(callback: types.CallbackQuery):
         pending_edits.pop(user_id, None)
         _vid_clear(user_id)
         st = _ws(user_id)
+        _clear_image_flow_keys(st)  # чтобы промпт из чата ушёл в видео, а не в картинки
         st["vmode"] = "ingredients"
         st["vmodel"] = VID_REF_DEFAULT_MODEL
         st["vcount"] = 1
@@ -4220,6 +4696,7 @@ async def on_animate_action(callback: types.CallbackQuery):
         pending_edits.pop(user_id, None)
         _vid_clear(user_id)
         st = _ws(user_id)
+        _clear_image_flow_keys(st)  # чтобы промпт из чата ушёл в видео, а не в картинки
         st["vmode"] = "ingredients"
         st["vmodel"] = VID_REF_DEFAULT_MODEL
         st["vcount"] = 1
@@ -4445,6 +4922,10 @@ async def on_video_upload_action(callback: types.CallbackQuery):
     msg = callback.message
     st = _ws(user_id)
     if data == "vu:start":
+        if not UPLOAD_VIDEO_EDIT_ENABLED:
+            # Фича временно выключена — гасим даже устаревшие кнопки.
+            await callback.answer(flow_copy.msg("vid_upload_disabled"), show_alert=True)
+            return
         await callback.answer()
         _vid_clear(user_id)
         st["vmode"] = "edit"
@@ -4463,8 +4944,8 @@ async def handle_video_upload(message: types.Message):
     """Приём пользовательского видео для режима «Изменить своё видео»."""
     user_id = message.from_user.id
     st = _ws(user_id)
-    if st.get("vawait") != "vu_video":
-        return  # видео ждём только в этом режиме — иначе игнор
+    if not UPLOAD_VIDEO_EDIT_ENABLED or st.get("vawait") != "vu_video":
+        return  # видео ждём только в этом режиме (и пока фича включена) — иначе игнор
     file_obj = message.video or message.document
     if file_obj is None:
         return
@@ -4481,18 +4962,48 @@ async def handle_video_upload(message: types.Message):
         log.exception("download user video failed")
         await status.edit_text(flow_copy.msg("vid_upload_failed"))
         return
-    await ensure_user_project(user_id)
-    source = await keeper.upload_video(data, filename=f"tg_{user_id}.mp4")
+    project_id = await ensure_user_project(user_id)
+    source = await _keeper_for(user_id).upload_video(
+        data,
+        filename=f"tg_{user_id}.mp4",
+        project_id=project_id,
+        content_type=mime or "video/mp4",
+    )
     if not source or not source.get("mediaId"):
         await status.edit_text(flow_copy.msg("vid_upload_failed"))
         return
+    # Транскод на стороне сервиса: без ожидания SUCCESSFUL правка падает FAILED.
+    ready_item = await _client_for(user_id).wait_video_ready(
+        source["mediaId"], source.get("_project_id") or project_id or ""
+    )
+    if ready_item is None:
+        await status.edit_text(flow_copy.msg("vid_upload_failed"))
+        return
+    # Реальная длительность клипа → endFrameIndex правки (кадры за концом клипа
+    # роняют edit-джобу). Сервер надёжнее Telegram (документы без duration).
+    source["duration_s"] = (
+        video_duration_from_poll_item(ready_item)
+        or float(getattr(file_obj, "duration", 0) or 0)
+        or None
+    )
+    if source["duration_s"] is None:
+        # endFrameIndex упадёт в дефолт 240: для клипа короче 8с правка уйдёт в
+        # FAILED на стороне сервиса — пусть причина будет видна в логах.
+        log.warning("🎬 upload: длительность не определена (ни poll, ни Telegram) — "
+                    "endFrameIndex возьмёт дефолт %s", video_edit_end_frame(None))
     st["vu_source"] = source
-    st["vawait"] = "vu_edit_prompt"
     metrics.log_event("video_upload_edit_started", user_id=user_id, source="upload")
     try:
         await status.delete()
     except Exception:
         pass
+    caption = (message.caption or "").strip()
+    if len(caption) >= 3:
+        # Видео пришло сразу с текстом правки — не переспрашиваем, генерируем.
+        st["vawait"] = None
+        await _video_edit_uploaded(message, caption, user_id=user_id)
+        return
+    st["vawait"] = "vu_edit_prompt"
     await message.answer(
         flow_copy.msg("vid_upload_ask_prompt", price=action_price("video_prompt_edit"))
     )
@@ -4505,20 +5016,26 @@ async def _video_edit_uploaded(message: types.Message, prompt: str, *, user_id: 
     if not src.get("mediaId"):
         await message.answer(flow_copy.msg("vid_expired_wizard"))
         return
+    # Ориентация — из реальных размеров загруженного видео (PUT-ответ),
+    # иначе вертикальный ролик ушёл бы в правку как landscape.
+    w, h = src.get("width"), src.get("height")
+    fmt = "port" if isinstance(w, int) and isinstance(h, int) and h > w else "land"
     ref = VideoRef(
         user_id=user_id,
         project_id=src.get("_project_id"),
         media_id=src.get("mediaId"),
         prompt="",
         model_id="omni-flash-4s",
-        aspect_ratio="landscape",
+        aspect_ratio=_VID_FMT_TO_ASPECT[fmt],
         mode="edit",
         prompt_edited=True,  # навсегда блокирует Продлить у результата
         workflow_id=src.get("workflowId") or src.get("workflow_id"),
+        duration_s=src.get("duration_s"),
+        account_id=_account_for(user_id),
     )
     st["vmode"] = "edit"
     st["vmodel"] = "omni-flash-4s"
-    st["vfmt"] = "land"
+    st["vfmt"] = fmt
     st["vcount"] = 1
     st["vawait"] = None
     st.pop("vu_source", None)
@@ -4887,14 +5404,16 @@ async def _video_delivery_bytes(
     Returns ``(bytes, is_full)``.
     """
     if ref.mode == "extend" and ref.scene_id and ref.project_id:
-        full_bytes = await client.fetch_full_extended_video(ref.scene_id, ref.project_id)
+        full_bytes = await _client_for_acc(ref.account_id).fetch_full_extended_video(
+            ref.scene_id, ref.project_id
+        )
         if full_bytes:
             return full_bytes, True
         log.warning("full stitched video unavailable; falling back to extension segment")
 
     video_bytes = fetched_bytes
     if video_bytes is None:
-        video_bytes = await client.fetch_video_bytes(ref.media_id)
+        video_bytes = await _client_for_acc(ref.account_id).fetch_video_bytes(ref.media_id)
     return video_bytes, False
 
 
@@ -4914,6 +5433,36 @@ async def _repeat_last(callback: types.CallbackQuery, user_id: int):
 
 
 async def _video_generate_and_send(
+    message: types.Message,
+    prompt: str,
+    *,
+    user_id: int,
+    unit_price_override: int | None = None,
+    prompt_edited: bool = False,
+    status_text: str | None = None,
+    source_video: VideoRef | None = None,
+    video_operation: str = "generate",
+    source_scene_id: str | None = None,
+) -> None:
+    """Слот-обёртка: видео идёт через тот же per-user замок, что и картинки.
+
+    Без него параллельные видео+картинка одного юзера читали баланс до
+    списания друг друга (гонка проверь-потом-спиши на кредитах).
+    """
+    try:
+        async with user_slot(user_id, message):
+            await _do_video_generate_and_send(
+                message, prompt, user_id=user_id,
+                unit_price_override=unit_price_override,
+                prompt_edited=prompt_edited, status_text=status_text,
+                source_video=source_video, video_operation=video_operation,
+                source_scene_id=source_scene_id,
+            )
+    except RateLimited:
+        return
+
+
+async def _do_video_generate_and_send(
     message: types.Message,
     prompt: str,
     *,
@@ -4954,6 +5503,15 @@ async def _video_generate_and_send(
     model_key = meta["key"]
     single_price = unit_price_override if unit_price_override is not None else video_price(model_id, 1, vmode)
     total_price = single_price * vcount
+
+    # Аккаунт пула: правки/продления держим на аккаунте исходного ролика
+    # (media живёт только там), свежие генерации — на sticky-аккаунте юзера.
+    acc_id = (source_video.account_id if source_video and source_video.account_id
+              else _account_for(user_id))
+    if acc_id is None:
+        # Весь пул в кулдауне/отключён — отказ ДО списания кредитов.
+        await message.answer(flow_copy.msg("accounts_unavailable"))
+        return
 
     _vid_started = time.monotonic()
     metrics.log_event("video_requested", user_id=user_id, username=_username(message),
@@ -5006,7 +5564,7 @@ async def _video_generate_and_send(
         metrics.log_event("credits_refunded", user_id=user_id, source=vmode,
                           payload={"amount": refund_amt})
         metrics.log_flow_job(
-            user_id=user_id, account_id=FLOW_ACCOUNT_ID,
+            user_id=user_id, account_id=acc_id,
             operation_type=f"video_{vmode}", model=model_id,
             bot_credits_charged=0, refund_amount=refund_amt,
             duration_ms=_ms_since(_vid_started), status="fail", error_type="video_gen_failed",
@@ -5025,7 +5583,7 @@ async def _video_generate_and_send(
         from aiogram.types import BufferedInputFile
 
         for i in range(vcount):
-            result = await client.generate_video(
+            result = await _client_for_acc(acc_id).generate_video(
                 prompt,
                 model_key=model_key,
                 aspect=aspect,
@@ -5037,6 +5595,7 @@ async def _video_generate_and_send(
                 source_media_id=source_video.media_id if source_video else None,
                 source_workflow_id=source_video.workflow_id if source_video else None,
                 source_scene_id=source_scene_id or (source_video.scene_id if source_video else None),
+                source_duration_s=source_video.duration_s if source_video else None,
                 progress_cb=update_status,
             )
 
@@ -5046,12 +5605,13 @@ async def _video_generate_and_send(
                     "🎬 gen failed: mode=%s model=%s aspect=%s err=%s",
                     vmode, model_id, aspect, str(result.get("error"))[:300],
                 )
+                account_pool.mark_failure(acc_id)
                 await _fail_retry(i)
                 return
 
             media_id = result["media_id"]
             await update_status("⬇️ Готовлю видео для отправки…")
-            video_bytes = await client.fetch_video_bytes(media_id)
+            video_bytes = await _client_for_acc(acc_id).fetch_video_bytes(media_id)
 
             if not video_bytes:
                 await _fail_retry(i)
@@ -5073,8 +5633,18 @@ async def _video_generate_and_send(
                 # Each extend deepens the chain; drives the progressive extend price.
                 extend_index=(source_video.extend_index + 1)
                 if (video_operation == "extend" and source_video) else 0,
+                # Правка не меняет длину клипа; свежая генерация = длина модели.
+                # Нужна для endFrameIndex последующих правок (кадры за концом
+                # клипа роняют edit-джобу).
+                duration_s=(
+                    source_video.duration_s if video_operation == "edit" and source_video
+                    else float(meta["duration"]) if video_operation == "generate"
+                    else None
+                ),
+                account_id=acc_id,
             )
             vtoken = video_registry.add(vref)
+            account_pool.mark_success(acc_id)
 
             caption = flow_copy.msg("vid_result_caption", i=i + 1, n=vcount, prompt=prompt[:60])
             if meta.get("family") == "omni-flash":
@@ -5118,7 +5688,7 @@ async def _video_generate_and_send(
             metrics.log_event("credits_charged", user_id=user_id, source=vmode,
                               payload={"amount": charged, "action": f"video_{vmode}"})
             metrics.log_flow_job(
-                user_id=user_id, account_id=FLOW_ACCOUNT_ID,
+                user_id=user_id, account_id=acc_id,
                 operation_type=f"video_{vmode}", model=model_id,
                 bot_credits_charged=charged,
                 refund_amount=single_price * refunded_units,
@@ -5140,8 +5710,9 @@ async def _video_generate_and_send(
             credit_store.refund(user_id, remaining)
         metrics.log_event("video_failed", user_id=user_id, source=vmode,
                           payload={"model": model_id, "reason": "exception"})
+        account_pool.mark_failure(acc_id)
         metrics.log_flow_job(
-            user_id=user_id, account_id=FLOW_ACCOUNT_ID,
+            user_id=user_id, account_id=acc_id,
             operation_type=f"video_{vmode}", model=model_id, bot_credits_charged=0,
             refund_amount=total_price, duration_ms=_ms_since(_vid_started),
             status="error", error_type="exception",
@@ -5198,7 +5769,7 @@ async def _video_segment_download(
 
     await callback.answer()
     status_msg = await callback.message.answer(flow_copy.msg("preparing_file"))
-    video_bytes = await client.fetch_video_bytes(ref.media_id)
+    video_bytes = await _client_for_acc(ref.account_id).fetch_video_bytes(ref.media_id)
 
     if not video_bytes:
         await status_msg.edit_text("❌ Не удалось скачать фрагмент. Попробуйте позже.")
@@ -5305,7 +5876,7 @@ async def _video_extend_and_send(
         return
 
     status_msg = await message.answer(flow_copy.msg("vid_working"))
-    scene_id = ref.scene_id or await client.prepare_video_extend_scene(
+    scene_id = ref.scene_id or await _client_for_acc(ref.account_id).prepare_video_extend_scene(
         project_id=ref.project_id,
         workflow_id=ref.workflow_id,
     )
@@ -5385,7 +5956,16 @@ async def _start_topup(callback: types.CallbackQuery, user_id: int, pack_id: str
 
 @dp.pre_checkout_query()
 async def on_pre_checkout(query: types.PreCheckoutQuery):
-    await query.answer(ok=True)
+    """Последний рубеж перед списанием звёзд: подтверждаем только наш payload."""
+    payload = query.invoice_payload or ""
+    parts = payload.split(":")
+    ok = len(parts) >= 2 and parts[0] == "credits" and credit_pack(parts[1]) is not None
+    if not ok:
+        log.warning("pre_checkout отклонён: payload=%r", payload[:64])
+    await query.answer(
+        ok=ok,
+        error_message=None if ok else "Пакет не найден — обновите меню и попробуйте снова.",
+    )
 
 
 @dp.message(F.successful_payment)
@@ -5400,30 +5980,41 @@ async def on_successful_payment(message: types.Message):
         log.warning(f"Unknown payment payload: {payload}")
         await message.answer("Платёж получен, но пакет не распознан. Напишите в поддержку.")
         return
-    new_balance = credit_store.add(user_id, p["credits"])
-    # Запоминаем платёж (charge_id) — нужен для возврата звёзд через /refund.
     charge_id = getattr(sp, "telegram_payment_charge_id", "") or ""
     stars_paid = getattr(sp, "total_amount", p["stars"])
+    # Идемпотентность ДО зачисления: Telegram может редоставить successful_payment
+    # (бот упал до подтверждения offset и т.п.) — кредиты нельзя зачислять дважды.
+    # Fallback-ключ включает message_id: редоставка того же апдейта дедупится,
+    # а честная вторая покупка того же пака приходит новым сообщением.
+    provider_payment_id = charge_id or f"nocharge:{user_id}:{pack_id}:{message.message_id}"
+    tx_status = metrics.record_transaction_status(
+        provider="telegram_stars",
+        provider_payment_id=provider_payment_id,
+        user_id=user_id, package_id=pack_id,
+        amount_rub=round(stars_paid * STARS_TO_RUB, 2), stars_amount=stars_paid,
+        credits_issued=p["credits"], status="paid",
+    )
+    if tx_status == "duplicate":
+        log.warning("💳 Дубль доставки платежа проигнорирован: %s", provider_payment_id)
+        return
+    if tx_status == "error":
+        # Метрики недоступны — звёзды уже уплачены, кредиты всё равно отдаём,
+        # но громко логируем: дедуп-защита на этот платёж не сработала.
+        log.error("💳 metrics недоступны, зачисляю без дедуп-гарантии: %s", provider_payment_id)
+    new_balance = credit_store.add(user_id, p["credits"])
+    # Запоминаем платёж (charge_id) — нужен для возврата звёзд через /refund.
     if charge_id:
         try:
             payment_store.add(user_id, charge_id, stars_paid, p["credits"], pack_id)
         except Exception:
             log.exception("payment_store.add failed")
-    # Метрики: идемпотентная запись транзакции (charge_id уникален) + событие.
-    metrics.record_transaction(
-        provider="telegram_stars",
-        provider_payment_id=charge_id or f"nocharge:{user_id}:{pack_id}",
-        user_id=user_id, package_id=pack_id,
-        amount_rub=round(stars_paid * STARS_TO_RUB, 2), stars_amount=stars_paid,
-        credits_issued=p["credits"], status="paid",
-    )
     metrics.log_event("payment_success", user_id=user_id, username=_username(message),
                       source="stars",
                       payload={"pack": pack_id, "stars": stars_paid, "credits": p["credits"]})
     # Реферальная награда пригласившему (идемпотентно; не ломает оплату).
     _maybe_apply_referral_rewards(
         user_id, stars_paid=stars_paid, credits_issued=p["credits"],
-        pack_id=pack_id, provider_payment_id=charge_id or f"nocharge:{user_id}:{pack_id}",
+        pack_id=pack_id, provider_payment_id=provider_payment_id,
     )
     log.info(f"💳 Оплата: +{p['credits']} кр пользователю {user_id} (баланс {new_balance})")
     await message.answer(
@@ -5511,7 +6102,7 @@ async def _upload_photo_source_from_message(
 
     project_id = await ensure_user_project(user_id)
     try:
-        source = await keeper.upload_image(data, filename=f"tg_{user_id}.png")
+        source = await _keeper_for(user_id).upload_image(data, filename=f"tg_{user_id}.png")
     except Exception:
         log.exception("upload_image failed")
         source = None
@@ -5683,8 +6274,9 @@ async def handle_photo(message: types.Message):
         return
 
     project_id = await ensure_user_project(user_id)
+    acc_id = _account_for(user_id)
     try:
-        source = await keeper.upload_image(data, filename=f"tg_{user_id}.png")
+        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png")
     except Exception:
         log.exception("upload_image failed")
         source = None
@@ -5700,6 +6292,7 @@ async def handle_photo(message: types.Message):
     ref = ImageRef(
         user_id=user_id, project_id=upload_project, source=source,
         prompt=caption or "uploaded image", aspect_ratio="landscape",
+        account_id=acc_id,
     )
     await status_msg.delete()
 
@@ -5785,6 +6378,21 @@ async def handle_plain_text(message: types.Message):
         if message.photo:
             await message.answer(flow_copy.msg("vid_text_only_hint"))
             return
+        st["vawait"] = None
+        await _video_generate_and_send(message, text, user_id=user_id)
+        return
+
+    # «Оживить фото» / видео-из-фото: фото(и) уже выбраны (через кнопку или
+    # загрузку) — промпт из чата запускает генерацию сразу, как «Готово» + промпт.
+    # Кнопка «Готово» остаётся опциональной. Проверяем ДО image-фолбэка, иначе
+    # залипший image-визард перехватил бы текст и сгенерил картинки.
+    if st.get("vmode") == "ingredients" and (st.get("ving_photos") or []):
+        st["vawait"] = None
+        await _video_generate_and_send(message, text, user_id=user_id)
+        return
+
+    # Видео по двум кадрам: оба кадра загружены — промпт из чата запускает генерацию.
+    if st.get("vmode") == "frames" and st.get("vfrm_start") and st.get("vfrm_end"):
         st["vawait"] = None
         await _video_generate_and_send(message, text, user_id=user_id)
         return
@@ -5902,8 +6510,21 @@ async def main():
     except Exception:
         log.warning("Не удалось установить меню команд")
 
-    # Сначала запускаем браузер, потом бота
-    await keeper.start()
+    # Сначала запускаем браузеры всех аккаунтов пула, потом бота. Упавший на
+    # старте аккаунт отключается в пуле (роутинг его обойдёт); встаём только
+    # если не поднялся ни один.
+    started_any = False
+    for acc_id, kp in keepers.items():
+        try:
+            log.info("🌐 Запускаю аккаунт пула: %s", acc_id)
+            await kp.start()
+            started_any = True
+        except Exception:
+            log.exception("❌ Аккаунт %s не стартовал — отключаю в пуле", acc_id)
+            account_pool.set_disabled(acc_id, True)
+    if not started_any:
+        log.error("❌ Ни один аккаунт пула не запустился — выходим.")
+        return
 
     log.info("🤖 Бот запущен!")
     await dp.start_polling(bot)

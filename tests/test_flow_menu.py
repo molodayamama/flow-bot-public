@@ -25,7 +25,7 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.action_price("myphoto"), 10)
         self.assertEqual(flow_core.action_price("up2x"), 5)      # quick enhance
         self.assertEqual(flow_core.action_price("realup"), 5)    # true HD upscale
-        self.assertEqual(flow_core.action_price("video_prompt_edit"), 40)  # = its 40 G-credit cost
+        self.assertEqual(flow_core.action_price("video_prompt_edit"), 400)  # assumed 40 G-credit cost
         self.assertEqual(flow_core.action_price("dl_raw"), 0)    # free
         self.assertEqual(flow_core.action_price("unknown"), 0)
 
@@ -33,17 +33,17 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.UPSCALE_PRICE, flow_core.PRICE_PER_IMAGE // 2)
 
     def test_video_prices_are_bot_retail_prices(self) -> None:
-        self.assertEqual(flow_core.video_price("omni-flash-4s"), 20)
-        self.assertEqual(flow_core.video_price("omni-flash-6s"), 30)
-        self.assertEqual(flow_core.video_price("omni-flash-8s"), 35)
-        self.assertEqual(flow_core.video_price("omni-flash-10s"), 45)
-        self.assertEqual(flow_core.video_price("veo-lite"), 30)
-        self.assertEqual(flow_core.video_price("veo-fast"), 60)
-        self.assertEqual(flow_core.video_price("veo-quality"), 290)
+        self.assertEqual(flow_core.video_price("omni-flash-4s"), 100)
+        self.assertEqual(flow_core.video_price("omni-flash-6s"), 140)
+        self.assertEqual(flow_core.video_price("omni-flash-8s"), 170)
+        self.assertEqual(flow_core.video_price("omni-flash-10s"), 210)
+        self.assertEqual(flow_core.video_price("veo-lite"), 150)
+        self.assertEqual(flow_core.video_price("veo-fast"), 300)
+        self.assertEqual(flow_core.video_price("veo-quality"), 1200)
 
     def test_video_reference_mode_surcharges(self) -> None:
-        self.assertEqual(flow_core.video_price("veo-fast", mode="ingredients"), 70)
-        self.assertEqual(flow_core.video_price("veo-fast", mode="frames"), 80)
+        self.assertEqual(flow_core.video_price("veo-fast", mode="ingredients"), 350)
+        self.assertEqual(flow_core.video_price("veo-fast", mode="frames"), 380)
 
     def test_family_picker_min_prices(self) -> None:
         # Drives the "· от N⭐" hint on the video family buttons (no hardcoding).
@@ -52,7 +52,7 @@ class PricingTests(unittest.TestCase):
         veo = min(flow_core.video_price(m, 1, "text") for m, _ in flow_core.video_models_in_family("veo"))
         ing = min(flow_core.video_price(m, 1, "ingredients") for m in variants)
         frm = min(flow_core.video_price(m, 1, "frames") for m in variants)
-        self.assertEqual((omni, veo, ing, frm), (20, 30, 40, 50))
+        self.assertEqual((omni, veo, ing, frm), (100, 150, 200, 230))
 
     def test_referral_milestone_tiers(self) -> None:
         # Single highest applicable tier per first payment (no stacking).
@@ -69,9 +69,9 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.referral_ongoing_bonus(5), 0)  # floor < 1 → 0
 
     def test_extend_price_escalates_by_step(self) -> None:
-        base = flow_core.video_price("veo-lite", 1, "text")  # 30
-        step = flow_core.VIDEO_EXTEND_STEP                    # 5
-        # 1st extend = base+5, 2nd = base+10, … each one step dearer.
+        base = flow_core.video_price("veo-lite", 1, "text")  # 150
+        step = flow_core.VIDEO_EXTEND_STEP                    # 50
+        # 1st extend = base+50, 2nd = base+100, … each one step dearer.
         self.assertEqual(flow_core.video_extend_price("veo-lite", 1), base + step)
         self.assertEqual(flow_core.video_extend_price("veo-lite", 2), base + 2 * step)
         self.assertEqual(flow_core.video_extend_price("veo-lite", 3), base + 3 * step)
@@ -239,6 +239,32 @@ class PaymentStoreTests(unittest.TestCase):
             reloaded = flow_core.PaymentStore(path)
             self.assertEqual(reloaded.find_by_charge("chg_X")["credits"], 100)
 
+    def test_add_is_idempotent_on_charge_id(self) -> None:
+        # Редоставка апдейта несёт тот же charge_id — второй записи нет, иначе
+        # /refund мог бы вернуть звёзды по «двойнику» второй раз.
+        with tempfile.TemporaryDirectory() as tmp:
+            ps = flow_core.PaymentStore(Path(tmp) / "payments.json")
+            first = ps.add(7, "chg_DUP", 75, 100, "small")
+            again = ps.add(7, "chg_DUP", 75, 100, "small")
+            self.assertIs(first, again)
+            self.assertEqual(len(ps._records), 1)
+
+
+class ChannelSeedTests(unittest.TestCase):
+    def test_parses_and_lowercases_valid_slug(self) -> None:
+        self.assertEqual(flow_core.parse_channel_seed("seed_MyChannel"), "mychannel")
+        self.assertEqual(flow_core.parse_channel_seed("seed_my_channel-1"), "my_channel-1")
+
+    def test_rejects_wrong_prefix_or_garbage(self) -> None:
+        self.assertIsNone(flow_core.parse_channel_seed(""))
+        self.assertIsNone(flow_core.parse_channel_seed("ref_123"))
+        self.assertIsNone(flow_core.parse_channel_seed("seed_"))          # пустой слаг
+        self.assertIsNone(flow_core.parse_channel_seed("seed_bad slug"))  # пробел
+        self.assertIsNone(flow_core.parse_channel_seed("seed_" + "x" * 33))  # длинный
+
+    def test_prefix_constant(self) -> None:
+        self.assertEqual(flow_core.CHANNEL_PARAM_PREFIX, "seed_")
+
 
 class CopyTests(unittest.TestCase):
     def test_every_button_key_has_label(self) -> None:
@@ -376,7 +402,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # The real upscale uses the verified flow/upsampleImage contract (sync POST
         # returning base64 encodedImage), NOT a prompt-based image-to-image enhance.
         self.assertIn("async def upsample_image", self.source)
-        self.assertIn("result = await client.upsample_image", self.source)
+        self.assertIn("result = await _client_for_acc(ref.account_id).upsample_image", self.source)
         self.assertIn("build_upsample_payload", self.source)
         self.assertIn("parse_upsample_response", self.source)
         self.assertIn('b("realup", "realup")', self.source)
@@ -592,19 +618,60 @@ class BotMenuWiringTests(unittest.TestCase):
             '"payment_success"', '"wizard_started"', '"wizard_completed"',
         ):
             self.assertIn(ev, self.source, ev)
-        self.assertIn("metrics.record_transaction(", self.source)
+        # Идемпотентность ДО зачисления: дубль доставки successful_payment не
+        # зачисляет кредиты второй раз; сбой метрик-БД оплату не блокирует.
+        self.assertIn("metrics.record_transaction_status(", self.source)
+        start = self.source.index("async def on_successful_payment")
+        handler = self.source[start:start + 2600]
+        self.assertLess(
+            handler.index("metrics.record_transaction_status("),
+            handler.index("credit_store.add(user_id"),
+        )
+        self.assertIn('if tx_status == "duplicate":', handler)
+        self.assertIn('if tx_status == "error":', handler)
+        # Fallback-ключ дедупа различает редоставку и новую покупку (message_id).
+        self.assertIn("message.message_id", handler)
         self.assertIn("metrics.log_flow_job(", self.source)
 
     def test_admin_metrics_commands_registered(self) -> None:
         for cmd in (
             "admin_today", "admin_revenue", "admin_flow",
-            "admin_accounts", "admin_refs", "admin_errors",
+            "admin_accounts", "admin_refs", "admin_channels", "admin_errors",
         ):
             self.assertIn(f'Command("{cmd}")', self.source, cmd)
         # All admin-gated (read-only for users).
         self.assertIn("def _admin_only", self.source)
         self.assertIn("metrics.report_today()", self.source)
         self.assertIn("metrics.report_accounts()", self.source)
+
+    def test_channel_attribution_wired(self) -> None:
+        # /start seed_<канал> → first-touch атрибуция в metrics.acquisitions.
+        self.assertIn("CHANNEL_PARAM_PREFIX", self.source)
+        self.assertIn("parse_channel_seed(payload)", self.source)
+        self.assertIn("metrics.record_acquisition(", self.source)
+        self.assertIn('"acquired_from_channel"', self.source)
+        # Атрибуция стоит внутри cmd_start (рядом с рефералкой), не где попало.
+        start = self.source.index("async def cmd_start")
+        block = self.source[start:start + 1400]
+        self.assertIn("channel = parse_channel_seed(payload)", block)
+        self.assertIn("metrics.record_acquisition(user_id=user_id, channel=channel)", block)
+        # Админ-отчёт по каналам читает report_channels и умеет выдавать ссылку.
+        self.assertIn("metrics.report_channels()", self.source)
+        self.assertIn("?start={CHANNEL_PARAM_PREFIX}{slug}", self.source)
+
+    def test_admin_help_is_owner_gated(self) -> None:
+        # /admin_help — справочник команд, доступен ТОЛЬКО владельцам (OWNER_ID).
+        self.assertIn('Command("admin_help")', self.source)
+        self.assertIn("def _owner_only", self.source)
+        self.assertIn("message.from_user.id in OWNER_IDS", self.source)
+        start = self.source.index("async def cmd_admin_help")
+        block = self.source[start:start + 400]
+        self.assertIn("if not _owner_only(message):", block)
+        self.assertNotIn("_admin_only(message)", block)  # не путать админ/владелец
+        # Справочник перечисляет и пользовательские, и админские команды.
+        self.assertIn("_HELP_SECTIONS", self.source)
+        for cmd in ("/grant", "/refund", "/admin_channels", "/img", "/admin_help"):
+            self.assertIn(cmd, self.source, cmd)
 
     def test_referral_wired(self) -> None:
         # Deep-link join, payment reward, menu entry, invite buttons, clawback.
@@ -619,6 +686,35 @@ class BotMenuWiringTests(unittest.TestCase):
         # Reward must be applied only after a recorded (idempotent) payment.
         self.assertIn("referral_milestone_bonus(", self.source)
         self.assertIn("referral_ongoing_bonus(", self.source)
+        # Milestone выдаётся через атомарный клейм joined→rewarded (без TOCTOU):
+        # начисление кредитов реферу — только при выигранном UPDATE.
+        self.assertIn("metrics.grant_milestone_if_joined(", self.source)
+        start = self.source.index("def _maybe_apply_referral_rewards")
+        block = self.source[start:start + 2200]
+        self.assertLess(
+            block.index("metrics.grant_milestone_if_joined("),
+            block.index("credit_store.add(referrer_id, bonus)"),
+        )
+
+    def test_video_generation_holds_user_slot(self) -> None:
+        # Видео — через тот же per-user замок, что и картинки: иначе гонка
+        # «проверь баланс — потом спиши» между параллельными видео и картинкой.
+        start = self.source.index("async def _video_generate_and_send")
+        end = self.source.index("async def _do_video_generate_and_send", start)
+        wrapper = self.source[start:end]
+        self.assertIn("async with user_slot(user_id, message):", wrapper)
+        self.assertIn("await _do_video_generate_and_send(", wrapper)
+        self.assertIn("except RateLimited:", wrapper)
+
+    def test_pre_checkout_validates_payload(self) -> None:
+        # Последний рубеж перед списанием звёзд: чужой/битый payload не одобряем.
+        start = self.source.index("async def on_pre_checkout")
+        block = self.source[start:start + 700]
+        self.assertIn("invoice_payload", block)
+        self.assertIn('parts[0] == "credits"', block)
+        self.assertIn("credit_pack(parts[1]) is not None", block)
+        self.assertIn("ok=ok", block)
+        self.assertNotIn("answer(ok=True)", block)
 
     def test_animate_image_to_video_wired(self) -> None:
         # "Оживить фото" button under images + main-menu entry → r2v pipeline.
@@ -635,6 +731,31 @@ class BotMenuWiringTests(unittest.TestCase):
             self.source.index('startswith("an:")'),
             self.source.index("async def on_image_action"),
         )
+
+    def test_ingredients_chat_prompt_starts_video(self) -> None:
+        # «Оживить фото»: фото уже выбрано → текст из чата запускает ВИДЕО, а не
+        # картинки. Ветки (ingredients/frames) стоят ДО image-фолбэка.
+        start = self.source.index("async def handle_plain_text")
+        ing_branch = self.source.index(
+            'if st.get("vmode") == "ingredients" and (st.get("ving_photos") or []):', start
+        )
+        frm_branch = self.source.index(
+            'if st.get("vmode") == "frames" and st.get("vfrm_start") and st.get("vfrm_end"):',
+            start,
+        )
+        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        awaiting_image_prompt = self.source.index('awaiting = st.get("await")', start)
+        wizard_image = self.source.index('if st.get("step") == "wizard":', start)
+        for branch in (ing_branch, frm_branch):
+            self.assertLess(branch, awaiting_image_prompt)
+            self.assertLess(branch, wizard_image)
+            self.assertLess(branch, image_fallback)
+        block = self.source[ing_branch:frm_branch + 260]
+        self.assertIn("_video_generate_and_send(message, text, user_id=user_id)", block)
+        # Вход в «Оживить фото» чистит залипший image-визард (await/step), иначе он
+        # перехватил бы промпт. Помощник зовётся из m:animate и an:img.
+        self.assertIn("def _clear_image_flow_keys", self.source)
+        self.assertEqual(self.source.count("_clear_image_flow_keys(st)"), 2)
 
     def test_ideas_hub_wired(self) -> None:
         # Menu entry + hub root + both branches (templates Q&A, guided picker).
@@ -658,7 +779,7 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_prompts_lib_templates_complete(self) -> None:
         import prompts_lib
-        self.assertEqual(len(prompts_lib.template_ids()), 7)
+        self.assertEqual(len(prompts_lib.template_ids()), 9)
         # Composing never leaks placeholders or header-comment lines.
         p = prompts_lib.compose_template_prompt(
             "product_card",
@@ -669,16 +790,57 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertEqual(prompts_lib.compose_template_prompt("nope", {}), "")
 
     def test_video_upload_edit_wired(self) -> None:
-        # Entry in the video family + upload handler + edit (no Extend on uploads).
+        # Загрузка/правка СВОЕГО видео временно отключена флагом: сервис отдаёт
+        # «Oops…» / недогруз. Реализация сохранена целиком, но спрятана за
+        # UPLOAD_VIDEO_EDIT_ENABLED (вернуть фичу = поставить True).
+        self.assertIn("UPLOAD_VIDEO_EDIT_ENABLED = False", self.source)
+        self.assertIn("if UPLOAD_VIDEO_EDIT_ENABLED else []", self.source)   # кнопка в семействе
+        self.assertIn("if not UPLOAD_VIDEO_EDIT_ENABLED:", self.source)      # колбэк vu:start
+        self.assertIn("vid_upload_disabled", flow_copy.MESSAGES)
+        # handle_video_upload игнорирует видео, пока фича выключена.
+        self.assertIn(
+            "if not UPLOAD_VIDEO_EDIT_ENABLED or st.get(\"vawait\") != \"vu_video\":",
+            self.source,
+        )
+        # Реализация (на случай возврата фичи) на месте: колбэк + хендлер + правка.
         self.assertIn('"vu:start"', self.source)
         self.assertIn('@dp.callback_query(F.data.startswith("vu:"))', self.source)
         self.assertIn("@dp.message(F.video | F.document)", self.source)
-        self.assertIn("keeper.upload_video(", self.source)
+        self.assertIn("_keeper_for(user_id).upload_video(", self.source)
         self.assertIn("async def _video_edit_uploaded", self.source)
+        # The upload proxy contract (from the Flow web-app bundle): the PUT must
+        # carry the resumable session URL + chunk headers, else it 400s.
+        self.assertIn("'X-Upload-Session-Url': sessionUrl", self.source)
+        self.assertIn("'X-Upload-Offset': String(offset)", self.source)
+        self.assertIn("'upload, finalize'", self.source)
+        self.assertIn("'X-Upload-Content-Length': String(bytes.length)", self.source)
+        # No image-file-input fallback for video: that input only accepts images
+        # and pops "Unsupported image format" in the service UI.
+        upload_video_block = self.source[
+            self.source.index("async def upload_video"):
+            self.source.index("async def _page_media_ids")
+        ]
+        self.assertNotIn("upload_image(", upload_video_block)
         # Uploaded-video edit is marked prompt_edited=True → extend stays blocked.
-        block = self.source[self.source.index("async def _video_edit_uploaded"):][:1300]
+        block = self.source[
+            self.source.index("async def _video_edit_uploaded"):
+            self.source.index("async def on_edit_settings")
+        ]
         self.assertIn("prompt_edited=True", block)
         self.assertIn('video_operation="edit"', block)
+        # Orientation comes from the uploaded clip's real dimensions.
+        self.assertIn("_VID_FMT_TO_ASPECT[fmt]", block)
+        # The upload handler waits for server-side transcode before allowing the
+        # edit (otherwise the edit job FAILs), and a caption sent together with
+        # the video starts the edit immediately instead of re-asking.
+        upload_handler = self.source[
+            self.source.index("async def handle_video_upload"):
+            self.source.index("async def _video_edit_uploaded")
+        ]
+        self.assertIn("_client_for(user_id).wait_video_ready(", upload_handler)
+        self.assertIn("message.caption", upload_handler)
+        self.assertIn("_video_edit_uploaded(message, caption, user_id=user_id)", upload_handler)
+        self.assertIn("async def wait_video_ready", self.source)
 
     def test_video_prompt_edit_clears_reference_mode_inputs(self) -> None:
         self.assertIn("def _vid_clear_reference_inputs", self.source)
@@ -694,7 +856,7 @@ class BotMenuWiringTests(unittest.TestCase):
         start = self.source.index("async def _video_extend_and_send")
         end = self.source.index("async def _video_repeat_last")
         block = self.source[start:end]
-        self.assertIn("client.prepare_video_extend_scene", block)
+        self.assertIn("_client_for_acc(ref.account_id).prepare_video_extend_scene", block)
         self.assertIn("if not scene_id:", block)
         self.assertNotIn("ref.scene_id =", block)
         self.assertIn('st["vmode"] = "extend"', block)
@@ -709,7 +871,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # Default extend delivery = the service's server-side stitched full video.
         self.assertIn("async def _video_delivery_bytes", self.source)
         self.assertIn("async def fetch_full_extended_video", self.source)
-        self.assertIn("full_bytes = await client.fetch_full_extended_video", self.source)
+        self.assertIn("full_bytes = await _client_for_acc(ref.account_id).fetch_full_extended_video", self.source)
         self.assertIn('if ref.mode == "extend" and ref.scene_id and ref.project_id', self.source)
         # The new fragment button downloads the extend result media_id itself.
         self.assertIn("async def _video_segment_download", self.source)
@@ -761,6 +923,17 @@ class CaptureVideoToolTests(unittest.TestCase):
         self.assertIn("sourceVideo", self.source)
         self.assertIn("body_l = body_str.lower()", self.source)
 
+    def test_upload_edit_capture_mode_available(self) -> None:
+        # Editing a USER-uploaded video is the bot's failing flow; the tool needs a
+        # dedicated mode that also records the upload (which may hit a different host).
+        self.assertIn('"--upload-edit"', self.source)
+        self.assertIn('Path("tools/video_upload_edit_capture.json")', self.source)
+        self.assertIn("upload-edit", self.source)
+        # Upload of a user video can go to a non-API host (resumable/signed URL):
+        # the route handler must record upload-like traffic on any host.
+        self.assertIn("upload_like", self.source)
+        self.assertIn('"upload" in url.lower()', self.source)
+
 
 class BotImportSmokeTests(unittest.TestCase):
     """Import flow_bot with aiogram installed to catch handler/registration errors.
@@ -802,6 +975,30 @@ class BotImportSmokeTests(unittest.TestCase):
             # Family buttons show a min-price hint.
             fam_first = fb.video_family_kb().inline_keyboard[0][0].text
             self.assertIn("⭐", fam_first)
+            # "Изменить своё видео" (upload→edit) временно отключено флагом:
+            # пока UPLOAD_VIDEO_EDIT_ENABLED=False, кнопки vu:start в семействе нет.
+            self.assertFalse(fb.UPLOAD_VIDEO_EDIT_ENABLED)
+            fam_rows = fb.video_family_kb().inline_keyboard
+            self.assertFalse(
+                any((b.callback_data or "") == "vu:start" for row in fam_rows for b in row)
+            )
+            # Возврат флага возвращает кнопку (с ценой) — проводка сохранена, лишь скрыта.
+            fb.UPLOAD_VIDEO_EDIT_ENABLED = True
+            try:
+                rows_on = fb.video_family_kb().inline_keyboard
+                upload_btn = next(
+                    b for row in rows_on for b in row if (b.callback_data or "") == "vu:start"
+                )
+                self.assertIn("⭐", upload_btn.text)
+            finally:
+                fb.UPLOAD_VIDEO_EDIT_ENABLED = False
+            # "Оживить фото" under a generated image (an:img:) now carries a price too.
+            img_rows = fb._image_keyboard("abcd1234").inline_keyboard
+            animate_btn = next(
+                b for row in img_rows for b in row
+                if (b.callback_data or "").startswith("an:img:")
+            )
+            self.assertIn("⭐", animate_btn.text)
             # Extend gating: ANY veo-family source (lite/fast/quality) is
             # extendable — the extension itself runs on veo-lite. Omni is not.
             VR = fb.VideoRef

@@ -21,4 +21,5 @@ class FlowBotRecoveryStaticTests(unittest.TestCase):
         source = (PROJECT_ROOT / "flow_bot.py").read_text(encoding="utf-8")
 
         self.assertIn('log.exception("Generation failed")', source)
-        self.assertIn("result = await client.generate_images", source)
+        # Генерация роутится по аккаунту пула (multi-account).
+        self.assertIn("result = await _client_for_acc(acc_id).generate_images", source)

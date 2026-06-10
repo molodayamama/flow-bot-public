@@ -1,0 +1,25 @@
+# purpose: Marketplace product card on pure white background for WB/Ozon sellers.
+# inputs:
+#   {product}  = product name / product description
+#   {platform} = target marketplace
+#   {angle}    = product angle
+#   {detail}   = identity/details to preserve, optional
+# outputs: a detailed English image-edit/generation prompt for a clean white-background product card.
+#
+# example_dialog_1:
+#   product: женские кроссовки белые
+#   platform: Wildberries
+#   angle: 3/4
+#   detail: форму подошвы и логотип
+#   result: Marketplace white-background product card for женские кроссовки белые,
+#           optimized for Wildberries, three-quarter view, preserve and emphasize:
+#           форму подошвы и логотип, pure white seamless #FFFFFF background.
+#
+# example_dialog_2:
+#   product: банка кофе
+#   platform: Ozon
+#   angle: Фронтально
+#   detail: (skipped)
+#   result: Marketplace white-background product card for банка кофе, optimized for
+#           Ozon, front-facing view, pure white seamless #FFFFFF background.
+Marketplace white-background product card for {product}, {platform}, {angle}, {detail}, pure white seamless #FFFFFF background, clean e-commerce catalog lighting, centered product, crisp cutout edges, natural proportions, realistic shadow under the product, sharp focus, no extra props, no hands, no decorative background, no text overlay except existing packaging text, photorealistic, high detail.

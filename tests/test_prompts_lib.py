@@ -18,6 +18,8 @@ import prompts_lib  # noqa: E402
 
 
 EXPECTED_IDS = [
+    "pet_photo_animation",
+    "marketplace_white_bg",
     "product_card",
     "ad_banner",
     "ugc_creative",
@@ -31,7 +33,7 @@ EXPECTED_IDS = [
 class TemplateCatalogTests(unittest.TestCase):
     def test_template_ids_order_and_count(self) -> None:
         self.assertEqual(prompts_lib.template_ids(), EXPECTED_IDS)
-        self.assertEqual(len(prompts_lib.template_ids()), 7)
+        self.assertEqual(len(prompts_lib.template_ids()), 9)
 
     def test_get_template_shape(self) -> None:
         for tid in EXPECTED_IDS:
@@ -161,6 +163,40 @@ class TemplateCompositionTests(unittest.TestCase):
         )
         self.assertIsInstance(out, str)
         self.assertTrue(out)
+        self.assertNotIn("{", out)
+
+    def test_pet_photo_animation_prompt(self) -> None:
+        out = prompts_lib.compose_template_prompt(
+            "pet_photo_animation",
+            {
+                "pet": "рыжий кот",
+                "emotion": "cute",
+                "motion": "head_tilt",
+                "detail": "зелёные глаза и полоски на шерсти",
+            },
+        )
+        self.assertIn("Photo-to-video prompt", out)
+        self.assertIn("рыжий кот", out)
+        self.assertIn("slowly tilts the head", out)
+        self.assertIn("heartwarming cute emotion", out)
+        self.assertIn("зелёные глаза", out)
+        self.assertNotIn("{", out)
+
+    def test_marketplace_white_bg_prompt(self) -> None:
+        out = prompts_lib.compose_template_prompt(
+            "marketplace_white_bg",
+            {
+                "product": "женские кроссовки",
+                "platform": "wb",
+                "angle": "threequarter",
+                "detail": "форму подошвы и логотип",
+            },
+        )
+        self.assertIn("Marketplace white-background product card", out)
+        self.assertIn("женские кроссовки", out)
+        self.assertIn("Wildberries", out)
+        self.assertIn("three-quarter product view", out)
+        self.assertIn("#FFFFFF", out)
         self.assertNotIn("{", out)
 
     def test_all_templates_compose_without_braces(self) -> None:

@@ -87,6 +87,64 @@ def _text(key: str, text: str, optional: bool = False) -> dict[str, Any]:
 
 _TEMPLATES: list[dict[str, Any]] = [
     {
+        "id": "pet_photo_animation",
+        "title": "🐾 Оживи фото питомца",
+        "questions": [
+            _text("pet", "Кто на фото? Например: рыжий кот, корги, попугай."),
+            _choice(
+                "emotion",
+                "Какая эмоция нужна?",
+                [
+                    _opt("cute", "Милота"),
+                    _opt("playful", "Играет"),
+                    _opt("curious", "Любопытство"),
+                    _opt("surprised", "Удивление"),
+                    _opt("cozy", "Нежность"),
+                ],
+            ),
+            _choice(
+                "motion",
+                "Что должен сделать питомец?",
+                [
+                    _opt("head_tilt", "Наклонить голову"),
+                    _opt("look_camera", "Посмотреть в камеру"),
+                    _opt("tail_wag", "Вильнуть хвостом"),
+                    _opt("gentle_walk", "Сделать шаг"),
+                    _opt("paw_wave", "Поднять лапу"),
+                ],
+            ),
+            _text("detail", "Что важно не менять? (можно пропустить)", optional=True),
+        ],
+    },
+    {
+        "id": "marketplace_white_bg",
+        "title": "⚪ Товар на белый фон за 10 сек",
+        "questions": [
+            _text("product", "Что за товар? Опиши коротко."),
+            _choice(
+                "platform",
+                "Для какой площадки?",
+                [
+                    _opt("wb", "Wildberries"),
+                    _opt("ozon", "Ozon"),
+                    _opt("ym", "Яндекс Маркет"),
+                    _opt("universal", "Универсально"),
+                ],
+            ),
+            _choice(
+                "angle",
+                "Как показать товар?",
+                [
+                    _opt("front", "Фронтально"),
+                    _opt("threequarter", "3/4"),
+                    _opt("top", "Сверху"),
+                    _opt("packshot", "Packshot"),
+                ],
+            ),
+            _text("detail", "Что важно сохранить или подчеркнуть? (можно пропустить)", optional=True),
+        ],
+    },
+    {
         "id": "product_card",
         "title": "🛒 Карточка товара для маркетплейса",
         "questions": [
@@ -283,6 +341,34 @@ _GUIDED_STEPS: list[dict[str, Any]] = [
 # to avoid collisions (e.g. "background" vs "style" both having a "minimal").
 
 _CHOICE_PHRASES: dict[str, dict[str, str]] = {
+    # pet_photo_animation
+    "pet_photo_animation.emotion": {
+        "cute": "heartwarming cute emotion",
+        "playful": "playful joyful energy",
+        "curious": "curious attentive expression",
+        "surprised": "gentle funny surprise",
+        "cozy": "soft affectionate cozy mood",
+    },
+    "pet_photo_animation.motion": {
+        "head_tilt": "slowly tilts the head in a charming way",
+        "look_camera": "looks toward the camera with natural eye movement",
+        "tail_wag": "gently wags the tail with subtle body motion",
+        "gentle_walk": "takes one small natural step",
+        "paw_wave": "raises one paw slightly as if greeting",
+    },
+    # marketplace_white_bg
+    "marketplace_white_bg.platform": {
+        "wb": "optimized for a Wildberries marketplace product card",
+        "ozon": "optimized for an Ozon marketplace product card",
+        "ym": "optimized for a Yandex Market product card",
+        "universal": "optimized for a universal e-commerce catalog",
+    },
+    "marketplace_white_bg.angle": {
+        "front": "front-facing product view",
+        "threequarter": "three-quarter product view",
+        "top": "clean top-down product view",
+        "packshot": "classic packshot composition",
+    },
     # product_card.background
     "product_card.background": {
         "white": "pure white seamless background",
@@ -371,6 +457,8 @@ _CHOICE_PHRASES: dict[str, dict[str, str]] = {
 
 # Optional questions whose phrasing wraps the user's free text when present.
 _TEXT_WRAPPERS: dict[str, str] = {
+    "pet_photo_animation.detail": "preserve exactly: {v}",
+    "marketplace_white_bg.detail": "preserve and emphasize: {v}",
     "product_card.audience": "aimed at {v}",
     "ad_banner.text_on_image": 'with clear space for the headline text "{v}"',
     "tg_post_cover.text_on_image": 'with space for the title text "{v}"',

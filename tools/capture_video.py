@@ -10,6 +10,7 @@ Common usage:
     python tools/capture_video.py --frames
     python tools/capture_video.py --ingredients
     python tools/capture_video.py --edit
+    python tools/capture_video.py --upload-edit
     python tools/capture_video.py --extend
     python tools/capture_video.py --no-abort --timeout 300
 
@@ -251,6 +252,8 @@ def capture_kind_from_args(args: argparse.Namespace) -> str:
         return "frames"
     if args.ingredients:
         return "ingredients"
+    if getattr(args, "upload_edit", False):
+        return "upload-edit"
     if args.edit:
         return "edit"
     if args.extend:
@@ -268,6 +271,8 @@ def default_output(args: argparse.Namespace) -> Path:
         return Path("tools/video_ingredients_capture.json")
     if kind == "edit":
         return Path("tools/video_edit_capture.json")
+    if kind == "upload-edit":
+        return Path("tools/video_upload_edit_capture.json")
     if kind == "extend":
         return Path("tools/video_extend_capture.json")
     if args.no_abort:
@@ -293,6 +298,7 @@ async def run(
     frames: bool,
     ingredients: bool = False,
     edit: bool = False,
+    upload_edit: bool = False,
     extend: bool = False,
 ) -> int:
     from playwright.async_api import async_playwright
@@ -333,7 +339,15 @@ async def run(
             method = req.method.upper()
             body_str = request_post_data_text(req)
 
-            if API_HOST not in url:
+            # Upload of a user video may go to a DIFFERENT host (resumable/signed
+            # upload URL), so also record upload-like traffic on any host — its
+            # response carries the mediaId/workflowId we need for video-edit.
+            upload_like = (
+                method in ("POST", "PUT", "PATCH")
+                and "upload" in url.lower()
+                and "batchlog" not in url.lower()
+            )
+            if API_HOST not in url and not upload_like:
                 await route.continue_()
                 return
 
@@ -458,6 +472,22 @@ async def run(
                 "  5. Default mode aborts the video-like POST before spending credits.\n"
                 "  Goal: capture the endpoint URL + how reference images are passed.\n"
             )
+        elif upload_edit:
+            instructions = (
+                "User-uploaded video Edit capture (THIS is the bot's failing flow):\n"
+                "  1. Open your Flow project.\n"
+                "  2. Upload your OWN video file from disk (not a generated one).\n"
+                "     -> Watch the console: the UPLOAD POST/PUT is logged here even if\n"
+                "        it goes to a different host (resumable/signed upload URL).\n"
+                "  3. Wait until Flow finishes ingesting the uploaded video.\n"
+                "  4. Use Flow's native Edit action on that uploaded video.\n"
+                "  5. Enter a short edit instruction and submit it.\n"
+                "  6. Default mode aborts the final video-like generate POST (no credits);\n"
+                "     the upload + its mediaId/workflowId response are still captured.\n"
+                "  Goal: capture (a) the upload endpoint + response (does it return a\n"
+                "        mediaId AND a workflowId?) and (b) how Edit references that\n"
+                "        uploaded source.\n"
+            )
         elif edit:
             instructions = (
                 "Native video Edit capture:\n"
@@ -531,7 +561,15 @@ async def run(
         "capture_kind": (
             "frames"
             if frames
-            else ("ingredients" if ingredients else ("edit" if edit else ("extend" if extend else "text-video")))
+            else (
+                "ingredients"
+                if ingredients
+                else (
+                    "upload-edit"
+                    if upload_edit
+                    else ("edit" if edit else ("extend" if extend else "text-video"))
+                )
+            )
         ),
         "captured_at": utc_now(),
         "generation_request": None,
@@ -579,6 +617,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Manual native video Edit capture; default output is tools/video_edit_capture.json.",
     )
     mode_group.add_argument(
+        "--upload-edit",
+        dest="upload_edit",
+        action="store_true",
+        help=(
+            "Upload your OWN video then Edit it; captures the upload endpoint + "
+            "mediaId/workflowId. Default output tools/video_upload_edit_capture.json."
+        ),
+    )
+    mode_group.add_argument(
         "--extend",
         action="store_true",
         help="Manual native video Extend capture; default output is tools/video_extend_capture.json.",
@@ -614,6 +661,7 @@ if __name__ == "__main__":
                 frames=parsed.frames,
                 ingredients=parsed.ingredients,
                 edit=parsed.edit,
+                upload_edit=parsed.upload_edit,
                 extend=parsed.extend,
             )
         )

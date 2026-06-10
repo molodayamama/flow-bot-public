@@ -126,3 +126,10 @@ metrics.db
 metrics.db-journal
 metrics.db-wal
 metrics.db-shm
+
+# Привязки user→account пула Flow-аккаунтов (runtime state)
+flow_accounts_state.json
+
+# Local agent/research artifacts
+.claude/agent-memory/
+Pablo/
