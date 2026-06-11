@@ -2905,7 +2905,7 @@ async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
 
 VID_DEFAULT_FMT = "land"
 VID_DEFAULT_COUNT = 1
-VID_REF_DEFAULT_MODEL = "veo-fast"
+VID_REF_DEFAULT_MODEL = "veo-lite"
 # Frames (старт/финиш-кадр) дефолтится на veo-lite: единственный interpolation-
 # ключ, подтверждённый живым захватом (veo_3_1_interpolation_lite). Остальные
 # tiers — догадка по паттерну, пока не подтверждены живым прогоном.

@@ -955,24 +955,24 @@ def video_aspect_code(aspect_ratio: str) -> str:
 # ``family`` groups the two-tier picker: choose family → choose variant.
 VIDEO_MODELS: "OrderedDict[str, dict]" = OrderedDict([
     # Omni Flash — fast/cheap, duration is the variant axis.
-    ("omni-flash-4s",  {"key": "abra_t2v_4s",  "family": "omni-flash", "duration": 4,  "price": 100,  "confirmed": True}),
-    ("omni-flash-6s",  {"key": "abra_t2v_6s",  "family": "omni-flash", "duration": 6,  "price": 140,  "confirmed": False}),
-    ("omni-flash-8s",  {"key": "abra_t2v_8s",  "family": "omni-flash", "duration": 8,  "price": 170,  "confirmed": False}),
-    ("omni-flash-10s", {"key": "abra_t2v_10s", "family": "omni-flash", "duration": 10, "price": 210,  "confirmed": False}),
+    ("omni-flash-4s",  {"key": "abra_t2v_4s",  "family": "omni-flash", "duration": 4,  "price": 50,   "confirmed": True}),
+    ("omni-flash-6s",  {"key": "abra_t2v_6s",  "family": "omni-flash", "duration": 6,  "price": 70,   "confirmed": False}),
+    ("omni-flash-8s",  {"key": "abra_t2v_8s",  "family": "omni-flash", "duration": 8,  "price": 85,   "confirmed": False}),
+    ("omni-flash-10s", {"key": "abra_t2v_10s", "family": "omni-flash", "duration": 10, "price": 100,  "confirmed": False}),
     # Veo 3.1 — quality tiers, fixed duration (8s observed for lite).
-    ("veo-lite",       {"key": "veo_3_1_t2v_lite",    "family": "veo", "duration": 8, "price": 150,  "confirmed": True}),
-    ("veo-fast",       {"key": "veo_3_1_t2v_fast",    "family": "veo", "duration": 8, "price": 300,  "confirmed": False}),
-    ("veo-quality",    {"key": "veo_3_1_t2v_quality", "family": "veo", "duration": 8, "price": 1200, "confirmed": False}),
+    ("veo-lite",       {"key": "veo_3_1_t2v_lite",    "family": "veo", "duration": 8, "price": 75,   "confirmed": True}),
+    ("veo-fast",       {"key": "veo_3_1_t2v_fast",    "family": "veo", "duration": 8, "price": 160,  "confirmed": False}),
+    ("veo-quality",    {"key": "veo_3_1_t2v_quality", "family": "veo", "duration": 8, "price": 600,  "confirmed": False}),
 ])
 
-VIDEO_INGREDIENTS_SURCHARGE = 50
-VIDEO_FRAMES_SURCHARGE = 80
-VIDEO_PROMPT_EDIT_PRICE = 400  # assumed 40 G-cr; keep at premium-video ratio
+VIDEO_INGREDIENTS_SURCHARGE = 15
+VIDEO_FRAMES_SURCHARGE = 25
+VIDEO_PROMPT_EDIT_PRICE = 250  # assumed 40 G-cr; includes reserve until verified
 
 # Each successive Extend in a chain costs this many MORE credits than the
 # previous one (on top of the base video price). Longer chains cost more to
 # stitch and burn more provider quota, so the escalation tracks real cost/risk.
-VIDEO_EXTEND_STEP = 50
+VIDEO_EXTEND_STEP = 20
 
 # Limits for "how many videos at once".
 MIN_NUM_VIDEOS = 1
@@ -1007,7 +1007,7 @@ def video_extend_price(model_id: str, extend_index: int) -> int:
     """Credits for the ``extend_index``-th Extend of a chain (1-based).
 
     Price = base video price + ``VIDEO_EXTEND_STEP`` × extend_index, so the
-    1st extend costs base+50, the 2nd base+100, the 3rd base+150, … Each extend is
+    1st extend costs base+20, the 2nd base+40, the 3rd base+60, … Each extend is
     exactly ``VIDEO_EXTEND_STEP`` credits dearer than the one before it.
     """
     base = video_price(model_id, 1, "text")

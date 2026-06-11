@@ -59,8 +59,8 @@ Endpoint:
 
 Defaults:
 
-- `VID_REF_DEFAULT_MODEL = "veo-fast"`
-- surcharge: `VIDEO_INGREDIENTS_SURCHARGE = 50`
+- `VID_REF_DEFAULT_MODEL = "veo-lite"`
+- surcharge: `VIDEO_INGREDIENTS_SURCHARGE = 15`
 
 Implementation note: only a subset of tier/orientation combinations has been
 live-confirmed. Unconfirmed model keys are pattern-inferred in `flow_core.py`
@@ -82,7 +82,7 @@ Endpoint:
 Defaults:
 
 - `VID_FRAMES_DEFAULT_MODEL = "veo-lite"`
-- surcharge: `VIDEO_FRAMES_SURCHARGE = 80`
+- surcharge: `VIDEO_FRAMES_SURCHARGE = 25`
 
 ### Prompt Edit
 
@@ -94,7 +94,7 @@ Endpoint:
 
 Price:
 
-- `VIDEO_PROMPT_EDIT_PRICE = 400`
+- `VIDEO_PROMPT_EDIT_PRICE = 250`
 
 ### Extend
 
@@ -111,7 +111,7 @@ Behavior:
 Formula:
 
 ```text
-video_extend_price(model, n) = video_price(model, 1, "text") + 50 * n
+video_extend_price(model, n) = video_price(model, 1, "text") + 20 * n
 ```
 
 ### Uploaded Video Edit
@@ -136,26 +136,30 @@ Current video grid:
 
 | Model | Bot credits |
 |---|---:|
-| Omni Flash 4s | 100 |
-| Omni Flash 6s | 140 |
-| Omni Flash 8s | 170 |
-| Omni Flash 10s | 210 |
-| Veo Lite | 150 |
-| Veo Fast | 300 |
-| Veo Quality | 1200 |
+| Omni Flash 4s | 50 |
+| Omni Flash 6s | 70 |
+| Omni Flash 8s | 85 |
+| Omni Flash 10s | 100 |
+| Veo Lite | 75 |
+| Veo Fast | 160 |
+| Veo Quality | 600 |
 
 Surcharges:
 
 | Mode | Extra bot credits |
 |---|---:|
-| Ingredients / reference-to-video | +50 |
-| Frames / start-end interpolation | +80 |
-| Prompt edit | 400 total |
-| Extend | base text-video price + 50 per chain step |
+| Ingredients / reference-to-video | +15 |
+| Frames / start-end interpolation | +25 |
+| Prompt edit | 250 total |
+| Extend | base text-video price + 20 per chain step |
 
-Rationale: one Flow account has about 1,000 Google Flow credits per month, which
-is only about 142 Omni Flash 4s videos. Video is a quota-limited premium product,
-not a cheap image-like action.
+Rationale: entry video must fit the first-purchase ladder while still protecting
+scarce Flow quota. If monthly Flow quota load factor stays above 70% for a full
+month, raise video prices by 25-50%.
+
+Current reference-to-video variants are Veo-only because the captured
+`video_reference_model_key(...)` contract builds `veo_3_1_r2v_*` keys. Do not
+offer Omni-priced reference videos until that endpoint/key is verified.
 
 ## UI Rules
 

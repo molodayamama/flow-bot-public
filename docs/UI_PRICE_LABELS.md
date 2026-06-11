@@ -16,22 +16,22 @@ Current core constants:
 | `UPSCALE_PRICE = 5` | prompt enhance / real upscale service action |
 | `STARTER_CREDITS = 30` | first-start balance, enough for 3 images |
 | `VIDEO_MODELS` | video model catalog and base bot-credit prices |
-| `VIDEO_INGREDIENTS_SURCHARGE = 50` | reference/ingredients video surcharge |
-| `VIDEO_FRAMES_SURCHARGE = 80` | start/end frame video surcharge |
-| `VIDEO_PROMPT_EDIT_PRICE = 400` | video prompt edit price |
-| `VIDEO_EXTEND_STEP = 50` | progressive extend increment |
+| `VIDEO_INGREDIENTS_SURCHARGE = 15` | reference/ingredients video surcharge |
+| `VIDEO_FRAMES_SURCHARGE = 25` | start/end frame video surcharge |
+| `VIDEO_PROMPT_EDIT_PRICE = 250` | video prompt edit price |
+| `VIDEO_EXTEND_STEP = 20` | progressive extend increment |
 
 Current video base prices:
 
 | Model | Bot credits |
 |---|---:|
-| Omni Flash 4s | 100 |
-| Omni Flash 6s | 140 |
-| Omni Flash 8s | 170 |
-| Omni Flash 10s | 210 |
-| Veo Lite | 150 |
-| Veo Fast | 300 |
-| Veo Quality | 1200 |
+| Omni Flash 4s | 50 |
+| Omni Flash 6s | 70 |
+| Omni Flash 8s | 85 |
+| Omni Flash 10s | 100 |
+| Veo Lite | 75 |
+| Veo Fast | 160 |
+| Veo Quality | 600 |
 
 ## Image UI
 

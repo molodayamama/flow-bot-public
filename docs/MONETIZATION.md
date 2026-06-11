@@ -14,7 +14,8 @@ one reviewed change.
 - Images are the low-friction entry product because current image operations do
   not consume Google Flow credits.
 - Videos are premium because a single Flow account has about 1,000 provider
-  credits/month, which is only about 142 Omni Flash 4s videos.
+  credits/month, while the current planning fleet of five accounts is still only
+  about 5,000 provider credits/month.
 - Telegram Stars introduce payout friction, so retail packs must be priced for
   conversion and quota protection, not just raw compute margin.
 
@@ -27,6 +28,7 @@ Current operating assumptions:
 | Google One activation | 240 RUB / 12 months |
 | Flow quota per account | 1,000 G-credits/month |
 | Flow quota per account/year | 12,000 G-credits |
+| Planning quota at 5 accounts | 5,000 G-credits/month |
 | Activation-only cost | about 0.02 RUB / G-credit |
 | First-year blended account/card cost | about 0.053 RUB / G-credit |
 | MVP account fleet | up to 5 accounts before real demand proves need |
@@ -66,26 +68,36 @@ Current video prices in `flow_core.VIDEO_MODELS`:
 
 | Model | Bot credits | Provider credits |
 |---|---:|---:|
-| Omni Flash 4s | 100 | 7 |
-| Omni Flash 6s | 140 | 10 |
-| Omni Flash 8s | 170 | 12 |
-| Omni Flash 10s | 210 | 15 |
-| Veo Lite | 150 | 10 |
-| Veo Fast | 300 | 20 |
-| Veo Quality | 1200 | 100 |
+| Omni Flash 4s | 50 | 7 |
+| Omni Flash 6s | 70 | 10 |
+| Omni Flash 8s | 85 | 12 |
+| Omni Flash 10s | 100 | 15 |
+| Veo Lite | 75 | 10 |
+| Veo Fast | 160 | 20 |
+| Veo Quality | 600 | 100 |
 
 Reference and edit surcharges:
 
 | Mode | Bot credits |
 |---|---:|
-| Ingredients / reference-to-video | base video price + 50 |
-| Frames / start-end interpolation | base video price + 80 |
-| Video prompt edit | 400 |
-| Extend step | base video price + 50 * chain depth |
+| Ingredients / reference-to-video | base video price + 15 |
+| Frames / start-end interpolation | base video price + 25 |
+| Video prompt edit | 250 |
+| Extend step | base video price + 20 * chain depth |
 
-The old cheap-video grid is retired. At 100 bot credits for Omni Flash 4s, one
-account's monthly 142-video quota costs users about 14,200 bot credits instead
-of being drained by a few low-priced users.
+The video grid is intentionally between two bad extremes:
+
+- the retired cheap grid underpriced scarce quota;
+- the previous premium grid protected quota but pushed entry video above the
+  first-purchase threshold.
+
+With blended net revenue near 0.65 RUB per bot credit, the current grid targets
+roughly 4.5-5 RUB net revenue per provider G-credit on mass video modes. Current
+reference-to-video is Veo-only, so pet animation starts at 90 credits (Veo Lite +
+reference surcharge) and fits the small pack. Do not advertise a 65-credit pet
+animation until an Omni Flash reference-to-video key is captured and enabled.
+Veo Quality stays a premium anchor at 600 credits because it burns about 2% of a
+5,000 G-credit monthly planning quota in one generation.
 
 ## Packs
 
@@ -118,8 +130,8 @@ Use video as a paid upgrade:
 ## Operational Guardrails
 
 - Do not give enough free starter credits for the cheapest video.
-- Do not discount videos until account routing, quotas, cooldowns, and refund
-  behavior have real metrics.
+- If monthly Flow quota load factor stays above 70% for a full month, raise
+  video prices by 25-50% before adding promotional discounts.
 - Track conversion separately for image users and video users.
 - Keep failed paid actions refundable.
 - Do not run live quota or generation experiments without explicit approval.
