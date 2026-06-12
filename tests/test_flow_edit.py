@@ -509,7 +509,7 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("async def handle_photo", self.source)
         # Загрузка идёт через keeper аккаунта юзера (multi-account роутинг).
         self.assertIn("_keeper_for_acc(acc_id).upload_image", self.source)
-        self.assertIn("_keeper_for(user_id).upload_image", self.source)
+        self.assertIn("_account_for_image(user_id, prefer_image_only=True)", self.source)
         self.assertIn("async def upload_image", self.source)
         self.assertIn("set_input_files", self.source)
         self.assertIn("media_source_from_response", self.source)

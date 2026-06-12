@@ -15,6 +15,11 @@ cookies.pkl
 *.session-journal
 chrome_profile/
 google_profile/
+google_profile_acc2/
+google_profile_acc3/
+google_profile_acc4/
+google_profile_acc5/
+google_profile_acc6/
 
 # Per-user Flow project map (runtime state)
 user_projects.json

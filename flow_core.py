@@ -1932,7 +1932,8 @@ class AccountPool:
         self._path = Path(store_path) if store_path else None
         self._assign: dict[str, str] = {}
         self._health: dict[str, dict] = {
-            a.id: {"fails": 0, "cooldown_until": 0.0, "disabled": False}
+            a.id: {"fails": 0, "cooldown_until": 0.0, "disabled": False,
+                   "video_allowed": True}
             for a in accounts
         }
         self._load()
@@ -1987,6 +1988,29 @@ class AccountPool:
             h["cooldown_until"] = 0.0
         return True
 
+    def set_video_allowed(self, account_id: str, allowed: bool) -> bool:
+        """Разрешить/запретить видео на аккаунте; True если id известен.
+
+        Персистируется в state-файле — переживает рестарт.
+        """
+        h = self._health.get(account_id)
+        if h is None:
+            return False
+        h["video_allowed"] = bool(allowed)
+        self._save()
+        return True
+
+    def is_video_capable(self, account_id: str) -> bool:
+        """True если аккаунт доступен (не в кулдауне/disabled) и может видео."""
+        if not self.is_available(account_id):
+            return False
+        h = self._health.get(account_id)
+        return bool(h and h.get("video_allowed", True))
+
+    def is_image_only(self, account_id: str) -> bool:
+        h = self._health.get(account_id)
+        return bool(h and not h.get("video_allowed", True))
+
     # ── роутинг ────────────────────────────────────────────────────────
 
     def assigned_to(self, user_id: int | str) -> str | None:
@@ -2021,6 +2045,56 @@ class AccountPool:
         self._save()
         return best
 
+    def pick_for_image(
+        self, user_id: int | str, *, prefer_image_only: bool = False
+    ) -> str | None:
+        """Pick an account for image work.
+
+        Normal image generation keeps the regular sticky route. Upload-based
+        image editing can prefer accounts marked ``video_allowed=False`` so paid
+        video-capable accounts keep more quota for video jobs.
+        """
+        if not prefer_image_only:
+            return self.pick_for(user_id)
+        key = str(user_id)
+        candidates = [
+            aid for aid in self._accounts
+            if self.is_available(aid) and self.is_image_only(aid)
+        ]
+        if not candidates:
+            return self.pick_for(user_id)
+        sticky = self._assign.get(key)
+        if sticky in candidates:
+            return sticky
+        loads: dict[str, int] = {aid: 0 for aid in self._accounts}
+        for assigned in self._assign.values():
+            if assigned in loads:
+                loads[assigned] += 1
+        best = min(candidates, key=lambda aid: loads[aid])
+        self._assign[key] = best
+        self._save()
+        return best
+
+    def pick_for_video(self, user_id: int | str) -> str | None:
+        """Аккаунт для видео-джобы — только среди video_capable.
+
+        Не изменяет sticky-привязку юзера (та остаётся для картинок).
+        Если sticky-аккаунт юзера может видео — используем его (consistency).
+        Иначе — наименее загруженный video-capable аккаунт без записи в assign.
+        """
+        key = str(user_id)
+        sticky = self._assign.get(key)
+        if sticky and self.is_video_capable(sticky):
+            return sticky
+        candidates = [aid for aid in self._accounts if self.is_video_capable(aid)]
+        if not candidates:
+            return None
+        loads: dict[str, int] = {aid: 0 for aid in self._accounts}
+        for assigned in self._assign.values():
+            if assigned in loads:
+                loads[assigned] += 1
+        return min(candidates, key=lambda aid: loads[aid])
+
     def status(self) -> list[dict]:
         """Срез состояния пула для админ-отчёта (без секретов)."""
         now = self._clock()
@@ -2034,6 +2108,7 @@ class AccountPool:
             out.append({
                 "id": aid,
                 "disabled": h["disabled"],
+                "video_allowed": h.get("video_allowed", True),
                 "cooldown_left": max(0, int(h["cooldown_until"] - now)),
                 "fails": h["fails"],
                 "users": loads[aid],
@@ -2058,12 +2133,27 @@ class AccountPool:
                     str(k): str(v) for k, v in assign.items()
                     if str(v) in self._accounts
                 }
+            # Восстанавливаем флаги video_allowed (персистируем только False-записи)
+            video_cfg = parsed.get("video_allowed", {})
+            if isinstance(video_cfg, dict):
+                for acc_id, allowed in video_cfg.items():
+                    h = self._health.get(str(acc_id))
+                    if h is not None:
+                        h["video_allowed"] = bool(allowed)
 
     def _save(self) -> None:
         if self._path is None:
             return
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"assignments": self._assign}
+        # Сохраняем только аккаунты у которых video_allowed=False (остальные — дефолт True)
+        video_cfg = {
+            aid: h["video_allowed"]
+            for aid, h in self._health.items()
+            if not h.get("video_allowed", True)
+        }
+        payload: dict = {"assignments": self._assign}
+        if video_cfg:
+            payload["video_allowed"] = video_cfg
         fd, tmp_name = tempfile.mkstemp(dir=str(self._path.parent), suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:

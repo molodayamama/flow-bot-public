@@ -78,6 +78,7 @@ LABELS = {
     "vid_edit": "✏️ Изменить",
     "vid_extend": "⏩ Продлить",
     "vid_retry": "🔄 Попробовать снова",
+    "img_retry": "🔄 Повторить запрос",
     # video: ingredients mode
     "vid_ing_done": "✅ Готово — ввести запрос",
     "vid_ing_done_ready": "✅ Готово — на генерацию",

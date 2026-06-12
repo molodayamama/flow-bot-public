@@ -100,6 +100,37 @@ class AccountPoolTests(unittest.TestCase):
         self.assertTrue(pool.is_available(a1))
         self.assertFalse(pool.set_disabled("nope", True))
 
+    def test_video_allowed_filters_video_picker(self) -> None:
+        pool = self._pool(3)
+        a1, a2, a3 = pool.account_ids()
+        self.assertTrue(pool.set_video_allowed(a1, False))
+        self.assertTrue(pool.set_video_allowed(a2, False))
+        self.assertFalse(pool.is_video_capable(a1))
+        self.assertFalse(pool.is_video_capable(a2))
+        self.assertEqual(pool.pick_for_video(7), a3)
+        self.assertFalse(pool.set_video_allowed("missing", False))
+
+    def test_image_picker_prefers_image_only_accounts(self) -> None:
+        pool = self._pool(3)
+        a1, a2, a3 = pool.account_ids()
+        pool.set_video_allowed(a2, False)
+        self.assertEqual(pool.pick_for_image(10, prefer_image_only=True), a2)
+        self.assertEqual(pool.assigned_to(10), a2)
+        self.assertEqual(pool.pick_for_video(10), a1)
+
+        pool.set_disabled(a2, True)
+        self.assertIn(pool.pick_for_image(11, prefer_image_only=True), {a1, a3})
+
+    def test_video_allowed_persists_false_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "accounts_state.json"
+            accs = [FlowAccount("a1", "./p1"), FlowAccount("a2", "./p2")]
+            pool = AccountPool(accs, path, clock=lambda: 0.0)
+            self.assertTrue(pool.set_video_allowed("a2", False))
+            reloaded = AccountPool(accs, path, clock=lambda: 0.0)
+            self.assertTrue(reloaded.is_video_capable("a1"))
+            self.assertFalse(reloaded.is_video_capable("a2"))
+
     def test_assignments_persist_and_drop_unknown_accounts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "accounts_state.json"
@@ -167,7 +198,7 @@ class BotPoolWiringTests(unittest.TestCase):
         # Image: роутинг по аккаунту + health-отметки.
         start = self.source.index("async def _do_generate_and_send")
         block = self.source[start:start + 2600]
-        self.assertIn("acc_id = _account_for(user_id)", block)
+        self.assertIn("acc_id = _account_for_image(user_id)", block)
         self.assertIn('flow_copy.msg("accounts_unavailable")', block)
         self.assertIn("account_pool.mark_failure(acc_id)", block)
         self.assertIn("account_pool.mark_success(acc_id)", block)
@@ -199,6 +230,24 @@ class BotPoolWiringTests(unittest.TestCase):
         # Метрики flow_jobs пишут фактический аккаунт джобы, не статичный ярлык.
         self.assertIn("account_id=acc_id", self.source)
         self.assertIn("account_pool.assigned_to(user_id) or FLOW_ACCOUNT_ID", self.source)
+
+    def test_image_upload_prefers_image_only_and_video_upload_uses_video_account(self) -> None:
+        self.assertIn("def _account_for_image", self.source)
+        photo_start = self.source.index("async def handle_photo")
+        photo_block = self.source[photo_start:photo_start + 5200]
+        self.assertIn("_account_for_image(user_id, prefer_image_only=True)", photo_block)
+        self.assertIn("ensure_user_project(user_id, account_id=acc_id)", photo_block)
+        self.assertIn("_keeper_for_acc(acc_id).upload_image", photo_block)
+
+        helper_start = self.source.index("async def _upload_photo_source_from_message")
+        helper_block = self.source[helper_start:helper_start + 1800]
+        self.assertIn("acc_id = _account_for_video(user_id)", helper_block)
+        self.assertIn('source.setdefault("_account_id", acc_id)', helper_block)
+
+        video_start = self.source.index("async def _do_video_generate_and_send")
+        video_block = self.source[video_start:video_start + 4200]
+        self.assertIn("ref_acc_id = _video_reference_account_id(st, vmode)", video_block)
+        self.assertIn("video_project_id = (", video_block)
 
 
 if __name__ == "__main__":

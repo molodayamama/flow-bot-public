@@ -2356,6 +2356,15 @@ def _account_for(user_id: int) -> str | None:
     return account_pool.pick_for(user_id)
 
 
+def _account_for_image(user_id: int, *, prefer_image_only: bool = False) -> str | None:
+    return account_pool.pick_for_image(user_id, prefer_image_only=prefer_image_only)
+
+
+def _account_for_video(user_id: int) -> str | None:
+    """Аккаунт для видео-джобы — только среди video_capable, None — нет доступных."""
+    return account_pool.pick_for_video(user_id)
+
+
 def _keeper_for_acc(account_id: str | None) -> SessionKeeper:
     return keepers.get(account_id or "", keeper)
 
@@ -2651,7 +2660,7 @@ def _project_key(account_id: str, user_id: int) -> str:
     return f"{account_id}:{user_id}"
 
 
-async def ensure_user_project(user_id: int) -> str | None:
+async def ensure_user_project(user_id: int, *, account_id: str | None = None) -> str | None:
     """Вернуть Flow-проект пользователя, создав его при первом обращении.
 
     Проект привязан к аккаунту пула (sticky): при failover на другой аккаунт
@@ -2665,7 +2674,7 @@ async def ensure_user_project(user_id: int) -> str | None:
     """
     global _project_creation_failures, _per_user_projects_enabled
 
-    acc_id = _account_for(user_id) or DEFAULT_ACCOUNT_ID
+    acc_id = account_id or _account_for(user_id) or DEFAULT_ACCOUNT_ID
     key = _project_key(acc_id, user_id)
     existing = project_store.get(key)
     if existing:
@@ -2730,6 +2739,14 @@ L = flow_copy.label
 
 def _menu_button(copy_key: str, data: str) -> types.InlineKeyboardButton:
     return types.InlineKeyboardButton(text=L(copy_key), callback_data=data)
+
+
+def _img_retry_kb() -> types.InlineKeyboardMarkup:
+    """Клавиатура под сообщением об ошибке картинки: повтор + меню."""
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [_menu_button("img_retry", "img:retry")],
+        [_menu_button("menu", "m:menu")],
+    ])
 
 
 def main_menu_kb(show_repeat: bool = False) -> types.InlineKeyboardMarkup:
@@ -3076,8 +3093,7 @@ def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
         edit_price = action_price("video_prompt_edit")
         rows.append([B(text=f"{L('vid_edit')} · {edit_price}⭐", callback_data=f"v:edit:{vtoken}")])
     if _video_can_extend(ref):
-        # Next extend in the chain — price escalates by VIDEO_EXTEND_STEP each time.
-        # Extension is always veo-lite, so price off veo-lite regardless of source.
+        # Extension is always priced as the configured extend action.
         next_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
         rows.append([B(text=f"{L('vid_extend')} · {next_price}⭐", callback_data=f"v:extend:{vtoken}")])
     if ref:
@@ -3665,8 +3681,9 @@ async def cmd_admin_accounts(message: types.Message):
         state = "⛔ выключен" if s["disabled"] else (
             f"🧊 кулдаун {s['cooldown_left']}с" if s["cooldown_left"] else "✅ активен"
         )
+        media_cap = "🎬+🖼" if s.get("video_allowed", True) else "🖼 only"
         pool_lines.append(
-            f"  • <b>{html.escape(s['id'])}</b>: {state} · 👥{s['users']} · сбоев {s['fails']}"
+            f"  • <b>{html.escape(s['id'])}</b>: {state} · {media_cap} · 👥{s['users']} · сбоев {s['fails']}"
         )
     text = "🧮 <b>Пул аккаунтов</b>\n" + "\n".join(pool_lines)
     accounts = metrics.report_accounts().get("accounts", [])
@@ -3715,6 +3732,49 @@ async def cmd_acc_on(message: types.Message):
         metrics.log_event("account_enabled", user_id=message.from_user.id,
                           payload={"account": acc_id})
         await message.answer(f"✅ Аккаунт {html.escape(acc_id)} включён.")
+    else:
+        await message.answer(
+            "Не нашёл такой аккаунт. Известные: " + ", ".join(account_pool.account_ids())
+        )
+
+
+@dp.message(Command("acc_vid_off"))
+async def cmd_acc_vid_off(message: types.Message):
+    """Запретить видео на аккаунте пула: /acc_vid_off <id> (admin)."""
+    if not _admin_only(message):
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    parts = (message.text or "").split()
+    acc_id = parts[1] if len(parts) > 1 else ""
+    if account_pool.set_video_allowed(acc_id, False):
+        metrics.log_event("account_video_disabled", user_id=message.from_user.id,
+                          payload={"account": acc_id})
+        await message.answer(
+            f"🖼 Аккаунт <b>{html.escape(acc_id)}</b>: только картинки. "
+            f"Видео-запросы пойдут на другой аккаунт.",
+            parse_mode="HTML",
+        )
+    else:
+        await message.answer(
+            "Не нашёл такой аккаунт. Известные: " + ", ".join(account_pool.account_ids())
+        )
+
+
+@dp.message(Command("acc_vid_on"))
+async def cmd_acc_vid_on(message: types.Message):
+    """Вернуть видео на аккаунт пула: /acc_vid_on <id> (admin)."""
+    if not _admin_only(message):
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    parts = (message.text or "").split()
+    acc_id = parts[1] if len(parts) > 1 else ""
+    if account_pool.set_video_allowed(acc_id, True):
+        metrics.log_event("account_video_enabled", user_id=message.from_user.id,
+                          payload={"account": acc_id})
+        await message.answer(
+            f"🎬 Аккаунт <b>{html.escape(acc_id)}</b>: видео снова разрешено.",
+            parse_mode="HTML",
+        )
     else:
         await message.answer(
             "Не нашёл такой аккаунт. Известные: " + ", ".join(account_pool.account_ids())
@@ -3833,6 +3893,8 @@ _HELP_SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         ("/admin_accounts", "состояние пула аккаунтов + задания за сегодня"),
         ("/acc_off &lt;id&gt;", "вручную отключить аккаунт пула"),
         ("/acc_on &lt;id&gt;", "вернуть аккаунт пула в работу"),
+        ("/acc_vid_off &lt;id&gt;", "только картинки на аккаунте (видео → другой акк)"),
+        ("/acc_vid_on &lt;id&gt;", "вернуть видео на аккаунт"),
         ("/admin_refs", "рефералы: приглашения/награды/топ"),
         ("/admin_channels [ярлык]", "каналы (атрибуция); с ярлыком — выдать ссылку"),
         ("/admin_errors", "ошибки бэкенда за 7 дней"),
@@ -3892,11 +3954,16 @@ async def _generate_and_send(
     _ws(user_id)["last"] = {
         "prompt": prompt, "count": num_images, "aspect": aspect_ratio, "imodel": image_model,
     }
+    # Снимок для кнопки «Повторить запрос» при ошибке (action нужен credit_gate).
+    _ws(user_id)["img_retry"] = {
+        "prompt": prompt, "num_images": num_images,
+        "aspect_ratio": aspect_ratio, "image_model": image_model, "action": action,
+    }
 
     # Весь пул аккаунтов недоступен — отказ ДО credit_gate (ничего не списываем,
     # без цикла «списали-вернули»). Внутри _do_generate_and_send есть та же
     # проверка (защита остальных входов), но здесь она до денег.
-    if _account_for(user_id) is None:
+    if _account_for_image(user_id) is None:
         await message.answer(flow_copy.msg("accounts_unavailable"))
         return
 
@@ -3967,12 +4034,12 @@ async def _do_generate_and_send(
 
     # Каждый Telegram-пользователь работает в своём проекте на сайте.
     await update_status("📂 Готовлю ваш проект...")
-    acc_id = _account_for(user_id)
+    acc_id = _account_for_image(user_id)
     if acc_id is None:
         # Весь пул аккаунтов в кулдауне/отключён — отказ ДО списания кредитов.
         await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
         return False
-    project_id = await ensure_user_project(user_id)
+    project_id = await ensure_user_project(user_id, account_id=acc_id)
 
     try:
         result = await _client_for_acc(acc_id).generate_images(
@@ -3986,21 +4053,30 @@ async def _do_generate_and_send(
     except Exception:
         log.exception("Generation failed")
         account_pool.mark_failure(acc_id)
-        await status_msg.edit_text(flow_copy.msg("gen_failed"))
+        await status_msg.edit_text(
+            flow_copy.msg("gen_failed"),
+            reply_markup=_img_retry_kb(),
+        )
         return False
 
     if "error" in result:
         account_pool.mark_failure(acc_id)
         # Тексты ошибок здесь — наша копия из flow_copy, но эскейпим на случай
         # сырого текста от бэкенда (защита разметки от инъекции).
-        await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
+        await status_msg.edit_text(
+            f"❌ {html.escape(str(result['error'])[:300])}",
+            reply_markup=_img_retry_kb(),
+        )
         return False
 
     pairs = result_pairs(result)
 
     if not pairs:
         log.warning(f"Пустой ответ: {str(result)[:500]}")
-        await status_msg.edit_text(flow_copy.msg("nothing_returned"))
+        await status_msg.edit_text(
+            flow_copy.msg("nothing_returned"),
+            reply_markup=_img_retry_kb(),
+        )
         return False
 
     account_pool.mark_success(acc_id)
@@ -4961,8 +5037,12 @@ async def handle_video_upload(message: types.Message):
         log.exception("download user video failed")
         await status.edit_text(flow_copy.msg("vid_upload_failed"))
         return
-    project_id = await ensure_user_project(user_id)
-    source = await _keeper_for(user_id).upload_video(
+    acc_id = _account_for_video(user_id)
+    if acc_id is None:
+        await status.edit_text(flow_copy.msg("accounts_unavailable"))
+        return
+    project_id = await ensure_user_project(user_id, account_id=acc_id)
+    source = await _keeper_for_acc(acc_id).upload_video(
         data,
         filename=f"tg_{user_id}.mp4",
         project_id=project_id,
@@ -4972,7 +5052,8 @@ async def handle_video_upload(message: types.Message):
         await status.edit_text(flow_copy.msg("vid_upload_failed"))
         return
     # Транскод на стороне сервиса: без ожидания SUCCESSFUL правка падает FAILED.
-    ready_item = await _client_for(user_id).wait_video_ready(
+    source.setdefault("_account_id", acc_id)
+    ready_item = await _client_for_acc(acc_id).wait_video_ready(
         source["mediaId"], source.get("_project_id") or project_id or ""
     )
     if ready_item is None:
@@ -5030,7 +5111,7 @@ async def _video_edit_uploaded(message: types.Message, prompt: str, *, user_id: 
         prompt_edited=True,  # навсегда блокирует Продлить у результата
         workflow_id=src.get("workflowId") or src.get("workflow_id"),
         duration_s=src.get("duration_s"),
-        account_id=_account_for(user_id),
+        account_id=src.get("_account_id") or _account_for_video(user_id),
     )
     st["vmode"] = "edit"
     st["vmodel"] = "omni-flash-4s"
@@ -5431,6 +5512,50 @@ async def _repeat_last(callback: types.CallbackQuery, user_id: int):
     )
 
 
+def _source_account_id(source: dict | None) -> str | None:
+    if isinstance(source, dict):
+        value = source.get("_account_id")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _source_project_id(source: dict | None) -> str | None:
+    if isinstance(source, dict):
+        value = source.get("_project_id")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _video_reference_sources(st: dict, vmode: str) -> list[dict]:
+    if vmode == "ingredients":
+        return [s for s in (st.get("ving_photos") or []) if isinstance(s, dict)]
+    if vmode == "frames":
+        return [s for s in (st.get("vfrm_start"), st.get("vfrm_end")) if isinstance(s, dict)]
+    return []
+
+
+def _video_reference_account_id(st: dict, vmode: str) -> str | None:
+    accounts = {
+        aid for aid in (_source_account_id(s) for s in _video_reference_sources(st, vmode))
+        if aid
+    }
+    if len(accounts) == 1:
+        aid = next(iter(accounts))
+        if account_pool.is_video_capable(aid):
+            return aid
+    return None
+
+
+def _video_reference_project_id(st: dict, vmode: str) -> str | None:
+    projects = {
+        pid for pid in (_source_project_id(s) for s in _video_reference_sources(st, vmode))
+        if pid
+    }
+    return next(iter(projects)) if len(projects) == 1 else None
+
+
 async def _video_generate_and_send(
     message: types.Message,
     prompt: str,
@@ -5504,13 +5629,20 @@ async def _do_video_generate_and_send(
     total_price = single_price * vcount
 
     # Аккаунт пула: правки/продления держим на аккаунте исходного ролика
-    # (media живёт только там), свежие генерации — на sticky-аккаунте юзера.
+    # (media живёт только там), свежие генерации — на video-capable аккаунте.
+    ref_acc_id = _video_reference_account_id(st, vmode)
     acc_id = (source_video.account_id if source_video and source_video.account_id
-              else _account_for(user_id))
+              else ref_acc_id or _account_for_video(user_id))
     if acc_id is None:
-        # Весь пул в кулдауне/отключён — отказ ДО списания кредитов.
+        # Нет доступных video-capable аккаунтов — отказ ДО списания кредитов.
         await message.answer(flow_copy.msg("accounts_unavailable"))
         return
+    video_project_id = (
+        source_video.project_id if source_video
+        else _video_reference_project_id(st, vmode)
+    )
+    if not video_project_id:
+        video_project_id = await ensure_user_project(user_id, account_id=acc_id)
 
     _vid_started = time.monotonic()
     metrics.log_event("video_requested", user_id=user_id, username=_username(message),
@@ -5586,7 +5718,7 @@ async def _do_video_generate_and_send(
                 prompt,
                 model_key=model_key,
                 aspect=aspect,
-                project_id=source_video.project_id if source_video else None,
+                project_id=video_project_id,
                 reference_sources=st.get("ving_photos") if vmode == "ingredients" else None,
                 start_source=st.get("vfrm_start") if vmode == "frames" else None,
                 end_source=st.get("vfrm_end") if vmode == "frames" else None,
@@ -5898,7 +6030,7 @@ async def _video_extend_and_send(
     st["vcount"] = 1
     st["vawait"] = None
     st.pop("vextend_token", None)
-    # Progressive price: each extend in the chain costs VIDEO_EXTEND_STEP more.
+    # Fixed operator-set extend price.
     extend_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
     await _video_generate_and_send(
         message,
@@ -6022,6 +6154,26 @@ async def on_successful_payment(message: types.Message):
     await show_main_menu(message, user_id=user_id)
 
 
+@dp.callback_query(F.data == "img:retry")
+async def on_img_retry(callback: types.CallbackQuery):
+    """Повторить последний провалившийся запрос на генерацию картинок."""
+    user_id = callback.from_user.id
+    snap = _ws(user_id).get("img_retry")
+    if not snap or not snap.get("prompt"):
+        await callback.answer("Запрос устарел — попробуйте снова.", show_alert=True)
+        return
+    await callback.answer("Повторяю 🔁")
+    await _generate_and_send(
+        callback.message,
+        snap["prompt"],
+        num_images=snap.get("num_images", 1),
+        aspect_ratio=snap.get("aspect_ratio", "landscape"),
+        actor_id=user_id,
+        action=snap.get("action", "gen"),
+        image_model=snap.get("image_model", DEFAULT_IMAGE_MODEL),
+    )
+
+
 @dp.callback_query()
 async def on_image_action(callback: types.CallbackQuery):
     """Единый обработчик инлайн-кнопок под картинкой (edit/vary/regen/mix/up)."""
@@ -6099,9 +6251,13 @@ async def _upload_photo_source_from_message(
         await status_msg.edit_text("❌ Не удалось получить ваше фото.")
         return None
 
-    project_id = await ensure_user_project(user_id)
+    acc_id = _account_for_video(user_id)
+    if acc_id is None:
+        await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
+        return None
+    project_id = await ensure_user_project(user_id, account_id=acc_id)
     try:
-        source = await _keeper_for(user_id).upload_image(data, filename=f"tg_{user_id}.png")
+        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png")
     except Exception:
         log.exception("upload_image failed")
         source = None
@@ -6111,6 +6267,7 @@ async def _upload_photo_source_from_message(
         return None
 
     source.setdefault("_project_id", project_id)
+    source.setdefault("_account_id", acc_id)
     return source
 
 
@@ -6272,8 +6429,11 @@ async def handle_photo(message: types.Message):
         await status_msg.edit_text("❌ Не удалось получить ваше фото.")
         return
 
-    project_id = await ensure_user_project(user_id)
-    acc_id = _account_for(user_id)
+    acc_id = _account_for_image(user_id, prefer_image_only=True)
+    if acc_id is None:
+        await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
+        return
+    project_id = await ensure_user_project(user_id, account_id=acc_id)
     try:
         source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png")
     except Exception:

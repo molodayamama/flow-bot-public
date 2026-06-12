@@ -793,7 +793,8 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('"vu:start"', self.source)
         self.assertIn('@dp.callback_query(F.data.startswith("vu:"))', self.source)
         self.assertIn("@dp.message(F.video | F.document)", self.source)
-        self.assertIn("_keeper_for(user_id).upload_video(", self.source)
+        self.assertIn("_account_for_video(user_id)", self.source)
+        self.assertIn("_keeper_for_acc(acc_id).upload_video(", self.source)
         self.assertIn("async def _video_edit_uploaded", self.source)
         # The upload proxy contract (from the Flow web-app bundle): the PUT must
         # carry the resumable session URL + chunk headers, else it 400s.
@@ -824,7 +825,7 @@ class BotMenuWiringTests(unittest.TestCase):
             self.source.index("async def handle_video_upload"):
             self.source.index("async def _video_edit_uploaded")
         ]
-        self.assertIn("_client_for(user_id).wait_video_ready(", upload_handler)
+        self.assertIn("_client_for_acc(acc_id).wait_video_ready(", upload_handler)
         self.assertIn("message.caption", upload_handler)
         self.assertIn("_video_edit_uploaded(message, caption, user_id=user_id)", upload_handler)
         self.assertIn("async def wait_video_ready", self.source)
