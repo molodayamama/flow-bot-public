@@ -531,6 +531,7 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         # Edit must target the project the upload actually landed in.
         self.assertIn('source.pop("_project_id", None)', self.source)
         self.assertIn("upload_project", self.source)
+        self.assertIn('source.setdefault("_tg_file_id", photo.file_id)', self.source)
 
     def test_pending_edit_routing_in_plain_text_handler(self) -> None:
         self.assertIn("pending_edits", self.source)
@@ -542,6 +543,11 @@ class FlowBotWiringStaticTests(unittest.TestCase):
     def test_edit_rate_limit_keeps_context_copy(self) -> None:
         self.assertIn("def _is_rate_limit_error", self.source)
         self.assertIn("image_edit_rate_limited", self.source)
+        self.assertIn("image_edit_failover", self.source)
+        self.assertIn("async def _reupload_ref_for_edit_failover", self.source)
+        self.assertIn("exclude={current_account_id}", self.source)
+        self.assertIn("account_pool.mark_failure(ref.account_id)", self.source)
+        self.assertIn("_generate_for(failover_ref, failover_inputs)", self.source)
         self.assertIn("1–3 минуты", flow_copy.msg("image_edit_rate_limited"))
 
     def test_per_user_project_creation_wired(self) -> None:

@@ -2046,7 +2046,11 @@ class AccountPool:
         return best
 
     def pick_for_image(
-        self, user_id: int | str, *, prefer_image_only: bool = False
+        self,
+        user_id: int | str,
+        *,
+        prefer_image_only: bool = False,
+        exclude: set[str] | None = None,
     ) -> str | None:
         """Pick an account for image work.
 
@@ -2054,16 +2058,25 @@ class AccountPool:
         image editing can prefer accounts marked ``video_allowed=False`` so paid
         video-capable accounts keep more quota for video jobs.
         """
-        if not prefer_image_only:
+        excluded = set(exclude or set())
+        if not prefer_image_only and not excluded:
             return self.pick_for(user_id)
         key = str(user_id)
+        sticky = self._assign.get(key)
+        if not prefer_image_only and sticky and sticky not in excluded and self.is_available(sticky):
+            return sticky
+
         candidates = [
             aid for aid in self._accounts
-            if self.is_available(aid) and self.is_image_only(aid)
+            if aid not in excluded and self.is_available(aid) and self.is_image_only(aid)
         ]
         if not candidates:
-            return self.pick_for(user_id)
-        sticky = self._assign.get(key)
+            candidates = [
+                aid for aid in self._accounts
+                if aid not in excluded and self.is_available(aid)
+            ]
+        if not candidates:
+            return None
         if sticky in candidates:
             return sticky
         loads: dict[str, int] = {aid: 0 for aid in self._accounts}

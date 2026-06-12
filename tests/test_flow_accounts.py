@@ -117,6 +117,10 @@ class AccountPoolTests(unittest.TestCase):
         self.assertEqual(pool.pick_for_image(10, prefer_image_only=True), a2)
         self.assertEqual(pool.assigned_to(10), a2)
         self.assertEqual(pool.pick_for_video(10), a1)
+        self.assertIn(
+            pool.pick_for_image(10, prefer_image_only=True, exclude={a2}),
+            {a1, a3},
+        )
 
         pool.set_disabled(a2, True)
         self.assertIn(pool.pick_for_image(11, prefer_image_only=True), {a1, a3})

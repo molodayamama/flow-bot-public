@@ -2356,8 +2356,15 @@ def _account_for(user_id: int) -> str | None:
     return account_pool.pick_for(user_id)
 
 
-def _account_for_image(user_id: int, *, prefer_image_only: bool = False) -> str | None:
-    return account_pool.pick_for_image(user_id, prefer_image_only=prefer_image_only)
+def _account_for_image(
+    user_id: int,
+    *,
+    prefer_image_only: bool = False,
+    exclude: set[str] | None = None,
+) -> str | None:
+    return account_pool.pick_for_image(
+        user_id, prefer_image_only=prefer_image_only, exclude=exclude,
+    )
 
 
 def _account_for_video(user_id: int) -> str | None:
@@ -4196,6 +4203,72 @@ def _is_rate_limit_error(result: dict) -> bool:
     )
 
 
+async def _download_ref_image_bytes(ref: ImageRef) -> bytes | None:
+    source = ref.source if isinstance(ref.source, dict) else {}
+    tg_file_id = source.get("_tg_file_id")
+    if isinstance(tg_file_id, str) and tg_file_id:
+        try:
+            buf = await bot.download(tg_file_id)
+            return buf.read() if hasattr(buf, "read") else bytes(buf)
+        except Exception:
+            log.exception("download failover tg image failed")
+
+    url = download_url(source)
+    if not url:
+        return None
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url, timeout=aiohttp.ClientTimeout(total=60)) as r:
+                if r.status == 200:
+                    return await r.read()
+                log.warning("download failover image returned HTTP %s", r.status)
+    except Exception:
+        log.exception("download failover image failed")
+    return None
+
+
+async def _reupload_ref_for_edit_failover(
+    ref: ImageRef,
+    user_id: int,
+    *,
+    current_account_id: str | None,
+) -> ImageRef | None:
+    if not current_account_id:
+        return None
+    acc_id = _account_for_image(
+        user_id, prefer_image_only=True, exclude={current_account_id},
+    )
+    if not acc_id or acc_id == current_account_id:
+        return None
+
+    data = await _download_ref_image_bytes(ref)
+    if not data:
+        return None
+    project_id = await ensure_user_project(user_id, account_id=acc_id)
+    try:
+        source = await _keeper_for_acc(acc_id).upload_image(
+            data, filename=f"failover_{user_id}.png",
+        )
+    except Exception:
+        log.exception("failover upload_image failed")
+        source = None
+    if not source or not source.get("mediaId"):
+        return None
+
+    source.setdefault("_project_id", project_id)
+    if isinstance(ref.source, dict) and ref.source.get("_tg_file_id"):
+        source.setdefault("_tg_file_id", ref.source["_tg_file_id"])
+    upload_project = source.pop("_project_id", None) or project_id
+    return ImageRef(
+        user_id=user_id,
+        project_id=upload_project,
+        source=source,
+        prompt=ref.prompt,
+        aspect_ratio=ref.aspect_ratio,
+        account_id=acc_id,
+    )
+
+
 async def _edit_and_send(
     message: types.Message,
     ref: ImageRef,
@@ -4278,17 +4351,22 @@ async def _do_edit_and_send(
         except Exception:
             pass
 
-    try:
-        result = await _client_for_acc(ref.account_id).generate_images(
+    async def _generate_for(edit_ref: ImageRef, inputs: list) -> dict:
+        return await _client_for_acc(edit_ref.account_id).generate_images(
             instruction,
             aspect_ratio=aspect,
             num_images=1,
             progress_cb=update_status,
-            project_id=ref.project_id,
-            image_inputs=image_inputs,
+            project_id=edit_ref.project_id,
+            image_inputs=inputs,
             allow_browser_fallback=False,
             image_model=image_model,
         )
+
+    active_ref = ref
+    result: dict
+    try:
+        result = await _generate_for(active_ref, image_inputs)
     except Exception:
         log.exception("Edit failed")
         await status_msg.edit_text("❌ Ошибка редактирования. Попробуйте ещё раз.")
@@ -4296,10 +4374,32 @@ async def _do_edit_and_send(
 
     if "error" in result:
         if _is_rate_limit_error(result):
-            await status_msg.edit_text(flow_copy.msg("image_edit_rate_limited"))
+            account_pool.mark_failure(ref.account_id)
+            await update_status(flow_copy.msg("image_edit_failover"))
+            failover_ref = await _reupload_ref_for_edit_failover(
+                ref, user_id, current_account_id=ref.account_id,
+            )
+            failover_inputs = (
+                build_image_inputs(failover_ref.source, load_edit_capture(EDIT_CAPTURE_FILE))
+                if failover_ref else []
+            )
+            if failover_ref and failover_inputs:
+                try:
+                    result = await _generate_for(failover_ref, failover_inputs)
+                    if "error" not in result:
+                        active_ref = failover_ref
+                        account_pool.mark_success(failover_ref.account_id)
+                except Exception:
+                    log.exception("Edit failover retry failed")
+                    result = {"error": flow_copy.msg("image_edit_rate_limited")}
+            if "error" in result:
+                if failover_ref and _is_rate_limit_error(result):
+                    account_pool.mark_failure(failover_ref.account_id)
+                await status_msg.edit_text(flow_copy.msg("image_edit_rate_limited"))
+                return False
         else:
             await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
-        return False
+            return False
 
     pairs = result_pairs(result)
     if not pairs:
@@ -4308,10 +4408,11 @@ async def _do_edit_and_send(
         return False
 
     await update_status(flow_copy.msg("sending"))
+    account_pool.mark_success(active_ref.account_id)
     await _send_result_pairs(
-        message, pairs, user_id=user_id, project_id=ref.project_id,
+        message, pairs, user_id=user_id, project_id=active_ref.project_id,
         prompt=instruction, aspect_ratio=aspect, emoji="✏️",
-        account_id=ref.account_id,
+        account_id=active_ref.account_id,
     )
     await status_msg.delete()
     return True
@@ -6443,6 +6544,8 @@ async def handle_photo(message: types.Message):
     if not source or not source.get("mediaId"):
         await status_msg.edit_text(flow_copy.msg("upload_failed"))
         return
+
+    source.setdefault("_tg_file_id", photo.file_id)
 
     # Редактируем в ТОМ ЖЕ проекте, куда реально легла загрузка (иначе Google
     # не найдёт картинку). Если браузер не отдал проект — используем проект юзера.
