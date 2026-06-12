@@ -1,6 +1,6 @@
 # UI_PRICE_LABELS.md - current pricing label rules
 
-Last sync: 2026-06-11.
+Last sync: 2026-06-12.
 
 Purpose: every paid action must show its credit cost before the user commits to
 it. The executable source of truth is `flow_core.py`; UI builders in
@@ -13,13 +13,14 @@ Current core constants:
 | Constant/helper | Current meaning |
 |---|---|
 | `PRICE_PER_IMAGE = 10` | base image generation price per image |
+| `IMAGE_EDIT_PRICE = 15` | photo edit price |
 | `UPSCALE_PRICE = 5` | prompt enhance / real upscale service action |
 | `STARTER_CREDITS = 30` | first-start balance, enough for 3 images |
 | `VIDEO_MODELS` | video model catalog and base bot-credit prices |
 | `VIDEO_INGREDIENTS_SURCHARGE = 15` | reference/ingredients video surcharge |
 | `VIDEO_FRAMES_SURCHARGE = 25` | start/end frame video surcharge |
-| `VIDEO_PROMPT_EDIT_PRICE = 250` | video prompt edit price |
-| `VIDEO_EXTEND_STEP = 20` | progressive extend increment |
+| `VIDEO_PROMPT_EDIT_PRICE = 150` | video prompt edit price |
+| `VIDEO_EXTEND_PRICE = 60` | video extend price |
 
 Current video base prices:
 
@@ -29,9 +30,9 @@ Current video base prices:
 | Omni Flash 6s | 70 |
 | Omni Flash 8s | 85 |
 | Omni Flash 10s | 100 |
-| Veo Lite | 75 |
-| Veo Fast | 160 |
-| Veo Quality | 600 |
+| Veo Lite | 60 |
+| Veo Fast | 120 |
+| Veo Quality | 450 |
 
 ## Image UI
 
@@ -76,8 +77,7 @@ Prompt screens:
 
 - The user must see the final price before sending a paid prompt.
 - Prompt edit must show `VIDEO_PROMPT_EDIT_PRICE`.
-- Extend must show the computed `video_extend_price(model, extend_index)`, not a
-  static base value.
+- Extend must show `video_extend_price(model, extend_index)`.
 
 Result keyboard:
 

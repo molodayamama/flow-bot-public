@@ -21,11 +21,11 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.action_price("gen", 4), 40)
         self.assertEqual(flow_core.action_price("regen", 2), 20)
         self.assertEqual(flow_core.action_price("revary"), 20)   # ~2 images
-        self.assertEqual(flow_core.action_price("edit"), 10)
-        self.assertEqual(flow_core.action_price("myphoto"), 10)
+        self.assertEqual(flow_core.action_price("edit"), 15)
+        self.assertEqual(flow_core.action_price("myphoto"), 15)
         self.assertEqual(flow_core.action_price("up2x"), 5)      # quick enhance
         self.assertEqual(flow_core.action_price("realup"), 5)    # true HD upscale
-        self.assertEqual(flow_core.action_price("video_prompt_edit"), 250)  # assumed 40 G-credit cost
+        self.assertEqual(flow_core.action_price("video_prompt_edit"), 150)
         self.assertEqual(flow_core.action_price("dl_raw"), 0)    # free
         self.assertEqual(flow_core.action_price("unknown"), 0)
 
@@ -37,13 +37,13 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.video_price("omni-flash-6s"), 70)
         self.assertEqual(flow_core.video_price("omni-flash-8s"), 85)
         self.assertEqual(flow_core.video_price("omni-flash-10s"), 100)
-        self.assertEqual(flow_core.video_price("veo-lite"), 75)
-        self.assertEqual(flow_core.video_price("veo-fast"), 160)
-        self.assertEqual(flow_core.video_price("veo-quality"), 600)
+        self.assertEqual(flow_core.video_price("veo-lite"), 60)
+        self.assertEqual(flow_core.video_price("veo-fast"), 120)
+        self.assertEqual(flow_core.video_price("veo-quality"), 450)
 
     def test_video_reference_mode_surcharges(self) -> None:
-        self.assertEqual(flow_core.video_price("veo-fast", mode="ingredients"), 175)
-        self.assertEqual(flow_core.video_price("veo-fast", mode="frames"), 185)
+        self.assertEqual(flow_core.video_price("veo-lite", mode="ingredients"), 75)
+        self.assertEqual(flow_core.video_price("veo-fast", mode="frames"), 145)
 
     def test_family_picker_min_prices(self) -> None:
         # Drives the "· от N⭐" hint on the video family buttons (no hardcoding).
@@ -52,7 +52,7 @@ class PricingTests(unittest.TestCase):
         veo = min(flow_core.video_price(m, 1, "text") for m, _ in flow_core.video_models_in_family("veo"))
         ing = min(flow_core.video_price(m, 1, "ingredients") for m in variants)
         frm = min(flow_core.video_price(m, 1, "frames") for m in variants)
-        self.assertEqual((omni, veo, ing, frm), (50, 75, 90, 100))
+        self.assertEqual((omni, veo, ing, frm), (50, 60, 75, 85))
 
     def test_referral_milestone_tiers(self) -> None:
         # Single highest applicable tier per first payment (no stacking).
@@ -68,27 +68,13 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.referral_ongoing_bonus(1500), 150)
         self.assertEqual(flow_core.referral_ongoing_bonus(5), 0)  # floor < 1 → 0
 
-    def test_extend_price_escalates_by_step(self) -> None:
-        base = flow_core.video_price("veo-lite", 1, "text")  # 75
-        step = flow_core.VIDEO_EXTEND_STEP                    # 20
-        # 1st extend = base+20, 2nd = base+40, … each one step dearer.
-        self.assertEqual(flow_core.video_extend_price("veo-lite", 1), base + step)
-        self.assertEqual(flow_core.video_extend_price("veo-lite", 2), base + 2 * step)
-        self.assertEqual(flow_core.video_extend_price("veo-lite", 3), base + 3 * step)
-        # Consecutive extends differ by exactly one step.
-        self.assertEqual(
-            flow_core.video_extend_price("veo-lite", 3)
-            - flow_core.video_extend_price("veo-lite", 2),
-            step,
-        )
+    def test_extend_price_is_fixed(self) -> None:
+        self.assertEqual(flow_core.video_extend_price("veo-lite", 1), 60)
+        self.assertEqual(flow_core.video_extend_price("veo-lite", 2), 60)
+        self.assertEqual(flow_core.video_extend_price("veo-lite", 3), 60)
 
     def test_extend_price_index_floor_is_one(self) -> None:
-        base = flow_core.video_price("veo-lite", 1, "text")
-        # A 0 / negative index never charges less than the first extend.
-        self.assertEqual(
-            flow_core.video_extend_price("veo-lite", 0),
-            base + flow_core.VIDEO_EXTEND_STEP,
-        )
+        self.assertEqual(flow_core.video_extend_price("veo-lite", 0), 60)
 
     def test_extend_index_default_on_videoref(self) -> None:
         ref = flow_core.VideoRef(user_id=1, project_id="p", media_id="m")

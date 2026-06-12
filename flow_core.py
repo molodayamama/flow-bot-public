@@ -960,19 +960,17 @@ VIDEO_MODELS: "OrderedDict[str, dict]" = OrderedDict([
     ("omni-flash-8s",  {"key": "abra_t2v_8s",  "family": "omni-flash", "duration": 8,  "price": 85,   "confirmed": False}),
     ("omni-flash-10s", {"key": "abra_t2v_10s", "family": "omni-flash", "duration": 10, "price": 100,  "confirmed": False}),
     # Veo 3.1 — quality tiers, fixed duration (8s observed for lite).
-    ("veo-lite",       {"key": "veo_3_1_t2v_lite",    "family": "veo", "duration": 8, "price": 75,   "confirmed": True}),
-    ("veo-fast",       {"key": "veo_3_1_t2v_fast",    "family": "veo", "duration": 8, "price": 160,  "confirmed": False}),
-    ("veo-quality",    {"key": "veo_3_1_t2v_quality", "family": "veo", "duration": 8, "price": 600,  "confirmed": False}),
+    ("veo-lite",       {"key": "veo_3_1_t2v_lite",    "family": "veo", "duration": 8, "price": 60,   "confirmed": True}),
+    ("veo-fast",       {"key": "veo_3_1_t2v_fast",    "family": "veo", "duration": 8, "price": 120,  "confirmed": False}),
+    ("veo-quality",    {"key": "veo_3_1_t2v_quality", "family": "veo", "duration": 8, "price": 450,  "confirmed": False}),
 ])
 
 VIDEO_INGREDIENTS_SURCHARGE = 15
 VIDEO_FRAMES_SURCHARGE = 25
-VIDEO_PROMPT_EDIT_PRICE = 250  # assumed 40 G-cr; includes reserve until verified
+VIDEO_PROMPT_EDIT_PRICE = 150
 
-# Each successive Extend in a chain costs this many MORE credits than the
-# previous one (on top of the base video price). Longer chains cost more to
-# stitch and burn more provider quota, so the escalation tracks real cost/risk.
-VIDEO_EXTEND_STEP = 20
+# Operator-set fixed price for one Extend action.
+VIDEO_EXTEND_PRICE = 60
 
 # Limits for "how many videos at once".
 MIN_NUM_VIDEOS = 1
@@ -1004,15 +1002,8 @@ def video_price(model_id: str, num_videos: int = 1, mode: str = "text") -> int:
 
 
 def video_extend_price(model_id: str, extend_index: int) -> int:
-    """Credits for the ``extend_index``-th Extend of a chain (1-based).
-
-    Price = base video price + ``VIDEO_EXTEND_STEP`` × extend_index, so the
-    1st extend costs base+20, the 2nd base+40, the 3rd base+60, … Each extend is
-    exactly ``VIDEO_EXTEND_STEP`` credits dearer than the one before it.
-    """
-    base = video_price(model_id, 1, "text")
-    n = max(1, int(extend_index))
-    return base + VIDEO_EXTEND_STEP * n
+    """Credits for extending a video."""
+    return VIDEO_EXTEND_PRICE
 
 
 def clamp_num_videos(value: object, default: int = DEFAULT_NUM_VIDEOS) -> int:
@@ -2089,6 +2080,7 @@ class AccountPool:
 # ── credits & pricing (monetization-strategist model) ─────────────────
 
 PRICE_PER_IMAGE = 10        # 1 generated image = 10 credits
+IMAGE_EDIT_PRICE = 15       # edit uploaded/generated photo
 UPSCALE_PRICE = 5          # +0.5x of one image, rounded
 STARTER_CREDITS = 30        # one-time grant on first /start (balanced: 3 free images)
 LOW_BALANCE_THRESHOLD = 20  # nudge to top up below this
@@ -2104,7 +2096,7 @@ def action_price(action: str, num_images: int = 1) -> int:
 
     - ``gen``/``regen``: per-image (count chosen in the wizard).
     - ``revary``: image-to-image, ~2 images → priced as 2 images.
-    - ``edit``/``myphoto``: 1 image.
+    - ``edit``/``myphoto``: photo edit price.
     - ``up2x`` / ``realup``: premium add-on, +0.5x of one image.
     - ``dl_raw``: free.
     """
@@ -2113,7 +2105,7 @@ def action_price(action: str, num_images: int = 1) -> int:
     if action == "revary":
         return price_gen(2)
     if action in ("edit", "myphoto"):
-        return price_gen(1)
+        return IMAGE_EDIT_PRICE
     if action in ("up2x", "realup"):
         return UPSCALE_PRICE
     if action == "video_prompt_edit":

@@ -104,7 +104,6 @@ from flow_core import (
     video_model_meta,
     video_price,
     video_extend_price,
-    VIDEO_EXTEND_STEP,
     clamp_num_videos,
     video_models_in_family,
     video_families,

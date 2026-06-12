@@ -44,7 +44,9 @@ Current code baseline:
 
 | Action | Bot credits |
 |---|---:|
-| Generate 1 image | 10 |
+| Nano Banana 2 image | 10 |
+| Nano Banana Pro image | 15 |
+| Edit photo | 15 |
 | First-start grant | 30 |
 | Prompt enhance / service upscale | 5 |
 | Original download | 0 |
@@ -72,9 +74,9 @@ Current video prices in `flow_core.VIDEO_MODELS`:
 | Omni Flash 6s | 70 | 10 |
 | Omni Flash 8s | 85 | 12 |
 | Omni Flash 10s | 100 | 15 |
-| Veo Lite | 75 | 10 |
-| Veo Fast | 160 | 20 |
-| Veo Quality | 600 | 100 |
+| Veo Lite | 60 | 10 |
+| Veo Fast | 120 | 20 |
+| Veo Quality | 450 | 100 |
 
 Reference and edit surcharges:
 
@@ -82,8 +84,9 @@ Reference and edit surcharges:
 |---|---:|
 | Ingredients / reference-to-video | base video price + 15 |
 | Frames / start-end interpolation | base video price + 25 |
-| Video prompt edit | 250 |
-| Extend step | base video price + 20 * chain depth |
+| Photo animation via Veo Lite | 75 |
+| Video prompt edit | 150 |
+| Extend video | 60 |
 
 The video grid is intentionally between two bad extremes:
 
@@ -91,13 +94,12 @@ The video grid is intentionally between two bad extremes:
 - the previous premium grid protected quota but pushed entry video above the
   first-purchase threshold.
 
-With blended net revenue near 0.65 RUB per bot credit, the current grid targets
-roughly 4.5-5 RUB net revenue per provider G-credit on mass video modes. Current
-reference-to-video is Veo-only, so pet animation starts at 90 credits (Veo Lite +
-reference surcharge) and fits the small pack. Do not advertise a 65-credit pet
-animation until an Omni Flash reference-to-video key is captured and enabled.
-Veo Quality stays a premium anchor at 600 credits because it burns about 2% of a
-5,000 G-credit monthly planning quota in one generation.
+With blended net revenue near 0.65 RUB per bot credit, the current grid keeps
+images cheap, makes Veo Lite accessible, and leaves Veo Quality as a premium
+anchor. Current reference-to-video is Veo-only, so photo animation starts at
+75 credits (Veo Lite + reference surcharge) and fits the small pack. Do not
+advertise Omni Flash reference videos until an Omni reference-to-video key is
+captured and enabled.
 
 ## Packs
 

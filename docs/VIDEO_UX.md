@@ -94,7 +94,7 @@ Endpoint:
 
 Price:
 
-- `VIDEO_PROMPT_EDIT_PRICE = 250`
+- `VIDEO_PROMPT_EDIT_PRICE = 150`
 
 ### Extend
 
@@ -104,14 +104,14 @@ Behavior:
 
 - each step extends from the current video reference;
 - `VideoRef.extend_index` tracks chain depth;
-- price grows by `VIDEO_EXTEND_STEP` each time;
+- price is fixed by `VIDEO_EXTEND_PRICE`;
 - provider-side concat/stitch is used for full chained output when available;
 - segment-only fallback remains available.
 
 Formula:
 
 ```text
-video_extend_price(model, n) = video_price(model, 1, "text") + 20 * n
+video_extend_price(model, n) = VIDEO_EXTEND_PRICE
 ```
 
 ### Uploaded Video Edit
@@ -140,9 +140,9 @@ Current video grid:
 | Omni Flash 6s | 70 |
 | Omni Flash 8s | 85 |
 | Omni Flash 10s | 100 |
-| Veo Lite | 75 |
-| Veo Fast | 160 |
-| Veo Quality | 600 |
+| Veo Lite | 60 |
+| Veo Fast | 120 |
+| Veo Quality | 450 |
 
 Surcharges:
 
@@ -150,8 +150,9 @@ Surcharges:
 |---|---:|
 | Ingredients / reference-to-video | +15 |
 | Frames / start-end interpolation | +25 |
-| Prompt edit | 250 total |
-| Extend | base text-video price + 20 per chain step |
+| Photo animation via Veo Lite | 75 total |
+| Prompt edit | 150 total |
+| Extend | 60 total |
 
 Rationale: entry video must fit the first-purchase ladder while still protecting
 scarce Flow quota. If monthly Flow quota load factor stays above 70% for a full
