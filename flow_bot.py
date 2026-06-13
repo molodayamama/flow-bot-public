@@ -2820,14 +2820,19 @@ def _sel_btn(label: str, chosen: bool, callback_data: str) -> types.InlineKeyboa
     return types.InlineKeyboardButton(**kwargs)
 
 
-def _imodel_row(selected: str, prefix: str = "w:imodel") -> list:
+def _imodel_row(
+    selected: str,
+    prefix: str = "w:imodel",
+    *,
+    base_price: int | None = None,
+) -> list:
     """Ряд выбора модели картинки (Nano Banana 2 / Pro) с наценкой в подписи."""
     B = types.InlineKeyboardButton
     row = []
+    base = price_gen(1) if base_price is None else int(base_price)
     for mid, meta in IMAGE_MODELS.items():
-        label = meta["label"]
-        if meta["extra"]:
-            label = f"{label} +{meta['extra']}"
+        price = base + int(meta.get("extra") or 0)
+        label = f"{meta['label']} · {price} кр"
         row.append(_sel_btn(label, mid == selected, f"{prefix}:{mid}"))
     return row
 
@@ -2872,7 +2877,7 @@ def edit_settings_kb(fmt: str, imodel: str) -> types.InlineKeyboardMarkup:
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
             *_fmt_rows(fmt, "es:fmt"),
-            _imodel_row(imodel, "es:imodel"),
+            _imodel_row(imodel, "es:imodel", base_price=action_price("edit")),
             [_menu_button("cancel", "es:cancel")],
         ]
     )

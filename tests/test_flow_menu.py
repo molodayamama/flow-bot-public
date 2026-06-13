@@ -341,7 +341,7 @@ class BotMenuWiringTests(unittest.TestCase):
         start = self.source.index("def edit_settings_kb")
         block = self.source[start:start + 500]
         self.assertIn('_fmt_rows(fmt, "es:fmt")', block)
-        self.assertIn('_imodel_row(imodel, "es:imodel")', block)
+        self.assertIn('_imodel_row(imodel, "es:imodel", base_price=action_price("edit"))', block)
 
     def test_edit_settings_prefix_does_not_collide_with_edit_button(self) -> None:
         # The image "Изменить" button uses the "edit:" callback prefix; the edit
@@ -954,6 +954,14 @@ class BotImportSmokeTests(unittest.TestCase):
             fb.wizard_kb(2, "sq")          # single-screen count+format
             fb.wizard_kb(4, "f43", "nbpro")  # new format + model picker
             fb.edit_settings_kb("f34", "nbpro")  # edit-flow format/model picker
+            model_buttons = [
+                b.text
+                for row in fb.wizard_kb(1, "sq", "nb2").inline_keyboard
+                for b in row
+                if (b.callback_data or "").startswith("w:imodel:")
+            ]
+            self.assertIn("Nano Banana 2 · 10 кр", model_buttons)
+            self.assertIn("Nano Banana Pro · 15 кр", model_buttons)
             fb.reply_menu_kb()             # persistent bottom keyboard
             fb.topup_kb()                  # public packs (no test pack)
             fb.topup_kb(is_admin=True)     # includes the 1-star test pack
