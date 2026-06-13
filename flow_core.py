@@ -1857,6 +1857,8 @@ class FlowAccount:
 
     id: str
     profile_dir: str
+    browser_proxy_url: str | None = None
+    api_proxy_url: str | None = None
 
 
 def parse_flow_accounts(
@@ -1879,19 +1881,44 @@ def parse_flow_accounts(
         entry = chunk.strip()
         if not entry:
             continue
-        if "=" in entry:
-            acc_id, _, path = entry.partition("=")
+        base, *option_parts = [part.strip() for part in entry.split("|")]
+        if "=" in base:
+            acc_id, _, path = base.partition("=")
             acc_id, path = acc_id.strip(), path.strip()
         else:
-            acc_id, path = "", entry
+            acc_id, path = "", base
         if not path:
             continue
         if not acc_id:
             acc_id = f"acc{len(accounts) + 1}"
         if acc_id in seen:
             continue
+        browser_proxy_url: str | None = None
+        api_proxy_url: str | None = None
+        for option in option_parts:
+            if not option or "=" not in option:
+                continue
+            key, _, value = option.partition("=")
+            key = key.strip().lower().replace("-", "_")
+            value = value.strip()
+            if not value:
+                continue
+            if key == "proxy":
+                browser_proxy_url = value
+                api_proxy_url = value
+            elif key in {"browser_proxy", "browser_proxy_url"}:
+                browser_proxy_url = value
+            elif key in {"api_proxy", "api_proxy_url"}:
+                api_proxy_url = value
         seen.add(acc_id)
-        accounts.append(FlowAccount(id=acc_id, profile_dir=path))
+        accounts.append(
+            FlowAccount(
+                id=acc_id,
+                profile_dir=path,
+                browser_proxy_url=browser_proxy_url,
+                api_proxy_url=api_proxy_url,
+            )
+        )
     if not accounts:
         accounts.append(FlowAccount(id=default_id, profile_dir=default_dir))
     return accounts

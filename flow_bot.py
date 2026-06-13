@@ -310,11 +310,19 @@ class SessionKeeper:
     Затем передаёт всё это в HTTP-клиент для повторного использования.
     """
 
-    def __init__(self, account_id: str = "", profile_dir: str | None = None):
+    def __init__(
+        self,
+        account_id: str = "",
+        profile_dir: str | None = None,
+        browser_proxy_url: str | None = None,
+        api_proxy_url: str | None = None,
+    ):
         # Пул аккаунтов: у каждого keeper'а свой Chrome-профиль (и свой Google-
         # аккаунт). Без аргументов — одиночный режим на USER_DATA_DIR.
         self.account_id = account_id
         self._profile_dir = profile_dir
+        self.browser_proxy_url = browser_proxy_url
+        self.api_proxy_url = api_proxy_url
         self._pw = None
         self._context: BrowserContext = None
         self._page = None
@@ -358,7 +366,12 @@ class SessionKeeper:
                     "--disable-dev-shm-usage",
                 ],
             )
-            browser_proxy_url = _effective_proxy_url(BROWSER_PROXY_URL)
+            browser_proxy_raw = (
+                self.browser_proxy_url
+                if self.browser_proxy_url is not None
+                else BROWSER_PROXY_URL
+            )
+            browser_proxy_url = _effective_proxy_url(browser_proxy_raw)
             if browser_proxy_url:
                 proxy_config = _playwright_proxy_config(browser_proxy_url)
                 if proxy_config:
@@ -1514,6 +1527,14 @@ class FlowHttpClient:
     def __init__(self, keeper: SessionKeeper):
         self.keeper = keeper
 
+    def _api_proxy(self) -> str | None:
+        raw = (
+            self.keeper.api_proxy_url
+            if self.keeper.api_proxy_url is not None
+            else API_PROXY_URL
+        )
+        return _effective_proxy_url(raw) or None
+
     def _build_headers(self, session: dict) -> dict:
         bearer = session["bearer"]
         extra = session["headers"]
@@ -1616,7 +1637,7 @@ class FlowHttpClient:
 
             try:
                 async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
-                    proxy = _effective_proxy_url(API_PROXY_URL) or None
+                    proxy = self._api_proxy()
                     async with http.post(
                         url,
                         headers=self._build_headers(session),
@@ -1699,7 +1720,7 @@ class FlowHttpClient:
             url, body = built
             try:
                 async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
-                    proxy = _effective_proxy_url(API_PROXY_URL) or None
+                    proxy = self._api_proxy()
                     async with http.post(
                         url,
                         headers=self._build_headers(session),
@@ -1761,7 +1782,7 @@ class FlowHttpClient:
             )
             try:
                 async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
-                    proxy = _effective_proxy_url(API_PROXY_URL) or None
+                    proxy = self._api_proxy()
                     async with http.post(
                         IMAGE_UPSAMPLE_ENDPOINT,
                         headers=self._build_headers(session),
@@ -1819,7 +1840,7 @@ class FlowHttpClient:
             return None
 
         headers = self._build_headers(session)
-        proxy = _effective_proxy_url(API_PROXY_URL) or None
+        proxy = self._api_proxy()
 
         try:
             async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
@@ -1870,7 +1891,7 @@ class FlowHttpClient:
         if not session["bearer"]:
             return None
         headers = self._build_headers(session)
-        proxy = _effective_proxy_url(API_PROXY_URL) or None
+        proxy = self._api_proxy()
         try:
             async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
                 async with http.get(
@@ -1977,7 +1998,7 @@ class FlowHttpClient:
 
         sess_id  = f";{int(time.time() * 1000)}"
         headers  = self._build_headers(session)
-        proxy    = _effective_proxy_url(API_PROXY_URL) or None
+        proxy    = self._api_proxy()
         reference_images = build_video_reference_images(reference_sources)
         start_image, end_image = build_video_frame_images(start_source, end_source)
         operation = (operation or "generate").strip().lower()
@@ -2204,7 +2225,7 @@ class FlowHttpClient:
         if not session["bearer"] or not project_id:
             return None
         headers = self._build_headers(session)
-        proxy = _effective_proxy_url(API_PROXY_URL) or None
+        proxy = self._api_proxy()
         payload = build_video_poll_payload(media_id, project_id)
         deadline = time.time() + timeout
         poll_num = 0
@@ -2258,7 +2279,7 @@ class FlowHttpClient:
         session = await self.keeper.get_session()
         cookies = session.get("cookies") or {}
         url = video_media_redirect_url(media_id)
-        proxy = _effective_proxy_url(API_PROXY_URL) or None
+        proxy = self._api_proxy()
 
         # Заголовки лёгкие: это запрос к фронту labs.google, не к API.
         headers = {
@@ -2340,7 +2361,12 @@ FLOW_ACCOUNTS = parse_flow_accounts(
 )
 account_pool = AccountPool(FLOW_ACCOUNTS, FLOW_ACCOUNTS_STATE_FILE)
 keepers: dict[str, SessionKeeper] = {
-    acc.id: SessionKeeper(account_id=acc.id, profile_dir=acc.profile_dir)
+    acc.id: SessionKeeper(
+        account_id=acc.id,
+        profile_dir=acc.profile_dir,
+        browser_proxy_url=acc.browser_proxy_url,
+        api_proxy_url=acc.api_proxy_url,
+    )
     for acc in FLOW_ACCOUNTS
 }
 clients: dict[str, FlowHttpClient] = {

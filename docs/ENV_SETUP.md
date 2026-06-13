@@ -109,6 +109,16 @@ FLOW_ACCOUNTS_STATE_FILE=flow_accounts_state.json
 Если `FLOW_ACCOUNTS` не задан, бот работает в одиночном режиме на
 `USER_DATA_DIR`.
 
+Per-account proxy можно добавить к нужной записи:
+
+```dotenv
+FLOW_ACCOUNTS=main=./google_profile;acc2=./google_profile_acc2|proxy=http://127.0.0.1:8118
+```
+
+`proxy=` применяется и к Playwright Chrome, и к HTTP-вызовам Flow API. Если
+нужно развести их, используйте `browser_proxy=` и `api_proxy=`. Значения
+`off`/`none`/`direct` отключают прокси для конкретной части.
+
 ## Telegram E2E tester
 
 Эти строки не нужны для работы бота. Они нужны только для

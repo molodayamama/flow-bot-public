@@ -38,6 +38,25 @@ class ParseFlowAccountsTests(unittest.TestCase):
         self.assertEqual(accs[1].profile_dir, "./p2")  # дубль id — первая запись
 
 
+    def test_account_proxy_option_sets_browser_and_api_proxy(self) -> None:
+        accs = parse_flow_accounts(
+            "main=./google_profile;"
+            "acc2=./profile2|proxy=http://127.0.0.1:8118"
+        )
+        self.assertIsNone(accs[0].browser_proxy_url)
+        self.assertIsNone(accs[0].api_proxy_url)
+        self.assertEqual(accs[1].profile_dir, "./profile2")
+        self.assertEqual(accs[1].browser_proxy_url, "http://127.0.0.1:8118")
+        self.assertEqual(accs[1].api_proxy_url, "http://127.0.0.1:8118")
+
+    def test_account_proxy_options_can_split_browser_and_api(self) -> None:
+        accs = parse_flow_accounts(
+            "acc2=./profile2|browser_proxy=direct|api_proxy=http://127.0.0.1:8120"
+        )
+        self.assertEqual(accs[0].browser_proxy_url, "direct")
+        self.assertEqual(accs[0].api_proxy_url, "http://127.0.0.1:8120")
+
+
 class AccountPoolTests(unittest.TestCase):
     def _pool(self, n: int = 2, **kw) -> AccountPool:
         accs = [FlowAccount(id=f"a{i}", profile_dir=f"./p{i}") for i in range(1, n + 1)]
@@ -180,8 +199,11 @@ class BotPoolWiringTests(unittest.TestCase):
         self.assertIn("client = clients[DEFAULT_ACCOUNT_ID]", self.source)
 
     def test_keeper_takes_per_account_profile(self) -> None:
-        self.assertIn("def __init__(self, account_id: str = \"\", profile_dir: str | None = None):", self.source)
+        self.assertIn("browser_proxy_url: str | None = None", self.source)
+        self.assertIn("api_proxy_url: str | None = None", self.source)
         self.assertIn("user_data_dir=self._profile_dir or USER_DATA_DIR", self.source)
+        self.assertIn("browser_proxy_url=acc.browser_proxy_url", self.source)
+        self.assertIn("api_proxy_url=acc.api_proxy_url", self.source)
 
     def test_projects_are_per_account_with_legacy_migration(self) -> None:
         self.assertIn("def _project_key(account_id: str, user_id: int) -> str:", self.source)
