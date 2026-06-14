@@ -2270,7 +2270,7 @@ def public_pack_ids(include_test: bool = False) -> list[str]:
 
 
 def pack_label(pack_id: str) -> str:
-    """Pack button label, e.g. ``700 кр · ~70 ген · 450⭐ 🔥 Выгодно``.
+    """Pack button label, e.g. ``700 кр · ~70 ген 🔥 Выгодно``.
 
     Shows how many generations the credits buy (1 ген = PRICE_PER_IMAGE кр).
     """
@@ -2279,8 +2279,8 @@ def pack_label(pack_id: str) -> str:
         return pack_id
     gens = p["credits"] // PRICE_PER_IMAGE
     if p.get("test"):
-        return f"🧪 Тест · {p['credits']} кр · {p['stars']}⭐"
-    text = f"{p['credits']} кр · ~{gens} ген · {p['stars']}⭐"
+        return f"🧪 Тест · {p['credits']} кр"
+    text = f"{p['credits']} кр · ~{gens} ген"
     if p.get("best"):
         text += " 🔥 Выгодно"
     return text

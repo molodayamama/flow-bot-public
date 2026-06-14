@@ -107,8 +107,11 @@ Pack labels are built by `pack_label(pid)` and must show:
 
 - bot credits;
 - approximate number of image generations;
-- Telegram Stars price;
 - optional "best value" marker.
+
+The top-up screen first separates payment methods ("Оплата через Stars" and
+"Оплата по СБП/Карте"). Pack labels avoid the Stars symbol; Robokassa/SBP pack
+labels show the RUB amount on the SBP/card screen.
 
 Do not promise a fixed number of videos in a pack unless the UI names the exact
 model/mode; video prices vary widely.

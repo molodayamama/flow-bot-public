@@ -2836,14 +2836,14 @@ def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
         label = flow_copy.label(copy_key)
         price = action_price(copy_key)
         if price > 0:
-            label = f"{label} · {price}⭐"
+            label = f"{label} · {price} кр"
         return B(text=label, callback_data=action_callback_data(action, token))
 
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
             [b("edit", "edit"), b("vary", "revary")],
             [b("regen", "regen"), b("realup", "realup")],
-            [B(text=f"{L('animate')} · от {_vid_family_min_price('ing')}⭐",
+            [B(text=f"{L('animate')} · от {_vid_family_min_price('ing')} кр",
                callback_data=f"an:img:{token}")],
             [b("download", "dl_raw")],
         ]
@@ -3121,7 +3121,7 @@ def _video_plain_text_ready(st: dict) -> bool:
 
 
 def _vid_family_min_price(code: str) -> int:
-    """Минимальная цена в семействе — для подписи кнопки «· от N⭐» (без хардкода)."""
+    """Минимальная цена в семействе — для подписи кнопки «· от N кр» (без хардкода)."""
     if code == "omni":
         return min(video_price(m, 1, "text") for m, _ in video_models_in_family("omni-flash"))
     if code == "veo":
@@ -3138,7 +3138,7 @@ def video_family_kb() -> types.InlineKeyboardMarkup:
 
     def fam(code: str) -> types.InlineKeyboardButton:
         return B(
-            text=f"{L('vid_fam:' + code)} · от {_vid_family_min_price(code)}⭐",
+            text=f"{L('vid_fam:' + code)} · от {_vid_family_min_price(code)} кр",
             callback_data=f"v:fam:{code}",
         )
 
@@ -3148,7 +3148,7 @@ def video_family_kb() -> types.InlineKeyboardMarkup:
         [fam("ing")],
         [fam("frm")],
     ] + (
-        [[B(text=f"{L('vid_upload_edit')} · {action_price('video_prompt_edit')}⭐",
+        [[B(text=f"{L('vid_upload_edit')} · {action_price('video_prompt_edit')} кр",
             callback_data="vu:start")]]
         if UPLOAD_VIDEO_EDIT_ENABLED else []
     ) + [
@@ -3167,7 +3167,7 @@ def video_variant_kb(family: str, selected_model: str | None) -> types.InlineKey
     rows = []
     for model_id, meta in video_models_in_family(family):
         name = L(f"vid_model_name:{model_id}")
-        label = f"{name} · {meta['price']}⭐"
+        label = f"{name} · {meta['price']} кр"
         rows.append([_sel_btn(
             label, model_id == selected_model, f"v:model:{model_id}",
         )])
@@ -3224,11 +3224,11 @@ def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
         rows.append([B(text=L("vid_dl_seg"), callback_data=f"v:dl_seg:{vtoken}")])
     if _video_can_edit(ref):
         edit_price = action_price("video_prompt_edit")
-        rows.append([B(text=f"{L('vid_edit')} · {edit_price}⭐", callback_data=f"v:edit:{vtoken}")])
+        rows.append([B(text=f"{L('vid_edit')} · {edit_price} кр", callback_data=f"v:edit:{vtoken}")])
     if _video_can_extend(ref):
         # Extension is always priced as the configured extend action.
         next_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
-        rows.append([B(text=f"{L('vid_extend')} · {next_price}⭐", callback_data=f"v:extend:{vtoken}")])
+        rows.append([B(text=f"{L('vid_extend')} · {next_price} кр", callback_data=f"v:extend:{vtoken}")])
     if ref:
         rows.append([_invite_button(ref.user_id)])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
@@ -3244,7 +3244,7 @@ def _vid_model_row(mode: str, selected: str | None) -> list:
     row = []
     for mid in VID_REF_VARIANTS:
         price = video_price(mid, 1, mode)
-        label = f"{L('vid_model_name:' + mid)} {price}⭐"
+        label = f"{L('vid_model_name:' + mid)} {price} кр"
         row.append(_sel_btn(label, mid == selected, f"v:vmod:{mid}"))
     return [row]
 
@@ -3469,23 +3469,37 @@ def _robokassa_configured() -> bool:
 def _robokassa_pack_label(pack_id: str) -> str:
     p = credit_pack(pack_id)
     if not p:
-        return "СБП"
+        return "СБП/карта"
     amount = robokassa_pack_amount(pack_id, STARS_TO_RUB)
-    return f"СБП/карта · {p['credits']} кр · {amount} ₽"
+    return f"{p['credits']} кр · {amount} ₽"
+
+
+def topup_method_kb() -> types.InlineKeyboardMarkup:
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [_menu_button("pay_stars", "m:pay:stars")],
+        [_menu_button("pay_robo", "m:pay:robo")],
+        [_menu_button("back", "m:balance")],
+    ])
 
 
 def topup_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
+    return topup_method_kb()
+
+
+def topup_stars_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
     rows = []
     for pid in public_pack_ids(include_test=is_admin):
-        rows.append([types.InlineKeyboardButton(text="⭐ " + pack_label(pid), callback_data=f"m:pack:{pid}")])
-        if _robokassa_configured():
-            rows.append([
-                types.InlineKeyboardButton(
-                    text=_robokassa_pack_label(pid),
-                    callback_data=f"m:robo:{pid}",
-                )
-            ])
-    rows.append([_menu_button("back", "m:balance")])
+        rows.append([types.InlineKeyboardButton(text=pack_label(pid), callback_data=f"m:pack:{pid}")])
+    rows.append([_menu_button("back", "m:topup")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def topup_robo_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
+    rows = [
+        [types.InlineKeyboardButton(text=_robokassa_pack_label(pid), callback_data=f"m:robo:{pid}")]
+        for pid in public_pack_ids(include_test=is_admin)
+    ]
+    rows.append([_menu_button("back", "m:topup")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -3750,15 +3764,15 @@ async def cmd_refund(message: types.Message):
                       payload={"amount": take, "charge_id": rec["charge_id"]})
     # Откатываем реферальные награды, привязанные к этому платежу.
     _clawback_referral_rewards(rec["user_id"], rec["charge_id"])
-    log.info(f"↩️ Рефанд {rec['stars']}⭐ пользователю {rec['user_id']} (charge {rec['charge_id']})")
+    log.info(f"↩️ Рефанд {rec['stars']} Stars пользователю {rec['user_id']} (charge {rec['charge_id']})")
     await message.answer(
-        f"↩️ Возвращено {rec['stars']}⭐ пользователю {rec['user_id']}. "
+        f"↩️ Возвращено {rec['stars']} Stars пользователю {rec['user_id']}. "
         f"Списано {take} кр (начислялось {rec['credits']})."
     )
     if target != message.from_user.id:
         try:
             await bot.send_message(
-                target, f"↩️ Возврат {rec['stars']}⭐ выполнен. Списано {take} кредитов."
+                target, f"↩️ Возврат {rec['stars']} Stars выполнен. Списано {take} кредитов."
             )
         except Exception:
             pass
@@ -3794,7 +3808,7 @@ async def cmd_admin_today(message: types.Message):
         f"платящие: <b>{r['paying_users']}</b>\n"
         f"Картинки: <b>{r['image_generations']}</b> · видео: <b>{r['video_generations']}</b>\n"
         f"Success rate: <b>{_fmt_pct(r['success_rate'])}</b>\n"
-        f"Выручка: <b>{r['revenue_rub']:.0f}₽</b> ({r['revenue_stars']}⭐)\n"
+        f"Выручка: <b>{r['revenue_rub']:.0f}₽</b> ({r['revenue_stars']} Stars)\n"
         f"Кредиты: списано <b>{r['credits_charged']}</b> · возвращено <b>{r['credits_refunded']}</b>\n"
         f"Топ действий:\n{top}",
         parse_mode="HTML",
@@ -3808,7 +3822,7 @@ async def cmd_admin_revenue(message: types.Message):
         return
     r = metrics.report_revenue(30)
     by_pack = "\n".join(
-        f"  • {p['package_id']}: {p['count']}× · {p['rub']:.0f}₽ ({p['stars']}⭐)"
+        f"  • {p['package_id']}: {p['count']}× · {p['rub']:.0f}₽ ({p['stars']} Stars)"
         for p in r["by_package"]
     ) or "  —"
     by_day = "\n".join(
@@ -3816,7 +3830,7 @@ async def cmd_admin_revenue(message: types.Message):
     ) or "  —"
     await message.answer(
         "💰 <b>Выручка (30 дней)</b>\n"
-        f"Всего: <b>{r['revenue_rub']:.0f}₽</b> ({r['revenue_stars']}⭐) · "
+        f"Всего: <b>{r['revenue_rub']:.0f}₽</b> ({r['revenue_stars']} Stars) · "
         f"платежей: <b>{r['transactions_count']}</b> · плательщиков: <b>{r['paying_users']}</b>\n"
         f"По пакетам:\n{by_pack}\n"
         f"По дням:\n{by_day}",
@@ -4020,7 +4034,7 @@ async def cmd_admin_channels(message: types.Message):
         rub = f" · {c['revenue_rub']:.0f}₽" if c["revenue_rub"] else ""
         lines.append(
             f"  • <b>{html.escape(str(c['channel']))}</b>: 👥{c['users']} · "
-            f"💳{c['paid_users']} · ⭐{c['revenue_stars']}{rub}"
+            f"💳{c['paid_users']} · Stars {c['revenue_stars']}{rub}"
         )
     await message.answer(
         f"📡 <b>Каналы</b> (привлечено всего: <b>{r['total_acquired']}</b>)\n"
@@ -4992,6 +5006,21 @@ async def on_menu_action(callback: types.CallbackQuery):
         await msg.edit_text(
             flow_copy.msg("topup_screen"),
             reply_markup=topup_kb(is_admin=user_id in ADMIN_IDS),
+        )
+    elif data == "m:pay:stars":
+        await callback.answer()
+        await msg.edit_text(
+            flow_copy.msg("topup_stars_screen"),
+            reply_markup=topup_stars_kb(is_admin=user_id in ADMIN_IDS),
+        )
+    elif data == "m:pay:robo":
+        if not _robokassa_configured():
+            await callback.answer("Оплата по СБП/карте пока недоступна", show_alert=True)
+            return
+        await callback.answer()
+        await msg.edit_text(
+            flow_copy.msg("topup_robo_screen"),
+            reply_markup=topup_robo_kb(is_admin=user_id in ADMIN_IDS),
         )
     elif data.startswith("m:pack:"):
         await _start_topup(callback, user_id, data.split(":", 2)[2])
@@ -6400,7 +6429,7 @@ async def _start_robokassa_topup(callback: types.CallbackQuery, user_id: int, pa
     await callback.answer()
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="Оплатить через СБП/карту", url=pay_url)],
-        [_menu_button("back", "m:topup")],
+        [_menu_button("back", "m:pay:robo")],
     ])
     await callback.message.answer(
         f"Счёт на {p['credits']} кр. Сумма: {robokassa_pack_amount(pack_id, STARS_TO_RUB)} ₽.\n"

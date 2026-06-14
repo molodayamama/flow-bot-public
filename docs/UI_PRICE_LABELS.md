@@ -57,7 +57,8 @@ Balance and top-up:
 
 - Balance copy explains the current image unit price.
 - Top-up pack labels are built by `pack_label(pid)` and already show credits,
-  approximate generation count, and Stars.
+  approximate generation count, without the Stars symbol. The top-up screen
+  first asks for the payment method.
 
 ## Video UI
 

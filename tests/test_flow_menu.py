@@ -47,7 +47,7 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.video_price("veo-fast", mode="frames"), 145)
 
     def test_family_picker_min_prices(self) -> None:
-        # Drives the "· от N⭐" hint on the video family buttons (no hardcoding).
+        # Drives the "· от N кр" hint on the video family buttons (no hardcoding).
         variants = ("veo-lite", "veo-fast", "veo-quality")
         omni = min(flow_core.video_price(m, 1, "text") for m, _ in flow_core.video_models_in_family("omni-flash"))
         veo = min(flow_core.video_price(m, 1, "text") for m, _ in flow_core.video_models_in_family("veo"))
@@ -168,13 +168,13 @@ class UpscaleCaptureTests(unittest.TestCase):
         self.assertIn("test", flow_core.public_pack_ids(include_test=True))
         self.assertIn("🧪", flow_core.pack_label("test"))
 
-    def test_pack_label_shows_credits_stars_and_generations(self) -> None:
+    def test_pack_label_shows_credits_and_generations(self) -> None:
         label = flow_core.pack_label("large")
         self.assertIn("700", label)            # credits
-        self.assertIn("450", label)            # stars
         self.assertIn("70", label)             # generations = 700 / 10
         self.assertIn("ген", label)
         self.assertIn("Выгодно", label)        # best-value marker
+        self.assertNotIn("⭐", label)
 
 
 class CreditStoreTests(unittest.TestCase):
@@ -280,6 +280,7 @@ class CopyTests(unittest.TestCase):
             "gen", "balance", "help", "myphoto", "cnt:1", "cnt:2", "cnt:4",
             "fmt:land", "fmt:port", "fmt:sq", "back", "cancel", "repeat_last",
             "dl_raw", "up2x", "edit", "revary", "regen", "topup",
+            "pay_stars", "pay_robo",
         ):
             self.assertIn(key, flow_copy.LABELS, key)
             self.assertTrue(flow_copy.label(key))
@@ -452,13 +453,13 @@ class BotMenuWiringTests(unittest.TestCase):
         real_block = self.source[real_start:real_start + 900]
         self.assertNotIn("_enhance_and_send", real_block)
 
-    def test_image_keyboard_has_no_mix_button_and_star_prices(self) -> None:
+    def test_image_keyboard_has_no_mix_button_and_credit_prices(self) -> None:
         start = self.source.index("def _image_keyboard")
         block = self.source[start:start + 900]
         self.assertNotIn('b("mix"', block)          # «В микс» removed from results
         self.assertNotIn('b("up2x"', block)         # «Чёткость ×2» removed from results
         self.assertIn('b("realup", "realup")', block)  # HD-upscale button kept
-        self.assertIn('· {price}⭐', block)          # price tags carry the star emoji
+        self.assertIn('· {price} кр', block)        # price tags are credits, not Stars
 
     def test_realup_label_is_improve_quality(self) -> None:
         import flow_copy
@@ -485,11 +486,11 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('"not modified" in str(exc).lower()', helper)
         self.assertIn("await _edit_or_answer(message, text, kb", self.source)
 
-    def test_star_price_tags_on_action_buttons(self) -> None:
-        # Video result / model rows show the credit cost with a star emoji.
-        self.assertIn('· {edit_price}⭐', self.source)
-        self.assertIn('· {next_price}⭐', self.source)
-        self.assertIn("{price}⭐", self.source)
+    def test_credit_price_tags_on_action_buttons(self) -> None:
+        # Video result / model rows show the credit cost in credits.
+        self.assertIn('· {edit_price} кр', self.source)
+        self.assertIn('· {next_price} кр', self.source)
+        self.assertIn("{price} кр", self.source)
 
     def test_stale_photo_edit_cleared_on_navigation(self) -> None:
         # Regression: photo upload sets pending_edits; navigating to generate/menu
@@ -612,7 +613,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("def _vid_family_min_price", self.source)
         block = self.source[self.source.index("def video_family_kb"):][:600]
         self.assertIn("от ", block)
-        self.assertIn("⭐", block)
+        self.assertIn("кр", block)
         self.assertIn("_vid_family_min_price", block)
 
     def test_ingredients_done_label_is_dynamic(self) -> None:
@@ -1017,14 +1018,19 @@ class BotImportSmokeTests(unittest.TestCase):
             self.assertIn("Nano Banana 2 · 10 кр", model_buttons)
             self.assertIn("Nano Banana Pro · 15 кр", model_buttons)
             fb.reply_menu_kb()             # persistent bottom keyboard
-            fb.topup_kb()                  # public packs (no test pack)
-            fb.topup_kb(is_admin=True)     # includes the 1-star test pack
+            methods = fb.topup_kb()
+            method_texts = [b.text for row in methods.inline_keyboard for b in row]
+            self.assertIn("Оплата через Stars", method_texts)
+            self.assertIn("Оплата по СБП/Карте", method_texts)
+            fb.topup_stars_kb()            # public Stars packs (no test pack)
+            fb.topup_stars_kb(is_admin=True)  # includes the admin test pack
+            fb.topup_robo_kb()
             fb._image_keyboard("abcd1234")
-            fb.video_family_kb()           # family buttons now carry "· от N⭐"
+            fb.video_family_kb()           # family buttons now carry "· от N кр"
             fb.ingredients_kb(1, "land", 1, "veo-fast", has_caption=True)
             # Family buttons show a min-price hint.
             fam_first = fb.video_family_kb().inline_keyboard[0][0].text
-            self.assertIn("⭐", fam_first)
+            self.assertIn("кр", fam_first)
             # "Изменить своё видео" (upload→edit) временно отключено флагом:
             # пока UPLOAD_VIDEO_EDIT_ENABLED=False, кнопки vu:start в семействе нет.
             self.assertFalse(fb.UPLOAD_VIDEO_EDIT_ENABLED)
@@ -1039,7 +1045,7 @@ class BotImportSmokeTests(unittest.TestCase):
                 upload_btn = next(
                     b for row in rows_on for b in row if (b.callback_data or "") == "vu:start"
                 )
-                self.assertIn("⭐", upload_btn.text)
+                self.assertIn("кр", upload_btn.text)
             finally:
                 fb.UPLOAD_VIDEO_EDIT_ENABLED = False
             # "Оживить фото" under a generated image (an:img:) now carries a price too.
@@ -1048,7 +1054,7 @@ class BotImportSmokeTests(unittest.TestCase):
                 b for row in img_rows for b in row
                 if (b.callback_data or "").startswith("an:img:")
             )
-            self.assertIn("⭐", animate_btn.text)
+            self.assertIn("кр", animate_btn.text)
             # Extend gating: ANY veo-family source (lite/fast/quality) is
             # extendable — the extension itself runs on veo-lite. Omni is not.
             VR = fb.VideoRef
