@@ -455,6 +455,10 @@ Live no-payment UI checks:
 - Video wizard checks covered Omni, Veo, Ingredients, and Frames entry states;
   model/format/count changes updated labels and prices without starting
   generation.
+- Negative video prompt check covered `/menu` -> `m:vid` -> Omni 4s -> `v:go`
+  -> short text `x`. The bot returned the shared video prompt-too-short copy,
+  and recent service logs showed only handled Telegram updates with no Flow
+  video HTTP activity.
 - Image wizard checks reached the image settings screen with count, aspect,
   model, balance, and price controls. The next untested step is prompt entry or
   `w:go`, which starts a paid/provider generation path.
