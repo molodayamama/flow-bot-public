@@ -86,7 +86,177 @@ Next fix notes:
 
 ## Open Failures
 
-No entries yet.
+### 2026-06-14 LF-001 photo upload returns no Flow mediaId
+
+- Severity: S1
+- Status: open
+- Next fix owner: unassigned
+- Live check approved by: operator request in current Codex session
+- Environment: VPS `/opt/geminifree`; `geminifree-bot` active; `@photozhab_bot`
+- Surface: image edit / photo upload
+
+Telegram input:
+
+- User/chat: `owner-test-chat`
+- Command/callback/path: direct Telegram photo upload
+- Attachments: 1 photo (`kotenok.jpg` test image); Telegram `file_id` omitted
+- Prompt/caption: short non-private test caption
+
+Telegram output:
+
+- User-facing text: `Не удалось загрузить фото. Попробуй отправить ещё раз.`
+- Messages/media sent: one status message edited to failure; no media result
+- Credits/refund observed: unchanged/unknown; upload failed before paid edit generation
+
+Flow account:
+
+- Account label: unknown image-upload route; image-only account was available in pool
+- Project/media ownership notes: no `mediaId` returned
+- Proxy/profile notes: browser upload path; no credentials logged
+
+Google/Flow evidence:
+
+- Endpoint/action: image upload through browser helper
+- HTTP status: unknown
+- Error class/code: `mediaId` missing
+- Body snippet: log summary reported `upload_image: mediaId не получен (ответов: 0). Схемы: upload_capture.json`
+
+Reproduction:
+
+1. Start from approved live Telegram E2E preconditions on the VPS.
+2. Send one photo with a short caption to the bot.
+3. Observe upload status and the final edited failure message.
+
+Expected:
+
+- The photo should upload into Flow, produce a usable `mediaId`, and continue to caption-driven image edit or prompt collection.
+
+Actual:
+
+- The upload status changed to a generic retry message; no Flow `mediaId` was captured.
+
+Suspected cause:
+
+- Browser upload contract or capture listener drifted; current helper did not observe any matching upload response.
+
+Next fix notes:
+
+- Inspect `SessionKeeper.upload_image`, `upload_capture.json` parsing/listener rules, and upload endpoint drift using an abort-safe capture before changing bot behavior.
+
+### 2026-06-14 LF-002 text-to-video rejected with 403 on all captcha actions
+
+- Severity: S1
+- Status: open
+- Next fix owner: unassigned
+- Live check approved by: operator request in current Codex session
+- Environment: VPS `/opt/geminifree`; `geminifree-bot` active; `@photozhab_bot`
+- Surface: video text
+
+Telegram input:
+
+- User/chat: `owner-test-chat`
+- Command/callback/path: `/menu` -> `m:vid` -> `v:fam:omni` -> `v:model:omni-flash-4s` -> plain text prompt
+- Attachments: none
+- Prompt/caption: short non-private test prompt
+
+Telegram output:
+
+- User-facing text: `Не удалось создать видео. Кредиты возвращены — попробуй ещё раз!`
+- Messages/media sent: no video; retry/menu buttons shown
+- Credits/refund observed: refunded; balance stayed at 1845 credits before and after
+
+Flow account:
+
+- Account label: `main` (admin report showed one new failure on `main`)
+- Project/media ownership notes: no media result
+- Proxy/profile notes: active video-capable pool account; no proxy details logged
+
+Google/Flow evidence:
+
+- Endpoint/action: text-to-video async generation
+- HTTP status: 403 for every tried action
+- Error class/code: provider rejected all reCAPTCHA actions
+- Body snippet: log summary reported `Сервис отклонил запрос видео (403) на всех action.`
+
+Reproduction:
+
+1. Open video wizard from `/menu`.
+2. Select quick Omni 4s, keep default 16:9 and count 1.
+3. Send a short text prompt.
+4. Observe retry UI and logs.
+
+Expected:
+
+- Bot should generate and deliver one 4-second video, then show video result actions.
+
+Actual:
+
+- The provider rejected every captcha action (`VIDEO_GENERATION`, `PINHOLE`, `batchAsyncGenerateVideoText`, `GENERATE_VIDEO`, `IMAGE_GENERATION`) with HTTP 403; the bot refunded credits and showed retry.
+
+Suspected cause:
+
+- Google Flow video captcha action/session/API contract drift or account-level video access problem.
+
+Next fix notes:
+
+- Re-capture the current video text request contract and reCAPTCHA action with `tools/capture_video.py` or another approved live capture; verify account-specific video capability before code changes.
+
+### 2026-06-14 LF-003 VPS shell admin helper is absent
+
+- Severity: S3
+- Status: open
+- Next fix owner: unassigned
+- Live check approved by: operator request in current Codex session
+- Environment: VPS `/opt/geminifree`; `geminifree-bot` active
+- Surface: admin/server command
+
+Telegram input:
+
+- User/chat: n/a
+- Command/callback/path: shell command `./admin_help`
+- Attachments: none
+- Prompt/caption: n/a
+
+Telegram output:
+
+- User-facing text: n/a
+- Messages/media sent: n/a
+- Credits/refund observed: n/a
+
+Flow account:
+
+- Account label: n/a
+- Project/media ownership notes: n/a
+- Proxy/profile notes: n/a
+
+Google/Flow evidence:
+
+- Endpoint/action: n/a
+- HTTP status: n/a
+- Error class/code: command not found
+- Body snippet: n/a
+
+Reproduction:
+
+1. SSH to the VPS and change to `/opt/geminifree`.
+2. Run `./admin_help` or resolve `admin_help` in the shell.
+3. Observe that no shell helper exists.
+
+Expected:
+
+- The operator-provided admin helper command should print account-control commands, or the runbook should name the Telegram command instead.
+
+Actual:
+
+- No shell command/helper was found. The Telegram command `/admin_help` works and lists `/acc_off`, `/acc_on`, `/acc_vid_off`, and `/acc_vid_on`.
+
+Suspected cause:
+
+- Deployment helper missing or operator/runbook instruction is stale.
+
+Next fix notes:
+
+- Either add a documented shell wrapper for admin help or update runbook instructions to use Telegram `/admin_help`.
 
 ## Closed Failures
 

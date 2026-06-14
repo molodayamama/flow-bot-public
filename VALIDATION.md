@@ -198,6 +198,24 @@ Telegram E2E tester:
 - Manual ramp, approval required and only after single generation passes:
   `python telegram_bot_tester.py --mode telegram-ramp --prompt "simple safe landscape test" --max-steps 3 --delay-sec 90 --approve-external-action`
 
+Approved ad-hoc live probe helper:
+
+- Text command/message:
+  `python tools/live_telegram_probe.py --env-file .env --bot-username <bot> --text "/admin_help"`
+- Photo upload:
+  `python tools/live_telegram_probe.py --env-file .env --bot-username <bot> --photo kotenok.jpg --caption "short safe test"`
+- Recent safe summaries:
+  `python tools/live_telegram_probe.py --env-file .env --bot-username <bot> --recent 10`
+- Inline callback by data:
+  `python tools/live_telegram_probe.py --env-file .env --bot-username <bot> --click-data m:vid`
+
+Run one Telethon probe at a time when reusing the same `.session` file.
+Concurrent probes can fail in the harness with
+`sqlite3.OperationalError: database is locked`; this is not evidence of a bot
+failure unless reproduced with sequential clients. The probe prints message
+summaries only; do not paste Telegram `file_id` values, raw logs, secrets, or
+private prompts into failure notes.
+
 Telegram E2E external modes contact Telegram and may cause the bot to contact
 Google Flow, mutate bot cooldown state, spend quota, trigger captcha/rate-limit
 signals, or create/update `.sessions/` files. Never run them as routine
