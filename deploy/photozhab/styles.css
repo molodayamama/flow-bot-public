@@ -1,13 +1,71 @@
 :root {
   color-scheme: dark;
-  --ink: #f4f1e8;
-  --muted: #b7b4aa;
-  --paper: #111312;
-  --line: rgba(244, 241, 232, 0.15);
-  --panel: rgba(18, 21, 20, 0.78);
-  --cyan: #54d7d6;
-  --lime: #c8f25f;
-  --coral: #ff7b6d;
+
+  /* ── Base palette ─────────────────────────────────────── */
+  --pz-paper:        #111312;
+  --pz-paper-2:      #171a18;
+  --pz-surface:      #151816;
+  --pz-surface-2:    #1b211d;
+  --pz-surface-3:    #1f2622;
+  --pz-void:         #0d0f0e;
+
+  --pz-ink:          #f4f1e8;
+  --pz-muted:        #b7b4aa;
+  --pz-faint:        #6f6e67;
+
+  /* ── Accents ──────────────────────────────────────────── */
+  --pz-lime:         #c8f25f;
+  --pz-lime-ink:     #101210;
+  --pz-cyan:         #54d7d6;
+  --pz-cyan-ink:     #06201f;
+  --pz-coral:        #ff7b6d;
+  --pz-coral-ink:    #2a0d09;
+
+  --pz-grad-brand:   linear-gradient(135deg, var(--pz-lime), var(--pz-cyan));
+  --pz-grad-neon:    linear-gradient(120deg, var(--pz-cyan), var(--pz-lime) 55%, var(--pz-coral));
+
+  /* ── Lines ────────────────────────────────────────────── */
+  --pz-line:         rgba(244, 241, 232, 0.15);
+  --pz-line-strong:  rgba(244, 241, 232, 0.28);
+  --pz-line-faint:   rgba(244, 241, 232, 0.08);
+
+  /* ── Translucent fills ────────────────────────────────── */
+  --pz-panel:        rgba(18, 21, 20, 0.78);
+  --pz-panel-soft:   rgba(17, 19, 18, 0.52);
+  --pz-glass:        rgba(17, 19, 18, 0.70);
+
+  /* ── Semantic status ──────────────────────────────────── */
+  --pz-success:      #c8f25f;
+  --pz-info:         #54d7d6;
+  --pz-warn:         #ffc24b;
+  --pz-danger:       #ff7b6d;
+
+  /* ── Shadows & glows ──────────────────────────────────── */
+  --shadow-sm:       0 4px 14px rgba(0, 0, 0, 0.35);
+  --shadow-md:       0 16px 40px rgba(0, 0, 0, 0.48);
+  --shadow-lg:       0 24px 60px rgba(0, 0, 0, 0.55);
+  --shadow-cta:      0 20px 46px rgba(244, 241, 232, 0.18);
+  --glow-lime:       0 0 0 1px rgba(200, 242, 95, 0.5), 0 0 28px rgba(200, 242, 95, 0.35);
+  --glow-cyan:       0 0 0 1px rgba(84, 215, 214, 0.5), 0 0 28px rgba(84, 215, 214, 0.35);
+  --glow-coral:      0 0 0 1px rgba(255, 123, 109, 0.5), 0 0 28px rgba(255, 123, 109, 0.35);
+
+  /* ── Blur & motion ────────────────────────────────────── */
+  --blur-chrome:     blur(18px);
+  --blur-glass:      blur(14px);
+  --dur-fast:        120ms;
+  --dur-base:        160ms;
+  --dur-slow:        260ms;
+  --ease-out:        cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /* ── Legacy aliases (for backward compatibility) ──────── */
+  --ink:    var(--pz-ink);
+  --muted:  var(--pz-muted);
+  --paper:  var(--pz-paper);
+  --line:   var(--pz-line);
+  --panel:  var(--pz-panel);
+  --cyan:   var(--pz-cyan);
+  --lime:   var(--pz-lime);
+  --coral:  var(--pz-coral);
   --shadow: rgba(0, 0, 0, 0.48);
 }
 
@@ -34,11 +92,9 @@ a {
 }
 
 .topbar {
-  position: fixed;
+  position: sticky;
   z-index: 10;
   top: 0;
-  left: 0;
-  right: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -68,7 +124,7 @@ a {
   gap: 10px;
   padding: 8px 14px 8px 8px;
   border-radius: 8px;
-  font-weight: 760;
+  font-weight: 800;
 }
 
 .brand-mark {
@@ -77,18 +133,18 @@ a {
   display: grid;
   place-items: center;
   border-radius: 6px;
-  color: #101210;
-  background: linear-gradient(135deg, var(--lime), var(--cyan));
-  font-weight: 850;
+  color: var(--pz-lime-ink);
+  background: var(--pz-grad-brand);
+  font-weight: 900;
 }
 
 .topbar-link {
   justify-content: center;
   padding: 0 16px;
   border-radius: 8px;
-  color: var(--ink);
+  color: var(--pz-ink);
   font-size: 14px;
-  font-weight: 720;
+  font-weight: 700;
 }
 
 .hero {
@@ -99,6 +155,7 @@ a {
   overflow: hidden;
   isolation: isolate;
   padding: 120px clamp(18px, 6vw, 76px) 72px;
+  margin-top: -78px;
 }
 
 .hero-image,
@@ -129,12 +186,15 @@ a {
 
 .eyebrow {
   margin: 0 0 14px;
-  color: var(--lime);
+  color: var(--pz-lime);
   font-size: 13px;
-  font-weight: 820;
-  letter-spacing: 0;
+  font-weight: 800;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
+
+.eyebrow--coral { color: var(--pz-coral); }
+.eyebrow--cyan  { color: var(--pz-cyan); }
 
 h1 {
   margin: 0;
@@ -241,9 +301,10 @@ h1 {
 }
 
 .quick-kicker {
-  color: var(--coral);
+  color: var(--pz-coral);
   font-size: 13px;
-  font-weight: 820;
+  font-weight: 800;
+  letter-spacing: 0.04em;
 }
 
 .quick-card h2 {
@@ -372,8 +433,32 @@ h1 {
   line-height: 1.35;
 }
 
+/* ── Badges ───────────────────────────────────────────────── */
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.badge--lime  { color: var(--pz-lime);  background: rgba(200, 242, 95, 0.12);  border: 1px solid rgba(200, 242, 95, 0.35); }
+.badge--cyan  { color: var(--pz-cyan);  background: rgba(84, 215, 214, 0.12);  border: 1px solid rgba(84, 215, 214, 0.35); }
+.badge--coral { color: var(--pz-coral); background: rgba(255, 123, 109, 0.12); border: 1px solid rgba(255, 123, 109, 0.35); }
+
+/* ── Legal ────────────────────────────────────────────────── */
 .legal-page {
-  padding-top: 96px;
+  padding-top: 24px;
 }
 
 .legal-page .two-col {
@@ -414,6 +499,7 @@ h1 {
   .hero {
     min-height: 84svh;
     padding: 104px 18px 48px;
+    margin-top: -62px;
   }
 
   .hero-image {
