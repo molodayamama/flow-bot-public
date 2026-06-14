@@ -9,6 +9,8 @@ When an approved live/stateful check fails, record a sanitized entry in
 Google HTTP status/body snippet, user-facing text, reproduction steps, severity,
 and next fix owner. Never paste secret values, raw HAR bodies, bearer/cookie
 material, proxy credentials, Telegram `file_id` values, or private user content.
+When a follow-up repair path is ready, record the sanitized recommendation in
+`docs/LIVE_TEST_FIXES.md` and reference the matching `LF-000` failure id.
 
 ## Validation Categories
 
