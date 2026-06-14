@@ -431,6 +431,8 @@ Live admin/account controls:
   not paste raw diagnostic values.
 - `telegram_bot_tester.py --mode telegram-smoke` is the public smoke path and
   should use `/start` plus `/menu`, not `/status`.
+- Verified 2026-06-14 on the VPS: updated `telegram-smoke` produced
+  `telegram-start` and `telegram-menu`, both `success`, with no stop signals.
 - `/acc_off sub3` disabled an account with no assigned users, `/acc_on sub3`
   restored it, `/acc_vid_off sub3` made it image-only, and `/acc_vid_on sub3`
   restored video capability. A final `/admin_accounts` check confirmed `sub3`
