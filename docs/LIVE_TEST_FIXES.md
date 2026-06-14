@@ -358,3 +358,88 @@ Notes:
 
 - This fix intentionally does not change photo upload, caption edit, video, or
   generic image prompt behavior.
+
+### 2026-06-14 LFX-009 classify no-fallback image 403 as rate-limited
+
+- Failure id: LF-007
+- Status: verified
+- Priority: S1
+- Fix owner: current Codex session
+- Proposed by: current Codex live E2E session
+
+Root cause hypothesis:
+
+- `FlowHttpClient.generate_images()` correctly rotated through recaptcha actions,
+  but when browser fallback was disabled it returned generic `gen_failed` after
+  exhausting the actions. The caller could no longer distinguish all-action HTTP
+  403 from other provider failures, so image edit skipped the existing
+  rate-limit/failover branch.
+- Confidence: high
+
+Implemented fix:
+
+- Track whether any action returned HTTP 403 during `generate_images()`. If all
+  actions are exhausted while `allow_browser_fallback=False`, return the
+  existing `rate_limited` message instead of generic `gen_failed`.
+
+Owner files:
+
+- `flow_bot.py` - image generation/edit API error classification.
+- `tests/test_flow_edit.py` - source-level guard that the no-fallback 403 branch
+  returns `rate_limited` before generic `gen_failed`.
+
+Validation:
+
+- Offline syntax and targeted edit/menu tests passed.
+- Approved live Telegram check ran `m:myphoto` with `kotenok.jpg` and an edit
+  prompt. The first account exhausted HTTP 403 actions, the bot reuploaded on
+  the failover account, the failover account also hit the provider 403 state,
+  and the user received the temporary edit-limit copy with no balance debit.
+
+Notes:
+
+- This fix intentionally does not enable browser fallback for image edits. It
+  only preserves the provider failure category so the existing edit failover and
+  no-charge user copy can run.
+
+### 2026-06-14 LFX-010 handle repeated image unusual-activity 403s
+
+- Failure id: LF-008
+- Status: proposed
+- Priority: S2
+- Fix owner: unassigned
+- Proposed by: current Codex live E2E session
+
+Root cause hypothesis:
+
+- The image edit provider rejected both the first selected image account and one
+  failover account with all-action HTTP 403 and `PUBLIC_ERROR_UNUSUAL_ACTIVITY`.
+  The code now handles this as a no-charge temporary edit failure, but provider
+  account health still prevents successful delivery.
+- Confidence: medium
+
+Proposed fix:
+
+- Treat repeated all-action unusual-activity 403s as an account-health signal:
+  either use existing admin commands to quarantine affected image accounts after
+  repeated evidence, or add a bounded automatic cooldown/quarantine path for
+  repeated image 403 runtime failures.
+
+Owner files:
+
+- `flow_bot.py` - if automatic cooldown is added to account-pool failure
+  handling.
+- `docs/LIVE_TEST_FAILURES.md` / `HANDOFF.md` - if the operator chooses manual
+  quarantine and records the live decision instead of a code change.
+
+Validation:
+
+- Offline checks depend on the chosen implementation.
+- Approved live check: retry a safe `m:myphoto` edit after cooldown or after
+  routing away from affected accounts; confirm either successful media delivery
+  or clean no-charge temporary-limit copy.
+
+Notes:
+
+- Do not run `login.py` or recreate browser profiles as part of this fix without
+  explicit operator approval.

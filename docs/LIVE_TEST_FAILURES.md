@@ -484,6 +484,144 @@ Next fix notes:
 - Add or audit explicit browser/context cleanup during shutdown before the event
   loop closes. Keep this separate from user-facing generation/payment fixes.
 
+### 2026-06-14 LF-007 image edit all-action 403 skipped failover classification
+
+- Severity: S1
+- Status: verified fixed
+- Next fix owner: current Codex session
+- Live check approved by: operator request in current Codex session
+- Environment: VPS `/opt/geminifree`; `geminifree-bot`; approved live Telegram E2E
+- Surface: image edit / account failover / user-facing error copy
+
+Telegram input:
+
+- User/chat: owner-test-chat
+- Command/callback/path: main menu -> `m:myphoto` -> upload photo -> send edit prompt
+- Attachments: one local test photo (`kotenok.jpg`), no Telegram `file_id` stored here
+- Prompt/caption: safe edit prompt asking for a small visual change
+
+Telegram output:
+
+- User-facing text before fix: generic generation failure text.
+- User-facing text after fix: temporary edit limit text; context-save/retry guidance.
+- Messages/media sent: no edited media returned in this provider state.
+- Credits/refund observed: balance unchanged during the fixed-path validation.
+
+Flow account:
+
+- Account label: image account pool (`cap1` first, then failover to `main` after fix)
+- Project/media ownership notes: after fix, failover account reuploaded the source photo before retry.
+- Proxy/profile notes: existing persistent profile/account pool reused; `login.py` was not run.
+
+Google/Flow evidence:
+
+- Endpoint/action: image generation/edit via `batchGenerateImages`
+- HTTP status: 403 on every recaptcha action for the tested account before fix.
+- Error class/code: provider unusual-activity class surfaced through the 403 body.
+- Body snippet: sanitized; no full provider body copied.
+
+Reproduction:
+
+1. Open `m:myphoto` in the approved Telegram test chat.
+2. Upload `kotenok.jpg`.
+3. Send a short edit prompt while the selected image account returns HTTP 403
+   for all recaptcha actions and browser fallback is disabled for edit/i2i.
+4. Observe the Telegram response and `/admin_accounts` health counters.
+
+Expected:
+
+- All-action HTTP 403 in the no-browser-fallback edit path should be classified
+  as a temporary account/rate-limit failure so existing edit failover and saved
+  context copy can run.
+
+Actual:
+
+- Before the fix, `generate_images()` lost the all-403 signal after exhausting
+  actions and returned generic `gen_failed`, so the edit path did not use the
+  intended rate-limit/failover handling.
+
+Suspected cause:
+
+- The final no-browser-fallback branch did not remember whether the exhausted
+  action loop failed specifically due to HTTP 403.
+
+Resolution:
+
+- `FlowHttpClient.generate_images()` now tracks whether any action returned 403
+  and returns the existing `rate_limited` message when all actions are exhausted
+  without browser fallback.
+- Live verification after deploy showed the first account hit all-action 403,
+  the bot reuploaded the source photo on the failover account, the failover
+  account also hit the provider 403 state, and the user received the temporary
+  edit-limit copy. Balance remained unchanged.
+
+### 2026-06-14 LF-008 image edit provider unusual-activity on active accounts
+
+- Severity: S2
+- Status: open
+- Next fix owner: unassigned
+- Live check approved by: operator request in current Codex session
+- Environment: VPS `/opt/geminifree`; `geminifree-bot`; approved live Telegram E2E
+- Surface: image edit / provider account health
+
+Telegram input:
+
+- User/chat: owner-test-chat
+- Command/callback/path: main menu -> `m:myphoto` -> upload photo -> send edit prompt
+- Attachments: one local test photo (`kotenok.jpg`), no Telegram `file_id` stored here
+- Prompt/caption: safe edit prompt asking for a small visual change
+
+Telegram output:
+
+- User-facing text: temporary edit limit text after failover exhausted the tested accounts.
+- Messages/media sent: no edited image delivered.
+- Credits/refund observed: balance unchanged.
+
+Flow account:
+
+- Account label: tested current image account and one failover image account
+- Project/media ownership notes: failover reuploaded the source photo before retry.
+- Proxy/profile notes: existing persistent profiles reused; `login.py` was not run.
+
+Google/Flow evidence:
+
+- Endpoint/action: image generation/edit via `batchGenerateImages`
+- HTTP status: repeated 403 on each recaptcha action for both tested accounts.
+- Error class/code: `PUBLIC_ERROR_UNUSUAL_ACTIVITY`
+- Body snippet: sanitized; no raw provider response copied.
+
+Reproduction:
+
+1. With the `LF-007` classification fix deployed, open `m:myphoto`.
+2. Upload `kotenok.jpg`.
+3. Send a short edit prompt.
+4. Inspect the bot response, `/admin_accounts`, and recent service journal.
+
+Expected:
+
+- At least one healthy image-capable account should complete the edit request
+  or the bot should keep the failure no-charge and route future retries away
+  from accounts that remain in the provider unusual-activity state.
+
+Actual:
+
+- Both tested accounts returned all-action 403 with provider unusual-activity
+  evidence. The bot preserved user credits and showed the temporary edit-limit
+  copy, but no edited image was delivered.
+
+Suspected cause:
+
+- Provider/account-risk state, captcha action drift, proxy reputation, or
+  account cooldown. This is operationally separate from the `LF-007` code
+  classification bug.
+
+Next fix notes:
+
+- Continue observing whether the account runtime fail counters self-recover.
+- If repeated under normal traffic, quarantine the affected image accounts with
+  admin commands or add a bounded cooldown path for repeated unusual-activity
+  403s. Do not recreate profiles or run `login.py` without explicit approval.
+
 ## Closed Failures
 
 - `LF-001`: fixed by Flow upload API path and live-verified with `kotenok.jpg`.
@@ -494,3 +632,5 @@ Next fix notes:
 - `LF-004`: fixed by single-image result regen and live-verified on the VPS.
 - `LF-005`: fixed by preserving the my-photo upload state on plain text and
   live-verified on the VPS.
+- `LF-007`: fixed by preserving all-action HTTP 403 classification in the
+  no-browser-fallback image edit path and live-verified on the VPS.

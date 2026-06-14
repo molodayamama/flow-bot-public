@@ -1764,6 +1764,7 @@ class FlowHttpClient:
 
         # Ротация actions: пробуем каждый action пока Google не примет
         actions = list(SessionKeeper.RECAPTCHA_ACTIONS)
+        saw_403 = False
 
         for idx, action in enumerate(actions):
             if progress_cb:
@@ -1828,6 +1829,7 @@ class FlowHttpClient:
 
             # 403 — капча не прошла, пробуем следующий action
             if status == 403:
+                saw_403 = True
                 log.warning(f"⚠️ HTTP 403 action={action} ({idx+1}/{len(actions)}). Тело: {text[:300]}")
                 continue
 
@@ -1842,6 +1844,8 @@ class FlowHttpClient:
             log.warning("Все actions провалились, фолбек в браузер")
             return await self.keeper.generate_via_browser(prompt)
         log.warning("Все actions провалились (без браузерного фолбэка)")
+        if saw_403:
+            return {"error": flow_copy.msg("rate_limited")}
         return {"error": flow_copy.msg("gen_failed")}
 
     async def run_captured_request(

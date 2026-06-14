@@ -431,6 +431,22 @@ Live my-photo entry state:
   photo, confirm the bot asks for a photo again, and inspect recent service logs
   to confirm there is no Flow HTTP request for that text.
 
+Live my-photo edit 403/failover classification:
+
+- Image edit/i2i calls run `generate_images(..., allow_browser_fallback=False)`.
+  If every recaptcha action returns HTTP 403, the result must be treated as the
+  existing temporary rate-limit/account failure, not generic `gen_failed`.
+- Safe offline validation: `python -m py_compile flow_bot.py
+  tests\test_flow_edit.py` and `python -m unittest discover -s tests -p
+  "test_flow_edit.py"`.
+- Approved live validation: open `m:myphoto`, upload `kotenok.jpg`, send a safe
+  edit prompt, and inspect recent service logs for either successful media or
+  rate-limit failover. If both the first account and failover account hit
+  `PUBLIC_ERROR_UNUSUAL_ACTIVITY`, balance should remain unchanged and the bot
+  should show temporary edit-limit copy rather than generic generation failure.
+- Repeated provider unusual-activity 403s are an account-health finding, not
+  proof that the classification fix failed.
+
 Service restart logs:
 
 - During approved VPS restarts on 2026-06-14, `journalctl` showed ignored

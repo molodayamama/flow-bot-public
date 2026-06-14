@@ -592,6 +592,23 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("_generate_for(failover_ref, failover_inputs)", self.source)
         self.assertIn("1–3 минуты", flow_copy.msg("image_edit_rate_limited"))
 
+    def test_no_fallback_image_403_classified_as_rate_limited(self) -> None:
+        start = self.source.index("async def generate_images")
+        end = self.source.index("async def run_captured_request", start)
+        block = self.source[start:end]
+        self.assertIn("saw_403 = False", block)
+        self.assertIn("saw_403 = True", block)
+        no_fallback = block.index("if saw_403:")
+        rate_limited_return = block.index(
+            'return {"error": flow_copy.msg("rate_limited")}',
+            no_fallback,
+        )
+        gen_failed_return = block.index(
+            'return {"error": flow_copy.msg("gen_failed")}',
+            no_fallback,
+        )
+        self.assertLess(rate_limited_return, gen_failed_return)
+
     def test_per_user_project_creation_wired(self) -> None:
         self.assertIn("async def ensure_user_project", self.source)
         self.assertIn("async def create_new_project", self.source)
