@@ -103,15 +103,29 @@ captured and enabled.
 
 ## Packs
 
-Pack labels are built by `pack_label(pid)` and must show:
+Generic pack labels are built by `pack_label(pid)` and must show:
 
 - bot credits;
 - approximate number of image generations;
 - optional "best value" marker.
 
-The top-up screen first separates payment methods ("Оплата через Stars" and
-"Оплата по СБП/Карте"). Pack labels avoid the Stars symbol; Robokassa/SBP pack
-labels show the RUB amount on the SBP/card screen.
+Top-up pack labels are context-specific in `flow_bot.py`. The top-up screen
+first separates payment methods ("Оплата через Stars" and
+"СБП/Карта · выгоднее"). Stars pack labels show the Star price with `⭐`.
+Robokassa/SBP pack labels show the discounted RUB amount, the same usage hint,
+and make card/SBP visibly better for the customer.
+
+Robokassa/SBP prices are derived from the same Stars packs but apply
+`ROBOKASSA_CARD_DISCOUNT_PCT` (default 10%). With `STARS_TO_RUB=1.3`, current
+card/SBP public prices are:
+
+| Pack | Credits | Card/SBP amount |
+|---|---:|---:|
+| trial | 45 | 40.95 ₽ |
+| small | 100 | 87.75 ₽ |
+| medium | 290 | 234.00 ₽ |
+| large | 700 | 526.50 ₽ |
+| xl | 1500 | 1053.00 ₽ |
 
 Do not promise a fixed number of videos in a pack unless the UI names the exact
 model/mode; video prices vary widely.

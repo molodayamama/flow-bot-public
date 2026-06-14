@@ -2339,12 +2339,14 @@ def robokassa_result_signature(
     return robokassa_hash(base, algorithm)
 
 
-def robokassa_pack_amount(pack_id: str, rub_per_star: float) -> str:
+def robokassa_pack_amount(pack_id: str, rub_per_star: float, discount_pct: float = 0.0) -> str:
     """RUB amount for a Robokassa top-up, derived from the existing Stars pack."""
     p = pack(pack_id)
     if not p:
         raise ValueError(f"unknown pack: {pack_id!r}")
-    return f"{float(p['stars']) * float(rub_per_star):.2f}"
+    discount = max(0.0, min(float(discount_pct or 0.0), 95.0))
+    amount = float(p["stars"]) * float(rub_per_star) * (1.0 - discount / 100.0)
+    return f"{amount:.2f}"
 
 
 # ── Referral program (economics in docs/REFERRAL.md) ──────────────────

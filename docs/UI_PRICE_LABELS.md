@@ -56,9 +56,14 @@ Image result keyboard:
 Balance and top-up:
 
 - Balance copy explains the current image unit price.
-- Top-up pack labels are built by `pack_label(pid)` and already show credits,
-  approximate generation count, without the Stars symbol. The top-up screen
-  first asks for the payment method.
+- The top-up screen first asks for the payment method.
+- Stars pack labels show credits, approximate usage, and the Star price with
+  `⭐`, for example `45 кр · ~4 карт. · 35⭐`.
+- SBP/card pack labels show credits, approximate usage, and the RUB amount.
+  These prices apply `ROBOKASSA_CARD_DISCOUNT_PCT` (default 10%) and should be
+  presented as the better payment method for the customer.
+- The value marker `🔥 +N%` is reserved for the three larger packs where the
+  credit-per-payment-unit ratio is better than the entry pack.
 
 ## Video UI
 

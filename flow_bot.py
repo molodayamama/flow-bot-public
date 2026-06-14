@@ -90,7 +90,6 @@ from flow_core import (
     STARS_PACKS,
     action_price,
     pack as credit_pack,
-    pack_label,
     public_pack_ids,
     price_gen,
     robokassa_pack_amount,
@@ -176,6 +175,10 @@ try:
     STARS_TO_RUB = float(os.getenv("STARS_TO_RUB", "1.3"))  # ~₽ за 1 Star, best-effort
 except (TypeError, ValueError):
     STARS_TO_RUB = 1.3
+try:
+    ROBOKASSA_CARD_DISCOUNT_PCT = float(os.getenv("ROBOKASSA_CARD_DISCOUNT_PCT", "10"))
+except (TypeError, ValueError):
+    ROBOKASSA_CARD_DISCOUNT_PCT = 10.0
 
 
 def _env_any(*names: str, default: str = "") -> str:
@@ -3466,12 +3469,50 @@ def _robokassa_configured() -> bool:
     )
 
 
+def _robokassa_pack_amount(pack_id: str) -> str:
+    return robokassa_pack_amount(pack_id, STARS_TO_RUB, ROBOKASSA_CARD_DISCOUNT_PCT)
+
+
+def _pack_usage_hint(credits: int) -> str:
+    images = max(0, int(credits) // price_gen(1))
+    cheapest_video = min(int(m["price"]) for m in VIDEO_MODELS.values())
+    videos = max(0, int(credits) // cheapest_video)
+    text = f"~{images} карт."
+    if videos:
+        text += f" / {videos} видео"
+    return text
+
+
+def _pack_value_bonus_pct(pack_id: str) -> int:
+    p = credit_pack(pack_id)
+    base = credit_pack("trial")
+    if not p or not base or pack_id not in {"medium", "large", "xl"}:
+        return 0
+    base_rate = float(base["credits"]) / float(base["stars"])
+    rate = float(p["credits"]) / float(p["stars"])
+    return max(0, round((rate / base_rate - 1.0) * 100))
+
+
+def _value_suffix(pack_id: str) -> str:
+    pct = _pack_value_bonus_pct(pack_id)
+    return f" 🔥 +{pct}%" if pct else ""
+
+
+def _stars_pack_label(pack_id: str) -> str:
+    p = credit_pack(pack_id)
+    if not p:
+        return pack_id
+    if p.get("test"):
+        return f"🧪 Тест · {p['credits']} кр · {p['stars']}⭐"
+    return f"{p['credits']} кр · {_pack_usage_hint(p['credits'])} · {p['stars']}⭐{_value_suffix(pack_id)}"
+
+
 def _robokassa_pack_label(pack_id: str) -> str:
     p = credit_pack(pack_id)
     if not p:
         return "СБП/карта"
-    amount = robokassa_pack_amount(pack_id, STARS_TO_RUB)
-    return f"{p['credits']} кр · {amount} ₽"
+    amount = _robokassa_pack_amount(pack_id)
+    return f"{p['credits']} кр · {_pack_usage_hint(p['credits'])} · {amount} ₽{_value_suffix(pack_id)}"
 
 
 def topup_method_kb() -> types.InlineKeyboardMarkup:
@@ -3489,7 +3530,7 @@ def topup_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
 def topup_stars_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
     rows = []
     for pid in public_pack_ids(include_test=is_admin):
-        rows.append([types.InlineKeyboardButton(text=pack_label(pid), callback_data=f"m:pack:{pid}")])
+        rows.append([types.InlineKeyboardButton(text=_stars_pack_label(pid), callback_data=f"m:pack:{pid}")])
     rows.append([_menu_button("back", "m:topup")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -6384,7 +6425,7 @@ def _robokassa_payment_url(user_id: int, pack_id: str, inv_id: int) -> str:
     p = credit_pack(pack_id)
     if not p:
         raise ValueError(f"unknown pack: {pack_id!r}")
-    out_sum = robokassa_pack_amount(pack_id, STARS_TO_RUB)
+    out_sum = _robokassa_pack_amount(pack_id)
     shp = {"Shp_pack": pack_id, "Shp_user": int(user_id)}
     signature = robokassa_payment_signature(
         ROBOKASSA_MERCHANT_LOGIN,
@@ -6432,7 +6473,7 @@ async def _start_robokassa_topup(callback: types.CallbackQuery, user_id: int, pa
         [_menu_button("back", "m:pay:robo")],
     ])
     await callback.message.answer(
-        f"Счёт на {p['credits']} кр. Сумма: {robokassa_pack_amount(pack_id, STARS_TO_RUB)} ₽.\n"
+        f"Счёт на {p['credits']} кр. Сумма: {_robokassa_pack_amount(pack_id)} ₽.\n"
         "После оплаты баланс пополнится автоматически.",
         reply_markup=kb,
     )
@@ -6575,7 +6616,7 @@ async def robokassa_result(request: web.Request) -> web.Response:
     p = credit_pack(pack_id)
     if not p or not user_raw.isdigit() or not inv_id:
         return web.Response(status=400, text="bad order")
-    expected_amount = robokassa_pack_amount(pack_id, STARS_TO_RUB)
+    expected_amount = _robokassa_pack_amount(pack_id)
     if not _robokassa_amount_matches(out_sum, expected_amount):
         log.warning("robokassa amount mismatch inv_id=%s", inv_id[:32])
         return web.Response(status=400, text="bad amount")
