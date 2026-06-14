@@ -220,7 +220,7 @@ def _scenarios(config: TelegramE2EConfig) -> list[Scenario]:
     if config.mode in {"dry-run", "telegram-smoke"}:
         return [
             Scenario("telegram-start", "/start", 0),
-            Scenario("telegram-status", "/status", 1),
+            Scenario("telegram-menu", "/menu", 1),
         ]
     if config.mode == "telegram-generation":
         assert config.prompt is not None

@@ -289,7 +289,7 @@ class TelegramE2ERunnerTests(unittest.TestCase):
             ]
             summary = json.loads(Path(result["summary_path"]).read_text(encoding="utf-8"))
 
-        self.assertEqual([event["stage_name"] for event in events], ["telegram-start", "telegram-status"])
+        self.assertEqual([event["stage_name"] for event in events], ["telegram-start", "telegram-menu"])
         self.assertEqual(summary["status_counts"], {"planned": 2})
 
     def test_mocked_login_mode_authorizes_without_messaging_bot(self) -> None:

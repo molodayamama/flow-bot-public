@@ -64,8 +64,10 @@ python telegram_bot_tester.py --mode telegram-login-complete --tg-code 12345 --a
 the gitignored `.sessions/*.login.json` file. `telegram-login-complete` deletes
 that file after successful authorization.
 
-`telegram-smoke` sends `/start` and `/status` only. It intentionally avoids
+`telegram-smoke` sends `/start` and `/menu` only. It intentionally avoids
 `/balance`, image generation, captcha solving, browser launch, and Google Flow.
+`/status` is an admin-only diagnostics command; check it separately from an
+owner/admin Telegram session when operational diagnostics are needed.
 
 `telegram-generation` sends one `/one <prompt>` request.
 

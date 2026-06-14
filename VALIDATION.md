@@ -429,6 +429,8 @@ Live admin/account controls:
   health markers, project id presence/value, cookie count, and captcha balances
   to admins, so it must keep the `ADMIN_IDS` gate and live validation notes must
   not paste raw diagnostic values.
+- `telegram_bot_tester.py --mode telegram-smoke` is the public smoke path and
+  should use `/start` plus `/menu`, not `/status`.
 - `/acc_off sub3` disabled an account with no assigned users, `/acc_on sub3`
   restored it, `/acc_vid_off sub3` made it image-only, and `/acc_vid_on sub3`
   restored video capability. A final `/admin_accounts` check confirmed `sub3`
