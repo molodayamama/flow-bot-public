@@ -408,6 +408,39 @@ Live Telegram probe:
   tools\live_telegram_probe.py`, then click a no-charge historical callback
   such as a finished `v:dl:<token>` and confirm only fresh bot replies appear in
   the summary.
+- When the chat has many old inline menus, pass `--click-message-id` for menu
+  callbacks. A plain `--click-data` may click an older message with the same
+  callback data, which is useful for result-button regression tests but noisy
+  for current-menu UX checks.
+
+Live admin/account controls:
+
+- Approved 2026-06-14 checks covered both the shell helper `./admin_help` and
+  Telegram owner/admin commands. The shell helper prints command names and
+  service-log hints only; account toggles must be run in Telegram.
+- `/admin_help`, `/admin_accounts`, and `/admin_errors` returned sanitized
+  owner/admin responses in Telegram.
+- `/acc_off sub3` disabled an account with no assigned users, `/acc_on sub3`
+  restored it, `/acc_vid_off sub3` made it image-only, and `/acc_vid_on sub3`
+  restored video capability. A final `/admin_accounts` check confirmed `sub3`
+  was active with video+image again.
+- Do not leave account toggles changed after validation unless the goal is
+  explicit quarantine and the decision is recorded in `docs/LIVE_TEST_FAILURES.md`
+  or `HANDOFF.md`.
+
+Live no-payment UI checks:
+
+- Approved 2026-06-14 checks covered menu/help/ideas/invite/balance/top-up
+  navigation without completing payment or generation.
+- Help, ideas/templates, guided prompt selection, referral invite, balance, and
+  top-up provider/package menus rendered in Telegram. The payment checks stopped
+  at package lists and did not create or pay invoices.
+- Video wizard checks covered Omni, Veo, Ingredients, and Frames entry states;
+  model/format/count changes updated labels and prices without starting
+  generation.
+- Image wizard checks reached the image settings screen with count, aspect,
+  model, balance, and price controls. The next untested step is prompt entry or
+  `w:go`, which starts a paid/provider generation path.
 
 Live image result actions:
 
