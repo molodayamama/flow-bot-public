@@ -108,9 +108,14 @@ class PricingTests(unittest.TestCase):
             hashlib.sha256(result_base.encode("utf-8")).hexdigest(),
         )
 
-    def test_robokassa_amount_uses_existing_pack_economics(self) -> None:
-        self.assertEqual(flow_core.robokassa_pack_amount("small", 1.3), "97.50")
-        self.assertEqual(flow_core.robokassa_pack_amount("small", 1.3, discount_pct=10), "87.75")
+    def test_robokassa_amount_uses_fixed_public_grid(self) -> None:
+        self.assertEqual(flow_core.robokassa_pack_amount("trial", 1.3), "45.00")
+        self.assertEqual(flow_core.robokassa_pack_amount("small", 1.3), "90.00")
+        self.assertEqual(flow_core.robokassa_pack_amount("medium", 1.3), "235.00")
+        self.assertEqual(flow_core.robokassa_pack_amount("large", 1.3), "530.00")
+        self.assertEqual(flow_core.robokassa_pack_amount("xl", 1.3), "1050.00")
+        self.assertEqual(flow_core.robokassa_pack_amount("small", 1.3, discount_pct=10), "90.00")
+        self.assertEqual(flow_core.robokassa_pack_amount("test", 1.3, discount_pct=10), "1.17")
 
 
 class UpscaleCaptureTests(unittest.TestCase):
@@ -1192,9 +1197,9 @@ class BotImportSmokeTests(unittest.TestCase):
             self.assertTrue(any("1500 кр" in text and "900⭐" in text and "🔥 +30%" in text for text in stars_texts))
             fb.topup_stars_kb(is_admin=True)  # includes the admin test pack
             robo_texts = [b.text for row in fb.topup_robo_kb().inline_keyboard for b in row]
-            self.assertIn("45 кр · только картинки · ~4 карт. · 40.95 ₽", robo_texts)
-            self.assertTrue(any("100 кр" in text and "2 видео" in text and "87.75 ₽" in text for text in robo_texts))
-            self.assertTrue(any("1500 кр" in text and "1053.00 ₽" in text and "🔥 +30%" in text for text in robo_texts))
+            self.assertIn("45 кр · только картинки · ~4 карт. · 45 ₽", robo_texts)
+            self.assertTrue(any("100 кр" in text and "2 видео" in text and "90 ₽" in text for text in robo_texts))
+            self.assertTrue(any("1500 кр" in text and "1050 ₽" in text and "🔥 +30%" in text for text in robo_texts))
             fb._image_keyboard("abcd1234")
             fb.video_family_kb()           # family buttons now carry "· от N кр"
             fb.ingredients_kb(1, "land", 1, "veo-fast", has_caption=True)

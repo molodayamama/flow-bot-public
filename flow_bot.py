@@ -3473,6 +3473,16 @@ def _robokassa_pack_amount(pack_id: str) -> str:
     return robokassa_pack_amount(pack_id, STARS_TO_RUB, ROBOKASSA_CARD_DISCOUNT_PCT)
 
 
+def _rub_display(amount: str) -> str:
+    try:
+        value = Decimal(str(amount))
+    except (InvalidOperation, ValueError):
+        return str(amount)
+    if value == value.to_integral_value():
+        return str(int(value))
+    return f"{value:.2f}"
+
+
 def _pack_usage_hint(credits: int) -> str:
     images = max(0, int(credits) // price_gen(1))
     cheapest_video = min(int(m["price"]) for m in VIDEO_MODELS.values())
@@ -3513,7 +3523,7 @@ def _robokassa_pack_label(pack_id: str) -> str:
     p = credit_pack(pack_id)
     if not p:
         return "СБП/карта"
-    amount = _robokassa_pack_amount(pack_id)
+    amount = _rub_display(_robokassa_pack_amount(pack_id))
     if pack_id == "trial":
         return f"{p['credits']} кр · только картинки · ~{p['credits'] // price_gen(1)} карт. · {amount} ₽"
     return f"{p['credits']} кр · {_pack_usage_hint(p['credits'])} · {amount} ₽{_value_suffix(pack_id)}"
@@ -6477,7 +6487,7 @@ async def _start_robokassa_topup(callback: types.CallbackQuery, user_id: int, pa
         [_menu_button("back", "m:pay:robo")],
     ])
     await callback.message.answer(
-        f"Счёт на {p['credits']} кр. Сумма: {_robokassa_pack_amount(pack_id)} ₽.\n"
+        f"Счёт на {p['credits']} кр. Сумма: {_rub_display(_robokassa_pack_amount(pack_id))} ₽.\n"
         "После оплаты баланс пополнится автоматически.",
         reply_markup=kb,
     )

@@ -2339,11 +2339,27 @@ def robokassa_result_signature(
     return robokassa_hash(base, algorithm)
 
 
+ROBOKASSA_PACK_AMOUNTS_RUB = {
+    "trial": "45.00",
+    "small": "90.00",
+    "medium": "235.00",
+    "large": "530.00",
+    "xl": "1050.00",
+}
+
+
 def robokassa_pack_amount(pack_id: str, rub_per_star: float, discount_pct: float = 0.0) -> str:
-    """RUB amount for a Robokassa top-up, derived from the existing Stars pack."""
+    """RUB amount for a Robokassa top-up.
+
+    Public packs use a fixed rounded card/SBP price grid. Admin or future packs
+    still fall back to Stars-derived pricing so test payments keep working.
+    """
     p = pack(pack_id)
     if not p:
         raise ValueError(f"unknown pack: {pack_id!r}")
+    fixed = ROBOKASSA_PACK_AMOUNTS_RUB.get(pack_id)
+    if fixed:
+        return fixed
     discount = max(0.0, min(float(discount_pct or 0.0), 95.0))
     amount = float(p["stars"]) * float(rub_per_star) * (1.0 - discount / 100.0)
     return f"{amount:.2f}"
