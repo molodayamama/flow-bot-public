@@ -22,6 +22,9 @@ from flow_core import (
     image_model_extra,
     IMAGE_MODELS,
     DEFAULT_IMAGE_MODEL,
+    build_upload_image_payload,
+    parse_upload_image_response,
+    IMAGE_UPLOAD_ENDPOINT,
     build_upsample_payload,
     parse_upsample_response,
     IMAGE_UPSAMPLE_ENDPOINT,
@@ -405,6 +408,36 @@ class MediaIdExtractionTests(unittest.TestCase):
     def test_returns_none_without_any_media_signal(self) -> None:
         self.assertIsNone(flow_core.media_source_from_response({"a": {"b": [1, 2, "x"]}}))
         self.assertIsNone(flow_core.media_source_from_response([]))
+
+    def test_upload_image_payload_matches_capture_contract(self) -> None:
+        payload = build_upload_image_payload(
+            project_id="proj-1",
+            image_bytes="abc123",
+            mime_type="image/png",
+            file_name="image.png",
+        )
+        self.assertEqual(IMAGE_UPLOAD_ENDPOINT, "https://aisandbox-pa.googleapis.com/v1/flow/uploadImage")
+        self.assertEqual(payload["clientContext"], {"projectId": "proj-1", "tool": "PINHOLE"})
+        self.assertEqual(payload["imageBytes"], "abc123")
+        self.assertTrue(payload["isUserUploaded"])
+        self.assertFalse(payload["isHidden"])
+        self.assertEqual(payload["mimeType"], "image/png")
+        self.assertEqual(payload["fileName"], "image.png")
+        self.assertNotIn("recaptchaContext", json.dumps(payload))
+
+    def test_parse_upload_image_response_preserves_project_and_workflow(self) -> None:
+        workflow_id = "11111111-2222-3333-4444-555555555555"
+        data = {
+            "media": {
+                "name": self.UID,
+                "projectId": "proj-1",
+                "workflowId": workflow_id,
+            }
+        }
+        src = parse_upload_image_response(data)
+        self.assertEqual(src["mediaId"], self.UID)
+        self.assertEqual(src["_project_id"], "proj-1")
+        self.assertEqual(src["workflowId"], workflow_id)
 
 
 class ImageRegistryTests(unittest.TestCase):

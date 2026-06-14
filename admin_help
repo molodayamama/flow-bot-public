@@ -1,0 +1,21 @@
+#!/usr/bin/env sh
+set -eu
+
+cat <<'EOF'
+Admin helpers for the running Telegram bot:
+
+Telegram owner/admin commands:
+  /admin_help
+  /admin_accounts
+  /acc_off <id>
+  /acc_on <id>
+  /acc_vid_off <id>
+  /acc_vid_on <id>
+  /admin_errors
+
+Common VPS checks:
+  systemctl is-active geminifree-bot
+  journalctl -u geminifree-bot -n 120 --no-pager
+
+Run account toggles inside the Telegram owner/admin chat, not in this shell.
+EOF

@@ -216,6 +216,10 @@ failure unless reproduced with sequential clients. The probe prints message
 summaries only; do not paste Telegram `file_id` values, raw logs, secrets, or
 private prompts into failure notes.
 
+After inline callback clicks, use `--recent` to read the current edited wizard
+message. Telegram often edits the existing message instead of sending a new one,
+so the callback command itself may print only the clicked message summary.
+
 Telegram E2E external modes contact Telegram and may cause the bot to contact
 Google Flow, mutate bot cooldown state, spend quota, trigger captcha/rate-limit
 signals, or create/update `.sessions/` files. Never run them as routine
@@ -367,6 +371,23 @@ Admin/server command change:
 - Reviewer approval required.
 - Verify authorization logic offline.
 - Do not execute real shell/admin actions as validation.
+- For the repo-root `admin_help` wrapper, safe validation is:
+  `./admin_help` on the VPS. It must print command names and service-log hints
+  only; it must not read or print runtime state or secrets.
+
+Live video 401/403 routing checks:
+
+- Requires explicit approval because it contacts Telegram, Google Flow, captcha
+  providers, and may spend Flow credits.
+- If a text-to-video request fails with repeated provider 403 on one account,
+  inspect `/admin_accounts` from the admin chat and consider quarantining only
+  the failing video account with `/acc_vid_off <id>`.
+- Verified 2026-06-14: disabling video for `main` and `sub1` routed the next
+  Omni 4s text-to-video request to `sub2`, which returned HTTP 200, completed
+  provider polling, downloaded the video, and delivered it in Telegram.
+- The code should refresh bearer and retry once on a video POST 401. Validate
+  the source-level guard with `test_video_401_retries_after_refresh` and keep
+  the retry bounded.
 
 ## Evidence Template
 

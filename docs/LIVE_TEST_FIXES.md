@@ -74,4 +74,144 @@ No entries yet.
 
 ## Implemented Or Verified Fixes
 
-No entries yet.
+### 2026-06-14 LFX-001 direct Flow upload API for Telegram photos
+
+- Failure id: LF-001
+- Status: verified
+- Priority: S1
+- Fix owner: current Codex session
+- Proposed by: current Codex live E2E session
+
+Root cause hypothesis:
+
+- The browser upload listener no longer reliably observes the Flow upload
+  response, so Telegram photo uploads can complete without a usable `mediaId`.
+- Confidence: medium
+
+Implemented fix:
+
+- Add a direct Flow image upload API path before the existing browser upload
+  fallback. Keep the fallback for provider drift.
+
+Owner files:
+
+- `flow_core.py` - upload payload and response parsing helpers.
+- `flow_bot.py` - `SessionKeeper` upload path and sanitized logging.
+- `tests/test_flow_edit.py` - offline payload/parser coverage.
+
+Validation:
+
+- Offline checks passed for syntax and targeted image-edit tests.
+- Approved live Telegram check with `kotenok.jpg` succeeded and delivered an
+  edited image result.
+
+Notes:
+
+- Do not paste returned Flow media ids or Telegram file ids into docs/logs.
+
+### 2026-06-14 LFX-002 video bearer refresh and retry handling
+
+- Failure id: LF-002
+- Status: implemented
+- Priority: S1
+- Fix owner: current Codex session
+- Proposed by: current Codex live E2E session
+
+Root cause hypothesis:
+
+- Some video failures are stale bearer/session failures. The old path refreshed
+  too late for a useful retry, especially after HTTP 401.
+- Confidence: medium
+
+Implemented fix:
+
+- On first video 403, refresh bearer before trying the next captcha action.
+- On first video 401 for an action, refresh bearer and retry that action once
+  with a fresh captcha token and batch id.
+
+Owner files:
+
+- `flow_bot.py` - video generation retry path.
+- `tests/test_flow_menu.py` - source-level guards for 401/403 retry behavior.
+
+Validation:
+
+- Offline syntax and targeted menu tests passed.
+- Live 401 was seen before this fix; the direct 401 retry path was not
+  re-triggered after deploy because the final healthy account returned HTTP 200.
+
+Notes:
+
+- Keep retries bounded. Do not loop indefinitely on provider auth errors.
+
+### 2026-06-14 LFX-003 quarantine failing video accounts
+
+- Failure id: LF-002
+- Status: verified
+- Priority: S1
+- Fix owner: operator/current Codex session
+- Proposed by: current Codex live E2E session
+
+Root cause hypothesis:
+
+- The repeated all-action 403 was account-specific: video-capable accounts
+  `main` and `sub1` failed, while another video-capable account succeeded.
+- Confidence: high for the live incident; medium as a general rule.
+
+Implemented fix:
+
+- Use existing admin commands to disable video routing for failing accounts:
+  `/acc_vid_off main` and `/acc_vid_off sub1`.
+
+Owner files:
+
+- `flow_bot.py` - future automatic quarantine/health scoring should live near
+  video failure handling and account routing.
+- `flow_core.py` - future account capability/state helpers if needed.
+- `tests/test_flow_menu.py` - future routing and quarantine coverage.
+
+Validation:
+
+- Approved live Telegram account checks showed `main` and `sub1` as image-only
+  after the toggles.
+- A subsequent Omni 4s text-to-video request routed to `sub2`, returned HTTP 200,
+  reached successful provider status, downloaded the video, and delivered it in
+  Telegram.
+
+Notes:
+
+- This is an operational mitigation, not full automation. Add automatic
+  per-account video quarantine if repeated video 401/403 failures should stop
+  routing without operator action.
+
+### 2026-06-14 LFX-004 VPS admin_help wrapper
+
+- Failure id: LF-003
+- Status: verified
+- Priority: S3
+- Fix owner: current Codex session
+- Proposed by: current Codex live E2E session
+
+Root cause hypothesis:
+
+- The operator runbook referenced a shell helper that was not deployed in the
+  repo.
+- Confidence: high
+
+Implemented fix:
+
+- Add repo-root `admin_help` wrapper that prints safe Telegram admin commands
+  and common VPS service/log checks.
+
+Owner files:
+
+- `admin_help` - shell helper.
+
+Validation:
+
+- Deployed to the VPS, marked executable, and verified with `./admin_help`.
+
+Notes:
+
+- The wrapper prints command names only. It must not include secrets, proxy
+  values, tokens, account emails, or raw runtime data.

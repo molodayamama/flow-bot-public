@@ -84,13 +84,13 @@ Next fix notes:
 - Smallest likely code/doc/config area to inspect next.
 ```
 
-## Open Failures
+## Recorded Failures
 
 ### 2026-06-14 LF-001 photo upload returns no Flow mediaId
 
 - Severity: S1
-- Status: open
-- Next fix owner: unassigned
+- Status: verified fixed
+- Next fix owner: completed in current Codex session
 - Live check approved by: operator request in current Codex session
 - Environment: VPS `/opt/geminifree`; `geminifree-bot` active; `@photozhab_bot`
 - Surface: image edit / photo upload
@@ -143,11 +143,18 @@ Next fix notes:
 
 - Inspect `SessionKeeper.upload_image`, `upload_capture.json` parsing/listener rules, and upload endpoint drift using an abort-safe capture before changing bot behavior.
 
+Resolution:
+
+- Implemented direct Flow image upload API use before the old browser upload fallback.
+- Live Telegram photo+caption check with `kotenok.jpg` succeeded after deploy:
+  the bot received a Flow `mediaId`, image generation returned HTTP 200, and a
+  generated image result was delivered in Telegram.
+
 ### 2026-06-14 LF-002 text-to-video rejected with 403 on all captcha actions
 
 - Severity: S1
-- Status: open
-- Next fix owner: unassigned
+- Status: mitigated; follow-up recommended
+- Next fix owner: follow-up fixer for automatic video-account quarantine
 - Live check approved by: operator request in current Codex session
 - Environment: VPS `/opt/geminifree`; `geminifree-bot` active; `@photozhab_bot`
 - Surface: video text
@@ -201,11 +208,27 @@ Next fix notes:
 
 - Re-capture the current video text request contract and reCAPTCHA action with `tools/capture_video.py` or another approved live capture; verify account-specific video capability before code changes.
 
+Resolution:
+
+- Implemented one bearer refresh on the first video 403 before trying the next
+  captcha action, plus one retry of the current action after a video 401.
+- Operationally quarantined failing video accounts with `/acc_vid_off main` and
+  `/acc_vid_off sub1`.
+- A follow-up Omni 4s text-to-video live run routed to `sub2`, returned HTTP 200,
+  reached successful provider status, downloaded the video, and delivered it in
+  Telegram.
+
+Residual risk:
+
+- Video account health is still mostly operator-controlled. Add automatic
+  per-account video quarantine or stronger health scoring if repeated 401/403
+  failures should be removed from routing without manual `/acc_vid_off`.
+
 ### 2026-06-14 LF-003 VPS shell admin helper is absent
 
 - Severity: S3
-- Status: open
-- Next fix owner: unassigned
+- Status: verified fixed
+- Next fix owner: completed in current Codex session
 - Live check approved by: operator request in current Codex session
 - Environment: VPS `/opt/geminifree`; `geminifree-bot` active
 - Surface: admin/server command
@@ -257,7 +280,14 @@ Suspected cause:
 Next fix notes:
 
 - Either add a documented shell wrapper for admin help or update runbook instructions to use Telegram `/admin_help`.
+- Added repo-root `admin_help` shell helper and deployed it to the VPS. Live
+  shell check showed `./admin_help` prints the Telegram admin commands and
+  service-log helpers.
 
 ## Closed Failures
 
-No entries yet.
+- `LF-001`: fixed by Flow upload API path and live-verified with `kotenok.jpg`.
+- `LF-002`: mitigated by bearer retry handling plus manual video quarantine for
+  `main` and `sub1`; live-verified video delivery on `sub2`. Automatic
+  quarantine remains a recommended follow-up.
+- `LF-003`: fixed by the `admin_help` shell wrapper and live-verified on the VPS.

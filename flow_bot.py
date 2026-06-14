@@ -72,9 +72,12 @@ from flow_core import (
     describe_schema,
     download_url,
     id_from_media_url,
+    IMAGE_UPLOAD_ENDPOINT,
     loads_xssi,
     load_edit_capture,
     media_source_from_response,
+    build_upload_image_payload,
+    parse_upload_image_response,
     parse_action_callback,
     result_pairs,
     save_edit_capture,
@@ -1310,6 +1313,96 @@ class SessionKeeper:
                 log.error(f"❌ generate_via_browser: {e}")
                 return {"error": flow_copy.msg("gen_failed")}
 
+    async def _upload_image_api_locked(self, data: bytes, filename: str) -> dict | None:
+        project_id = self._project_id
+        if not (self._bearer and project_id):
+            await self._refresh_bearer()
+            project_id = self._project_id
+        if not (self._bearer and project_id):
+            return None
+        proxy_raw = self.api_proxy_url if self.api_proxy_url is not None else API_PROXY_URL
+        proxy = _effective_proxy_url(proxy_raw) or None
+        mime_type = "image/png"
+        lower_name = (filename or "").lower()
+        if lower_name.endswith((".jpg", ".jpeg")):
+            mime_type = "image/jpeg"
+        elif lower_name.endswith(".webp"):
+            mime_type = "image/webp"
+        status: int | None = None
+        text = ""
+        for attempt in range(2):
+            try:
+                raw_cookies = await self._context.cookies("https://labs.google")
+            except Exception as e:
+                if not self._is_target_closed_error(e):
+                    raise
+                log.warning("Browser context closed while uploading image, restarting...")
+                await self._start_locked()
+                if not self._bearer:
+                    await self._refresh_bearer()
+                raw_cookies = await self._context.cookies("https://labs.google")
+
+            cookies = {c["name"]: c["value"] for c in raw_cookies}
+            project_id = self._project_id or project_id
+            if not (self._bearer and project_id):
+                return None
+            session = {
+                "bearer": self._bearer,
+                "cookies": cookies,
+                "project_id": project_id,
+                "headers": dict(self._last_headers),
+            }
+            payload = build_upload_image_payload(
+                project_id=project_id,
+                image_bytes=base64.b64encode(data).decode("ascii"),
+                mime_type=mime_type,
+                file_name=filename or "upload.png",
+            )
+            try:
+                async with aiohttp.ClientSession(cookies=cookies) as http:
+                    async with http.post(
+                        IMAGE_UPLOAD_ENDPOINT,
+                        headers=FlowHttpClient(self)._build_headers(session),
+                        json=payload,
+                        proxy=proxy,
+                        timeout=aiohttp.ClientTimeout(total=60),
+                    ) as resp:
+                        status = resp.status
+                        text = await resp.text()
+            except Exception as e:
+                log.warning("⚠️ upload_image API request failed: %s", e)
+                return None
+
+            if status == 401 and attempt == 0:
+                log.warning("🔑 upload_image API bearer expired, refreshing...")
+                await self._refresh_bearer()
+                project_id = self._project_id
+                continue
+            break
+
+        if status == 401:
+            log.warning("🔑 upload_image API bearer expired after refresh")
+            return None
+        if status != 200:
+            body = loads_xssi(text)
+            log.warning(
+                "⚠️ upload_image API status=%s schema=%s",
+                status,
+                describe_schema(body) if body is not None else "non-json",
+            )
+            return None
+        body = loads_xssi(text)
+        source = parse_upload_image_response(body) if body is not None else None
+        if source and source.get("mediaId"):
+            source.setdefault("_project_id", project_id)
+            log.info("⬆️ Фото загружено через Flow API: mediaId=%s…", source["mediaId"][:8])
+            return source
+        log.warning(
+            "⚠️ upload_image API 200 but mediaId not parsed (schema=%s)",
+            describe_schema(body) if body is not None else "non-json",
+        )
+        return None
+
     async def upload_image(self, data: bytes, filename: str = "upload.png") -> dict | None:
         """Загрузить присланное фото в Flow через файловый input браузера.
 
@@ -1355,6 +1448,10 @@ class SessionKeeper:
                     captured.update(src)
 
             try:
+                api_source = await self._upload_image_api_locked(data, filename)
+                if api_source and api_source.get("mediaId"):
+                    return api_source
+
                 # Базовые id картинок, уже присутствующих на странице ДО загрузки.
                 baseline_ids = await self._page_media_ids()
 
@@ -2103,66 +2200,88 @@ class FlowHttpClient:
         gen_status: int | None = None
         gen_text = ""
         solved_any = False
+        refreshed_after_403 = False
+        refreshed_after_401 = False
         for action in SessionKeeper.VIDEO_RECAPTCHA_ACTIONS:
-            captcha_token = await self.keeper.solve_captcha(action)
-            if not captcha_token:
+            posted = False
+            for _auth_attempt in range(2):
+                captcha_token = await self.keeper.solve_captcha(action)
+                if not captcha_token:
+                    break
+                solved_any = True
+                posted = True
+                batch_id = str(_uuid.uuid4())
+                if is_edit:
+                    payload = build_video_edit_payload(
+                        prompt=prompt,
+                        project_id=project_id,
+                        captcha_token=captcha_token,
+                        aspect=aspect,
+                        session_id=sess_id,
+                        batch_id=batch_id,
+                        source_media_id=source_media_id or "",
+                        source_workflow_id=source_workflow_id or "",
+                        end_frame_index=video_edit_end_frame(source_duration_s),
+                    )
+                elif is_extend:
+                    payload = build_video_extend_payload(
+                        prompt=prompt,
+                        project_id=project_id,
+                        captcha_token=captcha_token,
+                        aspect=aspect,
+                        model_key=model_key,
+                        session_id=sess_id,
+                        batch_id=batch_id,
+                        source_media_id=source_media_id or "",
+                        scene_id=source_scene_id or "",
+                    )
+                else:
+                    payload = build_video_payload(
+                        prompt=prompt,
+                        project_id=project_id,
+                        captcha_token=captcha_token,
+                        aspect=aspect,
+                        model_key=model_key,
+                        session_id=sess_id,
+                        batch_id=batch_id,
+                        reference_images=reference_images,
+                        start_image=start_image,
+                        end_image=end_image,
+                    )
+                try:
+                    async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
+                        async with http.post(
+                            gen_endpoint,
+                            headers=headers,
+                            json=payload,
+                            proxy=proxy,
+                            timeout=aiohttp.ClientTimeout(total=60),
+                        ) as resp:
+                            gen_status = resp.status
+                            gen_text   = await resp.text()
+                except Exception as exc:
+                    log.error("🎬 video network error: %s", exc)
+                    return {"error": flow_copy.msg("vid_gen_failed")}
+
+                if gen_status == 401 and not refreshed_after_401:
+                    log.warning("🎬 video → 401 (action=%s), refreshing bearer and retrying", action)
+                    refreshed_after_401 = True
+                    await self.keeper._refresh_bearer()
+                    session = await self.keeper.get_session()
+                    headers = self._build_headers(session)
+                    continue
+                break
+
+            if not posted:
                 continue
-            solved_any = True
-            batch_id = str(_uuid.uuid4())
-            if is_edit:
-                payload = build_video_edit_payload(
-                    prompt=prompt,
-                    project_id=project_id,
-                    captcha_token=captcha_token,
-                    aspect=aspect,
-                    session_id=sess_id,
-                    batch_id=batch_id,
-                    source_media_id=source_media_id or "",
-                    source_workflow_id=source_workflow_id or "",
-                    end_frame_index=video_edit_end_frame(source_duration_s),
-                )
-            elif is_extend:
-                payload = build_video_extend_payload(
-                    prompt=prompt,
-                    project_id=project_id,
-                    captcha_token=captcha_token,
-                    aspect=aspect,
-                    model_key=model_key,
-                    session_id=sess_id,
-                    batch_id=batch_id,
-                    source_media_id=source_media_id or "",
-                    scene_id=source_scene_id or "",
-                )
-            else:
-                payload = build_video_payload(
-                    prompt=prompt,
-                    project_id=project_id,
-                    captcha_token=captcha_token,
-                    aspect=aspect,
-                    model_key=model_key,
-                    session_id=sess_id,
-                    batch_id=batch_id,
-                    reference_images=reference_images,
-                    start_image=start_image,
-                    end_image=end_image,
-                )
-            try:
-                async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
-                    async with http.post(
-                        gen_endpoint,
-                        headers=headers,
-                        json=payload,
-                        proxy=proxy,
-                        timeout=aiohttp.ClientTimeout(total=60),
-                    ) as resp:
-                        gen_status = resp.status
-                        gen_text   = await resp.text()
-            except Exception as exc:
-                log.error("🎬 video network error: %s", exc)
-                return {"error": flow_copy.msg("vid_gen_failed")}
 
             if gen_status == 403:
                 log.warning(f"🎬 video → 403 (action={action}), пробую следующий action")
+                if not refreshed_after_403:
+                    refreshed_after_403 = True
+                    await self.keeper._refresh_bearer()
+                    session = await self.keeper.get_session()
+                    headers = self._build_headers(session)
                 continue
             log.info(f"🎬 video {endpoint_name} → {gen_status} (action={action})")
             break
@@ -2170,7 +2289,6 @@ class FlowHttpClient:
         if not solved_any:
             return {"error": "Не удалось решить капчу для видео"}
         if gen_status == 401:
-            await self.keeper._refresh_bearer()
             return {"error": "Bearer устарел, попробуйте ещё раз"}
         if gen_status == 429:
             return {"error": flow_copy.msg("rate_limited")}
@@ -2401,7 +2519,7 @@ def _make_bot() -> Bot:
                     )
                     return _SocksSession._shared
 
-            log.info(f"🧦 Telegram через SOCKS5: {TG_PROXY_URL}")
+            log.info("🧦 Telegram через SOCKS5: configured")
             return Bot(token=TELEGRAM_TOKEN, session=_SocksSession())
         except ImportError:
             log.error("❌ aiohttp-socks не установлен! pip install aiohttp-socks")

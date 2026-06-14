@@ -645,6 +645,29 @@ class BotMenuWiringTests(unittest.TestCase):
         clear = self.source[self.source.index("def _vid_clear"):][:400]
         self.assertIn('"vretry"', clear)  # snapshot survives the finally-clear
 
+    def test_video_403_refreshes_session_before_next_action(self) -> None:
+        start = self.source.index("async def generate_video")
+        end = self.source.index("if not solved_any:", start)
+        block = self.source[start:end]
+        self.assertIn("refreshed_after_403 = False", block)
+        self.assertIn("if gen_status == 403:", block)
+        self.assertIn("await self.keeper._refresh_bearer()", block)
+        self.assertIn("session = await self.keeper.get_session()", block)
+        self.assertIn("headers = self._build_headers(session)", block)
+
+    def test_video_401_retries_after_refresh(self) -> None:
+        start = self.source.index("async def generate_video")
+        end = self.source.index("if not solved_any:", start)
+        block = self.source[start:end]
+        self.assertIn("refreshed_after_401 = False", block)
+        self.assertIn("for _auth_attempt in range(2):", block)
+        self.assertIn("if gen_status == 401 and not refreshed_after_401:", block)
+        self.assertIn("refreshed_after_401 = True", block)
+        self.assertIn("session = await self.keeper.get_session()", block)
+        self.assertIn("headers = self._build_headers(session)", block)
+        tail = self.source[end:self.source.index("if gen_status == 429:", end)]
+        self.assertNotIn("await self.keeper._refresh_bearer()", tail)
+
     def test_after_result_offers_video_balance_and_menu(self) -> None:
         block = self.source[self.source.index("async def _after_result"):][:700]
         for cb in ('"m:repeat"', '"m:gen"', '"m:vid"', '"m:balance"', '"m:menu"'):

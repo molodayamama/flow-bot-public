@@ -301,6 +301,51 @@ def media_source_from_response(obj: Any) -> dict | None:
     return source
 
 
+IMAGE_UPLOAD_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1/flow/uploadImage"
+
+
+def build_upload_image_payload(
+    *,
+    project_id: str,
+    image_bytes: str,
+    mime_type: str,
+    file_name: str,
+) -> dict:
+    """Construct the verified ``flow/uploadImage`` request body.
+
+    The web app sends the image as a base64 string in ``imageBytes`` and marks it
+    as a visible user upload. No recaptcha token is present in the captured
+    request shape.
+    """
+    return {
+        "clientContext": {
+            "projectId": project_id,
+            "tool": "PINHOLE",
+        },
+        "imageBytes": image_bytes,
+        "isUserUploaded": True,
+        "isHidden": False,
+        "mimeType": mime_type,
+        "fileName": file_name,
+    }
+
+
+def parse_upload_image_response(data: Any) -> dict | None:
+    """Return an editable source dict from a ``flow/uploadImage`` response."""
+    source = media_source_from_response(data)
+    if not source:
+        return None
+    media = data.get("media") if isinstance(data, dict) else None
+    if isinstance(media, dict):
+        project_id = media.get("projectId")
+        workflow_id = media.get("workflowId")
+        if isinstance(project_id, str) and project_id:
+            source["_project_id"] = project_id
+        if isinstance(workflow_id, str) and workflow_id:
+            source["workflowId"] = workflow_id
+    return source
+
+
 def find_media_source(obj: Any) -> dict | None:
     """Backwards-compatible alias returning an editable image source dict."""
     return media_source_from_response(obj)
