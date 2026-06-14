@@ -22,6 +22,7 @@ It holds the testable core of the Google Flow bot:
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import secrets
@@ -2283,6 +2284,67 @@ def pack_label(pack_id: str) -> str:
     if p.get("best"):
         text += " 🔥 Выгодно"
     return text
+
+
+def robokassa_hash(data: str, algorithm: str = "md5") -> str:
+    """Return a Robokassa-compatible hex digest for ``data``."""
+    algo = (algorithm or "md5").strip().lower().replace("-", "")
+    if algo not in {"md5", "sha1", "sha256", "sha384", "sha512"}:
+        raise ValueError(f"unsupported Robokassa hash algorithm: {algorithm!r}")
+    h = hashlib.new(algo)
+    h.update(data.encode("utf-8"))
+    return h.hexdigest()
+
+
+def robokassa_shp_suffix(shp_params: dict[str, object] | None = None) -> str:
+    """Serialize Robokassa ``Shp_*`` params in the required sorted order."""
+    if not shp_params:
+        return ""
+    parts = []
+    for key in sorted(shp_params):
+        if key.startswith("Shp_"):
+            parts.append(f"{key}={shp_params[key]}")
+    return "".join(f":{part}" for part in parts)
+
+
+def robokassa_payment_signature(
+    merchant_login: str,
+    out_sum: str,
+    inv_id: str | int,
+    password1: str,
+    *,
+    shp_params: dict[str, object] | None = None,
+    receipt: str | None = None,
+    algorithm: str = "md5",
+) -> str:
+    """SignatureValue for redirecting the user to Robokassa payment."""
+    parts = [merchant_login, out_sum, str(inv_id)]
+    if receipt:
+        parts.append(receipt)
+    parts.append(password1)
+    base = ":".join(parts) + robokassa_shp_suffix(shp_params)
+    return robokassa_hash(base, algorithm)
+
+
+def robokassa_result_signature(
+    out_sum: str,
+    inv_id: str | int,
+    password2: str,
+    *,
+    shp_params: dict[str, object] | None = None,
+    algorithm: str = "md5",
+) -> str:
+    """Expected SignatureValue for Robokassa ResultURL callbacks."""
+    base = f"{out_sum}:{inv_id}:{password2}" + robokassa_shp_suffix(shp_params)
+    return robokassa_hash(base, algorithm)
+
+
+def robokassa_pack_amount(pack_id: str, rub_per_star: float) -> str:
+    """RUB amount for a Robokassa top-up, derived from the existing Stars pack."""
+    p = pack(pack_id)
+    if not p:
+        raise ValueError(f"unknown pack: {pack_id!r}")
+    return f"{float(p['stars']) * float(rub_per_star):.2f}"
 
 
 # ── Referral program (economics in docs/REFERRAL.md) ──────────────────

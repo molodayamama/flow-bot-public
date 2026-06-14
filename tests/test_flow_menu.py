@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -79,6 +80,27 @@ class PricingTests(unittest.TestCase):
     def test_extend_index_default_on_videoref(self) -> None:
         ref = flow_core.VideoRef(user_id=1, project_id="p", media_id="m")
         self.assertEqual(ref.extend_index, 0)
+
+    def test_robokassa_sha256_signatures(self) -> None:
+        shp = {"Shp_user": 7, "Shp_pack": "small"}
+        pay_base = "photozhab:97.50:123:pass1" + ":Shp_pack=small:Shp_user=7"
+        result_base = "97.50:123:pass2" + ":Shp_pack=small:Shp_user=7"
+        self.assertEqual(
+            flow_core.robokassa_payment_signature(
+                "photozhab", "97.50", 123, "pass1",
+                shp_params=shp, algorithm="sha256",
+            ),
+            hashlib.sha256(pay_base.encode("utf-8")).hexdigest(),
+        )
+        self.assertEqual(
+            flow_core.robokassa_result_signature(
+                "97.50", 123, "pass2", shp_params=shp, algorithm="sha256",
+            ),
+            hashlib.sha256(result_base.encode("utf-8")).hexdigest(),
+        )
+
+    def test_robokassa_amount_uses_existing_pack_economics(self) -> None:
+        self.assertEqual(flow_core.robokassa_pack_amount("small", 1.3), "97.50")
 
 
 class UpscaleCaptureTests(unittest.TestCase):
@@ -375,6 +397,20 @@ class BotMenuWiringTests(unittest.TestCase):
         block = self.source[start:start + 700]
         self.assertIn("_reset_image_flow(user_id)", block)
         self.assertIn("_vid_clear(user_id)", block)
+
+    def test_robokassa_sbp_topup_wired(self) -> None:
+        for needle in (
+            "ROBOKASSA_HASH_ALGO",
+            "ROBOKASSA_INC_CURR_LABEL",
+            'callback_data=f"m:robo:{pid}"',
+            'data.startswith("m:robo:")',
+            "robokassa_payment_signature(",
+            "robokassa_result_signature(",
+            "async def robokassa_result",
+            'provider="robokassa"',
+            "await _start_robokassa_web_server()",
+        ):
+            self.assertIn(needle, self.source, needle)
 
     def test_admin_grant_restricted(self) -> None:
         self.assertIn('@dp.message(Command("grant"))', self.source)

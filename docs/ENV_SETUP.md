@@ -133,6 +133,37 @@ TG_E2E_PROXY_URL=
 
 Внешние режимы tester всегда требуют `--approve-external-action`.
 
+## Robokassa / SBP
+
+Keep Telegram Stars enabled; Robokassa is an additional top-up path. Do not
+commit real passwords.
+
+```dotenv
+ROBOKASSA_ENABLED=1
+ROBOKASSA_MERCHANT_LOGIN=photozhab
+ROBOKASSA_HASH_ALGO=sha256
+ROBOKASSA_PASSWORD1=replace_me
+ROBOKASSA_PASSWORD2=replace_me
+ROBOKASSA_TEST_PASSWORD1=replace_me
+ROBOKASSA_TEST_PASSWORD2=replace_me
+ROBOKASSA_TEST=1
+ROBOKASSA_INC_CURR_LABEL=SBP
+ROBOKASSA_PUBLIC_BASE_URL=https://pay.photozhab.ru
+ROBOKASSA_WEB_HOST=127.0.0.1
+ROBOKASSA_WEB_PORT=8081
+```
+
+Robokassa cabinet URLs:
+
+```text
+Result URL:  https://pay.photozhab.ru/robokassa/result  POST
+Success URL: https://pay.photozhab.ru/robokassa/success GET
+Fail URL:    https://pay.photozhab.ru/robokassa/fail    GET
+```
+
+VPS nginx must proxy `/robokassa/` on `pay.photozhab.ru` to the bot callback
+server, usually `http://127.0.0.1:8081`.
+
 ## Runtime paths
 
 Эти переменные обычно не надо задавать: у них есть безопасные default-значения,

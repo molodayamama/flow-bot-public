@@ -37,9 +37,11 @@ import re
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
-from urllib.parse import unquote, urlparse
+from decimal import Decimal, InvalidOperation
+from urllib.parse import unquote, urlencode, urlparse
 
 import aiohttp
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramForbiddenError
@@ -91,6 +93,9 @@ from flow_core import (
     pack_label,
     public_pack_ids,
     price_gen,
+    robokassa_pack_amount,
+    robokassa_payment_signature,
+    robokassa_result_signature,
     REFERRAL_PARAM_PREFIX,
     REFERRAL_DAILY_CAP_CREDITS,
     REFERRAL_TIER1_BONUS,
@@ -171,6 +176,52 @@ try:
     STARS_TO_RUB = float(os.getenv("STARS_TO_RUB", "1.3"))  # ~₽ за 1 Star, best-effort
 except (TypeError, ValueError):
     STARS_TO_RUB = 1.3
+
+
+def _env_any(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value not in (None, ""):
+            return value
+    return default
+
+
+ROBOKASSA_MERCHANT_LOGIN = _env_any("ROBOKASSA_MERCHANT_LOGIN", "ROBOKASSA_LOGIN")
+ROBOKASSA_HASH_ALGO = _env_any("ROBOKASSA_HASH_ALGO", "ROBOKASSA_HASH_ALGORITHM", default="md5")
+ROBOKASSA_TEST = _env_any("ROBOKASSA_TEST", "ROBOKASSA_TEST_MODE", default="0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+ROBOKASSA_PASSWORD1 = (
+    _env_any("ROBOKASSA_TEST_PASSWORD1", "ROBOKASSA_TEST_PASS1")
+    if ROBOKASSA_TEST
+    else ""
+) or _env_any("ROBOKASSA_PASSWORD1", "ROBOKASSA_PASS1", "ROBOKASSA_PASSWORD_1")
+ROBOKASSA_PASSWORD2 = (
+    _env_any("ROBOKASSA_TEST_PASSWORD2", "ROBOKASSA_TEST_PASS2")
+    if ROBOKASSA_TEST
+    else ""
+) or _env_any("ROBOKASSA_PASSWORD2", "ROBOKASSA_PASS2", "ROBOKASSA_PASSWORD_2")
+ROBOKASSA_ENABLED = _env_any(
+    "ROBOKASSA_ENABLED",
+    default="1" if ROBOKASSA_MERCHANT_LOGIN and ROBOKASSA_PASSWORD1 and ROBOKASSA_PASSWORD2 else "0",
+).strip().lower() not in ("0", "false", "no", "off")
+ROBOKASSA_PAY_URL = _env_any(
+    "ROBOKASSA_PAY_URL",
+    default="https://auth.robokassa.ru/Merchant/Index.aspx",
+)
+ROBOKASSA_PUBLIC_BASE_URL = _env_any(
+    "ROBOKASSA_PUBLIC_BASE_URL",
+    default="https://pay.photozhab.ru",
+).rstrip("/")
+ROBOKASSA_INC_CURR_LABEL = _env_any("ROBOKASSA_INC_CURR_LABEL", default="SBP")
+ROBOKASSA_WEB_HOST = _env_any("ROBOKASSA_WEB_HOST", default="127.0.0.1")
+try:
+    ROBOKASSA_WEB_PORT = int(_env_any("ROBOKASSA_WEB_PORT", default="8081"))
+except ValueError:
+    ROBOKASSA_WEB_PORT = 8081
 # Имя бота для реферальных ссылок (берётся из get_me() на старте; env — фолбэк).
 BOT_USERNAME = os.getenv("BOT_USERNAME", "")
 PROXY_URL = os.getenv("PROXY_URL", "")          # общий прокси по умолчанию (http/socks5)
@@ -3406,11 +3457,34 @@ def _aspect_to_vfmt(aspect: str) -> str:
     return {"landscape": "land", "portrait": "port"}.get(aspect, "land")
 
 
+def _robokassa_configured() -> bool:
+    return bool(
+        ROBOKASSA_ENABLED
+        and ROBOKASSA_MERCHANT_LOGIN
+        and ROBOKASSA_PASSWORD1
+        and ROBOKASSA_PASSWORD2
+    )
+
+
+def _robokassa_pack_label(pack_id: str) -> str:
+    p = credit_pack(pack_id)
+    if not p:
+        return "СБП"
+    amount = robokassa_pack_amount(pack_id, STARS_TO_RUB)
+    return f"СБП/карта · {p['credits']} кр · {amount} ₽"
+
+
 def topup_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
-    rows = [
-        [types.InlineKeyboardButton(text=pack_label(pid), callback_data=f"m:pack:{pid}")]
-        for pid in public_pack_ids(include_test=is_admin)
-    ]
+    rows = []
+    for pid in public_pack_ids(include_test=is_admin):
+        rows.append([types.InlineKeyboardButton(text="⭐ " + pack_label(pid), callback_data=f"m:pack:{pid}")])
+        if _robokassa_configured():
+            rows.append([
+                types.InlineKeyboardButton(
+                    text=_robokassa_pack_label(pid),
+                    callback_data=f"m:robo:{pid}",
+                )
+            ])
     rows.append([_menu_button("back", "m:balance")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -4921,6 +4995,8 @@ async def on_menu_action(callback: types.CallbackQuery):
         )
     elif data.startswith("m:pack:"):
         await _start_topup(callback, user_id, data.split(":", 2)[2])
+    elif data.startswith("m:robo:"):
+        await _start_robokassa_topup(callback, user_id, data.split(":", 2)[2])
     elif data == "m:help":
         await callback.answer()
         await _show_help_screen(msg, edit=True)
@@ -6271,6 +6347,68 @@ async def _start_topup(callback: types.CallbackQuery, user_id: int, pack_id: str
         )
 
 
+def _robokassa_new_inv_id() -> int:
+    return int(time.time() * 1000) * 1000 + random.randint(100, 999)
+
+
+def _robokassa_payment_url(user_id: int, pack_id: str, inv_id: int) -> str:
+    p = credit_pack(pack_id)
+    if not p:
+        raise ValueError(f"unknown pack: {pack_id!r}")
+    out_sum = robokassa_pack_amount(pack_id, STARS_TO_RUB)
+    shp = {"Shp_pack": pack_id, "Shp_user": int(user_id)}
+    signature = robokassa_payment_signature(
+        ROBOKASSA_MERCHANT_LOGIN,
+        out_sum,
+        inv_id,
+        ROBOKASSA_PASSWORD1,
+        shp_params=shp,
+        algorithm=ROBOKASSA_HASH_ALGO,
+    )
+    params = {
+        "MerchantLogin": ROBOKASSA_MERCHANT_LOGIN,
+        "OutSum": out_sum,
+        "InvId": str(inv_id),
+        "Description": f"PhotoZhab credits: {p['credits']}",
+        "SignatureValue": signature,
+        "Culture": "ru",
+        "Encoding": "utf-8",
+        **shp,
+    }
+    if ROBOKASSA_INC_CURR_LABEL:
+        params["IncCurrLabel"] = ROBOKASSA_INC_CURR_LABEL
+    if ROBOKASSA_TEST:
+        params["IsTest"] = "1"
+    return ROBOKASSA_PAY_URL + "?" + urlencode(params)
+
+
+async def _start_robokassa_topup(callback: types.CallbackQuery, user_id: int, pack_id: str):
+    p = credit_pack(pack_id)
+    if not p or (p.get("test") and user_id not in ADMIN_IDS):
+        await callback.answer("Пакет не найден", show_alert=True)
+        return
+    if not _robokassa_configured():
+        await callback.answer("Оплата СБП пока не настроена", show_alert=True)
+        return
+    inv_id = _robokassa_new_inv_id()
+    try:
+        pay_url = _robokassa_payment_url(user_id, pack_id, inv_id)
+    except Exception:
+        log.exception("robokassa payment url failed")
+        await callback.answer("Оплата временно недоступна", show_alert=True)
+        return
+    await callback.answer()
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="Оплатить через СБП/карту", url=pay_url)],
+        [_menu_button("back", "m:topup")],
+    ])
+    await callback.message.answer(
+        f"Счёт на {p['credits']} кр. Сумма: {robokassa_pack_amount(pack_id, STARS_TO_RUB)} ₽.\n"
+        "После оплаты баланс пополнится автоматически.",
+        reply_markup=kb,
+    )
+
+
 @dp.pre_checkout_query()
 async def on_pre_checkout(query: types.PreCheckoutQuery):
     """Последний рубеж перед списанием звёзд: подтверждаем только наш payload."""
@@ -6338,6 +6476,167 @@ async def on_successful_payment(message: types.Message):
         flow_copy.msg("topup_done", credits=p["credits"], balance=new_balance)
     )
     await show_main_menu(message, user_id=user_id)
+
+
+async def _robokassa_request_data(request: web.Request) -> dict[str, str]:
+    data = {k: str(v) for k, v in request.query.items()}
+    if request.method == "POST":
+        post = await request.post()
+        data.update({k: str(v) for k, v in post.items()})
+    return data
+
+
+def _robokassa_param(data: dict[str, str], *names: str) -> str:
+    lower = {k.lower(): v for k, v in data.items()}
+    for name in names:
+        if name in data:
+            return data[name]
+        value = lower.get(name.lower())
+        if value is not None:
+            return value
+    return ""
+
+
+def _robokassa_shp_params(data: dict[str, str]) -> dict[str, str]:
+    return {k: v for k, v in data.items() if k.startswith("Shp_")}
+
+
+def _robokassa_amount_matches(actual: str, expected: str) -> bool:
+    try:
+        return abs(Decimal(actual) - Decimal(expected)) <= Decimal("0.01")
+    except (InvalidOperation, TypeError):
+        return False
+
+
+async def _notify_robokassa_success(user_id: int, credits: int, balance: int) -> None:
+    try:
+        await bot.send_message(
+            user_id,
+            flow_copy.msg("topup_done", credits=credits, balance=balance),
+            parse_mode="HTML",
+            reply_markup=main_menu_kb(show_repeat=bool(_ws(user_id).get("last"))),
+        )
+    except TelegramForbiddenError:
+        metrics.mark_user_blocked(user_id)
+    except Exception:
+        log.exception("robokassa success notify failed")
+
+
+async def robokassa_result(request: web.Request) -> web.Response:
+    if not _robokassa_configured():
+        return web.Response(status=503, text="Robokassa is not configured")
+    data = await _robokassa_request_data(request)
+    out_sum = _robokassa_param(data, "OutSum")
+    inv_id = _robokassa_param(data, "InvId", "InvID")
+    signature = _robokassa_param(data, "SignatureValue")
+    shp = _robokassa_shp_params(data)
+    expected = robokassa_result_signature(
+        out_sum,
+        inv_id,
+        ROBOKASSA_PASSWORD2,
+        shp_params=shp,
+        algorithm=ROBOKASSA_HASH_ALGO,
+    )
+    if not signature or signature.lower() != expected.lower():
+        log.warning("robokassa bad signature inv_id=%s", inv_id[:32])
+        return web.Response(status=400, text="bad signature")
+
+    pack_id = shp.get("Shp_pack", "")
+    user_raw = shp.get("Shp_user", "")
+    p = credit_pack(pack_id)
+    if not p or not user_raw.isdigit() or not inv_id:
+        return web.Response(status=400, text="bad order")
+    expected_amount = robokassa_pack_amount(pack_id, STARS_TO_RUB)
+    if not _robokassa_amount_matches(out_sum, expected_amount):
+        log.warning("robokassa amount mismatch inv_id=%s", inv_id[:32])
+        return web.Response(status=400, text="bad amount")
+
+    user_id = int(user_raw)
+    provider_payment_id = f"robokassa:{inv_id}"
+    tx_status = metrics.record_transaction_status(
+        provider="robokassa",
+        provider_payment_id=provider_payment_id,
+        user_id=user_id,
+        package_id=pack_id,
+        amount_rub=float(Decimal(out_sum)),
+        stars_amount=0,
+        credits_issued=p["credits"],
+        status="paid",
+    )
+    if tx_status == "duplicate":
+        return web.Response(text=f"OK{inv_id}")
+    if tx_status == "error":
+        return web.Response(status=500, text="temporary error")
+
+    new_balance = credit_store.add(user_id, p["credits"])
+    metrics.log_event(
+        "payment_success",
+        user_id=user_id,
+        source="robokassa",
+        payload={"pack": pack_id, "amount_rub": out_sum, "credits": p["credits"]},
+    )
+    _maybe_apply_referral_rewards(
+        user_id,
+        stars_paid=p["stars"],
+        credits_issued=p["credits"],
+        pack_id=pack_id,
+        provider_payment_id=provider_payment_id,
+    )
+    await _notify_robokassa_success(user_id, p["credits"], new_balance)
+    return web.Response(text=f"OK{inv_id}")
+
+
+async def robokassa_success(request: web.Request) -> web.Response:
+    return web.Response(
+        text=(
+            "<!doctype html><meta charset='utf-8'>"
+            "<title>Оплата прошла</title>"
+            "<body style='font-family:system-ui;max-width:560px;margin:48px auto;padding:0 20px'>"
+            "<h1>Оплата прошла</h1>"
+            "<p>Баланс пополнится автоматически. Можно вернуться в Telegram.</p>"
+            "<p><a href='https://t.me/photozhab_bot'>Открыть бота</a></p>"
+            "</body>"
+        ),
+        content_type="text/html",
+    )
+
+
+async def robokassa_fail(request: web.Request) -> web.Response:
+    return web.Response(
+        text=(
+            "<!doctype html><meta charset='utf-8'>"
+            "<title>Оплата не завершена</title>"
+            "<body style='font-family:system-ui;max-width:560px;margin:48px auto;padding:0 20px'>"
+            "<h1>Оплата не завершена</h1>"
+            "<p>Деньги не списаны или платёж отменён. Вернись в бот и попробуй ещё раз.</p>"
+            "<p><a href='https://t.me/photozhab_bot'>Открыть бота</a></p>"
+            "</body>"
+        ),
+        content_type="text/html",
+    )
+
+
+async def robokassa_health(request: web.Request) -> web.Response:
+    return web.Response(text="OK")
+
+
+async def _start_robokassa_web_server() -> web.AppRunner | None:
+    if not _robokassa_configured():
+        log.info("Robokassa callbacks disabled: env is incomplete or disabled")
+        return None
+    app = web.Application()
+    app.router.add_route("*", "/robokassa/result", robokassa_result)
+    app.router.add_get("/robokassa/success", robokassa_success)
+    app.router.add_post("/robokassa/success", robokassa_success)
+    app.router.add_get("/robokassa/fail", robokassa_fail)
+    app.router.add_post("/robokassa/fail", robokassa_fail)
+    app.router.add_get("/robokassa/health", robokassa_health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, ROBOKASSA_WEB_HOST, ROBOKASSA_WEB_PORT)
+    await site.start()
+    log.info("Robokassa callbacks listening on %s:%s", ROBOKASSA_WEB_HOST, ROBOKASSA_WEB_PORT)
+    return runner
 
 
 @dp.callback_query(F.data == "img:retry")
@@ -6893,6 +7192,11 @@ async def main():
     if not started_any:
         log.error("❌ Ни один аккаунт пула не запустился — выходим.")
         return
+
+    try:
+        await _start_robokassa_web_server()
+    except Exception:
+        log.exception("Robokassa callback server failed to start")
 
     log.info("🤖 Бот запущен!")
     await dp.start_polling(bot)
