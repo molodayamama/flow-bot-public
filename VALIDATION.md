@@ -448,6 +448,10 @@ Live no-payment UI checks:
 - Help, ideas/templates, guided prompt selection, referral invite, balance, and
   top-up provider/package menus rendered in Telegram. The payment checks stopped
   at package lists and did not create or pay invoices.
+- Negative image command checks `/img`, `/one`, `/portrait`, `/square`, and
+  `/imgn 2` without prompts returned the shared "describe a little more" copy.
+  Recent service logs showed only handled Telegram updates and no Flow HTTP
+  activity for those validation failures.
 - Video wizard checks covered Omni, Veo, Ingredients, and Frames entry states;
   model/format/count changes updated labels and prices without starting
   generation.
