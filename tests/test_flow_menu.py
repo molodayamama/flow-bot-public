@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import flow_core
 import flow_copy
@@ -54,6 +56,13 @@ class PricingTests(unittest.TestCase):
         ing = min(flow_core.video_price(m, 1, "ingredients") for m in variants)
         frm = min(flow_core.video_price(m, 1, "frames") for m in variants)
         self.assertEqual((omni, veo, ing, frm), (50, 60, 75, 85))
+
+    def test_trial_plus_starter_can_animate_one_photo(self) -> None:
+        trial = flow_core.STARS_PACKS["trial"]["credits"]
+        starter = flow_core.STARTER_CREDITS
+        animate_price = flow_core.video_price("veo-lite", mode="ingredients")
+        self.assertEqual(animate_price, 75)
+        self.assertEqual(starter + trial, animate_price)
 
     def test_referral_milestone_tiers(self) -> None:
         # Single highest applicable tier per first payment (no stacking).
@@ -948,6 +957,36 @@ class BotMenuWiringTests(unittest.TestCase):
             self.assertNotIn("flow", text.lower(), key)
 
 
+class LandingStaticContentTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.index = (PROJECT_ROOT / "deploy" / "photozhab" / "index.html").read_text(encoding="utf-8")
+        self.privacy = (PROJECT_ROOT / "deploy" / "photozhab" / "privacy.html").read_text(encoding="utf-8")
+
+    def test_hero_promises_honest_bot_points(self) -> None:
+        for needle in (
+            "30 кредитов на старте",
+            "3 картинки бесплатно",
+            "цены видны до нажатия",
+            "без VPN",
+            "без подписок",
+            "Veo работает",
+        ):
+            self.assertIn(needle, self.index)
+
+    def test_trial_package_is_image_only_on_landing(self) -> None:
+        self.assertIn("45 кр", self.index)
+        self.assertIn("только картинки: примерно 4 изображения", self.index)
+        self.assertIn("100 кр", self.index)
+        self.assertIn("примерно 10 картинок или 2 коротких видео", self.index)
+
+    def test_privacy_policy_page_and_footer_link_exist(self) -> None:
+        self.assertIn('href="/privacy.html"', self.index)
+        self.assertIn("Политика конфиденциальности", self.privacy)
+        self.assertIn("152-ФЗ", self.privacy)
+        for needle in ("telegram_id", "данные платежа", "Robokassa", "ФИО владельца сервиса"):
+            self.assertIn(needle, self.privacy)
+
+
 class CaptureVideoToolTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -977,6 +1016,130 @@ class CaptureVideoToolTests(unittest.TestCase):
         # the route handler must record upload-like traffic on any host.
         self.assertIn("upload_like", self.source)
         self.assertIn('"upload" in url.lower()', self.source)
+
+
+class RobokassaWebhookTests(unittest.TestCase):
+    def _load_bot(self):
+        import importlib
+        import os
+
+        try:
+            import aiogram  # noqa: F401
+        except Exception:
+            self.skipTest("aiogram not installed")
+
+        os.environ.setdefault("TELEGRAM_TOKEN", "123:test")
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        os.environ["USER_CREDITS_FILE"] = str(Path(self.tmpdir.name) / "credits.json")
+        fb = importlib.import_module("flow_bot")
+        return importlib.reload(fb)
+
+    @staticmethod
+    def _request(params: dict[str, str]):
+        return SimpleNamespace(query=params, method="GET")
+
+    @staticmethod
+    def _signed_result_params(fb, *, inv_id: str = "777", pack: str = "trial", user: str = "123") -> dict[str, str]:
+        out_sum = fb._robokassa_pack_amount(pack)
+        shp = {"Shp_pack": pack, "Shp_user": user}
+        sig = flow_core.robokassa_result_signature(
+            out_sum,
+            inv_id,
+            fb.ROBOKASSA_PASSWORD2,
+            shp_params=shp,
+            algorithm=fb.ROBOKASSA_HASH_ALGO,
+        )
+        return {
+            "OutSum": out_sum,
+            "InvId": inv_id,
+            "SignatureValue": sig,
+            **shp,
+        }
+
+    def _configure(self, fb):
+        fb.ROBOKASSA_ENABLED = True
+        fb.ROBOKASSA_MERCHANT_LOGIN = "photozhab"
+        fb.ROBOKASSA_PASSWORD1 = "pass1"
+        fb.ROBOKASSA_PASSWORD2 = "pass2"
+        fb.ROBOKASSA_HASH_ALGO = "sha256"
+        fb.STARS_TO_RUB = 1.3
+        fb.ROBOKASSA_CARD_DISCOUNT_PCT = 10
+
+        events: list[tuple[str, int, str, dict | None]] = []
+        tx_calls: list[dict] = []
+        credits_added: list[tuple[int, int]] = []
+
+        class FakeCreditStore:
+            def add(self, user_id, credits):
+                credits_added.append((int(user_id), int(credits)))
+                return sum(c for u, c in credits_added if u == int(user_id))
+
+        def record_transaction_status(**kwargs):
+            tx_calls.append(kwargs)
+            return "duplicate" if len(tx_calls) > 1 else "new"
+
+        def log_event(event_type, user_id=None, source="", payload=None, username=None):
+            events.append((event_type, int(user_id or 0), source, payload))
+
+        async def notify(user_id, credits, balance):
+            events.append(("notify", int(user_id), "robokassa", {"credits": credits, "balance": balance}))
+
+        def referral(*args, **kwargs):
+            events.append(("referral_checked", int(args[0]) if args else 0, "robokassa", kwargs))
+
+        fb.credit_store = FakeCreditStore()
+        fb.metrics = SimpleNamespace(
+            record_transaction_status=record_transaction_status,
+            log_event=log_event,
+            mark_user_blocked=lambda user_id: None,
+        )
+        fb._notify_robokassa_success = notify
+        fb._maybe_apply_referral_rewards = referral
+        return SimpleNamespace(events=events, tx_calls=tx_calls, credits_added=credits_added)
+
+    def test_robokassa_webhook_is_idempotent_by_inv_id(self) -> None:
+        fb = self._load_bot()
+        state = self._configure(fb)
+        params = self._signed_result_params(fb, inv_id="9001", pack="trial", user="123")
+
+        first = asyncio.run(fb.robokassa_result(self._request(params)))
+        second = asyncio.run(fb.robokassa_result(self._request(params)))
+
+        self.assertEqual(first.status, 200)
+        self.assertEqual(second.status, 200)
+        self.assertEqual(first.text, "OK9001")
+        self.assertEqual(second.text, "OK9001")
+        self.assertEqual(state.credits_added, [(123, 45)])
+        self.assertEqual([c["provider_payment_id"] for c in state.tx_calls], ["robokassa:9001", "robokassa:9001"])
+
+    def test_robokassa_webhook_credits_without_success_redirect(self) -> None:
+        fb = self._load_bot()
+        state = self._configure(fb)
+        params = self._signed_result_params(fb, inv_id="9002", pack="trial", user="456")
+
+        response = asyncio.run(fb.robokassa_result(self._request(params)))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.text, "OK9002")
+        self.assertEqual(state.credits_added, [(456, 45)])
+        self.assertEqual(state.tx_calls[0]["user_id"], 456)
+        self.assertEqual(state.tx_calls[0]["package_id"], "trial")
+
+    def test_robokassa_unmatched_payment_is_logged_for_manual_reconcile(self) -> None:
+        fb = self._load_bot()
+        state = self._configure(fb)
+        params = self._signed_result_params(fb, inv_id="9003", pack="trial", user="not-a-user")
+
+        response = asyncio.run(fb.robokassa_result(self._request(params)))
+
+        self.assertEqual(response.status, 400)
+        self.assertEqual(response.text, "bad order")
+        self.assertEqual(state.credits_added, [])
+        unmatched = [e for e in state.events if e[0] == "robokassa_unmatched_payment"]
+        self.assertEqual(len(unmatched), 1)
+        self.assertEqual(unmatched[0][3]["inv_id"], "9003")
+        self.assertEqual(unmatched[0][3]["reason"], "bad_order")
 
 
 class BotImportSmokeTests(unittest.TestCase):
@@ -1025,11 +1188,11 @@ class BotImportSmokeTests(unittest.TestCase):
             self.assertIn("СБП/Карта · выгоднее", method_texts)
             stars_rows = fb.topup_stars_kb().inline_keyboard  # public Stars packs (no test pack)
             stars_texts = [b.text for row in stars_rows for b in row]
-            self.assertIn("45 кр · ~4 карт. · 35⭐", stars_texts)
+            self.assertIn("45 кр · только картинки · ~4 карт. · 35⭐", stars_texts)
             self.assertTrue(any("1500 кр" in text and "900⭐" in text and "🔥 +30%" in text for text in stars_texts))
             fb.topup_stars_kb(is_admin=True)  # includes the admin test pack
             robo_texts = [b.text for row in fb.topup_robo_kb().inline_keyboard for b in row]
-            self.assertIn("45 кр · ~4 карт. · 40.95 ₽", robo_texts)
+            self.assertIn("45 кр · только картинки · ~4 карт. · 40.95 ₽", robo_texts)
             self.assertTrue(any("100 кр" in text and "2 видео" in text and "87.75 ₽" in text for text in robo_texts))
             self.assertTrue(any("1500 кр" in text and "1053.00 ₽" in text and "🔥 +30%" in text for text in robo_texts))
             fb._image_keyboard("abcd1234")

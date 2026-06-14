@@ -3504,6 +3504,8 @@ def _stars_pack_label(pack_id: str) -> str:
         return pack_id
     if p.get("test"):
         return f"🧪 Тест · {p['credits']} кр · {p['stars']}⭐"
+    if pack_id == "trial":
+        return f"{p['credits']} кр · только картинки · ~{p['credits'] // price_gen(1)} карт. · {p['stars']}⭐"
     return f"{p['credits']} кр · {_pack_usage_hint(p['credits'])} · {p['stars']}⭐{_value_suffix(pack_id)}"
 
 
@@ -3512,6 +3514,8 @@ def _robokassa_pack_label(pack_id: str) -> str:
     if not p:
         return "СБП/карта"
     amount = _robokassa_pack_amount(pack_id)
+    if pack_id == "trial":
+        return f"{p['credits']} кр · только картинки · ~{p['credits'] // price_gen(1)} карт. · {amount} ₽"
     return f"{p['credits']} кр · {_pack_usage_hint(p['credits'])} · {amount} ₽{_value_suffix(pack_id)}"
 
 
@@ -6615,6 +6619,22 @@ async def robokassa_result(request: web.Request) -> web.Response:
     user_raw = shp.get("Shp_user", "")
     p = credit_pack(pack_id)
     if not p or not user_raw.isdigit() or not inv_id:
+        log.warning(
+            "robokassa unmatched payment inv_id=%s pack=%r user=%r amount=%r",
+            inv_id[:32], pack_id[:64], user_raw[:32], out_sum[:32],
+        )
+        metrics.log_event(
+            "robokassa_unmatched_payment",
+            user_id=int(user_raw) if user_raw.isdigit() else 0,
+            source="robokassa",
+            payload={
+                "inv_id": inv_id[:64],
+                "pack": pack_id[:64],
+                "user": user_raw[:64],
+                "amount_rub": out_sum[:32],
+                "reason": "bad_order",
+            },
+        )
         return web.Response(status=400, text="bad order")
     expected_amount = _robokassa_pack_amount(pack_id)
     if not _robokassa_amount_matches(out_sum, expected_amount):

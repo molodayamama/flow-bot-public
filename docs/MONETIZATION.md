@@ -127,6 +127,13 @@ card/SBP public prices are:
 | large | 700 | 526.50 ₽ |
 | xl | 1500 | 1053.00 ₽ |
 
+The `trial` pack must be labelled as image-only in customer-facing package
+lists. It has 45 credits, so it cannot buy the cheapest standalone video
+(50 credits) by itself. The launch video-entry path is:
+
+`STARTER_CREDITS` 30 + `trial` 45 = 75 credits = one photo animation via
+Veo Lite (`video_price("veo-lite", mode="ingredients")`).
+
 Do not promise a fixed number of videos in a pack unless the UI names the exact
 model/mode; video prices vary widely.
 

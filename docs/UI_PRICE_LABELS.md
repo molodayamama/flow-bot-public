@@ -58,10 +58,12 @@ Balance and top-up:
 - Balance copy explains the current image unit price.
 - The top-up screen first asks for the payment method.
 - Stars pack labels show credits, approximate usage, and the Star price with
-  `⭐`, for example `45 кр · ~4 карт. · 35⭐`.
+  `⭐`, for example `45 кр · только картинки · ~4 карт. · 35⭐`.
 - SBP/card pack labels show credits, approximate usage, and the RUB amount.
   These prices apply `ROBOKASSA_CARD_DISCOUNT_PCT` (default 10%) and should be
   presented as the better payment method for the customer.
+- The 45-credit trial pack is explicitly image-only because it cannot buy the
+  cheapest 50-credit video by itself.
 - The value marker `🔥 +N%` is reserved for the three larger packs where the
   credit-per-payment-unit ratio is better than the entry pack.
 
