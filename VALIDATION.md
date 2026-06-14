@@ -459,6 +459,11 @@ Live no-payment UI checks:
   -> short text `x`. The bot returned the shared video prompt-too-short copy,
   and recent service logs showed only handled Telegram updates with no Flow
   video HTTP activity.
+- Video Ingredients/Frames photo-wait states must not fall through to the image
+  prompt wizard on plain text. Verified 2026-06-14 after deploy: text while
+  Ingredients waited for a photo repeated the Ingredients photo request; text
+  while Frames waited for the start photo repeated the start-frame request.
+  Recent service logs showed handled Telegram updates only for these checks.
 - Image wizard checks reached the image settings screen with count, aspect,
   model, balance, and price controls. The next untested step is prompt entry or
   `w:go`, which starts a paid/provider generation path.

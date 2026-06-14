@@ -487,3 +487,44 @@ Notes:
 
 - A true non-admin live denial check would require a separate non-admin Telegram
   session; this pass used the code guard plus source-level test instead.
+
+### 2026-06-14 LFX-012 preserve video photo-wait state on text
+
+- Failure id: LF-010
+- Status: verified
+- Priority: S2
+- Fix owner: current Codex session
+- Proposed by: current Codex live E2E session
+
+Root cause hypothesis:
+
+- The plain-text handler protected normal video prompt states, but did not
+  protect the photo-wait states used by video Ingredients and Frames. Text in
+  those states therefore reached the generic image prompt fallback and opened
+  the image wizard.
+- Confidence: high
+
+Implemented fix:
+
+- Add narrow `vawait` guards in `handle_plain_text()` for Ingredients photo,
+  Frames start photo, and Frames end photo wait states. Each guard repeats the
+  matching photo request message and returns before the image fallback.
+
+Owner files:
+
+- `flow_bot.py` - plain-text state routing.
+- `tests/test_flow_menu.py` - source-level regression guard for branch order.
+
+Validation:
+
+- Offline syntax and targeted menu tests passed.
+- VPS deploy syntax check and service restart passed.
+- Approved live Telegram checks confirmed that text while Ingredients waits for
+  a photo returns the Ingredients photo request, and text while Frames waits for
+  the start frame returns the start-frame photo request. No provider generation
+  was started for those text inputs.
+
+Notes:
+
+- The fix intentionally does not start video generation from text until the
+  required reference photos exist.

@@ -690,6 +690,76 @@ Resolution:
   validation after deploy confirmed `/status` still returns diagnostics for an
   admin without printing raw diagnostic values in this log.
 
+### 2026-06-14 LF-010 video photo-wait text opened image wizard
+
+- Severity: S2
+- Status: verified fixed
+- Next fix owner: current Codex session
+- Live check approved by: active live E2E goal
+- Environment: VPS `/opt/geminifree`; `geminifree-bot`; approved live Telegram E2E
+- Surface: video Ingredients/Frames state routing / plain text fallback
+
+Telegram input:
+
+- User/chat: owner-test-chat
+- Command/callback/path: `/menu` -> `m:vid` -> `v:fam:ing`, then plain text
+  while the bot was waiting for an Ingredients photo.
+- Attachments: none
+- Prompt/caption: harmless text used only to test state routing.
+
+Telegram output:
+
+- User-facing text before fix: the image generation wizard opened and treated
+  the text as an image prompt.
+- Messages/media sent: text-only wizard response; no generated media.
+- Credits/refund observed: unchanged.
+
+Flow account:
+
+- Account label: n/a
+- Project/media ownership notes: no media upload or provider generation started.
+- Proxy/profile notes: no profile recreation; `login.py` was not run.
+
+Google/Flow evidence:
+
+- Endpoint/action: n/a
+- HTTP status: n/a
+- Error class/code: n/a
+- Body snippet: n/a
+
+Reproduction:
+
+1. Open `/menu`, choose video, then choose Ingredients.
+2. Send plain text instead of a photo while the bot asks for an Ingredients
+   photo.
+3. Observe the next Telegram response.
+
+Expected:
+
+- The bot should repeat the photo-specific hint and keep the active video
+  photo-wait state.
+
+Actual:
+
+- Before the fix, the text fell through to the generic image prompt fallback and
+  opened the image wizard.
+
+Suspected cause:
+
+- `handle_plain_text()` handled video prompt states, but did not guard
+  `vawait == "ving_photo"`, `vawait == "vfrm_start"`, or
+  `vawait == "vfrm_end"` before the generic image prompt fallback.
+
+Resolution:
+
+- `handle_plain_text()` now repeats the correct photo hint for Ingredients,
+  Frames start, and Frames end wait states before the image fallback can run.
+- Offline source-level test pins the branch order.
+- Live post-fix validation on the VPS confirmed Ingredients plain text returned
+  the Ingredients photo request and Frames-start plain text returned the first
+  frame photo request. Recent service logs showed handled Telegram updates only
+  for these checks; no provider generation was started.
+
 ## Closed Failures
 
 - `LF-001`: fixed by Flow upload API path and live-verified with `kotenok.jpg`.
@@ -704,3 +774,5 @@ Resolution:
   no-browser-fallback image edit path and live-verified on the VPS.
 - `LF-009`: fixed by restricting `/status` diagnostics to `ADMIN_IDS` and
   moving the command to the admin help section.
+- `LF-010`: fixed by preserving video photo-wait states on plain text and
+  live-verified for Ingredients and Frames-start on the VPS.

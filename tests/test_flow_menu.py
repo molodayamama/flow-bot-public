@@ -864,6 +864,24 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("def _clear_image_flow_keys", self.source)
         self.assertEqual(self.source.count("_clear_image_flow_keys(st)"), 2)
 
+    def test_video_photo_wait_text_does_not_open_image_wizard(self) -> None:
+        start = self.source.index("async def handle_plain_text")
+        wait_guard = self.source.index('if st.get("vawait") == "ving_photo":', start)
+        start_guard = self.source.index('if st.get("vawait") == "vfrm_start":', start)
+        end_guard = self.source.index('if st.get("vawait") == "vfrm_end":', start)
+        ing_ready = self.source.index(
+            'if st.get("vmode") == "ingredients" and (st.get("ving_photos") or []):',
+            start,
+        )
+        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        for guard in (wait_guard, start_guard, end_guard):
+            self.assertLess(guard, ing_ready)
+            self.assertLess(guard, image_fallback)
+        block = self.source[wait_guard:end_guard + 180]
+        self.assertIn('flow_copy.msg("vid_ing_send_photo")', block)
+        self.assertIn('flow_copy.msg("vid_frm_send_photo_start")', block)
+        self.assertIn('flow_copy.msg("vid_frm_send_photo_end")', block)
+
     def test_ideas_hub_wired(self) -> None:
         # Menu entry + hub root + both branches (templates Q&A, guided picker).
         self.assertIn("import prompts_lib", self.source)
