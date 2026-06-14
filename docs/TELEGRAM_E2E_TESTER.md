@@ -17,6 +17,8 @@ credentials:
 
 ```bash
 python telegram_bot_tester.py --mode telegram-login --approve-external-action
+python telegram_bot_tester.py --mode telegram-login-request --approve-external-action
+python telegram_bot_tester.py --mode telegram-login-complete --tg-code 12345 --approve-external-action
 python telegram_bot_tester.py --mode telegram-smoke --approve-external-action
 python telegram_bot_tester.py --mode telegram-generation --prompt "simple safe landscape test" --approve-external-action
 python telegram_bot_tester.py --mode telegram-ramp --prompt "simple safe landscape test" --max-steps 3 --delay-sec 90 --approve-external-action
@@ -30,6 +32,8 @@ then process environment, then `.env`.
 - `TG_API_ID`
 - `TG_API_HASH`
 - `TG_PHONE`
+- `TG_CODE`, only for `telegram-login-complete` when not passed by `--tg-code`
+- `TG_PASSWORD`, optional 2FA password for `telegram-login-complete`
 - `TG_E2E_PROXY_URL`, optional MTProto proxy URL such as `tg://proxy?...`
 - `TG_E2E_SESSION_FILE`, optional session base path, default `.sessions/tg_e2e`
 - `--session-file`, default `.sessions/tg_e2e`
@@ -48,6 +52,17 @@ the bot API SOCKS proxy setting from `flow_bot.py`.
 `telegram-login` creates or validates the Telethon user `.session` file only. It
 does not send messages to the bot. Use it first when Telegram asks for a login
 code, then run `telegram-smoke` after the session is authorized.
+
+For non-interactive shells, use the two-step login:
+
+```bash
+python telegram_bot_tester.py --mode telegram-login-request --approve-external-action
+python telegram_bot_tester.py --mode telegram-login-complete --tg-code 12345 --approve-external-action
+```
+
+`telegram-login-request` stores only the temporary Telegram `phone_code_hash` in
+the gitignored `.sessions/*.login.json` file. `telegram-login-complete` deletes
+that file after successful authorization.
 
 `telegram-smoke` sends `/start` and `/status` only. It intentionally avoids
 `/balance`, image generation, captcha solving, browser launch, and Google Flow.

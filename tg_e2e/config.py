@@ -25,6 +25,8 @@ class TelegramE2EConfig:
     session_file: Path | None = None
     mtproxy: TelegramMTProxy | None = None
     tg_proxy_url: str | None = None
+    tg_code: str | None = None
+    tg_password: str | None = None
     prompt: str | None = None
     max_steps: int = 1
     delay_sec: float = 90.0
@@ -37,7 +39,14 @@ class TelegramMTProxy:
     secret: str
 
 
-EXTERNAL_MODES = frozenset({"telegram-login", "telegram-smoke", "telegram-generation", "telegram-ramp"})
+EXTERNAL_MODES = frozenset({
+    "telegram-login",
+    "telegram-login-request",
+    "telegram-login-complete",
+    "telegram-smoke",
+    "telegram-generation",
+    "telegram-ramp",
+})
 SUPPORTED_MODES = frozenset({"dry-run", *EXTERNAL_MODES})
 
 
@@ -54,6 +63,8 @@ def build_config(
     tg_phone: str | None = None,
     session_file: str | Path | None = None,
     tg_proxy_url: str | None = None,
+    tg_code: str | None = None,
+    tg_password: str | None = None,
     prompt: str | None = None,
     max_steps: int = 1,
     delay_sec: float = 90.0,
@@ -74,6 +85,8 @@ def build_config(
     actual_api_id = _parse_api_id(_first_value(tg_api_id, actual_env, ("TG_API_ID", "TELEGRAM_API_ID")))
     actual_proxy_url = _proxy_value(tg_proxy_url, actual_env)
     actual_mtproxy = _parse_mtproxy_url(actual_proxy_url) if actual_proxy_url else None
+    actual_code = _first_value(tg_code, actual_env, ("TG_CODE", "TELEGRAM_CODE"))
+    actual_password = _first_value(tg_password, actual_env, ("TG_PASSWORD", "TELEGRAM_PASSWORD"))
     actual_prompt = prompt.strip() if prompt is not None else None
 
     if timeout_sec < 10 or timeout_sec > 600:
@@ -100,7 +113,7 @@ def build_config(
 
     if not approve_external_action:
         raise ConfigError("external Telegram modes require approve_external_action")
-    if normalized_mode != "telegram-login" and not actual_bot_username:
+    if normalized_mode not in {"telegram-login", "telegram-login-request", "telegram-login-complete"} and not actual_bot_username:
         raise ConfigError("external Telegram modes require BOT_USERNAME")
     if actual_api_id is None:
         raise ConfigError("external Telegram modes require TG_API_ID")
@@ -109,11 +122,18 @@ def build_config(
     if not actual_phone:
         raise ConfigError("external Telegram modes require TG_PHONE")
 
-    if normalized_mode == "telegram-login":
+    if normalized_mode in {"telegram-login", "telegram-login-request"}:
         if prompt is not None:
-            raise ConfigError("telegram-login rejects prompt")
+            raise ConfigError(f"{normalized_mode} rejects prompt")
         if max_steps != 1:
-            raise ConfigError("telegram-login requires max_steps=1")
+            raise ConfigError(f"{normalized_mode} requires max_steps=1")
+    elif normalized_mode == "telegram-login-complete":
+        if prompt is not None:
+            raise ConfigError("telegram-login-complete rejects prompt")
+        if max_steps != 1:
+            raise ConfigError("telegram-login-complete requires max_steps=1")
+        if not actual_code:
+            raise ConfigError("telegram-login-complete requires TG_CODE or --tg-code")
     elif normalized_mode == "telegram-smoke":
         if prompt is not None:
             raise ConfigError("telegram-smoke rejects prompt")
@@ -140,6 +160,8 @@ def build_config(
         session_file=resolved_session_file,
         mtproxy=actual_mtproxy,
         tg_proxy_url=actual_proxy_url,
+        tg_code=actual_code,
+        tg_password=actual_password,
         prompt=actual_prompt,
         max_steps=max_steps,
         delay_sec=delay_sec,

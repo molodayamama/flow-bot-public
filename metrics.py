@@ -56,6 +56,21 @@ __all__ = [
     "report_refs",
     "report_channels",
     "report_errors",
+    # credits store
+    "credits_balance",
+    "credits_charge",
+    "credits_refund",
+    "credits_add",
+    "credits_migrate_from_json",
+    # users profile
+    "upsert_user",
+    "touch_user",
+    "mark_user_blocked",
+    "get_user_profile",
+    "report_active_users",
+    "report_top_users",
+    "report_top_referrers",
+    "backfill_users_from_metrics",
 ]
 
 log = logging.getLogger("flow.metrics")
@@ -166,6 +181,31 @@ CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at);
 CREATE INDEX IF NOT EXISTS idx_referrals_referrer  ON referrals(referrer_user_id);
 CREATE INDEX IF NOT EXISTS idx_ror_referrer        ON referral_ongoing_rewards(referrer_user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_acquisitions_channel ON acquisitions(channel);
+
+CREATE TABLE IF NOT EXISTS credits (
+    user_id    INTEGER PRIMARY KEY,
+    balance    INTEGER NOT NULL DEFAULT 0,
+    granted    INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- ── users: profile + denormalized snapshot for fast per-user reports ──────
+-- One row per Telegram user. Money, credits, requests, and referrals live in
+-- their own tables and are JOIN/aggregated; balances are NOT duplicated here.
+CREATE TABLE IF NOT EXISTS users (
+    user_id        INTEGER PRIMARY KEY,
+    username       TEXT,
+    first_name     TEXT,
+    first_seen     TEXT DEFAULT (datetime('now')),
+    last_active    TEXT DEFAULT (datetime('now')),
+    acq_channel    TEXT,
+    is_blocked     INTEGER NOT NULL DEFAULT 0,
+    updated_at     TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_last_active ON users(last_active);
+CREATE INDEX IF NOT EXISTS idx_users_first_seen  ON users(first_seen);
+CREATE INDEX IF NOT EXISTS idx_users_channel     ON users(acq_channel);
 """
 
 
@@ -651,6 +691,183 @@ def referral_stats(referrer_user_id: int) -> dict:
         return {"invited": 0, "earned": 0}
 
 
+# ── credits store ──────────────────────────────────────────────────────
+#
+# These functions mirror the CreditStore (JSON) API but persist to the
+# ``credits`` SQLite table. They follow the same contract as the rest of
+# this module: never raise into the caller, swallow errors at WARNING level.
+
+
+def credits_balance(user_id: int, starter: int) -> int:
+    """Return the user's balance, granting ``starter`` on first access (atomic).
+
+    If the user has no row yet (``granted=0``), the starter bonus is added
+    atomically via a single UPSERT so the grant is idempotent across concurrent
+    calls (only the first write wins). Returns 0 on any DB error.
+    """
+    try:
+        uid = int(user_id)
+        st = int(starter)
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT balance, granted FROM credits WHERE user_id=?", (uid,)
+            ).fetchone()
+            if row is None:
+                # New user — insert with starter already applied and granted=1.
+                conn.execute(
+                    "INSERT INTO credits (user_id, balance, granted, updated_at) "
+                    "VALUES (?, ?, 1, datetime('now'))",
+                    (uid, st),
+                )
+                conn.commit()
+                return st
+            if row[1] == 0:
+                # Existing row but starter not yet granted (edge case: row created
+                # before this migration, or by a manual INSERT).
+                new_bal = row[0] + st
+                conn.execute(
+                    "UPDATE credits SET balance=?, granted=1, updated_at=datetime('now') "
+                    "WHERE user_id=?",
+                    (new_bal, uid),
+                )
+                conn.commit()
+                return new_bal
+            return int(row[0])
+    except Exception:  # noqa: BLE001
+        log.warning("credits_balance failed for user_id=%r", user_id, exc_info=True)
+        return 0
+
+
+def credits_charge(user_id: int, amount: int, starter: int) -> bool:
+    """Deduct ``amount`` if the user can afford it; return True on success.
+
+    If ``amount <= 0`` the call is a no-op and returns True. Grants the
+    starter bonus first (via :func:`credits_balance`) if not yet applied.
+    Returns False on insufficient funds or on DB error (safe default).
+    """
+    try:
+        amount = int(amount)
+        if amount <= 0:
+            return True
+        uid = int(user_id)
+        # Ensure starter is applied and we have a fresh balance.
+        bal = credits_balance(uid, starter)
+        if bal < amount:
+            return False
+        with _LOCK:
+            conn = _conn()
+            # UPDATE only if balance is still sufficient (avoids races).
+            cur = conn.execute(
+                "UPDATE credits SET balance=balance-?, updated_at=datetime('now') "
+                "WHERE user_id=? AND balance>=?",
+                (amount, uid, amount),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    except Exception:  # noqa: BLE001
+        log.warning("credits_charge failed for user_id=%r", user_id, exc_info=True)
+        return False
+
+
+def credits_refund(user_id: int, amount: int) -> None:
+    """Add ``amount`` back to the user's balance (refund). Never raises.
+
+    A no-op when ``amount <= 0``. The row must exist (charge was called
+    first), but if it somehow doesn't the refund is still applied via UPSERT
+    with granted=1 so no accidental starter re-grant occurs.
+    """
+    try:
+        amount = int(amount)
+        if amount <= 0:
+            return
+        uid = int(user_id)
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                "INSERT INTO credits (user_id, balance, granted, updated_at) "
+                "VALUES (?, ?, 1, datetime('now')) "
+                "ON CONFLICT(user_id) DO UPDATE SET "
+                "balance=balance+excluded.balance, updated_at=datetime('now')",
+                (uid, amount),
+            )
+            conn.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("credits_refund failed for user_id=%r", user_id, exc_info=True)
+
+
+def credits_add(user_id: int, amount: int, starter: int) -> int:
+    """Top up by ``amount`` and return the new balance.
+
+    Grants the starter bonus first if not yet applied. Returns 0 on error.
+    """
+    try:
+        uid = int(user_id)
+        # Ensure starter is applied.
+        credits_balance(uid, starter)
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                "UPDATE credits SET balance=balance+?, updated_at=datetime('now') "
+                "WHERE user_id=?",
+                (int(amount), uid),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT balance FROM credits WHERE user_id=?", (uid,)
+            ).fetchone()
+            return int(row[0]) if row else 0
+    except Exception:  # noqa: BLE001
+        log.warning("credits_add failed for user_id=%r", user_id, exc_info=True)
+        return 0
+
+
+def credits_migrate_from_json(path) -> int:
+    """Read ``user_credits.json`` and upsert all rows into the credits table.
+
+    Uses ``INSERT OR IGNORE`` so it is safe to call repeatedly (idempotent).
+    Already-migrated users are skipped. Returns the count of newly inserted
+    rows. Returns 0 on a missing/empty/invalid JSON file (not an error).
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    try:
+        data = _json.loads(_Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    if not isinstance(data, dict):
+        return 0
+
+    balances = data.get("balances", {})
+    granted_set = set(data.get("granted", []))
+    if not isinstance(balances, dict):
+        return 0
+
+    count = 0
+    try:
+        with _LOCK:
+            conn = _conn()
+            for key, value in balances.items():
+                try:
+                    uid = int(key)
+                    bal = int(value)
+                except (TypeError, ValueError):
+                    continue
+                granted_flag = 1 if str(key) in granted_set else 0
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO credits (user_id, balance, granted) "
+                    "VALUES (?, ?, ?)",
+                    (uid, bal, granted_flag),
+                )
+                count += cur.rowcount
+            conn.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("credits_migrate_from_json failed for path=%r", str(path), exc_info=True)
+        return 0
+    return count
+
+
 # ── report helpers ─────────────────────────────────────────────────────
 
 
@@ -1075,3 +1292,443 @@ def report_errors(days: int = 7) -> dict:
     except Exception:  # noqa: BLE001
         log.warning("report_errors failed", exc_info=True)
         return {"errors_by_type": [], "recent": []}
+
+
+# ── users profile writers ──────────────────────────────────────────────
+
+
+def upsert_user(
+    user_id: int,
+    *,
+    username: str | None = None,
+    first_name: str | None = None,
+    channel: str | None = None,
+) -> None:
+    """Insert the user on first sight, else refresh snapshot + last_active.
+
+    Idempotent and safe to call on EVERY interaction (cheap single UPSERT).
+    On first insert sets first_seen=last_active=now and acq_channel=channel
+    (first-touch). On conflict: updates username/first_name if non-None,
+    always bumps last_active and updated_at, and sets acq_channel only if it
+    is still NULL (first-touch wins). Never raises.
+    """
+    try:
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                """
+                INSERT INTO users (user_id, username, first_name, acq_channel)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                  username    = CASE WHEN excluded.username IS NOT NULL
+                                     THEN excluded.username
+                                     ELSE users.username END,
+                  first_name  = CASE WHEN excluded.first_name IS NOT NULL
+                                     THEN excluded.first_name
+                                     ELSE users.first_name END,
+                  acq_channel = CASE WHEN users.acq_channel IS NULL
+                                     THEN excluded.acq_channel
+                                     ELSE users.acq_channel END,
+                  last_active = datetime('now'),
+                  updated_at  = datetime('now')
+                """,
+                (user_id, username, first_name, channel),
+            )
+            conn.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("upsert_user failed for user_id=%r", user_id, exc_info=True)
+
+
+def touch_user(user_id: int) -> None:
+    """Bump only last_active=now for an existing user (lighter than upsert).
+
+    No-op if the user row does not exist yet. Never raises.
+    """
+    try:
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                "UPDATE users SET last_active=datetime('now'), updated_at=datetime('now') "
+                "WHERE user_id=?",
+                (user_id,),
+            )
+            conn.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("touch_user failed for user_id=%r", user_id, exc_info=True)
+
+
+def mark_user_blocked(user_id: int, blocked: bool = True) -> None:
+    """Set users.is_blocked. Call when a send raises TelegramForbidden.
+
+    Also accepts blocked=False to clear the flag when the user resumes.
+    No-op if no row exists. Never raises.
+    """
+    try:
+        flag = 1 if blocked else 0
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                "UPDATE users SET is_blocked=?, updated_at=datetime('now') WHERE user_id=?",
+                (flag, user_id),
+            )
+            conn.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("mark_user_blocked failed for user_id=%r", user_id, exc_info=True)
+
+
+# ── users profile reader ───────────────────────────────────────────────
+
+
+def get_user_profile(user_id: int) -> dict:
+    """Full per-user dossier answering business questions 1-8 for ONE user.
+
+    Returns a dict (zeros/None on missing data, never raises). All queries
+    run under a single _LOCK acquisition.
+    """
+    _empty = {
+        "user_id": user_id,
+        "username": None,
+        "first_name": None,
+        "first_seen": None,
+        "last_active": None,
+        "is_blocked": False,
+        "balance": 0,
+        "starter_granted": False,
+        "acq_channel": None,
+        "requests": {"image": 0, "video": 0, "edit": 0, "upscale": 0, "total": 0},
+        "spend": {"stars": 0, "rub": 0.0, "payments": 0},
+        "referrals": {
+            "invited": 0,
+            "invited_paid": 0,
+            "referred_revenue_rub": 0.0,
+            "referred_revenue_stars": 0,
+            "reward_credits_earned": 0,
+        },
+    }
+    try:
+        with _LOCK:
+            conn = _conn()
+
+            # Q1 — user profile row
+            row = conn.execute(
+                "SELECT user_id, username, first_name, first_seen, last_active, is_blocked "
+                "FROM users WHERE user_id=?",
+                (user_id,),
+            ).fetchone()
+
+            # Q2 — credit balance + starter grant (Q8)
+            credits_row = conn.execute(
+                "SELECT balance, granted FROM credits WHERE user_id=?",
+                (user_id,),
+            ).fetchone()
+
+            # Q3 — requests by type
+            req_row = conn.execute(
+                """
+                SELECT
+                  SUM(CASE WHEN operation_type IN ('gen','regen','revary')
+                           THEN 1 ELSE 0 END) AS image,
+                  SUM(CASE WHEN operation_type LIKE 'video%'
+                           THEN 1 ELSE 0 END) AS video,
+                  SUM(CASE WHEN operation_type IN ('edit','myphoto')
+                           THEN 1 ELSE 0 END) AS edit,
+                  SUM(CASE WHEN operation_type IN ('up2x','realup','upscale')
+                           THEN 1 ELSE 0 END) AS upscale,
+                  COUNT(*) AS total
+                FROM flow_jobs
+                WHERE user_id=? AND status='success'
+                """,
+                (user_id,),
+            ).fetchone()
+
+            # Q4 — money brought in
+            spend_row = conn.execute(
+                "SELECT COALESCE(SUM(stars_amount),0) AS stars, "
+                "       COALESCE(SUM(amount_rub),0)   AS rub, "
+                "       COUNT(*)                      AS payments "
+                "FROM transactions WHERE user_id=? AND status='paid'",
+                (user_id,),
+            ).fetchone()
+
+            # Q5 — referral count (how many this user invited)
+            invited_row = conn.execute(
+                "SELECT COUNT(*) AS invited FROM referrals WHERE referrer_user_id=?",
+                (user_id,),
+            ).fetchone()
+
+            # Q6 — revenue from referrals
+            ref_rev_row = conn.execute(
+                "SELECT COALESCE(SUM(t.amount_rub),0)   AS referred_revenue_rub, "
+                "       COALESCE(SUM(t.stars_amount),0) AS referred_revenue_stars, "
+                "       COUNT(DISTINCT t.user_id)       AS invited_paid "
+                "FROM referrals r "
+                "JOIN transactions t "
+                "  ON t.user_id = r.referred_user_id AND t.status='paid' "
+                "WHERE r.referrer_user_id=?",
+                (user_id,),
+            ).fetchone()
+
+            # Q7 — acquisition channel (authoritative from acquisitions)
+            acq_row = conn.execute(
+                "SELECT channel FROM acquisitions WHERE user_id=?",
+                (user_id,),
+            ).fetchone()
+
+            # Reward credits (milestone + ongoing combined)
+            reward_m = conn.execute(
+                "SELECT COALESCE(SUM(reward_credits),0) FROM referrals "
+                "WHERE referrer_user_id=? AND status='rewarded'",
+                (user_id,),
+            ).fetchone()
+            reward_o = conn.execute(
+                "SELECT COALESCE(SUM(reward_credits),0) FROM referral_ongoing_rewards "
+                "WHERE referrer_user_id=?",
+                (user_id,),
+            ).fetchone()
+
+        result = dict(_empty)
+        if row:
+            result["user_id"] = int(row["user_id"])
+            result["username"] = row["username"]
+            result["first_name"] = row["first_name"]
+            result["first_seen"] = row["first_seen"]
+            result["last_active"] = row["last_active"]
+            result["is_blocked"] = bool(row["is_blocked"])
+
+        if credits_row:
+            result["balance"] = int(credits_row["balance"] or 0)
+            result["starter_granted"] = bool(credits_row["granted"])
+
+        result["acq_channel"] = acq_row["channel"] if acq_row else None
+
+        result["requests"] = {
+            "image":   int(req_row["image"]   or 0) if req_row else 0,
+            "video":   int(req_row["video"]   or 0) if req_row else 0,
+            "edit":    int(req_row["edit"]    or 0) if req_row else 0,
+            "upscale": int(req_row["upscale"] or 0) if req_row else 0,
+            "total":   int(req_row["total"]   or 0) if req_row else 0,
+        }
+
+        result["spend"] = {
+            "stars":    int(spend_row["stars"]    or 0)   if spend_row else 0,
+            "rub":      float(spend_row["rub"]    or 0.0) if spend_row else 0.0,
+            "payments": int(spend_row["payments"] or 0)   if spend_row else 0,
+        }
+
+        result["referrals"] = {
+            "invited":               int(invited_row["invited"]              or 0) if invited_row else 0,
+            "invited_paid":          int(ref_rev_row["invited_paid"]         or 0) if ref_rev_row else 0,
+            "referred_revenue_rub":  float(ref_rev_row["referred_revenue_rub"]  or 0.0) if ref_rev_row else 0.0,
+            "referred_revenue_stars": int(ref_rev_row["referred_revenue_stars"] or 0)   if ref_rev_row else 0,
+            "reward_credits_earned": (
+                int(reward_m[0] or 0) + int(reward_o[0] or 0)
+            ) if reward_m and reward_o else 0,
+        }
+        return result
+    except Exception:  # noqa: BLE001
+        log.warning("get_user_profile failed for user_id=%r", user_id, exc_info=True)
+        return _empty
+
+
+# ── operator rollup reports (new) ─────────────────────────────────────
+
+
+def report_active_users(now: bool = False) -> dict:  # noqa: ARG001 — `now` reserved
+    """DAU/WAU/MAU from users.last_active (local-day windows).
+
+    Returns {"dau": int, "wau": int, "mau": int}. Counts only is_blocked=0.
+    Never raises; returns zeros on error.
+    """
+    try:
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                """
+                SELECT
+                  SUM(CASE WHEN date(last_active,'localtime') = date('now','localtime')
+                           THEN 1 ELSE 0 END) AS dau,
+                  SUM(CASE WHEN last_active >= datetime('now','-7 days')
+                           THEN 1 ELSE 0 END) AS wau,
+                  SUM(CASE WHEN last_active >= datetime('now','-30 days')
+                           THEN 1 ELSE 0 END) AS mau
+                FROM users WHERE is_blocked = 0
+                """,
+            ).fetchone()
+            if row is None:
+                return {"dau": 0, "wau": 0, "mau": 0}
+            return {
+                "dau": int(row["dau"] or 0),
+                "wau": int(row["wau"] or 0),
+                "mau": int(row["mau"] or 0),
+            }
+    except Exception:  # noqa: BLE001
+        log.warning("report_active_users failed", exc_info=True)
+        return {"dau": 0, "wau": 0, "mau": 0}
+
+
+def report_top_users(limit: int = 20, days: int | None = None) -> dict:
+    """Top users by RUB spend, optionally restricted to the last ``days``.
+
+    Returns {"users": [...]} ordered by rub DESC. Never raises; empty list on error.
+    """
+    try:
+        params: tuple
+        if days is not None:
+            window = f"-{max(0, int(days))} days"
+            date_filter = "AND t.created_at >= datetime('now', ?)"
+            params = ("paid", window, int(limit))
+        else:
+            date_filter = ""
+            params = ("paid", int(limit))
+
+        sql = (
+            "SELECT t.user_id, u.username, "
+            "       COALESCE(SUM(t.amount_rub),0)   AS rub, "
+            "       COALESCE(SUM(t.stars_amount),0) AS stars, "
+            "       COUNT(*)                        AS payments "
+            "FROM transactions t "
+            "LEFT JOIN users u ON u.user_id = t.user_id "
+            f"WHERE t.status=? {date_filter} "
+            "GROUP BY t.user_id ORDER BY rub DESC LIMIT ?"
+        )
+        with _LOCK:
+            conn = _conn()
+            rows = _rows(conn, sql, params)
+        return {
+            "users": [
+                {
+                    "user_id":  int(r["user_id"]),
+                    "username": r["username"],
+                    "rub":      float(r["rub"] or 0.0),
+                    "stars":    int(r["stars"] or 0),
+                    "payments": int(r["payments"] or 0),
+                }
+                for r in rows
+            ]
+        }
+    except Exception:  # noqa: BLE001
+        log.warning("report_top_users failed", exc_info=True)
+        return {"users": []}
+
+
+def report_top_referrers(limit: int = 20) -> dict:
+    """Top referrers by referred-revenue (RUB their invitees brought in).
+
+    Returns {"referrers": [...]} ordered by referred_revenue_rub DESC.
+    Never raises; empty list on error.
+    """
+    try:
+        sql = (
+            "SELECT r.referrer_user_id, u.username, "
+            "       COUNT(DISTINCT r.referred_user_id) AS invited, "
+            "       COALESCE(SUM(CASE WHEN t.status='paid' THEN t.amount_rub END),0) "
+            "           AS referred_revenue_rub, "
+            "       COALESCE(("
+            "           SELECT SUM(rl.reward_credits) FROM referrals rl "
+            "           WHERE rl.referrer_user_id = r.referrer_user_id AND rl.status='rewarded'"
+            "       ),0) + COALESCE(("
+            "           SELECT SUM(ror.reward_credits) FROM referral_ongoing_rewards ror "
+            "           WHERE ror.referrer_user_id = r.referrer_user_id"
+            "       ),0) AS reward_credits_earned "
+            "FROM referrals r "
+            "LEFT JOIN transactions t ON t.user_id = r.referred_user_id "
+            "LEFT JOIN users u ON u.user_id = r.referrer_user_id "
+            "GROUP BY r.referrer_user_id "
+            "ORDER BY referred_revenue_rub DESC LIMIT ?"
+        )
+        with _LOCK:
+            conn = _conn()
+            rows = _rows(conn, sql, (int(limit),))
+        return {
+            "referrers": [
+                {
+                    "referrer_user_id":    int(r["referrer_user_id"]),
+                    "username":            r["username"],
+                    "invited":             int(r["invited"] or 0),
+                    "referred_revenue_rub": float(r["referred_revenue_rub"] or 0.0),
+                    "reward_credits_earned": int(r["reward_credits_earned"] or 0),
+                }
+                for r in rows
+            ]
+        }
+    except Exception:  # noqa: BLE001
+        log.warning("report_top_referrers failed", exc_info=True)
+        return {"referrers": []}
+
+
+def backfill_users_from_metrics() -> int:
+    """One-time idempotent backfill of the users table from existing tables.
+
+    For every distinct user_id seen in credits / transactions / acquisitions,
+    INSERT OR IGNORE a users row with best-effort first_seen (MIN created_at)
+    and the latest username from events. acq_channel is filled from acquisitions.
+    Safe to run repeatedly (INSERT OR IGNORE never overwrites a live row).
+    Returns the count of rows inserted. Never raises; returns 0 on error.
+    """
+    try:
+        with _LOCK:
+            conn = _conn()
+            # Collect all known user_ids from financial/credit tables.
+            all_users_sql = (
+                "SELECT DISTINCT user_id FROM credits WHERE user_id IS NOT NULL "
+                "UNION "
+                "SELECT DISTINCT user_id FROM transactions WHERE user_id IS NOT NULL "
+                "UNION "
+                "SELECT DISTINCT user_id FROM acquisitions WHERE user_id IS NOT NULL"
+            )
+            user_ids = [r[0] for r in conn.execute(all_users_sql).fetchall()]
+
+            count = 0
+            for uid in user_ids:
+                # Best-effort first_seen: MIN(created_at) across tables.
+                # credits table has updated_at, not created_at, so we skip it.
+                candidates = []
+                for tbl, col in (("transactions", "created_at"), ("acquisitions", "created_at")):
+                    r = conn.execute(
+                        f"SELECT MIN({col}) FROM {tbl} WHERE user_id=?", (uid,)
+                    ).fetchone()
+                    if r and r[0]:
+                        candidates.append(r[0])
+                # Also check events table for first_seen.
+                r = conn.execute(
+                    "SELECT MIN(created_at) FROM events WHERE user_id=?", (uid,)
+                ).fetchone()
+                if r and r[0]:
+                    candidates.append(r[0])
+
+                first_seen = min(candidates) if candidates else None
+
+                # Latest username from events.
+                u_row = conn.execute(
+                    "SELECT username FROM events WHERE user_id=? AND username IS NOT NULL "
+                    "ORDER BY id DESC LIMIT 1",
+                    (uid,),
+                ).fetchone()
+                username = u_row[0] if u_row else None
+
+                # Channel from acquisitions (first-touch).
+                a_row = conn.execute(
+                    "SELECT channel FROM acquisitions WHERE user_id=?", (uid,)
+                ).fetchone()
+                channel = a_row[0] if a_row else None
+
+                if first_seen:
+                    cur = conn.execute(
+                        "INSERT OR IGNORE INTO users "
+                        "(user_id, username, acq_channel, first_seen, last_active, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (uid, username, channel, first_seen, first_seen, first_seen),
+                    )
+                else:
+                    cur = conn.execute(
+                        "INSERT OR IGNORE INTO users (user_id, username, acq_channel) "
+                        "VALUES (?, ?, ?)",
+                        (uid, username, channel),
+                    )
+                count += cur.rowcount
+
+            conn.commit()
+            return count
+    except Exception:  # noqa: BLE001
+        log.warning("backfill_users_from_metrics failed", exc_info=True)
+        return 0

@@ -70,6 +70,33 @@ class TelegramE2EConfigTests(unittest.TestCase):
             )
             self.assertIsNone(login_config.bot_username)
 
+            request_config = build_config(
+                mode="telegram-login-request",
+                output_dir="runs",
+                project_root=root,
+                approve_external_action=True,
+                env={key: value for key, value in env.items() if key != "BOT_USERNAME"},
+            )
+            self.assertIsNone(request_config.bot_username)
+
+            with self.assertRaises(ConfigError):
+                build_config(
+                    mode="telegram-login-complete",
+                    output_dir="runs",
+                    project_root=root,
+                    approve_external_action=True,
+                    env={key: value for key, value in env.items() if key != "BOT_USERNAME"},
+                )
+            complete_config = build_config(
+                mode="telegram-login-complete",
+                output_dir="runs",
+                project_root=root,
+                approve_external_action=True,
+                tg_code="12345",
+                env={key: value for key, value in env.items() if key != "BOT_USERNAME"},
+            )
+            self.assertEqual(complete_config.tg_code, "12345")
+
             for unsafe in ("../session", ".env", "api_config.json", "google_profile/session"):
                 with self.subTest(unsafe=unsafe):
                     with self.assertRaises(ConfigError):

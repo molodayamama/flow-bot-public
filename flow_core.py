@@ -2423,6 +2423,55 @@ class CreditStore:
             raise
 
 
+class CreditStoreSQLite:
+    """SQLite-backed credit store with the same public API as :class:`CreditStore`.
+
+    Delegates to the ``credits_*`` functions in :mod:`metrics`.  The ``path``
+    parameter is accepted but ignored (kept only so callers can swap stores
+    without changing their constructor call).
+    """
+
+    def __init__(self, path, starter: int = STARTER_CREDITS) -> None:  # noqa: ANN001
+        # ``path`` kept for signature compatibility; metrics module owns the path.
+        self._starter = int(starter)
+
+    def balance(self, user_id: int | str) -> int:
+        """Balance, granting the one-time starter bonus on first access."""
+        import metrics as _m
+        return _m.credits_balance(int(user_id), self._starter)
+
+    def can_afford(self, user_id: int | str, amount: int) -> bool:
+        return self.balance(user_id) >= int(amount)
+
+    def charge(self, user_id: int | str, amount: int) -> bool:
+        """Deduct ``amount`` if affordable; return whether it succeeded."""
+        import metrics as _m
+        return _m.credits_charge(int(user_id), int(amount), self._starter)
+
+    def refund(self, user_id: int | str, amount: int) -> None:
+        import metrics as _m
+        _m.credits_refund(int(user_id), int(amount))
+
+    def add(self, user_id: int | str, amount: int) -> int:
+        """Top up (purchase) and return the new balance."""
+        import metrics as _m
+        return _m.credits_add(int(user_id), int(amount), self._starter)
+
+
+def make_credit_store(path, starter: int = STARTER_CREDITS, *, use_sqlite: bool | None = None):  # noqa: ANN001
+    """Factory: return a :class:`CreditStoreSQLite` or :class:`CreditStore`.
+
+    ``use_sqlite`` defaults to the ``CREDITS_SQLITE`` env var (``"1"`` → True).
+    Passing it explicitly overrides the env var (useful in tests).
+    """
+    import os as _os
+    if use_sqlite is None:
+        use_sqlite = _os.getenv("CREDITS_SQLITE", "0").strip() == "1"
+    if use_sqlite:
+        return CreditStoreSQLite(path, starter)
+    return CreditStore(path, starter)
+
+
 class PaymentStore:
     """Persisted log of Telegram Stars payments, for refunds (atomic JSON).
 

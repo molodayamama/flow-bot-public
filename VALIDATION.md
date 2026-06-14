@@ -4,6 +4,12 @@ Validation must be chosen by risk level. Prefer offline checks first. Network,
 paid, account-mutating, or browser-profile-mutating checks require explicit
 task approval.
 
+When an approved live/stateful check fails, record a sanitized entry in
+`docs/LIVE_TEST_FAILURES.md`. Include Telegram input/output, Flow account label,
+Google HTTP status/body snippet, user-facing text, reproduction steps, severity,
+and next fix owner. Never paste secret values, raw HAR bodies, bearer/cookie
+material, proxy credentials, Telegram `file_id` values, or private user content.
+
 ## Validation Categories
 
 ### Offline/Safe
@@ -49,6 +55,8 @@ Requires explicit approval.
 - `python test_tokens.py`
 - `python test_recaptcha_params.py`
 - `python flow_bot.py`
+- `python telegram_bot_tester.py --mode telegram-login-request --approve-external-action`
+- `python telegram_bot_tester.py --mode telegram-login-complete --approve-external-action`
 - `python telegram_bot_tester.py --mode telegram-smoke --approve-external-action`
 - `python telegram_bot_tester.py --mode telegram-generation --prompt "simple safe landscape test" --approve-external-action`
 - `python telegram_bot_tester.py --mode telegram-ramp --prompt "simple safe landscape test" --max-steps 3 --delay-sec 90 --approve-external-action`
@@ -177,6 +185,10 @@ Telegram E2E tester:
   `rg -l "ya29\\.|session-token|TELEGRAM_TOKEN=|TWOCAPTCHA|BEARER_TOKEN=|TG_API_HASH=|TG_PHONE=|TG_E2E_PROXY_URL=|tg://proxy\\?server=.*secret=|socks5h?://|http://[^\\s]+:[^\\s]+@" telegram_bot_tester.py tg_e2e tests docs`
 - Manual Telegram smoke, approval required:
   `python telegram_bot_tester.py --mode telegram-login --approve-external-action`
+- Non-interactive Telegram login request, approval required:
+  `python telegram_bot_tester.py --mode telegram-login-request --approve-external-action`
+- Non-interactive Telegram login completion, approval required:
+  `python telegram_bot_tester.py --mode telegram-login-complete --approve-external-action`
 - Manual Telegram smoke after login, approval required:
   `python telegram_bot_tester.py --mode telegram-smoke --approve-external-action`
 - Manual single generation, approval required and only after smoke passes:

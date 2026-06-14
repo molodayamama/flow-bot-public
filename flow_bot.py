@@ -42,6 +42,7 @@ from urllib.parse import unquote, urlparse
 import aiohttp
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import Command
 from dotenv import load_dotenv
 from playwright.async_api import BrowserContext, async_playwright
@@ -81,6 +82,8 @@ from flow_core import (
 )
 from flow_core import (
     CreditStore,
+    CreditStoreSQLite,
+    make_credit_store,
     PaymentStore,
     STARS_PACKS,
     action_price,
@@ -2434,7 +2437,8 @@ mix_baskets: dict[int, list[dict]] = defaultdict(list)
 MIX_MAX = 4
 
 # Баланс кредитов на пользователя (монетизация).
-credit_store = CreditStore(os.getenv("USER_CREDITS_FILE", "user_credits.json"))
+_USER_CREDITS_FILE = os.getenv("USER_CREDITS_FILE", "user_credits.json")
+credit_store = make_credit_store(_USER_CREDITS_FILE)
 payment_store = PaymentStore(os.getenv("PAYMENTS_FILE", "payments.json"))
 
 # Метрики (SQLite). init_db не бросает; log_* безопасны при сбое БД.
@@ -2442,6 +2446,16 @@ try:
     metrics.init_db(os.getenv("METRICS_DB", "metrics.db"))
 except Exception:
     log.warning("metrics.init_db failed; metrics disabled", exc_info=True)
+
+# One-time migration: if SQLite credits store is active, import existing JSON
+# balances. credits_migrate_from_json uses INSERT OR IGNORE → fully idempotent.
+if isinstance(credit_store, CreditStoreSQLite):
+    try:
+        migrated = metrics.credits_migrate_from_json(_USER_CREDITS_FILE)
+        if migrated:
+            log.info("credits: migrated %d balances from JSON to SQLite", migrated)
+    except Exception:
+        log.warning("credits: JSON→SQLite migration failed", exc_info=True)
 
 
 def _username(message_or_user) -> str | None:
@@ -2552,6 +2566,8 @@ def _notify_referrer(referrer_id: int, bonus: int) -> None:
                 referrer_id, flow_copy.msg("referral_reward_got", bonus=bonus),
                 parse_mode="HTML",
             )
+        except TelegramForbiddenError:
+            metrics.mark_user_blocked(referrer_id)
         except Exception:
             pass
     try:
@@ -3467,6 +3483,8 @@ async def _send_one_image(
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
+    metrics.upsert_user(user_id, username=_username(message),
+                        first_name=getattr(message.from_user, "first_name", None))
     is_new = user_id not in credit_store._granted if hasattr(credit_store, "_granted") else True
     credit_store.balance(user_id)  # начисляем стартовые кредиты при первом старте
     metrics.log_event("user_started", user_id=user_id,
@@ -3560,6 +3578,8 @@ async def cmd_grant(message: types.Message):
             await bot.send_message(
                 target, flow_copy.msg("topup_done", credits=amount, balance=new_balance)
             )
+        except TelegramForbiddenError:
+            metrics.mark_user_blocked(target)
         except Exception:
             pass
 
@@ -4810,6 +4830,8 @@ async def _do_mix_and_send(
 async def on_menu_action(callback: types.CallbackQuery):
     """Кнопки главного меню и экранов (генерация/баланс/пополнение/помощь)."""
     user_id = callback.from_user.id
+    metrics.upsert_user(user_id, username=getattr(callback.from_user, "username", None),
+                        first_name=getattr(callback.from_user, "first_name", None))
     data = callback.data or ""
     msg = callback.message
 
@@ -6604,6 +6626,8 @@ async def handle_photo(message: types.Message):
 async def handle_plain_text(message: types.Message):
     """Текст без команды: кнопки нижнего меню, ответ визарду или прямая генерация."""
     user_id = message.from_user.id
+    metrics.upsert_user(user_id, username=_username(message),
+                        first_name=getattr(message.from_user, "first_name", None))
     text = message.text.strip()
     st = _ws(user_id)
 

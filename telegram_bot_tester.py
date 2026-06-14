@@ -23,6 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tg-api-hash")
     parser.add_argument("--tg-phone")
     parser.add_argument("--tg-proxy-url")
+    parser.add_argument("--tg-code")
+    parser.add_argument("--tg-password")
     parser.add_argument("--session-file")
     parser.add_argument("--prompt")
     parser.add_argument("--max-steps", type=int, default=1)
@@ -48,6 +50,8 @@ def main(argv: list[str] | None = None) -> int:
             tg_api_hash=args.tg_api_hash,
             tg_phone=args.tg_phone,
             tg_proxy_url=args.tg_proxy_url,
+            tg_code=args.tg_code,
+            tg_password=args.tg_password,
             session_file=args.session_file,
             prompt=args.prompt,
             max_steps=args.max_steps,

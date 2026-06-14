@@ -30,6 +30,12 @@ class TelegramClientProtocol(Protocol):
     async def ensure_authorized(self) -> str:
         ...
 
+    async def request_login_code(self) -> str:
+        ...
+
+    async def complete_login(self) -> str:
+        ...
+
     async def send_and_collect(
         self,
         *,
@@ -140,11 +146,16 @@ async def _run_external_async(
     client = client_factory(config)
     events: list[dict[str, object]] = []
     try:
-        if config.mode == "telegram-login":
+        if config.mode in {"telegram-login", "telegram-login-request", "telegram-login-complete"}:
             started = _utc_now()
             start_tick = time.perf_counter()
             try:
-                page_state = await client.ensure_authorized()
+                if config.mode == "telegram-login-request":
+                    page_state = await client.request_login_code()
+                elif config.mode == "telegram-login-complete":
+                    page_state = await client.complete_login()
+                else:
+                    page_state = await client.ensure_authorized()
                 batch = TelegramBatch(text=page_state)
             except Exception as exc:
                 batch = TelegramBatch(
@@ -152,7 +163,7 @@ async def _run_external_async(
                     error_message=str(exc),
                 )
             finished = _utc_now()
-            scenario = Scenario("telegram-login", "login", 0)
+            scenario = Scenario(config.mode, "login", 0)
             events.append(
                 _classify_batch(
                     config=config,

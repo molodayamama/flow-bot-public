@@ -1,5 +1,7 @@
 import asyncio
 import getpass
+import json
+from datetime import datetime, timezone
 from typing import Any
 
 from .config import TelegramE2EConfig
@@ -64,6 +66,69 @@ class TelethonBotClient:
             raise RuntimeError("Telegram login failed: session is not authorized")
         return "authorized"
 
+    async def request_login_code(self) -> str:
+        client = await self._get_client()
+        if await client.is_user_authorized():
+            return "authorized"
+
+        assert self._config.tg_phone is not None
+        try:
+            sent = await client.send_code_request(self._config.tg_phone)
+        except Exception as exc:
+            raise RuntimeError(f"Telegram login code request failed: {exc.__class__.__name__}") from exc
+        self._pending_login_path().write_text(
+            json.dumps(
+                {
+                    "phone": self._config.tg_phone,
+                    "phone_code_hash": getattr(sent, "phone_code_hash", ""),
+                    "requested_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return "code_requested"
+
+    async def complete_login(self) -> str:
+        client = await self._get_client()
+        if await client.is_user_authorized():
+            self._pending_login_path().unlink(missing_ok=True)
+            return "authorized"
+
+        assert self._config.tg_code is not None
+        pending_path = self._pending_login_path()
+        try:
+            pending = json.loads(pending_path.read_text(encoding="utf-8"))
+            phone = str(pending["phone"])
+            phone_code_hash = str(pending["phone_code_hash"])
+        except Exception as exc:
+            raise RuntimeError("Telegram login code was not requested. Run telegram-login-request first.") from exc
+
+        try:
+            await client.sign_in(
+                phone=phone,
+                code=self._config.tg_code.strip().replace(" ", ""),
+                phone_code_hash=phone_code_hash,
+            )
+        except Exception as exc:
+            name = exc.__class__.__name__
+            if name == "SessionPasswordNeededError":
+                if not self._config.tg_password:
+                    raise RuntimeError("Telegram 2FA password is required via TG_PASSWORD or --tg-password.") from exc
+                await client.sign_in(password=self._config.tg_password)
+            elif name == "PhoneCodeInvalidError":
+                raise RuntimeError("Telegram login code was rejected. Use the newest code.") from exc
+            elif name == "PhoneCodeExpiredError":
+                raise RuntimeError("Telegram login code expired. Re-run telegram-login-request.") from exc
+            else:
+                raise RuntimeError(f"Telegram login failed: {name}") from exc
+
+        if not await client.is_user_authorized():
+            raise RuntimeError("Telegram login failed: session is not authorized")
+        pending_path.unlink(missing_ok=True)
+        return "authorized"
+
     async def close(self) -> None:
         if self._client is not None:
             await self._client.disconnect()
@@ -85,6 +150,8 @@ class TelethonBotClient:
         self._config.session_file.parent.mkdir(parents=True, exist_ok=True)
         client_kwargs: dict[str, Any] = {}
         if self._config.mtproxy is not None:
+            # Pass secret as a hex string — Telethon's normalize_secret() strips
+            # the "dd"/"ee" prefix and converts to bytes internally.
             client_kwargs["connection"] = connection.ConnectionTcpMTProxyRandomizedIntermediate
             client_kwargs["proxy"] = (
                 self._config.mtproxy.host,
@@ -99,6 +166,10 @@ class TelethonBotClient:
         )
         await self._client.connect()
         return self._client
+
+    def _pending_login_path(self):
+        assert self._config.session_file is not None
+        return self._config.session_file.with_suffix(".login.json")
 
     async def _collect(
         self,
