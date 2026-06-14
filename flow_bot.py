@@ -152,6 +152,8 @@ from flow_core import (
     video_media_redirect_url,
     video_edit_end_frame,
     video_duration_from_poll_item,
+    video_frames_model_key,
+    video_reference_model_key,
 )
 from flow_core import (
     FlowAccount,
@@ -2183,9 +2185,14 @@ class FlowHttpClient:
         # TEMP (capture-driven): trace r2v/frames request shape to diagnose the
         # "ingredients video never generates" bug. No secrets — endpoint/model/aspect only.
         if is_reference or is_frames:
+            effective_model_key = (
+                video_frames_model_key(model_key)
+                if is_frames
+                else video_reference_model_key(model_key, aspect)
+            )
             log.info(
-                "🎬 r2v req endpoint=%s model_key=%s aspect=%s ref_images=%d frames=%s",
-                endpoint_name, model_key, aspect, len(reference_images),
+                "🎬 r2v req endpoint=%s effective_model_key=%s aspect=%s ref_images=%d frames=%s",
+                endpoint_name, effective_model_key, aspect, len(reference_images),
                 bool(start_image or end_image),
             )
 

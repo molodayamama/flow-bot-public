@@ -215,3 +215,73 @@ Notes:
 
 - The wrapper prints command names only. It must not include secrets, proxy
   values, tokens, account emails, or raw runtime data.
+
+### 2026-06-14 LFX-005 live probe callback collection
+
+- Failure id: tooling-observation
+- Status: verified
+- Priority: S3
+- Fix owner: current Codex session
+- Proposed by: current Codex live E2E session
+
+Root cause hypothesis:
+
+- When clicking an old inline button, the probe collected messages after the
+  clicked message id. If newer chat messages already existed, stale messages
+  were mixed into the callback summary.
+- Confidence: high
+
+Implemented fix:
+
+- Before a callback click, record the current latest chat message id and collect
+  only bot replies after that point.
+
+Owner files:
+
+- `tools/live_telegram_probe.py`
+
+Validation:
+
+- `python -m py_compile tools\live_telegram_probe.py` passed.
+- VPS callback check on an existing video download button returned only the two
+  fresh download-preparation/result messages.
+
+Notes:
+
+- This is live-test tooling only; it does not change bot behavior.
+
+### 2026-06-14 LFX-006 r2v/frames effective model logging
+
+- Failure id: observability-observation
+- Status: implemented
+- Priority: S3
+- Fix owner: current Codex session
+- Proposed by: current Codex live E2E session
+
+Root cause hypothesis:
+
+- The r2v/frames diagnostic log ran before `build_video_payload()` converted the
+  UI model id into the mode-specific provider key, so successful Reference and
+  Frames requests looked like `veo_3_1_t2v_lite` in the journal.
+- Confidence: high
+
+Implemented fix:
+
+- Log `effective_model_key` using `video_reference_model_key()` for Ingredients
+  and `video_frames_model_key()` for Frames.
+
+Owner files:
+
+- `flow_bot.py`
+- `tests/test_flow_menu.py`
+
+Validation:
+
+- Source-level guard added in `tests/test_flow_menu.py`.
+- Live 2026-06-14 Reference and Frames requests both returned HTTP 200 and
+  delivered videos; this fix only corrects future diagnostic output.
+
+Notes:
+
+- Do not add media ids, project ids, tokens, cookies, proxy URLs, or raw request
+  bodies to this log.

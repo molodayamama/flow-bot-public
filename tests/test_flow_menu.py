@@ -685,6 +685,9 @@ class BotMenuWiringTests(unittest.TestCase):
     def test_ingredients_diagnostic_logging_present(self) -> None:
         # Temporary capture-driven logging to diagnose the фото+текст gen failure.
         self.assertIn("🎬 r2v req", self.source)
+        self.assertIn("effective_model_key=%s", self.source)
+        self.assertIn("video_reference_model_key(model_key, aspect)", self.source)
+        self.assertIn("video_frames_model_key(model_key)", self.source)
 
     def test_metrics_wired_into_flow(self) -> None:
         # Metrics import + init + key events + idempotent transaction recording.

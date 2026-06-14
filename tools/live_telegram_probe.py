@@ -78,6 +78,7 @@ async def main_async(args: argparse.Namespace) -> int:
             before = int(sent.id)
             sent_kind = "photo"
         elif args.click_text or args.click_data:
+            latest_before_click = await _latest_message_id(client, entity)
             clicked_message, click_result = await _click_button(
                 client,
                 entity,
@@ -85,7 +86,7 @@ async def main_async(args: argparse.Namespace) -> int:
                 click_data=args.click_data,
                 message_id=args.click_message_id,
             )
-            before = int(getattr(clicked_message, "id", 0) or 0)
+            before = max(latest_before_click, int(getattr(clicked_message, "id", 0) or 0))
             sent_kind = "click"
 
         if args.recent > 0 and not sent_kind:
@@ -110,6 +111,13 @@ async def _recent(client: Any, entity: Any, limit: int, text_limit: int) -> list
     async for msg in client.iter_messages(entity, limit=max(1, min(limit, 50))):
         rows.append(_summarize_message(msg, text_limit))
     return rows
+
+
+async def _latest_message_id(client: Any, entity: Any) -> int:
+    latest = await client.get_messages(entity, limit=1)
+    if not latest:
+        return 0
+    return int(getattr(latest[0], "id", 0) or 0)
 
 
 async def _collect_after(client: Any, entity: Any, min_id: int, timeout_sec: int, text_limit: int) -> list[dict[str, Any]]:

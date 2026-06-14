@@ -325,6 +325,11 @@ Video Ingredients/Frames (Flow API):
 - Live 2026-06-08 evidence in `HANDOFF.md`: text-to-video, Frames, and
   Ingredients generated successfully through the bot. Keep using the captured
   endpoint/request-shape helpers instead of guessing new video endpoints.
+- Live 2026-06-14 evidence in `HANDOFF.md`: video result download, native Edit,
+  Ingredients from `kotenok.jpg`, Frames from two `kotenok.jpg` uploads, Extend,
+  and "download only new segment" all completed through Telegram and Google
+  Flow. The r2v/frames request log should show `effective_model_key`, not the
+  source UI model id.
 - Native Video Edit uses the captured
   `video:batchAsyncGenerateVideoEditVideo` endpoint. It requires a stored source
   `mediaId` and `workflowId`; stale or incomplete video refs must fail closed
@@ -388,6 +393,17 @@ Live video 401/403 routing checks:
 - The code should refresh bearer and retry once on a video POST 401. Validate
   the source-level guard with `test_video_401_retries_after_refresh` and keep
   the retry bounded.
+
+Live Telegram probe:
+
+- `tools/live_telegram_probe.py` callback checks should collect messages after
+  the current latest chat message id before clicking, not after the clicked
+  historical message id. This avoids mixing stale messages into callback
+  summaries when testing old result buttons.
+- Safe validation for the probe fix: `python -m py_compile
+  tools\live_telegram_probe.py`, then click a no-charge historical callback
+  such as a finished `v:dl:<token>` and confirm only fresh bot replies appear in
+  the summary.
 
 ## Evidence Template
 
