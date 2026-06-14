@@ -2487,6 +2487,24 @@ def _invite_button(user_id: int) -> types.InlineKeyboardButton:
     return types.InlineKeyboardButton(text=flow_copy.label("invite_friend"), url=share)
 
 
+async def _show_referral_screen(message: types.Message, *, user_id: int, edit: bool) -> None:
+    stats = metrics.referral_stats(user_id)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [_invite_button(user_id)],
+        [_menu_button("menu", "m:menu")],
+    ])
+    text = flow_copy.msg(
+        "referral_screen",
+        link=html.escape(_referral_link(user_id)),
+        invited=stats["invited"], earned=stats["earned"],
+        t1=REFERRAL_TIER1_BONUS, t2=REFERRAL_TIER2_BONUS, t3=REFERRAL_TIER3_BONUS,
+    )
+    if edit:
+        await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
 def _maybe_apply_referral_rewards(
     referred_user_id: int, *, stars_paid: int, credits_issued: int,
     pack_id: str, provider_payment_id: str,
@@ -2905,12 +2923,22 @@ def reply_menu_kb() -> types.ReplyKeyboardMarkup:
     return types.ReplyKeyboardMarkup(
         keyboard=[
             [B(text=L("kb_gen")), B(text=L("kb_vid"))],
+            [B(text=L("ideas")), B(text=L("myphoto"))],
+            [B(text=L("invite")), B(text=L("help"))],
             [B(text=L("kb_menu")), B(text=L("kb_balance"))],
         ],
         resize_keyboard=True,
         is_persistent=True,
         input_field_placeholder="Опиши картинку или жми «🎨 Создать картинку»",
     )
+
+
+async def _show_help_screen(message: types.Message, *, edit: bool) -> None:
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[[_menu_button("menu", "m:menu")]])
+    if edit:
+        await message.edit_text(flow_copy.msg("help"), reply_markup=kb)
+    else:
+        await message.answer(flow_copy.msg("help"), reply_markup=kb)
 
 
 def _wizard_text(user_id: int) -> str:
@@ -3485,6 +3513,8 @@ async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     metrics.upsert_user(user_id, username=_username(message),
                         first_name=getattr(message.from_user, "first_name", None))
+    _reset_image_flow(user_id)
+    _vid_clear(user_id)
     is_new = user_id not in credit_store._granted if hasattr(credit_store, "_granted") else True
     credit_store.balance(user_id)  # начисляем стартовые кредиты при первом старте
     metrics.log_event("user_started", user_id=user_id,
@@ -3516,6 +3546,24 @@ async def cmd_start(message: types.Message):
 async def cmd_menu(message: types.Message):
     # Постоянная нижняя клавиатура держится с /start; здесь показываем меню.
     await show_main_menu(message, user_id=message.from_user.id, ensure_kb=True)
+
+
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    await _show_help_screen(message, edit=False)
+
+
+@dp.message(Command("ideas"))
+async def cmd_ideas(message: types.Message):
+    user_id = message.from_user.id
+    _reset_image_flow(user_id)
+    _vid_clear(user_id)
+    await _show_ideas_root(message, user_id=user_id, edit=False)
+
+
+@dp.message(Command("referral", "ref"))
+async def cmd_referral(message: types.Message):
+    await _show_referral_screen(message, user_id=message.from_user.id, edit=False)
 
 
 @dp.message(Command("status"))
@@ -4875,26 +4923,10 @@ async def on_menu_action(callback: types.CallbackQuery):
         await _start_topup(callback, user_id, data.split(":", 2)[2])
     elif data == "m:help":
         await callback.answer()
-        kb = types.InlineKeyboardMarkup(
-            inline_keyboard=[[_menu_button("menu", "m:menu")]]
-        )
-        await msg.edit_text(flow_copy.msg("help"), reply_markup=kb)
+        await _show_help_screen(msg, edit=True)
     elif data == "m:invite":
         await callback.answer()
-        stats = metrics.referral_stats(user_id)
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [_invite_button(user_id)],
-            [_menu_button("menu", "m:menu")],
-        ])
-        await msg.edit_text(
-            flow_copy.msg(
-                "referral_screen",
-                link=html.escape(_referral_link(user_id)),
-                invited=stats["invited"], earned=stats["earned"],
-                t1=REFERRAL_TIER1_BONUS, t2=REFERRAL_TIER2_BONUS, t3=REFERRAL_TIER3_BONUS,
-            ),
-            reply_markup=kb, parse_mode="HTML",
-        )
+        await _show_referral_screen(msg, user_id=user_id, edit=True)
     elif data == "m:myphoto":
         await callback.answer()
         _reset_image_flow(user_id, keep_last=False)
@@ -6644,6 +6676,22 @@ async def handle_plain_text(message: types.Message):
     if text == L("kb_balance"):
         await show_balance(message, user_id=user_id, edit=False)
         return
+    if text == L("ideas"):
+        _reset_image_flow(user_id)
+        _vid_clear(user_id)
+        await _show_ideas_root(message, user_id=user_id, edit=False)
+        return
+    if text == L("myphoto"):
+        _reset_image_flow(user_id, keep_last=False)
+        _ws(user_id)["await"] = "photo"
+        await message.answer(flow_copy.msg("ask_photo"))
+        return
+    if text == L("invite"):
+        await _show_referral_screen(message, user_id=user_id, edit=False)
+        return
+    if text == L("help"):
+        await _show_help_screen(message, edit=False)
+        return
     if text == L("kb_vid"):
         vlast = st.get("vlast")
         _vid_clear(user_id)
@@ -6822,6 +6870,9 @@ async def main():
                 types.BotCommand(command="start", description="Запуск и главное меню"),
                 types.BotCommand(command="menu", description="🏠 Главное меню"),
                 types.BotCommand(command="balance", description="💳 Баланс и пополнение"),
+                types.BotCommand(command="ideas", description="Ideas and templates"),
+                types.BotCommand(command="help", description="How to use the bot"),
+                types.BotCommand(command="referral", description="Invite a friend"),
             ]
         )
     except Exception:

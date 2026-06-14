@@ -357,6 +357,24 @@ class BotMenuWiringTests(unittest.TestCase):
         # Reply-button taps are handled as plain text before prompt routing.
         self.assertIn('text == L("kb_gen")', self.source)
         self.assertIn('text == L("kb_balance")', self.source)
+        for key in ("ideas", "myphoto", "invite", "help"):
+            self.assertIn(f'B(text=L("{key}"))', self.source)
+            self.assertIn(f'text == L("{key}")', self.source)
+
+    def test_public_help_ideas_referral_commands_wired(self) -> None:
+        for command in ('Command("help")', 'Command("ideas")', 'Command("referral", "ref")'):
+            self.assertIn(command, self.source)
+        self.assertIn("async def _show_help_screen", self.source)
+        self.assertIn("async def _show_referral_screen", self.source)
+        self.assertIn("_show_ideas_root(message, user_id=user_id, edit=False)", self.source)
+        for command in ('command="ideas"', 'command="help"', 'command="referral"'):
+            self.assertIn(command, self.source)
+
+    def test_start_resets_stale_generation_state(self) -> None:
+        start = self.source.index("async def cmd_start")
+        block = self.source[start:start + 700]
+        self.assertIn("_reset_image_flow(user_id)", block)
+        self.assertIn("_vid_clear(user_id)", block)
 
     def test_admin_grant_restricted(self) -> None:
         self.assertIn('@dp.message(Command("grant"))', self.source)
