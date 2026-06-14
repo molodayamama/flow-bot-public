@@ -5012,7 +5012,7 @@ async def _regen_and_send(message: types.Message, ref: ImageRef):
         await message.answer("⚠️ Нет исходного промпта для повтора.")
         return
     await _generate_and_send(
-        message, ref.prompt, num_images=4, aspect_ratio=ref.aspect_ratio,
+        message, ref.prompt, num_images=1, aspect_ratio=ref.aspect_ratio,
         actor_id=ref.user_id, action="regen",
     )
 

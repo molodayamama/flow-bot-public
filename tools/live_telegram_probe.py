@@ -29,6 +29,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--caption", default="")
     parser.add_argument("--recent", type=int, default=0)
     parser.add_argument("--text-limit", type=int, default=2400)
+    parser.add_argument(
+        "--idle-sec",
+        type=int,
+        default=4,
+        help="Seconds with no new bot messages before returning collected output.",
+    )
     parser.add_argument("--click-text")
     parser.add_argument("--click-data")
     parser.add_argument("--click-message-id", type=int)
@@ -92,7 +98,14 @@ async def main_async(args: argparse.Namespace) -> int:
         if args.recent > 0 and not sent_kind:
             messages = await _recent(client, entity, args.recent, args.text_limit)
         else:
-            messages = await _collect_after(client, entity, before, args.timeout_sec, args.text_limit)
+            messages = await _collect_after(
+                client,
+                entity,
+                before,
+                args.timeout_sec,
+                args.text_limit,
+                idle_sec=args.idle_sec,
+            )
 
         print(json.dumps({
             "sent_kind": sent_kind or "recent",
@@ -120,11 +133,20 @@ async def _latest_message_id(client: Any, entity: Any) -> int:
     return int(getattr(latest[0], "id", 0) or 0)
 
 
-async def _collect_after(client: Any, entity: Any, min_id: int, timeout_sec: int, text_limit: int) -> list[dict[str, Any]]:
+async def _collect_after(
+    client: Any,
+    entity: Any,
+    min_id: int,
+    timeout_sec: int,
+    text_limit: int,
+    *,
+    idle_sec: int,
+) -> list[dict[str, Any]]:
     deadline = asyncio.get_running_loop().time() + timeout_sec
     seen: set[int] = set()
     rows: list[dict[str, Any]] = []
-    quiet = 0
+    idle_deadline: float | None = None
+    idle_window = max(1, min(int(idle_sec), int(timeout_sec)))
     while asyncio.get_running_loop().time() < deadline:
         changed = False
         async for msg in client.iter_messages(entity, min_id=min_id, reverse=True, limit=40):
@@ -134,11 +156,9 @@ async def _collect_after(client: Any, entity: Any, min_id: int, timeout_sec: int
             seen.add(msg_id)
             changed = True
             rows.append(_summarize_message(msg, text_limit))
-        if rows and not changed:
-            quiet += 1
-        else:
-            quiet = 0
-        if rows and quiet >= 4:
+        if rows and changed:
+            idle_deadline = asyncio.get_running_loop().time() + idle_window
+        elif rows and idle_deadline is not None and asyncio.get_running_loop().time() >= idle_deadline:
             break
         await asyncio.sleep(1)
     return rows

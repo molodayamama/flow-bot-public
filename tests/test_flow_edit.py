@@ -527,6 +527,15 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("user_id = ref.user_id", self.source)
         self.assertIn("actor_id=ref.user_id", self.source)
 
+    def test_result_regen_button_generates_one_image(self) -> None:
+        # The result button is labeled with the default one-image regen price,
+        # so the handler must request one image and charge one unit.
+        start = self.source.index("async def _regen_and_send")
+        end = self.source.index("async def _send_original_file", start)
+        block = self.source[start:end]
+        self.assertIn("num_images=1", block)
+        self.assertIn('action="regen"', block)
+
     def test_rate_limit_waits_instead_of_rejecting(self) -> None:
         # Early cooldown should sleep the remainder and proceed, not reject.
         self.assertIn("MAX_AUTO_WAIT_SEC", self.source)

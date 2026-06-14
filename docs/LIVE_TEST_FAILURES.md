@@ -284,6 +284,76 @@ Next fix notes:
   shell check showed `./admin_help` prints the Telegram admin commands and
   service-log helpers.
 
+### 2026-06-14 LF-004 image regen button underquoted generated count
+
+- Severity: S0
+- Status: verified fixed
+- Next fix owner: completed in current Codex session
+- Live check approved by: operator request in current Codex session
+- Environment: VPS `/opt/geminifree`; `geminifree-bot` active; `@photozhab_bot`
+- Surface: image result action / credits
+
+Telegram input:
+
+- User/chat: `owner-test-chat`
+- Command/callback/path: click image result button `Заново · 10 кр`
+- Attachments: none
+- Prompt/caption: short non-private live E2E prompt
+
+Telegram output:
+
+- User-facing text: before fix, the clicked button advertised one-image regen
+  pricing; after fix, the status/result both show one generated image.
+- Messages/media sent: before fix, four regenerated photos were delivered;
+  after fix, one regenerated photo was delivered.
+- Credits/refund observed: before fix, the regen click consumed four image units;
+  after fix, the regen click consumed one image unit.
+
+Flow account:
+
+- Account label: normal image route
+- Project/media ownership notes: same user-owned image result action
+- Proxy/profile notes: normal live Flow image generation path
+
+Google/Flow evidence:
+
+- Endpoint/action: image generation
+- HTTP status: 200
+- Error class/code: n/a
+- Body snippet: n/a
+
+Reproduction:
+
+1. Generate one image with a short prompt.
+2. Click `Заново · 10 кр` under that result.
+3. Compare delivered result count and balance delta with the button price.
+
+Expected:
+
+- The result button should produce one new image and charge one image unit.
+
+Actual:
+
+- Before the fix, the handler generated four images from a button labelled as a
+  one-image 10-credit action.
+
+Suspected cause:
+
+- `_image_keyboard()` used the default `action_price("regen")` label for one
+  image, while `_regen_and_send()` hardcoded `num_images=4`.
+
+Next fix notes:
+
+- Fixed by making the result-button regen request one image and adding a
+  source-level regression guard.
+
+Resolution:
+
+- Changed `_regen_and_send()` to call `_generate_and_send(..., num_images=1,
+  action="regen")`.
+- Live verification after deploy: `/one` consumed one image unit, then
+  `Заново · 10 кр` delivered one `1/1` photo and consumed one image unit.
+
 ## Closed Failures
 
 - `LF-001`: fixed by Flow upload API path and live-verified with `kotenok.jpg`.
@@ -291,3 +361,4 @@ Next fix notes:
   `main` and `sub1`; live-verified video delivery on `sub2`. Automatic
   quarantine remains a recommended follow-up.
 - `LF-003`: fixed by the `admin_help` shell wrapper and live-verified on the VPS.
+- `LF-004`: fixed by single-image result regen and live-verified on the VPS.

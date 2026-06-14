@@ -400,10 +400,24 @@ Live Telegram probe:
   the current latest chat message id before clicking, not after the clicked
   historical message id. This avoids mixing stale messages into callback
   summaries when testing old result buttons.
+- Long-running image callbacks can post an interim status and then the final
+  media result tens of seconds later. Use `--idle-sec 35` for live generative
+  image callbacks such as variations, edits, and regen; keep the default for
+  quick menu/admin checks.
 - Safe validation for the probe fix: `python -m py_compile
   tools\live_telegram_probe.py`, then click a no-charge historical callback
   such as a finished `v:dl:<token>` and confirm only fresh bot replies appear in
   the summary.
+
+Live image result actions:
+
+- Approved 2026-06-14 checks covered Telegram photo+caption edit using
+  `kotenok.jpg`, original download, real upscale, variations, result edit, and
+  result regen. All successful generative callbacks returned Flow HTTP 200.
+- Result-button regen must match its displayed one-image price: `_regen_and_send`
+  should call `_generate_and_send(..., num_images=1, action="regen")`. Validate
+  with `python -m unittest discover -s tests -p "test_flow_edit.py"` plus a live
+  `/one` -> `Заново · 10 кр` check when external validation is approved.
 
 ## Evidence Template
 

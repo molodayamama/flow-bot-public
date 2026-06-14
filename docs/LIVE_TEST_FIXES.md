@@ -285,3 +285,38 @@ Notes:
 
 - Do not add media ids, project ids, tokens, cookies, proxy URLs, or raw request
   bodies to this log.
+
+### 2026-06-14 LFX-007 single-image result regen
+
+- Failure id: LF-004
+- Status: verified
+- Priority: S0
+- Fix owner: current Codex session
+- Proposed by: current Codex live E2E session
+
+Root cause hypothesis:
+
+- The image result keyboard labelled `regen` with the default one-image price,
+  but the callback handler reused the four-image default generation count.
+- Confidence: high
+
+Implemented fix:
+
+- Make `_regen_and_send()` request one image for the inline result `Заново`
+  action, matching the displayed 10-credit price and user expectation.
+
+Owner files:
+
+- `flow_bot.py` - image result action handler.
+- `tests/test_flow_edit.py` - source-level regression guard.
+
+Validation:
+
+- Offline syntax and targeted image/menu tests passed.
+- Approved live Telegram check generated one fresh image, clicked `Заново · 10
+  кр`, received one regenerated image, and observed a one-image balance delta.
+
+Notes:
+
+- Keep the generic `action_price("regen", n)` function per-image; only the
+  single-result button behavior changed.
