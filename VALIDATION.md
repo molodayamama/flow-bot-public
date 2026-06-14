@@ -425,6 +425,10 @@ Live admin/account controls:
   service-log hints only; account toggles must be run in Telegram.
 - `/admin_help`, `/admin_accounts`, and `/admin_errors` returned sanitized
   owner/admin responses in Telegram.
+- `/status` is an admin-only diagnostic command. It may show backend/session
+  health markers, project id presence/value, cookie count, and captcha balances
+  to admins, so it must keep the `ADMIN_IDS` gate and live validation notes must
+  not paste raw diagnostic values.
 - `/acc_off sub3` disabled an account with no assigned users, `/acc_on sub3`
   restored it, `/acc_vid_off sub3` made it image-only, and `/acc_vid_on sub3`
   restored video capability. A final `/admin_accounts` check confirmed `sub3`

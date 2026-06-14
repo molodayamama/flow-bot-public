@@ -443,3 +443,47 @@ Notes:
 
 - Do not run `login.py` or recreate browser profiles as part of this fix without
   explicit operator approval.
+
+### 2026-06-14 LFX-011 restrict status diagnostics to admins
+
+- Failure id: LF-009
+- Status: verified
+- Priority: S1
+- Fix owner: current Codex session
+- Proposed by: current Codex live E2E session
+
+Root cause hypothesis:
+
+- `/status` was originally treated as a user-visible smoke/diagnostic command,
+  but its response contains backend/session diagnostics that should be limited
+  to operators. Unlike the newer admin metrics commands, `cmd_status` did not
+  check `ADMIN_IDS`.
+- Confidence: high
+
+Implemented fix:
+
+- Add the existing `ADMIN_IDS` gate to `cmd_status` and return the standard
+  `admin_denied` message for non-admin callers.
+- Move `/status` from the public command list into the `ADMIN_IDS` section of
+  `/admin_help`.
+
+Owner files:
+
+- `flow_bot.py` - command authorization and help grouping.
+- `tests/test_flow_menu.py` - source-level guard for the admin gate and help
+  placement.
+
+Validation:
+
+- Offline syntax and targeted menu tests passed.
+- VPS deploy syntax check and service restart passed.
+- Approved live owner/admin `/status` check confirmed diagnostics still work for
+  admins. The validation command reduced output to boolean markers and did not
+  print raw project ids or captcha balances.
+- Approved live `/admin_help` check confirmed `/status` is documented in the
+  admin context.
+
+Notes:
+
+- A true non-admin live denial check would require a separate non-admin Telegram
+  session; this pass used the code guard plus source-level test instead.

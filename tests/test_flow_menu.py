@@ -435,6 +435,21 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("message.from_user.id not in ADMIN_IDS", self.source)
         self.assertIn("credit_store.add(target, amount)", self.source)
 
+    def test_status_diagnostics_restricted_to_admins(self) -> None:
+        start = self.source.index('@dp.message(Command("status"))')
+        end = self.source.index('@dp.message(Command("balance"))', start)
+        block = self.source[start:end]
+        self.assertIn("message.from_user.id not in ADMIN_IDS", block)
+        self.assertIn('flow_copy.msg("admin_denied")', block)
+
+        help_start = self.source.index("_HELP_SECTIONS")
+        help_end = self.source.index("def _render_admin_help", help_start)
+        help_block = self.source[help_start:help_end]
+        self.assertGreater(
+            help_block.index('("/status"'),
+            help_block.index('("/grant'),
+        )
+
     def test_credits_charged_with_refund_on_failure(self) -> None:
         self.assertIn("credit_gate", self.source)
         self.assertIn("class NotEnoughCredits", self.source)

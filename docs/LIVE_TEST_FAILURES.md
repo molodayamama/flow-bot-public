@@ -622,6 +622,74 @@ Next fix notes:
   admin commands or add a bounded cooldown path for repeated unusual-activity
   403s. Do not recreate profiles or run `login.py` without explicit approval.
 
+### 2026-06-14 LF-009 status command exposed backend diagnostics
+
+- Severity: S1
+- Status: verified fixed
+- Next fix owner: current Codex session
+- Live check approved by: active live E2E goal
+- Environment: VPS `/opt/geminifree`; `geminifree-bot`; approved live Telegram E2E
+- Surface: Telegram command authorization / diagnostics exposure
+
+Telegram input:
+
+- User/chat: owner-test-chat
+- Command/callback/path: `/status`
+- Attachments: none
+- Prompt/caption: n/a
+
+Telegram output:
+
+- User-facing text before fix: backend diagnostic status including bearer
+  presence/age, project-id presence/value, cookie count, captcha provider, and
+  captcha account balances.
+- Messages/media sent: one text response.
+- Credits/refund observed: unchanged.
+
+Flow account:
+
+- Account label: default session keeper diagnostics
+- Project/media ownership notes: command exposed diagnostic project id to the
+  caller before fix; raw value is not copied here.
+- Proxy/profile notes: no profile recreation; `login.py` was not run.
+
+Google/Flow evidence:
+
+- Endpoint/action: n/a
+- HTTP status: n/a
+- Error class/code: n/a
+- Body snippet: n/a
+
+Reproduction:
+
+1. Send `/status` to the bot.
+2. Observe diagnostic details in the Telegram response.
+3. Inspect `cmd_status` and confirm it lacked an `ADMIN_IDS` gate before fix.
+
+Expected:
+
+- Backend/session diagnostics should be restricted to bot admins and documented
+  under the admin command section.
+
+Actual:
+
+- `/status` was wired as a public command and returned operational diagnostics.
+
+Suspected cause:
+
+- `cmd_status` was implemented before the newer admin command grouping and was
+  left without the same `ADMIN_IDS` check used by other diagnostics.
+
+Resolution:
+
+- `cmd_status` now denies non-admin callers with the existing `admin_denied`
+  copy.
+- `/admin_help` now lists `/status` in the `ADMIN_IDS` command section, not the
+  public user command section.
+- Offline test guards the admin gate and help placement. Live owner/admin
+  validation after deploy confirmed `/status` still returns diagnostics for an
+  admin without printing raw diagnostic values in this log.
+
 ## Closed Failures
 
 - `LF-001`: fixed by Flow upload API path and live-verified with `kotenok.jpg`.
@@ -634,3 +702,5 @@ Next fix notes:
   live-verified on the VPS.
 - `LF-007`: fixed by preserving all-action HTTP 403 classification in the
   no-browser-fallback image edit path and live-verified on the VPS.
+- `LF-009`: fixed by restricting `/status` diagnostics to `ADMIN_IDS` and
+  moving the command to the admin help section.

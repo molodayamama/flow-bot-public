@@ -3840,6 +3840,10 @@ async def cmd_referral(message: types.Message):
 
 @dp.message(Command("status"))
 async def cmd_status(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+
     session = await keeper.get_session()
     bearer = "✅" if session["bearer"] else "❌"
     project = "✅" if session["project_id"] else "❌"
@@ -4254,7 +4258,6 @@ _HELP_SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         ("/start", "запуск и главное меню"),
         ("/menu", "главное меню"),
         ("/balance", "баланс и пополнение через Stars"),
-        ("/status", "состояние сессии (токен / проект / капча)"),
         ("/img &lt;промпт&gt;", "4 картинки по тексту"),
         ("/one &lt;промпт&gt;", "1 картинка"),
         ("/portrait &lt;промпт&gt;", "2 вертикальные картинки"),
@@ -4264,6 +4267,7 @@ _HELP_SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     )),
     ("🛡 Админские (ADMIN_IDS)", (
         ("/grant &lt;user_id&gt; &lt;кредиты&gt;", "начислить пользователю кредиты"),
+        ("/status", "состояние сессии (токен / проект / капча)"),
         ("/refund &lt;user_id&gt; [charge_id]", "вернуть Stars за платёж (по умолчанию последний)"),
         ("/admin_today", "сводка за сегодня (юзеры/выручка/успехи)"),
         ("/admin_revenue", "выручка за 30 дней (пакеты, по дням)"),
