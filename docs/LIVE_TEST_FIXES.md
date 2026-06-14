@@ -320,3 +320,41 @@ Notes:
 
 - Keep the generic `action_price("regen", n)` function per-image; only the
   single-result button behavior changed.
+
+### 2026-06-14 LFX-008 preserve my-photo upload state on text
+
+- Failure id: LF-005
+- Status: verified
+- Priority: S2
+- Fix owner: current Codex session
+- Proposed by: current Codex live E2E session
+
+Root cause hypothesis:
+
+- The plain-text handler recognized image prompt/edit states, but did not
+  recognize the `await == "photo"` state set by the "edit my photo" entry. Text
+  therefore fell through to the generic image prompt wizard.
+- Confidence: high
+
+Implemented fix:
+
+- Add a narrow `awaiting == "photo"` guard in `handle_plain_text()` before the
+  prompt/wizard fallback. The guard repeats the photo request message and keeps
+  the upload state active.
+
+Owner files:
+
+- `flow_bot.py` - plain-text state routing.
+- `tests/test_flow_menu.py` - source-level regression guard for branch order.
+
+Validation:
+
+- Offline syntax and targeted menu tests passed.
+- Approved live Telegram check opened `m:myphoto`, sent plain text, received the
+  photo request message again, and confirmed no Flow HTTP request in the service
+  journal.
+
+Notes:
+
+- This fix intentionally does not change photo upload, caption edit, video, or
+  generic image prompt behavior.

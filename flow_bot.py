@@ -7293,6 +7293,11 @@ async def handle_plain_text(message: types.Message):
 
     awaiting = st.get("await")
 
+    # Photo-edit entry is waiting for an upload; plain text must not open the image wizard.
+    if awaiting == "photo":
+        await message.answer(flow_copy.msg("ask_photo"))
+        return
+
     # Ждём промпт генерации из визарда.
     if awaiting == "prompt":
         st["await"] = None

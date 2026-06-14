@@ -354,6 +354,136 @@ Resolution:
 - Live verification after deploy: `/one` consumed one image unit, then
   `Заново · 10 кр` delivered one `1/1` photo and consumed one image unit.
 
+### 2026-06-14 LF-005 my-photo text escaped the photo-upload state
+
+- Severity: S2
+- Status: verified fixed
+- Next fix owner: completed in current Codex session
+- Live check approved by: operator request in current Codex session
+- Environment: VPS `/opt/geminifree`; `geminifree-bot` active; `@photozhab_bot`
+- Surface: image edit entry / state routing
+
+Telegram input:
+
+- User/chat: `owner-test-chat`
+- Command/callback/path: main menu -> `m:myphoto`, then plain text while the bot
+  is waiting for a photo upload
+- Attachments: none
+- Prompt/caption: sanitized live E2E marker text
+
+Telegram output:
+
+- User-facing text: before fix, the bot opened the normal image-generation
+  wizard with the typed text as a pending prompt; after fix, it repeated the
+  photo request message.
+- Messages/media sent: no media.
+- Credits/refund observed: no charge; no provider call after the fixed check.
+
+Flow account:
+
+- Account label: n/a
+- Project/media ownership notes: n/a
+- Proxy/profile notes: no new provider request in the fixed check
+
+Google/Flow evidence:
+
+- Endpoint/action: n/a after fix
+- HTTP status: n/a after fix
+- Error class/code: n/a
+- Body snippet: n/a
+
+Reproduction:
+
+1. Open the main menu.
+2. Click `m:myphoto`.
+3. Send plain text instead of a photo.
+
+Expected:
+
+- The bot should stay in the photo-upload state and ask the user to send a
+  photo.
+
+Actual:
+
+- Before the fix, the plain text fell through to the generic image prompt
+  fallback and opened the image-generation wizard.
+
+Suspected cause:
+
+- `handle_plain_text()` did not handle `await == "photo"` before the generic
+  image wizard fallback.
+
+Next fix notes:
+
+- Fixed by adding a narrow `awaiting == "photo"` guard before prompt/wizard
+  fallback and a source-level regression guard.
+
+Resolution:
+
+- Live verification after deploy: text sent in the photo-upload state returned
+  the photo request message again, and the service journal showed only the
+  handled Telegram update, with no Flow HTTP request.
+
+### 2026-06-14 LF-006 restart emits Event loop is closed cleanup noise
+
+- Severity: S3
+- Status: open
+- Next fix owner: unassigned
+- Live check approved by: operator request in current Codex session
+- Environment: VPS `/opt/geminifree`; `geminifree-bot` restart during deploy
+- Surface: service shutdown logs / Playwright cleanup
+
+Telegram input:
+
+- User/chat: n/a
+- Command/callback/path: service restart
+- Attachments: none
+- Prompt/caption: n/a
+
+Telegram output:
+
+- User-facing text: n/a
+- Messages/media sent: n/a
+- Credits/refund observed: n/a
+
+Flow account:
+
+- Account label: browser/account pool startup/shutdown
+- Project/media ownership notes: n/a
+- Proxy/profile notes: persistent profiles were reused; `login.py` was not run
+
+Google/Flow evidence:
+
+- Endpoint/action: n/a
+- HTTP status: n/a
+- Error class/code: `RuntimeError: Event loop is closed`
+- Body snippet: n/a
+
+Reproduction:
+
+1. Restart `geminifree-bot` while browser subprocesses have been initialized.
+2. Inspect recent `journalctl -u geminifree-bot` output.
+
+Expected:
+
+- Service shutdown/restart should not emit Python ignored-exception tracebacks.
+
+Actual:
+
+- During restart, several ignored `BaseSubprocessTransport.__del__` tracebacks
+  were logged after SIGINT. The service still stopped and restarted
+  successfully.
+
+Suspected cause:
+
+- Browser/Playwright subprocess transports are being garbage-collected after the
+  asyncio event loop is already closed.
+
+Next fix notes:
+
+- Add or audit explicit browser/context cleanup during shutdown before the event
+  loop closes. Keep this separate from user-facing generation/payment fixes.
+
 ## Closed Failures
 
 - `LF-001`: fixed by Flow upload API path and live-verified with `kotenok.jpg`.
@@ -362,3 +492,5 @@ Resolution:
   quarantine remains a recommended follow-up.
 - `LF-003`: fixed by the `admin_help` shell wrapper and live-verified on the VPS.
 - `LF-004`: fixed by single-image result regen and live-verified on the VPS.
+- `LF-005`: fixed by preserving the my-photo upload state on plain text and
+  live-verified on the VPS.

@@ -419,6 +419,26 @@ Live image result actions:
   with `python -m unittest discover -s tests -p "test_flow_edit.py"` plus a live
   `/one` -> `Заново · 10 кр` check when external validation is approved.
 
+Live my-photo entry state:
+
+- The "edit my photo" entry sets `await == "photo"`. Plain text in that state
+  must not become an image prompt or open the image wizard; it should repeat the
+  photo request message and keep waiting for an upload.
+- Safe offline validation: `python -m py_compile flow_bot.py
+  tests\test_flow_menu.py` and `python -m unittest discover -s tests -p
+  "test_flow_menu.py"`.
+- Approved live validation: open `m:myphoto`, send plain text instead of a
+  photo, confirm the bot asks for a photo again, and inspect recent service logs
+  to confirm there is no Flow HTTP request for that text.
+
+Service restart logs:
+
+- During approved VPS restarts on 2026-06-14, `journalctl` showed ignored
+  `RuntimeError: Event loop is closed` tracebacks from subprocess transport
+  cleanup after SIGINT. The service restarted and handled updates normally, but
+  this remains a low-priority cleanup validation target for future shutdown
+  work.
+
 ## Evidence Template
 
 Use this in Verifier handoff:

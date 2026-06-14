@@ -581,6 +581,15 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("_video_generate_and_send(message, text, user_id=user_id)", block)
         self.assertIn("return", block)
 
+    def test_myphoto_waiting_text_stays_in_photo_upload_state(self) -> None:
+        start = self.source.index("async def handle_plain_text")
+        photo_guard = self.source.index('if awaiting == "photo":', start)
+        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        self.assertLess(photo_guard, image_fallback)
+        block = self.source[photo_guard:photo_guard + 180]
+        self.assertIn('flow_copy.msg("ask_photo")', block)
+        self.assertIn("return", block)
+
     def test_video_plain_text_ready_is_narrow(self) -> None:
         start = self.source.index("def _video_plain_text_ready")
         end = self.source.index("def video_family_kb", start)
