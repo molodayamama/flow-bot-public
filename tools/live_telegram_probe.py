@@ -72,6 +72,7 @@ async def main_async(args: argparse.Namespace) -> int:
         before = 0
         sent_kind = None
         click_result = None
+        clicked_message_after = None
         if args.text:
             sent = await client.send_message(entity, args.text)
             before = int(sent.id)
@@ -106,11 +107,18 @@ async def main_async(args: argparse.Namespace) -> int:
                 args.text_limit,
                 idle_sec=args.idle_sec,
             )
+            if sent_kind == "click":
+                clicked_id = int((click_result or {}).get("message_id") or 0)
+                if clicked_id:
+                    refreshed = await client.get_messages(entity, ids=clicked_id)
+                    if refreshed is not None and not getattr(refreshed, "out", False):
+                        clicked_message_after = _summarize_message(refreshed, args.text_limit)
 
         print(json.dumps({
             "sent_kind": sent_kind or "recent",
             "bot_username": config.bot_username,
             "click_result": click_result,
+            "clicked_message_after": clicked_message_after,
             "message_count": len(messages),
             "messages": messages,
         }, ensure_ascii=False, indent=2))

@@ -216,9 +216,11 @@ failure unless reproduced with sequential clients. The probe prints message
 summaries only; do not paste Telegram `file_id` values, raw logs, secrets, or
 private prompts into failure notes.
 
-After inline callback clicks, use `--recent` to read the current edited wizard
-message. Telegram often edits the existing message instead of sending a new one,
-so the callback command itself may print only the clicked message summary.
+After inline callback clicks, inspect `clicked_message_after` to read the
+current edited wizard message. Telegram often edits the existing message instead
+of sending a new one, so the probe's `messages` array only contains fresh bot
+messages created after the click. Use `--recent` as a fallback when manually
+auditing older chat state.
 
 Telegram E2E external modes contact Telegram and may cause the bot to contact
 Google Flow, mutate bot cooldown state, spend quota, trigger captcha/rate-limit
@@ -405,9 +407,12 @@ Live Telegram probe:
   image callbacks such as variations, edits, and regen; keep the default for
   quick menu/admin checks.
 - Safe validation for the probe fix: `python -m py_compile
-  tools\live_telegram_probe.py`, then click a no-charge historical callback
-  such as a finished `v:dl:<token>` and confirm only fresh bot replies appear in
-  the summary.
+  tools\live_telegram_probe.py`, then click a no-charge callback such as a
+  menu/help button and confirm `clicked_message_after` contains the edited
+  message while only fresh bot replies appear in `messages`.
+- Verified 2026-06-14 on the VPS: `/menu` then `m:help` by explicit
+  `--click-message-id` returned the edited help message in
+  `clicked_message_after` and left `messages` empty.
 - When the chat has many old inline menus, pass `--click-message-id` for menu
   callbacks. A plain `--click-data` may click an older message with the same
   callback data, which is useful for result-button regression tests but noisy
