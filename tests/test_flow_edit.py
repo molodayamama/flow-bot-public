@@ -585,7 +585,8 @@ class FlowBotWiringStaticTests(unittest.TestCase):
     def test_edit_rate_limit_keeps_context_copy(self) -> None:
         self.assertIn("def _is_rate_limit_error", self.source)
         self.assertIn("image_edit_rate_limited", self.source)
-        self.assertIn("image_edit_failover", self.source)
+        # image_edit_failover msg key exists in flow_copy but is shown only in logs, not to users
+        self.assertIn("_reupload_ref_for_edit_failover", self.source)
         self.assertIn("async def _reupload_ref_for_edit_failover", self.source)
         self.assertIn("exclude={current_account_id}", self.source)
         self.assertIn("_mark_image_account_failure(ref.account_id, result)", self.source)

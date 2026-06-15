@@ -747,10 +747,10 @@ tr:hover td{background:var(--pz-surface-2)}
               </div>
             </div>
             <div>
-              <div style="font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-faint);margin-bottom:8px">G-кредиты по моделям</div>
+              <div style="font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-faint);margin-bottom:8px">Расход кредитов по моделям</div>
               <div class="table-wrap">
                 <table>
-                  <thead><tr><th>Модель</th><th>Задач</th><th>ΔG</th></tr></thead>
+                  <thead><tr><th>Модель</th><th>Задач</th><th>Кр. бота</th></tr></thead>
                   <tbody id="flow-models-tbody"><tr><td colspan="3" style="color:var(--pz-faint);padding:16px;text-align:center">—</td></tr></tbody>
                 </table>
               </div>
@@ -962,8 +962,8 @@ async function loadOverview() {
         <tbody>${accs.map(a=>{
           const badge = a.disabled
             ? '<span class="badge badge-red">выключен</span>'
-            : (a.failures||0)>=3
-              ? '<span class="badge badge-yellow">кулдаун</span>'
+            : (a.cooldown_left||0) > 0
+              ? `<span class="badge badge-yellow">кулдаун ${a.cooldown_left}с</span>`
               : '<span class="badge badge-green">OK</span>';
           const total   = a.jobs_total   ?? 0;
           const success = a.jobs_success ?? 0;
@@ -1005,12 +1005,12 @@ async function loadAccounts() {
         <div class="mono" style="color:var(--pz-cyan)">${esc(a.id)}</div>
         <div style="font-size:11px;color:var(--pz-faint);margin-top:2px">${esc(a.profile_dir)}</div>
       </td>
-      <td>${a.disabled ? '<span class="badge badge-red">выключен</span>' : a.failures>=3 ? '<span class="badge badge-yellow">кулдаун</span>' : '<span class="badge badge-green">активен</span>'}</td>
+      <td>${a.disabled ? '<span class="badge badge-red">выключен</span>' : (a.cooldown_left||0)>0 ? `<span class="badge badge-yellow">кулдаун ${a.cooldown_left}с</span>` : '<span class="badge badge-green">активен</span>'}</td>
       <td class="mono">
         ${a.jobs_total??0}
         ${(a.jobs_total??0)>0?`<div style="font-size:10px;font-weight:400;color:var(--pz-faint);margin-top:1px"><span style="color:var(--pz-green)">✓${a.jobs_success??0}</span>&thinsp;<span style="color:var(--pz-coral)">✗${a.jobs_fail??0}</span></div>`:''}
       </td>
-      <td class="mono" style="color:${(a.failures||0)>0?'var(--pz-coral)':'var(--pz-faint)'}">${a.failures??0}</td>
+      <td class="mono" style="color:${(a.fails||0)>0?'var(--pz-coral)':'var(--pz-faint)'}">${a.fails??0}</td>
       <td><label class="toggle"><input type="checkbox" ${a.video_allowed?'checked':''} onchange="toggleVideo('${esc(a.id)}',this.checked)"><span class="toggle-slider"></span></label></td>
       <td><label class="toggle"><input type="checkbox" ${!a.disabled?'checked':''} onchange="toggleDisabled('${esc(a.id)}',!this.checked)"><span class="toggle-slider"></span></label></td>
       <td><button class="btn btn-ghost btn-sm" onclick="resetFailures('${esc(a.id)}')">Сбросить ошибки</button></td>
@@ -1349,9 +1349,9 @@ async function loadAnalytics() {
       : `<tr><td colspan="5" style="color:var(--pz-faint);padding:12px;text-align:center">—</td></tr>`;
     document.getElementById('flow-models-tbody').innerHTML = flow.by_model_credits.length
       ? flow.by_model_credits.map(m=>`<tr>
-          <td class="mono" style="color:var(--pz-cyan);font-size:12px">${esc(m.model)}</td>
+          <td class="mono" style="color:var(--pz-cyan);font-size:12px">${esc(m.model||'—')}</td>
           <td class="mono">${fmt(m.jobs)}</td>
-          <td class="mono" style="color:${m.flow_credits_delta_sum<0?'var(--pz-coral)':'var(--pz-lime)'}">${m.flow_credits_delta_sum>0?'+':''}${fmt(m.flow_credits_delta_sum)}</td>
+          <td class="mono" style="color:var(--pz-lime)">${fmt(m.bot_credits_sum??0)}</td>
         </tr>`).join('')
       : `<tr><td colspan="3" style="color:var(--pz-faint);padding:12px;text-align:center">—</td></tr>`;
   }

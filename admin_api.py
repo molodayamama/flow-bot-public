@@ -176,7 +176,7 @@ def _build_price_defaults() -> dict:
         vid = flow_core.VIDEO_MODELS
         return {
             "image_nano":    getattr(flow_core, "PRICE_PER_IMAGE", 10),
-            "image_pro":     getattr(flow_core, "PRICE_PER_IMAGE", 10),
+            "image_pro":     getattr(flow_core, "PRICE_PER_IMAGE", 10) + flow_core.image_model_extra("nbpro"),
             "edit_photo":    getattr(flow_core, "IMAGE_EDIT_PRICE", 15),
             "upscale":       getattr(flow_core, "UPSCALE_PRICE", 5),
             "omni_4s":       vid.get("omni-flash-4s",  {}).get("price", 50),

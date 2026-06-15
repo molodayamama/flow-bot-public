@@ -1843,6 +1843,10 @@ class FlowHttpClient:
             if status == 429:
                 return {"error": flow_copy.msg("rate_limited")}
 
+            if status == 400:
+                log.warning(f"⚠️ Prompt rejected (400): {text[:300]}")
+                return {"error": flow_copy.msg("prompt_rejected"), "error_type": "prompt_rejected"}
+
             log.error(f"❌ Неизвестный статус {status}: {text[:300]}")
             return {"error": flow_copy.msg("service_error", status=status)}
 
@@ -3808,7 +3812,7 @@ async def cmd_start(message: types.Message):
                         first_name=getattr(message.from_user, "first_name", None))
     _reset_image_flow(user_id)
     _vid_clear(user_id)
-    is_new = user_id not in credit_store._granted if hasattr(credit_store, "_granted") else True
+    is_new = not metrics.user_exists(user_id)  # DB надёжнее in-memory _granted после рестарта
     credit_store.balance(user_id)  # начисляем стартовые кредиты при первом старте
     metrics.log_event("user_started", user_id=user_id,
                       username=_username(message), source="command")
@@ -4436,7 +4440,6 @@ async def _do_generate_and_send(
             pass
 
     # Каждый Telegram-пользователь работает в своём проекте на сайте.
-    await update_status("📂 Готовлю ваш проект...")
     acc_id = _account_for_image(user_id)
     if acc_id is None:
         # Весь пул аккаунтов в кулдауне/отключён — отказ ДО списания кредитов.
@@ -4464,12 +4467,21 @@ async def _do_generate_and_send(
 
     if "error" in result:
         _mark_image_account_failure(acc_id, result)
-        # Тексты ошибок здесь — наша копия из flow_copy, но эскейпим на случай
-        # сырого текста от бэкенда (защита разметки от инъекции).
-        await status_msg.edit_text(
-            f"❌ {html.escape(str(result['error'])[:300])}",
-            reply_markup=_img_retry_kb(),
-        )
+        # 400 = prompt rejected by content filter → особое сообщение без кнопки «Повторить»
+        if result.get("error_type") == "prompt_rejected":
+            await status_msg.edit_text(
+                f"❌ {html.escape(str(result['error'])[:300])}",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    [_menu_button("menu", "m:menu")],
+                ]),
+            )
+        else:
+            # Тексты ошибок здесь — наша копия из flow_copy, но эскейпим на случай
+            # сырого текста от бэкенда (защита разметки от инъекции).
+            await status_msg.edit_text(
+                f"❌ {html.escape(str(result['error'])[:300])}",
+                reply_markup=_img_retry_kb(),
+            )
         return False
 
     pairs = result_pairs(result)
@@ -4791,7 +4803,7 @@ async def _do_edit_and_send(
     if "error" in result:
         if _is_rate_limit_error(result):
             _mark_image_account_failure(ref.account_id, result)
-            await update_status(flow_copy.msg("image_edit_failover"))
+            log.info("image_edit failover: аккаунт %s ушёл в кулдаун, пробую другой", ref.account_id)
             failover_ref = await _reupload_ref_for_edit_failover(
                 ref, user_id, current_account_id=ref.account_id,
             )
@@ -7179,6 +7191,16 @@ async def handle_photo(message: types.Message):
     # Video wizard expects text, not a photo.
     if vawait in ("vprompt", "vedit_prompt", "vextend_prompt"):
         await message.answer(flow_copy.msg("vid_text_only_hint"))
+        return
+
+    # Текстовый видео-визард (omni/veo без референсов) — юзер прислал фото вместо текста.
+    # Если есть подпись — берём её как промпт и стартуем видео. Без подписи — напоминаем.
+    if _video_plain_text_ready(st):
+        caption_text = (message.caption or "").strip()
+        if caption_text:
+            await _video_generate_and_send(message, caption_text, user_id=user_id)
+        else:
+            await message.answer(flow_copy.msg("vid_text_only_hint"))
         return
 
     caption = (message.caption or "").strip()

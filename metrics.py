@@ -71,6 +71,7 @@ __all__ = [
     "report_top_users",
     "report_top_referrers",
     "backfill_users_from_metrics",
+    "user_exists",
 ]
 
 log = logging.getLogger("flow.metrics")
@@ -1101,14 +1102,16 @@ def report_flow() -> dict:
 
             by_model_credits = [
                 {
-                    "model": r["model"],
+                    "model": r["model"] or "—",
                     "jobs": int(r["jobs"]),
                     "flow_credits_delta_sum": int(r["delta_sum"] or 0),
+                    "bot_credits_sum": int(r["bot_sum"] or 0),
                 }
                 for r in _rows(
                     conn,
                     "SELECT model, COUNT(*) AS jobs, "
-                    "COALESCE(SUM(flow_credits_delta),0) AS delta_sum "
+                    "COALESCE(SUM(flow_credits_delta),0) AS delta_sum, "
+                    "COALESCE(SUM(bot_credits_charged),0) AS bot_sum "
                     "FROM flow_jobs GROUP BY model ORDER BY jobs DESC",
                 )
             ]
@@ -1295,6 +1298,25 @@ def report_errors(days: int = 7) -> dict:
 
 
 # ── users profile writers ──────────────────────────────────────────────
+
+
+def user_exists(user_id: int) -> bool:
+    """Return True if ``user_id`` already has a row in the ``users`` table.
+
+    Used in ``cmd_start`` to distinguish genuinely new users from returning
+    ones after a bot restart (in-memory sets reset on restart, the DB does not).
+    Never raises.
+    """
+    try:
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT 1 FROM users WHERE user_id = ? LIMIT 1", (user_id,)
+            ).fetchone()
+            return row is not None
+    except Exception:  # noqa: BLE001
+        log.warning("user_exists failed for user_id=%r", user_id, exc_info=True)
+        return False
 
 
 def upsert_user(

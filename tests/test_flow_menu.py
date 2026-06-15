@@ -932,8 +932,10 @@ class BotMenuWiringTests(unittest.TestCase):
             start,
         )
         image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        # ingredients check must come BEFORE the vawait guards (ingredients-ready text
+        # should trigger video generation, not be blocked by the photo-wait guard).
         for guard in (wait_guard, start_guard, end_guard):
-            self.assertLess(guard, ing_ready)
+            self.assertLess(ing_ready, guard)
             self.assertLess(guard, image_fallback)
         block = self.source[wait_guard:end_guard + 180]
         self.assertIn('flow_copy.msg("vid_ing_send_photo")', block)
