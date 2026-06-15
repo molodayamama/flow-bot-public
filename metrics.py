@@ -1793,7 +1793,7 @@ def report_recent_events(limit: int = 50) -> list:
             conn = _conn()
             rows = _rows(
                 conn,
-                "SELECT event_name, payload, created_at, username, user_id "
+                "SELECT event_name, payload_json, created_at, username, user_id "
                 "FROM events ORDER BY id DESC LIMIT ?",
                 (int(limit),),
             )
