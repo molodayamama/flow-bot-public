@@ -1830,6 +1830,18 @@ def report_recent_events(limit: int = 50) -> list:
                 """,
                 (int(limit),),
             )
+            # Фейловер-события из таблицы events
+            failover_rows = _rows(
+                conn,
+                """
+                SELECT user_id, username, payload_json, created_at
+                FROM events
+                WHERE event_name = 'gen_failover'
+                ORDER BY id DESC LIMIT ?
+                """,
+                (int(limit),),
+            )
+
         result = []
         for r in rows:
             op   = r["operation_type"] or ""
@@ -1837,10 +1849,10 @@ def report_recent_events(limit: int = 50) -> list:
             status = r["status"] or ""
             if status == "success":
                 chip_label = f"{icon} ok"
-                color = "green"
+                color = "lime"
             elif status in ("fail", "error"):
                 chip_label = f"{icon} fail"
-                color = "red"
+                color = "coral"
             else:
                 chip_label = f"{icon} {status[:4]}"
                 color = "muted"
@@ -1863,13 +1875,45 @@ def report_recent_events(limit: int = 50) -> list:
             ts = str(r["created_at"] or "")
             time_str = ts[11:16] if len(ts) >= 16 else ts
             result.append({
-                "time":    time_str,
-                "text":    text,
-                "chip":    chip_label,
-                "color":   color,
-                "account": acc,
+                "time":     time_str,
+                "text":     text,
+                "chip":     chip_label,
+                "color":    color,
+                "account":  acc,
+                "_sort_ts": ts,
             })
-        return result
+
+        import json as _json
+        for fr in failover_rows:
+            try:
+                payload = _json.loads(fr["payload_json"] or "{}")
+            except Exception:
+                payload = {}
+            username = fr["username"] or ""
+            uid = fr["user_id"] or ""
+            user_label = f"@{username}" if username else f"#{uid}" if uid else "—"
+            from_acc = payload.get("from_account", "?")
+            reason = payload.get("reason", "")
+            reason_short = reason[:40] if reason else ""
+            text = f"{user_label}  → фейловер с {from_acc}"
+            if reason_short:
+                text += f"  ({reason_short})"
+            ts = str(fr["created_at"] or "")
+            time_str = ts[11:16] if len(ts) >= 16 else ts
+            result.append({
+                "time":     time_str,
+                "text":     text,
+                "chip":     "⚠ failover",
+                "color":    "warn",
+                "account":  from_acc,
+                "_sort_ts": ts,
+            })
+
+        # Сортируем по времени (новейшие первыми), обрезаем до limit
+        result.sort(key=lambda x: x.get("_sort_ts", ""), reverse=True)
+        for item in result:
+            item.pop("_sort_ts", None)
+        return result[:limit]
     except Exception:  # noqa: BLE001
         log.warning("report_recent_events failed", exc_info=True)
         return []

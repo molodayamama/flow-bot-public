@@ -1805,7 +1805,7 @@ class FlowHttpClient:
                         headers=self._build_headers(session),
                         json=payload,
                         proxy=proxy,
-                        timeout=aiohttp.ClientTimeout(total=120),
+                        timeout=aiohttp.ClientTimeout(total=75),
                     ) as resp:
                         status = resp.status
                         text = await resp.text()
@@ -4441,10 +4441,14 @@ async def _do_generate_and_send(
 
     # Генерация с тихим фейловером: попытка 0 — основной аккаунт, попытка 1 — другой.
     # 400 (prompt_rejected) = проблема юзера, не аккаунта — фейловер и кулдаун не нужны.
+    # asyncio.wait_for(timeout=70) на каждую попытку: не ждём 120с зависший аккаунт —
+    # фейловер стартует сразу, суммарное ожидание ≤ 140с вместо ≤ 240с.
+    _GEN_ATTEMPT_TIMEOUT = 70  # секунд на одну попытку
     tried: set[str] = set()
     acc_id: str | None = None
     project_id: str | None = None
     result: dict = {}
+    _uname = _username(message)
 
     for attempt in range(2):
         acc_id = _account_for_image(user_id, exclude=tried if tried else None)
@@ -4454,20 +4458,38 @@ async def _do_generate_and_send(
         tried.add(acc_id)
         project_id = await ensure_user_project(user_id, account_id=acc_id)
 
-        try:
-            result = await _client_for_acc(acc_id).generate_images(
-                prompt,
-                aspect_ratio=aspect_ratio,
-                num_images=num_images,
-                progress_cb=update_status,
-                project_id=project_id,
-                image_model=image_model,
+        def _log_failover(from_acc: str, reason: str) -> None:
+            metrics.log_event(
+                "gen_failover", user_id=user_id, username=_uname,
+                payload={"from_account": from_acc, "reason": reason[:120]},
             )
+
+        try:
+            result = await asyncio.wait_for(
+                _client_for_acc(acc_id).generate_images(
+                    prompt,
+                    aspect_ratio=aspect_ratio,
+                    num_images=num_images,
+                    progress_cb=update_status,
+                    project_id=project_id,
+                    image_model=image_model,
+                ),
+                timeout=_GEN_ATTEMPT_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            log.warning("Generation timed out after %ds (account %s, attempt %d)",
+                        _GEN_ATTEMPT_TIMEOUT, acc_id, attempt)
+            account_pool.mark_failure(acc_id)
+            if attempt == 0:
+                _log_failover(acc_id, "timeout")
+                continue
+            await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
+            return False
         except Exception:
             log.exception("Generation failed (account %s, attempt %d)", acc_id, attempt)
             account_pool.mark_failure(acc_id)
             if attempt == 0:
-                log.info("Тихий фейловер после исключения — пробую другой аккаунт")
+                _log_failover(acc_id, "exception")
                 continue
             await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
             return False
@@ -4485,10 +4507,9 @@ async def _do_generate_and_send(
             # Ошибка аккаунта — помечаем и пробуем другой (один раз)
             _mark_image_account_failure(acc_id, result)
             if attempt == 0:
-                log.info(
-                    "Тихий фейловер после ошибки аккаунта %s: %s",
-                    acc_id, str(result.get("error", ""))[:80],
-                )
+                reason = str(result.get("error", ""))[:80]
+                log.info("Тихий фейловер после ошибки аккаунта %s: %s", acc_id, reason)
+                _log_failover(acc_id, reason)
                 continue
             # Оба аккаунта не справились
             await status_msg.edit_text(
