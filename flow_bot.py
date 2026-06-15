@@ -2859,15 +2859,18 @@ async def user_slot(user_id: int, message: types.Message):
 
     elapsed = time.time() - user_last_request[user_id]
     remaining = COOLDOWN_SEC - elapsed
-    if remaining > 0:
-        if remaining > MAX_AUTO_WAIT_SEC:
-            await message.answer(f"⏱️ Слишком часто. Подождите ещё {int(remaining)} сек.")
-            raise RateLimited
-        await message.answer(f"⏱️ Подождите {int(remaining) + 1} сек, выполняю...")
-        await asyncio.sleep(remaining)
+    if remaining > 0 and remaining > MAX_AUTO_WAIT_SEC:
+        await message.answer(f"⏱️ Слишком часто. Подождите ещё {int(remaining)} сек.")
+        raise RateLimited
 
+    # Занимаем слот ДО любого await чтобы избежать race condition:
+    # два одновременных запроса иначе оба пройдут проверку user_busy
+    # и уйдут в sleep параллельно.
     user_busy.add(user_id)
     try:
+        if remaining > 0:
+            await message.answer(f"⏱️ Подождите {int(remaining) + 1} сек, выполняю...")
+            await asyncio.sleep(remaining)
         yield
     finally:
         user_busy.discard(user_id)
