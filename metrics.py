@@ -1778,14 +1778,17 @@ def report_recent_events(limit: int = 50) -> list:
         "image_success":   ("🖼 ok",    "green"),
         "image_requested": ("🖼 req",   "cyan"),
         "image_fail":      ("🖼 fail",  "red"),
+        "image_failed":    ("🖼 fail",  "red"),
         "video_success":   ("🎬 ok",    "green"),
         "video_requested": ("🎬 req",   "cyan"),
         "video_fail":      ("🎬 fail",  "red"),
+        "video_failed":    ("🎬 fail",  "red"),
         "user_started":    ("👤 new",   "cyan"),
         "payment_success": ("💳 paid",  "green"),
         "payment_fail":    ("💳 fail",  "red"),
         "credits_charged": ("💰 chg",   "muted"),
         "credits_refunded":("💰 ref",   "yellow"),
+        "animate_started": ("🎬 anim",  "cyan"),
         "error":           ("⚠ err",    "red"),
     }
     try:
