@@ -588,7 +588,7 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("image_edit_failover", self.source)
         self.assertIn("async def _reupload_ref_for_edit_failover", self.source)
         self.assertIn("exclude={current_account_id}", self.source)
-        self.assertIn("account_pool.mark_failure(ref.account_id)", self.source)
+        self.assertIn("_mark_image_account_failure(ref.account_id, result)", self.source)
         self.assertIn("_generate_for(failover_ref, failover_inputs)", self.source)
         self.assertIn("1–3 минуты", flow_copy.msg("image_edit_rate_limited"))
 
@@ -597,7 +597,10 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         end = self.source.index("async def run_captured_request", start)
         block = self.source[start:end]
         self.assertIn("saw_403 = False", block)
+        self.assertIn("saw_unusual_activity = False", block)
         self.assertIn("saw_403 = True", block)
+        self.assertIn("PUBLIC_ERROR_UNUSUAL_ACTIVITY", block)
+        self.assertIn('"account_risk": "unusual_activity"', block)
         no_fallback = block.index("if saw_403:")
         rate_limited_return = block.index(
             'return {"error": flow_copy.msg("rate_limited")}',
@@ -608,6 +611,23 @@ class FlowBotWiringStaticTests(unittest.TestCase):
             no_fallback,
         )
         self.assertLess(rate_limited_return, gen_failed_return)
+
+    def test_unusual_activity_cools_down_image_account(self) -> None:
+        self.assertIn("def _mark_image_account_failure", self.source)
+        helper = self.source[
+            self.source.index("def _mark_image_account_failure"):
+            self.source.index("async def _download_ref_image_bytes")
+        ]
+        self.assertIn('(result or {}).get("account_risk") == "unusual_activity"', helper)
+        self.assertIn("account_pool.mark_cooldown(account_id)", helper)
+        self.assertIn("account_pool.mark_failure(account_id)", helper)
+
+        edit = self.source[
+            self.source.index("async def _do_edit_and_send"):
+            self.source.index("async def _run_i2i")
+        ]
+        self.assertIn("_mark_image_account_failure(ref.account_id, result)", edit)
+        self.assertIn("_mark_image_account_failure(failover_ref.account_id, result)", edit)
 
     def test_per_user_project_creation_wired(self) -> None:
         self.assertIn("async def ensure_user_project", self.source)

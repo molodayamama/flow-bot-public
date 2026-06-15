@@ -2050,6 +2050,15 @@ class AccountPool:
             return True
         return False
 
+    def mark_cooldown(self, account_id: str) -> bool:
+        """Force a bounded runtime cooldown for a strong account-health signal."""
+        h = self._health.get(account_id)
+        if h is None:
+            return False
+        h["fails"] = 0
+        h["cooldown_until"] = self._clock() + self._cooldown_sec
+        return True
+
     def set_disabled(self, account_id: str, disabled: bool) -> bool:
         """Ручное отключение/включение аккаунта; True если id известен."""
         h = self._health.get(account_id)

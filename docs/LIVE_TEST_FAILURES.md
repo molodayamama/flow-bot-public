@@ -427,8 +427,8 @@ Resolution:
 ### 2026-06-14 LF-006 restart emits Event loop is closed cleanup noise
 
 - Severity: S3
-- Status: open
-- Next fix owner: unassigned
+- Status: mitigated; live provider retry pending
+- Next fix owner: operator / future live tester
 - Live check approved by: operator request in current Codex session
 - Environment: VPS `/opt/geminifree`; `geminifree-bot` restart during deploy
 - Surface: service shutdown logs / Playwright cleanup
@@ -628,10 +628,21 @@ Suspected cause:
 
 Next fix notes:
 
-- Continue observing whether the account runtime fail counters self-recover.
-- If repeated under normal traffic, quarantine the affected image accounts with
-  admin commands or add a bounded cooldown path for repeated unusual-activity
-  403s. Do not recreate profiles or run `login.py` without explicit approval.
+- Implemented as `LFX-010`: no-browser-fallback image 403s that include the
+  provider unusual-activity signal now return a symbolic `account_risk` marker.
+  Image edit/i2i paths immediately place that account in the existing bounded
+  runtime cooldown instead of waiting for the generic three-failure threshold.
+- The user-facing behavior stays no-charge temporary edit-limit copy when all
+  available accounts fail.
+- Do not recreate profiles or run `login.py` without explicit approval.
+
+Resolution:
+
+- Offline regression tests prove the symbolic provider-risk marker and immediate
+  cooldown routing path.
+- A provider-backed live retry is still needed to confirm that future attempts
+  either route to a healthy account and deliver media, or continue to fail
+  cleanly with no charge while risky accounts are cooled down.
 
 ### 2026-06-14 LF-009 status command exposed backend diagnostics
 

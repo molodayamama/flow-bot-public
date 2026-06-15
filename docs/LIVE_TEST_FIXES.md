@@ -405,9 +405,9 @@ Notes:
 ### 2026-06-14 LFX-010 handle repeated image unusual-activity 403s
 
 - Failure id: LF-008
-- Status: proposed
+- Status: implemented; live provider retry pending
 - Priority: S2
-- Fix owner: unassigned
+- Fix owner: current Codex session
 - Proposed by: current Codex live E2E session
 
 Root cause hypothesis:
@@ -418,24 +418,30 @@ Root cause hypothesis:
   account health still prevents successful delivery.
 - Confidence: medium
 
-Proposed fix:
+Implemented fix:
 
-- Treat repeated all-action unusual-activity 403s as an account-health signal:
-  either use existing admin commands to quarantine affected image accounts after
-  repeated evidence, or add a bounded automatic cooldown/quarantine path for
-  repeated image 403 runtime failures.
+- Treat all-action no-browser-fallback 403s with `PUBLIC_ERROR_UNUSUAL_ACTIVITY`
+  or equivalent unusual-activity text as an account-health signal.
+- Return the existing user-facing rate-limit copy plus a symbolic
+  `account_risk: unusual_activity` marker; do not expose provider response
+  bodies to users.
+- Image edit/i2i paths immediately put the marked account into the existing
+  bounded runtime cooldown via `AccountPool.mark_cooldown()`, instead of waiting
+  for the generic three-failure threshold.
 
 Owner files:
 
-- `flow_bot.py` - if automatic cooldown is added to account-pool failure
-  handling.
-- `docs/LIVE_TEST_FAILURES.md` / `HANDOFF.md` - if the operator chooses manual
-  quarantine and records the live decision instead of a code change.
+- `flow_bot.py` - provider-risk classification and image account health marking.
+- `flow_core.py` - `AccountPool.mark_cooldown()`.
+- `tests/test_flow_edit.py` / `tests/test_flow_accounts.py` - regression tests.
 
 Validation:
 
-- Offline checks depend on the chosen implementation.
-- Approved live check: retry a safe `m:myphoto` edit after cooldown or after
+- Offline syntax and targeted account/edit tests passed.
+- Live/deploy validation may restart the service, but a safe `m:myphoto` edit
+  retry is still pending because it can spend provider quota if a healthy
+  account succeeds.
+- Future live check: retry a safe `m:myphoto` edit after cooldown or after
   routing away from affected accounts; confirm either successful media delivery
   or clean no-charge temporary-limit copy.
 

@@ -505,6 +505,18 @@ Live my-photo edit 403/failover classification:
   should show temporary edit-limit copy rather than generic generation failure.
 - Repeated provider unusual-activity 403s are an account-health finding, not
   proof that the classification fix failed.
+- After `LFX-010`, no-browser-fallback image 403s that include the provider
+  unusual-activity signal should return a symbolic `account_risk:
+  unusual_activity` marker and immediately cool down that account through
+  `AccountPool.mark_cooldown()`. Safe offline validation: `python -m py_compile
+  flow_core.py flow_bot.py tests\test_flow_accounts.py tests\test_flow_edit.py`,
+  `python -m unittest discover -s tests -p "test_flow_accounts.py"`, and
+  `python -m unittest discover -s tests -p "test_flow_edit.py"`.
+- A full LF-008 provider-backed retry can spend provider quota if a healthy
+  account succeeds. Run it only with operator approval: `m:myphoto`, upload a
+  safe test image, send a safe edit prompt, and confirm either successful media
+  delivery or no-charge temporary edit-limit copy while `/admin_accounts` shows
+  risky accounts in cooldown.
 
 Service restart logs:
 

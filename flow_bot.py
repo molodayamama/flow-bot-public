@@ -1769,6 +1769,7 @@ class FlowHttpClient:
         # Ротация actions: пробуем каждый action пока Google не примет
         actions = list(SessionKeeper.RECAPTCHA_ACTIONS)
         saw_403 = False
+        saw_unusual_activity = False
 
         for idx, action in enumerate(actions):
             if progress_cb:
@@ -1834,6 +1835,8 @@ class FlowHttpClient:
             # 403 — капча не прошла, пробуем следующий action
             if status == 403:
                 saw_403 = True
+                if "PUBLIC_ERROR_UNUSUAL_ACTIVITY" in text or "unusual activity" in text.lower():
+                    saw_unusual_activity = True
                 log.warning(f"⚠️ HTTP 403 action={action} ({idx+1}/{len(actions)}). Тело: {text[:300]}")
                 continue
 
@@ -1849,6 +1852,11 @@ class FlowHttpClient:
             return await self.keeper.generate_via_browser(prompt)
         log.warning("Все actions провалились (без браузерного фолбэка)")
         if saw_403:
+            if saw_unusual_activity:
+                return {
+                    "error": flow_copy.msg("rate_limited"),
+                    "account_risk": "unusual_activity",
+                }
             return {"error": flow_copy.msg("rate_limited")}
         return {"error": flow_copy.msg("gen_failed")}
 
@@ -4446,7 +4454,7 @@ async def _do_generate_and_send(
         return False
 
     if "error" in result:
-        account_pool.mark_failure(acc_id)
+        _mark_image_account_failure(acc_id, result)
         # Тексты ошибок здесь — наша копия из flow_copy, но эскейпим на случай
         # сырого текста от бэкенда (защита разметки от инъекции).
         await status_msg.edit_text(
@@ -4580,6 +4588,16 @@ def _is_rate_limit_error(result: dict) -> bool:
         or "too many requests" in error
         or "слишком много" in error
     )
+
+
+def _mark_image_account_failure(account_id: str | None, result: dict | None = None) -> None:
+    if not account_id:
+        return
+    if (result or {}).get("account_risk") == "unusual_activity":
+        if account_pool.mark_cooldown(account_id):
+            log.warning("Image account %s cooled down after provider unusual-activity", account_id)
+        return
+    account_pool.mark_failure(account_id)
 
 
 async def _download_ref_image_bytes(ref: ImageRef) -> bytes | None:
@@ -4753,7 +4771,7 @@ async def _do_edit_and_send(
 
     if "error" in result:
         if _is_rate_limit_error(result):
-            account_pool.mark_failure(ref.account_id)
+            _mark_image_account_failure(ref.account_id, result)
             await update_status(flow_copy.msg("image_edit_failover"))
             failover_ref = await _reupload_ref_for_edit_failover(
                 ref, user_id, current_account_id=ref.account_id,
@@ -4773,7 +4791,7 @@ async def _do_edit_and_send(
                     result = {"error": flow_copy.msg("image_edit_rate_limited")}
             if "error" in result:
                 if failover_ref and _is_rate_limit_error(result):
-                    account_pool.mark_failure(failover_ref.account_id)
+                    _mark_image_account_failure(failover_ref.account_id, result)
                 await status_msg.edit_text(flow_copy.msg("image_edit_rate_limited"))
                 return False
         else:
@@ -4887,6 +4905,7 @@ async def _do_run_i2i(
 
     if "error" in result:
         if _is_rate_limit_error(result):
+            _mark_image_account_failure(ref.account_id, result)
             await status_msg.edit_text(flow_copy.msg("image_edit_rate_limited"))
         else:
             await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")

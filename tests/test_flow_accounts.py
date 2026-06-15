@@ -94,6 +94,15 @@ class AccountPoolTests(unittest.TestCase):
         self.assertFalse(pool.mark_failure(acc))  # счётчик сброшен — кулдауна нет
         self.assertTrue(pool.is_available(acc))
 
+    def test_mark_cooldown_bypasses_failure_threshold(self) -> None:
+        pool = self._pool(2, max_failures=3, cooldown_sec=600)
+        acc = pool.pick_for(1)
+        self.assertTrue(pool.mark_cooldown(acc))
+        self.assertFalse(pool.is_available(acc))
+        self.assertNotEqual(pool.pick_for(1), acc)
+        self.clock_now += 601
+        self.assertTrue(pool.is_available(acc))
+
     def test_single_account_never_blocked_by_cooldown(self) -> None:
         # Падения единственного аккаунта почти наверняка системные: лучше
         # попытаться, чем молча отказывать всем (см. docstring AccountPool).
@@ -241,7 +250,7 @@ class BotPoolWiringTests(unittest.TestCase):
         self.assertIn("account_id: str | None = None", (PROJECT_ROOT / "flow_core.py").read_text(encoding="utf-8"))
 
     def test_main_starts_all_keepers_and_disables_failed(self) -> None:
-        start = self.source.index("async def main")
+        start = self.source.index("async def _main_impl")
         block = self.source[start:start + 2400]
         self.assertIn("for acc_id, kp in keepers.items():", block)
         self.assertIn("account_pool.set_disabled(acc_id, True)", block)
