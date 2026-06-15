@@ -7330,6 +7330,14 @@ async def handle_plain_text(message: types.Message):
     # загрузку) — промпт из чата запускает генерацию сразу, как «Готово» + промпт.
     # Кнопка «Готово» остаётся опциональной. Проверяем ДО image-фолбэка, иначе
     # залипший image-визард перехватил бы текст и сгенерил картинки.
+    # ВАЖНО: этот блок должен быть ВЫШЕ проверки vawait == "ving_photo", иначе
+    # show_video_ingredients (которая всегда выставляет vawait=ving_photo) блокирует
+    # текстовый промпт даже когда фото уже добавлены («Оживить фото» не работает).
+    if st.get("vmode") == "ingredients" and (st.get("ving_photos") or []):
+        st["vawait"] = None
+        await _video_generate_and_send(message, text, user_id=user_id)
+        return
+
     if st.get("vawait") == "ving_photo":
         await message.answer(flow_copy.msg("vid_ing_send_photo"))
         return
@@ -7340,11 +7348,6 @@ async def handle_plain_text(message: types.Message):
 
     if st.get("vawait") == "vfrm_end":
         await message.answer(flow_copy.msg("vid_frm_send_photo_end"))
-        return
-
-    if st.get("vmode") == "ingredients" and (st.get("ving_photos") or []):
-        st["vawait"] = None
-        await _video_generate_and_send(message, text, user_id=user_id)
         return
 
     # Видео по двум кадрам: оба кадра загружены — промпт из чата запускает генерацию.
