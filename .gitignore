@@ -111,6 +111,8 @@ htmlcov/
 tmp/
 temp/
 *.tmp
+tmp_*.py
+kotenok.jpg
 
 # Scratch / validation run artifacts (leftover output, not source — see CLAUDE.md)
 *-mode.stdout.txt

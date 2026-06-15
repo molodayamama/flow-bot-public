@@ -1,63 +1,148 @@
+/* ============================================================
+   Photozhab — Production Stylesheet
+   Implements the Photozhab Design System tokens verbatim.
+   Source of truth: photozhab-design-system/project/
+   ============================================================ */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap");
+
+/* ── Design System Tokens ─────────────────────────────────── */
 :root {
   color-scheme: dark;
 
-  /* ── Base palette ─────────────────────────────────────── */
-  --pz-paper:        #111312;
-  --pz-paper-2:      #171a18;
-  --pz-surface:      #151816;
-  --pz-surface-2:    #1b211d;
-  --pz-surface-3:    #1f2622;
-  --pz-void:         #0d0f0e;
+  /* ── Base palette ─────────────────────────────────────────── */
+  --pz-paper:        #111312; /* page background (warm near-black) */
+  --pz-paper-2:      #171a18; /* alt section background */
+  --pz-surface:      #151816; /* card / row surface */
+  --pz-surface-2:    #1b211d; /* raised / highlighted row */
+  --pz-surface-3:    #1f2622; /* hover / pressed surface */
+  --pz-void:         #0d0f0e; /* footer / deepest background */
 
-  --pz-ink:          #f4f1e8;
-  --pz-muted:        #b7b4aa;
-  --pz-faint:        #6f6e67;
+  --pz-ink:          #f4f1e8; /* primary text — warm cream */
+  --pz-muted:        #b7b4aa; /* secondary text */
+  --pz-faint:        #6f6e67; /* tertiary / disabled text */
 
-  /* ── Accents ──────────────────────────────────────────── */
-  --pz-lime:         #c8f25f;
-  --pz-lime-ink:     #101210;
-  --pz-cyan:         #54d7d6;
+  /* ── Accents (neon) ───────────────────────────────────────── */
+  --pz-lime:         #c8f25f; /* primary — eyebrows, prices, CTAs */
+  --pz-lime-ink:     #101210; /* text on lime */
+  --pz-cyan:         #54d7d6; /* secondary — links, focus, AI */
   --pz-cyan-ink:     #06201f;
-  --pz-coral:        #ff7b6d;
+  --pz-coral:        #ff7b6d; /* tertiary — kickers, video, alerts */
   --pz-coral-ink:    #2a0d09;
 
+  /* Brand gradients */
   --pz-grad-brand:   linear-gradient(135deg, var(--pz-lime), var(--pz-cyan));
   --pz-grad-neon:    linear-gradient(120deg, var(--pz-cyan), var(--pz-lime) 55%, var(--pz-coral));
 
-  /* ── Lines ────────────────────────────────────────────── */
+  /* ── Lines & strokes ──────────────────────────────────────── */
   --pz-line:         rgba(244, 241, 232, 0.15);
   --pz-line-strong:  rgba(244, 241, 232, 0.28);
   --pz-line-faint:   rgba(244, 241, 232, 0.08);
 
-  /* ── Translucent fills ────────────────────────────────── */
+  /* ── Translucent fills (blur panels) ─────────────────────── */
   --pz-panel:        rgba(18, 21, 20, 0.78);
   --pz-panel-soft:   rgba(17, 19, 18, 0.52);
   --pz-glass:        rgba(17, 19, 18, 0.70);
 
-  /* ── Semantic status ──────────────────────────────────── */
+  /* ── Semantic status ──────────────────────────────────────── */
   --pz-success:      #c8f25f;
   --pz-info:         #54d7d6;
   --pz-warn:         #ffc24b;
   --pz-danger:       #ff7b6d;
 
-  /* ── Shadows & glows ──────────────────────────────────── */
-  --shadow-sm:       0 4px 14px rgba(0, 0, 0, 0.35);
-  --shadow-md:       0 16px 40px rgba(0, 0, 0, 0.48);
-  --shadow-lg:       0 24px 60px rgba(0, 0, 0, 0.55);
-  --shadow-cta:      0 20px 46px rgba(244, 241, 232, 0.18);
-  --glow-lime:       0 0 0 1px rgba(200, 242, 95, 0.5), 0 0 28px rgba(200, 242, 95, 0.35);
-  --glow-cyan:       0 0 0 1px rgba(84, 215, 214, 0.5), 0 0 28px rgba(84, 215, 214, 0.35);
-  --glow-coral:      0 0 0 1px rgba(255, 123, 109, 0.5), 0 0 28px rgba(255, 123, 109, 0.35);
+  /* ── Typography ───────────────────────────────────────────── */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-  /* ── Blur & motion ────────────────────────────────────── */
-  --blur-chrome:     blur(18px);
-  --blur-glass:      blur(14px);
-  --dur-fast:        120ms;
-  --dur-base:        160ms;
-  --dur-slow:        260ms;
-  --ease-out:        cubic-bezier(0.22, 0.61, 0.36, 1);
+  --fw-regular:  400;
+  --fw-medium:   500;
+  --fw-semibold: 600;
+  --fw-bold:     700;
+  --fw-extra:    800;
+  --fw-black:    900;
 
-  /* ── Legacy aliases (for backward compatibility) ──────── */
+  --fs-display:  clamp(56px, 11vw, 144px);
+  --fs-h1:       clamp(40px, 6vw, 72px);
+  --fs-h2:       clamp(30px, 4vw, 54px);
+  --fs-h3:       clamp(22px, 2.5vw, 32px);
+  --fs-xl:       24px;
+  --fs-lg:       20px;
+  --fs-md:       17px;
+  --fs-base:     16px;
+  --fs-sm:       15px;
+  --fs-xs:       13px;
+  --fs-2xs:      11px;
+
+  --lh-display:  0.92;
+  --lh-tight:    1.05;
+  --lh-snug:     1.2;
+  --lh-normal:   1.5;
+  --lh-relaxed:  1.65;
+
+  --ls-eyebrow:  0.04em;
+  --ls-tight:    -0.01em;
+
+  /* ── Spacing & layout ─────────────────────────────────────── */
+  --sp-1:   4px;
+  --sp-2:   8px;
+  --sp-3:   12px;
+  --sp-4:   16px;
+  --sp-5:   20px;
+  --sp-6:   24px;
+  --sp-8:   32px;
+  --sp-10:  40px;
+  --sp-12:  48px;
+  --sp-16:  64px;
+  --sp-20:  80px;
+  --sp-24:  96px;
+
+  --pad-section: clamp(48px, 7vw, 92px);
+  --pad-gutter:  clamp(18px, 6vw, 76px);
+
+  --w-content: 1120px;
+  --w-prose:   700px;
+  --w-hero:    860px;
+
+  /* ── Radii ────────────────────────────────────────────────── */
+  --r-xs:     4px;
+  --r-sm:     6px;
+  --r-md:     8px;   /* default — buttons, cards, inputs */
+  --r-lg:     12px;
+  --r-xl:     18px;
+  --r-bubble: 20px;  /* chat bubbles */
+  --r-pill:   999px;
+
+  --hairline:  1px;
+
+  /* ── Shadows ──────────────────────────────────────────────── */
+  --shadow-sm:  0 4px 14px rgba(0, 0, 0, 0.35);
+  --shadow-md:  0 16px 40px rgba(0, 0, 0, 0.48);
+  --shadow-lg:  0 24px 60px rgba(0, 0, 0, 0.55);
+  --shadow-cta: 0 20px 46px rgba(244, 241, 232, 0.18);
+
+  /* ── Neon glows ───────────────────────────────────────────── */
+  --glow-lime:  0 0 0 1px rgba(200, 242, 95, 0.5),  0 0 28px rgba(200, 242, 95, 0.35);
+  --glow-cyan:  0 0 0 1px rgba(84, 215, 214, 0.5),  0 0 28px rgba(84, 215, 214, 0.35);
+  --glow-coral: 0 0 0 1px rgba(255, 123, 109, 0.5), 0 0 28px rgba(255, 123, 109, 0.35);
+
+  /* ── Blur ─────────────────────────────────────────────────── */
+  --blur-chrome: blur(18px);
+  --blur-glass:  blur(14px);
+
+  /* ── Motion ───────────────────────────────────────────────── */
+  --ease-out:    cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-std:    cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast:    120ms;
+  --dur-base:    160ms;
+  --dur-slow:    260ms;
+  --hover-lift:  -2px;
+  --press-scale: 0.97;
+
+  /* ── Focus ring ───────────────────────────────────────────── */
+  --focus-ring:   3px solid var(--pz-cyan);
+  --focus-offset: 3px;
+
+  /* ── Legacy aliases (backward compat) ────────────────────── */
   --ink:    var(--pz-ink);
   --muted:  var(--pz-muted);
   --paper:  var(--pz-paper);
@@ -69,21 +154,22 @@
   --shadow: rgba(0, 0, 0, 0.48);
 }
 
+/* ── Reset & base ─────────────────────────────────────────── */
 * {
   box-sizing: border-box;
 }
 
 html {
   min-width: 320px;
-  background: var(--paper);
+  background: var(--pz-paper);
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: var(--ink);
-  background: #111312;
+  font-family: var(--font-sans);
+  color: var(--pz-ink);
+  background: var(--pz-paper);
 }
 
 a {
@@ -91,14 +177,15 @@ a {
   text-decoration: none;
 }
 
+/* ── Topbar ───────────────────────────────────────────────── */
 .topbar {
   position: sticky;
-  z-index: 10;
+  z-index: var(--z-sticky, 10);
   top: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--sp-4);
   padding: 18px clamp(18px, 5vw, 56px);
   background: linear-gradient(180deg, rgba(17, 19, 18, 0.82), rgba(17, 19, 18, 0));
 }
@@ -108,10 +195,10 @@ a {
   min-height: 42px;
   display: inline-flex;
   align-items: center;
-  border: 1px solid var(--line);
-  background: rgba(17, 19, 18, 0.52);
-  backdrop-filter: blur(18px);
-  box-shadow: 0 16px 40px var(--shadow);
+  border: 1px solid var(--pz-line);
+  background: var(--pz-panel-soft);
+  backdrop-filter: var(--blur-chrome);
+  box-shadow: var(--shadow-md);
 }
 
 .topbar-nav {
@@ -123,8 +210,8 @@ a {
 .brand {
   gap: 10px;
   padding: 8px 14px 8px 8px;
-  border-radius: 8px;
-  font-weight: 800;
+  border-radius: var(--r-md);
+  font-weight: var(--fw-extra);
 }
 
 .brand-mark {
@@ -132,21 +219,22 @@ a {
   height: 26px;
   display: grid;
   place-items: center;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   color: var(--pz-lime-ink);
   background: var(--pz-grad-brand);
-  font-weight: 900;
+  font-weight: var(--fw-black);
 }
 
 .topbar-link {
   justify-content: center;
   padding: 0 16px;
-  border-radius: 8px;
+  border-radius: var(--r-md);
   color: var(--pz-ink);
-  font-size: 14px;
-  font-weight: 700;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
 }
 
+/* ── Hero ─────────────────────────────────────────────────── */
 .hero {
   position: relative;
   min-height: 86svh;
@@ -154,7 +242,7 @@ a {
   align-items: end;
   overflow: hidden;
   isolation: isolate;
-  padding: 120px clamp(18px, 6vw, 76px) 72px;
+  padding: 120px var(--pad-gutter) 72px;
   margin-top: -78px;
 }
 
@@ -181,15 +269,16 @@ a {
 }
 
 .hero-content {
-  width: min(860px, 100%);
+  width: min(var(--w-hero), 100%);
 }
 
+/* ── Typography ───────────────────────────────────────────── */
 .eyebrow {
   margin: 0 0 14px;
   color: var(--pz-lime);
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-extra);
+  letter-spacing: var(--ls-eyebrow);
   text-transform: uppercase;
 }
 
@@ -198,24 +287,25 @@ a {
 
 h1 {
   margin: 0;
-  font-size: clamp(56px, 11vw, 144px);
-  line-height: 0.92;
+  font-size: var(--fs-display);
+  line-height: var(--lh-display);
   letter-spacing: 0;
 }
 
 .lead {
   max-width: 610px;
-  margin: 24px 0 0;
+  margin: var(--sp-6) 0 0;
   color: rgba(244, 241, 232, 0.88);
   font-size: clamp(20px, 3vw, 31px);
-  line-height: 1.18;
+  line-height: var(--lh-snug);
 }
 
+/* ── Hero actions ─────────────────────────────────────────── */
 .hero-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: var(--sp-4);
   margin-top: 34px;
 }
 
@@ -224,49 +314,53 @@ h1 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0 24px;
-  border-radius: 8px;
-  background: var(--ink);
+  padding: 0 var(--sp-6);
+  border-radius: var(--r-md);
+  background: var(--pz-ink);
   color: #111312;
+  font-family: var(--font-sans);
   font-weight: 820;
-  box-shadow: 0 20px 46px rgba(244, 241, 232, 0.18);
-  transition: transform 160ms ease, background-color 160ms ease;
+  box-shadow: var(--shadow-cta);
+  transition:
+    transform var(--dur-base) var(--ease-out),
+    background-color var(--dur-base) var(--ease-out);
 }
 
 .primary-action:hover {
-  transform: translateY(-2px);
+  transform: translateY(var(--hover-lift));
   background: #ffffff;
 }
 
 .primary-action:focus-visible,
 .topbar-link:focus-visible,
 .brand:focus-visible {
-  outline: 3px solid var(--cyan);
-  outline-offset: 3px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 .microcopy {
-  color: var(--muted);
-  font-size: 15px;
+  color: var(--pz-muted);
+  font-size: var(--fs-sm);
 }
 
+/* ── Hero proof tiles ─────────────────────────────────────── */
 .hero-proof {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  width: min(860px, 100%);
+  gap: var(--hairline);
+  width: min(var(--w-hero), 100%);
   margin-top: 34px;
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--line);
+  border: 1px solid var(--pz-line);
+  border-radius: var(--r-md);
+  background: var(--pz-line);
 }
 
 .hero-proof div {
   min-height: 116px;
   padding: 18px;
-  background: rgba(17, 19, 18, 0.7);
-  backdrop-filter: blur(14px);
+  background: var(--pz-glass);
+  backdrop-filter: var(--blur-glass);
 }
 
 .hero-proof strong,
@@ -279,85 +373,87 @@ h1 {
 }
 
 .hero-proof span {
-  margin-top: 8px;
-  color: var(--muted);
-  font-size: 15px;
+  margin-top: var(--sp-2);
+  color: var(--pz-muted);
+  font-size: var(--fs-sm);
   line-height: 1.35;
 }
 
+/* ── Quick grid (3-up cards) ──────────────────────────────── */
 .quick-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  background: var(--line);
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
+  gap: var(--hairline);
+  background: var(--pz-line);
+  border-top: 1px solid var(--pz-line);
+  border-bottom: 1px solid var(--pz-line);
 }
 
 .quick-card {
   min-height: 210px;
   padding: clamp(24px, 4vw, 44px);
-  background: #111312;
+  background: var(--pz-paper);
 }
 
 .quick-kicker {
   color: var(--pz-coral);
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-extra);
+  letter-spacing: var(--ls-eyebrow);
 }
 
 .quick-card h2 {
   margin: 34px 0 12px;
-  font-size: clamp(22px, 2.5vw, 32px);
-  line-height: 1;
+  font-size: var(--fs-h3);
+  line-height: var(--lh-tight);
   letter-spacing: 0;
 }
 
 .quick-card p {
   max-width: 360px;
   margin: 0;
-  color: var(--muted);
-  font-size: 16px;
-  line-height: 1.5;
+  color: var(--pz-muted);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
 }
 
+/* ── Info sections ────────────────────────────────────────── */
 .info-section {
-  padding: clamp(48px, 7vw, 92px) clamp(18px, 6vw, 76px);
-  background: #111312;
-  border-bottom: 1px solid var(--line);
+  padding: var(--pad-section) var(--pad-gutter);
+  background: var(--pz-paper);
+  border-bottom: 1px solid var(--pz-line);
 }
 
 .info-section.alt {
-  background: #171a18;
+  background: var(--pz-paper-2);
 }
 
 .section-inner {
-  width: min(1120px, 100%);
+  width: min(var(--w-content), 100%);
   margin: 0 auto;
 }
 
 .section-inner h2 {
   margin: 0;
-  font-size: clamp(30px, 4vw, 54px);
-  line-height: 1;
+  font-size: var(--fs-h2);
+  line-height: var(--lh-tight);
   letter-spacing: 0;
 }
 
 .section-lead {
-  max-width: 700px;
+  max-width: var(--w-prose);
   margin: 18px 0 0;
-  color: var(--muted);
+  color: var(--pz-muted);
   font-size: 18px;
-  line-height: 1.5;
+  line-height: var(--lh-normal);
 }
 
 .section-note {
   max-width: 780px;
   margin: 22px 0 0;
   color: rgba(244, 241, 232, 0.82);
-  font-size: 16px;
-  line-height: 1.5;
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
 }
 
 .two-col {
@@ -369,8 +465,8 @@ h1 {
 
 .text-block {
   color: rgba(244, 241, 232, 0.86);
-  font-size: 17px;
-  line-height: 1.65;
+  font-size: var(--fs-md);
+  line-height: var(--lh-relaxed);
   overflow-wrap: anywhere;
 }
 
@@ -385,23 +481,24 @@ h1 {
 }
 
 .text-block a {
-  color: var(--cyan);
+  color: var(--pz-cyan);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
 
 .requisites strong {
-  color: var(--ink);
+  color: var(--pz-ink);
 }
 
+/* ── Price list (hairline grid) ───────────────────────────── */
 .price-list {
   display: grid;
-  gap: 1px;
+  gap: var(--hairline);
   margin-top: 30px;
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--line);
+  border: 1px solid var(--pz-line);
+  border-radius: var(--r-md);
+  background: var(--pz-line);
 }
 
 .price-row {
@@ -411,11 +508,11 @@ h1 {
   align-items: center;
   min-height: 72px;
   padding: 18px 22px;
-  background: #151816;
+  background: var(--pz-surface);
 }
 
 .price-row.highlighted {
-  background: #1b211d;
+  background: var(--pz-surface-2);
 }
 
 .price-row span,
@@ -424,11 +521,12 @@ h1 {
 }
 
 .price-row strong {
-  color: var(--lime);
+  color: var(--pz-lime);
+  font-family: var(--font-mono);
 }
 
 .price-row em {
-  color: var(--muted);
+  color: var(--pz-muted);
   font-style: normal;
   line-height: 1.35;
 }
@@ -437,7 +535,7 @@ h1 {
 .badges {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--sp-2);
   margin-top: 18px;
 }
 
@@ -446,9 +544,9 @@ h1 {
   align-items: center;
   height: 24px;
   padding: 0 9px;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   line-height: 1;
 }
 
@@ -456,9 +554,9 @@ h1 {
 .badge--cyan  { color: var(--pz-cyan);  background: rgba(84, 215, 214, 0.12);  border: 1px solid rgba(84, 215, 214, 0.35); }
 .badge--coral { color: var(--pz-coral); background: rgba(255, 123, 109, 0.12); border: 1px solid rgba(255, 123, 109, 0.35); }
 
-/* ── Legal ────────────────────────────────────────────────── */
+/* ── Legal page ───────────────────────────────────────────── */
 .legal-page {
-  padding-top: 24px;
+  padding-top: var(--sp-6);
 }
 
 .legal-page .two-col {
@@ -468,21 +566,22 @@ h1 {
 .legal-page .section-inner h1 {
   max-width: 520px;
   font-size: clamp(38px, 5vw, 64px);
-  line-height: 1;
+  line-height: var(--lh-tight);
   overflow-wrap: anywhere;
 }
 
+/* ── Footer ───────────────────────────────────────────────── */
 .site-footer {
   display: flex;
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
   gap: 16px 26px;
-  padding: 28px clamp(18px, 6vw, 76px);
-  color: var(--muted);
-  background: #0d0f0e;
-  border-top: 1px solid var(--line);
-  font-size: 14px;
+  padding: 28px var(--pad-gutter);
+  color: var(--pz-muted);
+  background: var(--pz-void);
+  border-top: 1px solid var(--pz-line);
+  font-size: var(--fs-xs);
 }
 
 .site-footer a {
@@ -491,6 +590,7 @@ h1 {
   text-underline-offset: 3px;
 }
 
+/* ── Responsive ───────────────────────────────────────────── */
 @media (max-width: 820px) {
   .topbar {
     padding: 14px;

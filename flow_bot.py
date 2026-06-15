@@ -6892,23 +6892,28 @@ async def robokassa_health(request: web.Request) -> web.Response:
     return web.Response(text="OK")
 
 
-async def _start_robokassa_web_server() -> web.AppRunner | None:
-    if not _robokassa_configured():
-        log.info("Robokassa callbacks disabled: env is incomplete or disabled")
-        return None
+async def _start_web_server() -> web.AppRunner:
+    import admin_api as _admin_api
     app = web.Application()
-    app.router.add_route("*", "/robokassa/result", robokassa_result)
-    app.router.add_get("/robokassa/success", robokassa_success)
-    app.router.add_post("/robokassa/success", robokassa_success)
-    app.router.add_get("/robokassa/fail", robokassa_fail)
-    app.router.add_post("/robokassa/fail", robokassa_fail)
-    app.router.add_get("/robokassa/health", robokassa_health)
+    _admin_api.register_admin_routes(app, account_pool)
+    if _robokassa_configured():
+        app.router.add_route("*", "/robokassa/result", robokassa_result)
+        app.router.add_get("/robokassa/success", robokassa_success)
+        app.router.add_post("/robokassa/success", robokassa_success)
+        app.router.add_get("/robokassa/fail", robokassa_fail)
+        app.router.add_post("/robokassa/fail", robokassa_fail)
+        app.router.add_get("/robokassa/health", robokassa_health)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, ROBOKASSA_WEB_HOST, ROBOKASSA_WEB_PORT)
     await site.start()
-    log.info("Robokassa callbacks listening on %s:%s", ROBOKASSA_WEB_HOST, ROBOKASSA_WEB_PORT)
+    log.info("Web server listening on %s:%s (admin API + robokassa=%s)",
+             ROBOKASSA_WEB_HOST, ROBOKASSA_WEB_PORT, _robokassa_configured())
     return runner
+
+
+async def _start_robokassa_web_server() -> web.AppRunner | None:
+    return await _start_web_server()
 
 
 @dp.callback_query(F.data == "img:retry")
