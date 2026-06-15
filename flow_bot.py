@@ -410,6 +410,10 @@ class SessionKeeper:
         async with self._lock:
             await self._start_locked()
 
+    async def close(self):
+        async with self._lock:
+            await self._close_browser_locked()
+
     async def _start_locked(self):
         """Запускает браузер и открывает Flow. Вызывать один раз при старте."""
         try:
@@ -7396,8 +7400,31 @@ async def handle_plain_text(message: types.Message):
 # ───────────────────────────────────────────
 
 
-async def main():
+def _install_shutdown_exception_filter() -> None:
+    loop = asyncio.get_running_loop()
+    default_handler = loop.get_exception_handler()
+
+    def _handler(loop, context):
+        exc = context.get("exception")
+        message = context.get("message", "")
+        if (
+            message == "Future exception was never retrieved"
+            and exc is not None
+            and "Connection closed while reading from the driver" in str(exc)
+        ):
+            log.debug("Suppressed Playwright driver shutdown future: %s", exc)
+            return
+        if default_handler is not None:
+            default_handler(loop, context)
+        else:
+            loop.default_exception_handler(context)
+
+    loop.set_exception_handler(_handler)
+
+
+async def _main_impl():
     log.info("🚀 Запуск Flow Bot...")
+    _install_shutdown_exception_filter()
 
     if TELEGRAM_TOKEN == "PASTE_YOUR_TOKEN_HERE":
         log.error("❌ Укажите TELEGRAM_TOKEN в .env или прямо в коде!")
@@ -7443,13 +7470,43 @@ async def main():
         log.error("❌ Ни один аккаунт пула не запустился — выходим.")
         return
 
+    robokassa_runner = None
     try:
-        await _start_robokassa_web_server()
+        robokassa_runner = await _start_robokassa_web_server()
     except Exception:
         log.exception("Robokassa callback server failed to start")
 
     log.info("🤖 Бот запущен!")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        log.info("Shutting down bot resources...")
+        if robokassa_runner is not None:
+            try:
+                await robokassa_runner.cleanup()
+            except Exception:
+                log.exception("Robokassa callback server cleanup failed")
+        for acc_id, kp in keepers.items():
+            try:
+                await kp.close()
+            except Exception:
+                log.exception("Flow account %s cleanup failed", acc_id)
+
+
+async def main():
+    try:
+        await _main_impl()
+    finally:
+        log.info("Shutting down remaining bot resources...")
+        for acc_id, kp in keepers.items():
+            try:
+                await kp.close()
+            except Exception:
+                log.exception("Flow account %s cleanup failed", acc_id)
+        try:
+            await bot.session.close()
+        except Exception:
+            log.exception("Telegram bot session cleanup failed")
 
 
 if __name__ == "__main__":

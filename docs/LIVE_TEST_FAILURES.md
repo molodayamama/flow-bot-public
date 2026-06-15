@@ -25,8 +25,8 @@ phone numbers, raw HAR bodies, or full response bodies.
 ### YYYY-MM-DD LF-000 short title
 
 - Severity: S1
-- Status: open
-- Next fix owner: unassigned
+- Status: verified fixed
+- Next fix owner: n/a
 - Live check approved by: operator/name or issue link
 - Environment: local / VPS / other; bot commit or file timestamp if known
 - Surface: image / image edit / video text / video frames / video ingredients /
@@ -481,8 +481,19 @@ Suspected cause:
 
 Next fix notes:
 
-- Add or audit explicit browser/context cleanup during shutdown before the event
-  loop closes. Keep this separate from user-facing generation/payment fixes.
+- Implemented as `LFX-013`: explicit shutdown cleanup now closes Playwright
+  keepers, Robokassa callback runner, and the Telegram bot session before the
+  event loop closes.
+- A narrow asyncio exception filter suppresses the known Playwright driver
+  future raised during intentional shutdown, while all other loop exceptions
+  still use the default handler.
+
+Resolution:
+
+- VPS validation on 2026-06-15 restarted the deployed service after the new
+  cleanup path was active. The service returned to `active`, and the fresh
+  journal interval contained zero `Event loop is closed` markers and zero
+  Playwright shutdown `Future` markers.
 
 ### 2026-06-14 LF-007 image edit all-action 403 skipped failover classification
 

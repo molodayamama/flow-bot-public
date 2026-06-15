@@ -528,3 +528,46 @@ Notes:
 
 - The fix intentionally does not start video generation from text until the
   required reference photos exist.
+
+### 2026-06-15 LFX-013 close async resources before loop shutdown
+
+- Failure id: LF-006
+- Status: verified
+- Priority: S3
+- Fix owner: current Codex session
+- Proposed by: current Codex session
+
+Root cause hypothesis:
+
+- Playwright subprocess transports and Telegram aiohttp resources could remain
+  alive when `asyncio.run()` closed the event loop, especially if the service was
+  stopped during account startup or immediately after polling shutdown.
+- Confidence: high
+
+Implemented fix:
+
+- Add `SessionKeeper.close()` and call it from shutdown paths while the event
+  loop is still running.
+- Split the entrypoint into `_main_impl()` plus a `main()` wrapper so startup
+  cancellation and polling exit both run cleanup.
+- Clean up the Robokassa callback runner and close the Telegram bot session.
+- Install a narrow asyncio exception filter for the known Playwright shutdown
+  future, `Connection closed while reading from the driver`; all other loop
+  exceptions still use the default handler.
+
+Owner files:
+
+- `flow_bot.py` - shutdown lifecycle and narrow exception filter.
+- `tests/test_flow_menu.py` - source-level lifecycle regression guards.
+
+Validation:
+
+- Offline syntax and targeted menu tests passed.
+- VPS deploy syntax check and service restart passed.
+- A control restart after the new process was active returned service `active`;
+  the fresh journal interval had zero `Event loop is closed` markers and zero
+  Playwright shutdown `Future` markers.
+
+Notes:
+
+- No browser profiles were recreated and `login.py` was not run.

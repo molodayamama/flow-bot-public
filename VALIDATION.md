@@ -513,6 +513,13 @@ Service restart logs:
   cleanup after SIGINT. The service restarted and handled updates normally, but
   this remains a low-priority cleanup validation target for future shutdown
   work.
+- After `LFX-013` on 2026-06-15, validate shutdown cleanup by deploying
+  `flow_bot.py`, running a remote syntax check, restarting `geminifree-bot`,
+  waiting for the new process to reach polling, then restarting once more. In
+  the fresh journal interval for the second restart, `Event` markers for
+  `Event loop is closed` and `Future` markers for the known Playwright shutdown
+  future should both be zero, and `systemctl is-active geminifree-bot` should
+  return `active`.
 
 ## Evidence Template
 

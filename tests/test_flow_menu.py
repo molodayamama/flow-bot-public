@@ -450,6 +450,43 @@ class BotMenuWiringTests(unittest.TestCase):
             help_block.index('("/grant'),
         )
 
+    def test_session_keeper_has_locked_shutdown_close(self) -> None:
+        start = self.source.index("class SessionKeeper:")
+        end = self.source.index("async def _start_locked", start)
+        block = self.source[start:end]
+        self.assertIn("async def close(self):", block)
+        self.assertIn("async with self._lock:", block)
+        self.assertIn("await self._close_browser_locked()", block)
+
+    def test_main_cleans_long_lived_resources_on_polling_exit(self) -> None:
+        start = self.source.index("async def _main_impl():")
+        end = self.source.index("async def main():", start)
+        block = self.source[start:end]
+        self.assertIn("robokassa_runner = None", block)
+        self.assertIn("robokassa_runner = await _start_robokassa_web_server()", block)
+        self.assertIn("try:\n        await dp.start_polling(bot)\n    finally:", block)
+        self.assertIn("await robokassa_runner.cleanup()", block)
+        self.assertIn("for acc_id, kp in keepers.items():", block)
+        self.assertIn("await kp.close()", block)
+
+    def test_main_wrapper_cleans_startup_cancellation_resources(self) -> None:
+        start = self.source.index("async def main():")
+        end = self.source.index('if __name__ == "__main__":', start)
+        block = self.source[start:end]
+        self.assertIn("await _main_impl()", block)
+        self.assertIn("finally:", block)
+        self.assertIn("await kp.close()", block)
+        self.assertIn("await bot.session.close()", block)
+
+    def test_shutdown_exception_filter_is_narrow(self) -> None:
+        start = self.source.index("def _install_shutdown_exception_filter")
+        end = self.source.index("async def _main_impl", start)
+        block = self.source[start:end]
+        self.assertIn('message == "Future exception was never retrieved"', block)
+        self.assertIn("Connection closed while reading from the driver", block)
+        self.assertIn("loop.default_exception_handler(context)", block)
+        self.assertIn("_install_shutdown_exception_filter()", self.source)
+
     def test_credits_charged_with_refund_on_failure(self) -> None:
         self.assertIn("credit_gate", self.source)
         self.assertIn("class NotEnoughCredits", self.source)
