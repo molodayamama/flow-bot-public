@@ -577,16 +577,19 @@ tr:hover td{background:var(--pz-surface-2)}
             <div class="stat-label">DAU</div>
             <div class="stat-value" id="u-dau">—</div>
             <div class="stat-sub">сегодня активны</div>
+            <div style="font-size:9px;color:var(--pz-faint);margin-top:2px;text-transform:none;letter-spacing:0">Daily Active Users</div>
           </div>
           <div class="stat-card">
             <div class="stat-label">WAU</div>
             <div class="stat-value" id="u-wau">—</div>
             <div class="stat-sub">за 7 дней</div>
+            <div style="font-size:9px;color:var(--pz-faint);margin-top:2px;text-transform:none;letter-spacing:0">Weekly Active Users</div>
           </div>
           <div class="stat-card warn">
             <div class="stat-label">MAU</div>
             <div class="stat-value" id="u-mau">—</div>
             <div class="stat-sub">за 30 дней</div>
+            <div style="font-size:9px;color:var(--pz-faint);margin-top:2px;text-transform:none;letter-spacing:0">Monthly Active Users</div>
           </div>
         </div>
         <div class="search-row">
@@ -945,33 +948,43 @@ async function loadOverview() {
   document.getElementById('stat-accounts').textContent = accs.filter(a=>!a.disabled).length+'/'+accs.length;
   document.getElementById('stat-credits').textContent  = fmt(stats.credits_sold);
 
-  document.getElementById('overview-accounts').innerHTML = accs.map(a=>{
-    const badge = a.disabled
-      ? '<span class="badge badge-red">выключен</span>'
-      : (a.fails||0)>=3
-        ? '<span class="badge badge-yellow">кулдаун</span>'
-        : '<span class="badge badge-green">OK</span>';
-    const total   = a.jobs_total   ?? 0;
-    const success = a.jobs_success ?? 0;
-    const fail    = a.jobs_fail    ?? 0;
-    const statsHtml = total > 0
-      ? `<span style="font-size:11px;color:var(--pz-faint);white-space:nowrap">
-           всего&nbsp;<b style="color:var(--pz-ink)">${fmt(total)}</b>
-           &nbsp;·&nbsp;<span style="color:var(--pz-green)">✓&nbsp;${fmt(success)}</span>
-           &nbsp;·&nbsp;<span style="color:var(--pz-coral)">✗&nbsp;${fmt(fail)}</span>
-         </span>`
-      : `<span style="font-size:11px;color:var(--pz-faint)">нет запросов</span>`;
-    const active = a.active_jobs > 0
-      ? `<span style="font-size:11px;color:var(--pz-cyan)">${a.active_jobs} активных</span>`
-      : '';
-    return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--pz-line-faint)">
-      <span class="mono" style="width:70px;color:var(--pz-cyan)">${esc(a.id)}</span>
-      ${badge}
-      ${a.video_allowed ? '<span style="font-size:10px;color:var(--pz-faint)">🎬</span>' : '<span style="font-size:10px;color:var(--pz-faint)">🖼</span>'}
-      <span style="flex:1">${statsHtml}</span>
-      ${active}
+  document.getElementById('overview-accounts').innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Аккаунт</th>
+          <th>Статус</th>
+          <th style="text-align:right">Запросы</th>
+          <th style="text-align:right">✓ Успешные</th>
+          <th style="text-align:right">✗ Неудачные</th>
+          <th style="text-align:right">% успеха</th>
+        </tr></thead>
+        <tbody>${accs.map(a=>{
+          const badge = a.disabled
+            ? '<span class="badge badge-red">выключен</span>'
+            : (a.failures||0)>=3
+              ? '<span class="badge badge-yellow">кулдаун</span>'
+              : '<span class="badge badge-green">OK</span>';
+          const total   = a.jobs_total   ?? 0;
+          const success = a.jobs_success ?? 0;
+          const fail    = a.jobs_fail    ?? 0;
+          const pct     = total > 0 ? Math.round(success/total*100)+'%' : '—';
+          const icon    = a.video_allowed ? '🎬' : '🖼';
+          const activeLbl = a.active_jobs > 0
+            ? `<span style="font-size:10px;color:var(--pz-cyan);margin-left:4px">${a.active_jobs}↻</span>`
+            : '';
+          return `<tr>
+            <td><span class="mono" style="color:var(--pz-cyan)">${esc(a.id)}</span>
+                <span style="font-size:10px;color:var(--pz-faint);margin-left:4px">${icon}</span>${activeLbl}</td>
+            <td>${badge}</td>
+            <td class="mono" style="text-align:right">${fmt(total)}</td>
+            <td class="mono" style="text-align:right;color:var(--pz-green)">${fmt(success)}</td>
+            <td class="mono" style="text-align:right;color:var(--pz-coral)">${fmt(fail)}</td>
+            <td class="mono" style="text-align:right;font-weight:700">${pct}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
     </div>`;
-  }).join('');
 
   document.getElementById('log-list').innerHTML = log.map(e=>`
     <div class="log-row">
@@ -993,7 +1006,10 @@ async function loadAccounts() {
         <div style="font-size:11px;color:var(--pz-faint);margin-top:2px">${esc(a.profile_dir)}</div>
       </td>
       <td>${a.disabled ? '<span class="badge badge-red">выключен</span>' : a.failures>=3 ? '<span class="badge badge-yellow">кулдаун</span>' : '<span class="badge badge-green">активен</span>'}</td>
-      <td class="mono">${a.active_jobs??0}</td>
+      <td class="mono">
+        ${a.jobs_total??0}
+        ${(a.jobs_total??0)>0?`<div style="font-size:10px;font-weight:400;color:var(--pz-faint);margin-top:1px"><span style="color:var(--pz-green)">✓${a.jobs_success??0}</span>&thinsp;<span style="color:var(--pz-coral)">✗${a.jobs_fail??0}</span></div>`:''}
+      </td>
       <td class="mono" style="color:${(a.failures||0)>0?'var(--pz-coral)':'var(--pz-faint)'}">${a.failures??0}</td>
       <td><label class="toggle"><input type="checkbox" ${a.video_allowed?'checked':''} onchange="toggleVideo('${esc(a.id)}',this.checked)"><span class="toggle-slider"></span></label></td>
       <td><label class="toggle"><input type="checkbox" ${!a.disabled?'checked':''} onchange="toggleDisabled('${esc(a.id)}',!this.checked)"><span class="toggle-slider"></span></label></td>
