@@ -4439,49 +4439,67 @@ async def _do_generate_and_send(
         except Exception:
             pass
 
-    # Каждый Telegram-пользователь работает в своём проекте на сайте.
-    acc_id = _account_for_image(user_id)
-    if acc_id is None:
-        # Весь пул аккаунтов в кулдауне/отключён — отказ ДО списания кредитов.
-        await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
-        return False
-    project_id = await ensure_user_project(user_id, account_id=acc_id)
+    # Генерация с тихим фейловером: попытка 0 — основной аккаунт, попытка 1 — другой.
+    # 400 (prompt_rejected) = проблема юзера, не аккаунта — фейловер и кулдаун не нужны.
+    tried: set[str] = set()
+    acc_id: str | None = None
+    project_id: str | None = None
+    result: dict = {}
 
-    try:
-        result = await _client_for_acc(acc_id).generate_images(
-            prompt,
-            aspect_ratio=aspect_ratio,
-            num_images=num_images,
-            progress_cb=update_status,
-            project_id=project_id,
-            image_model=image_model,
-        )
-    except Exception:
-        log.exception("Generation failed")
-        account_pool.mark_failure(acc_id)
-        await status_msg.edit_text(
-            flow_copy.msg("gen_failed"),
-            reply_markup=_img_retry_kb(),
-        )
-        return False
+    for attempt in range(2):
+        acc_id = _account_for_image(user_id, exclude=tried if tried else None)
+        if acc_id is None:
+            await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
+            return False
+        tried.add(acc_id)
+        project_id = await ensure_user_project(user_id, account_id=acc_id)
 
-    if "error" in result:
-        _mark_image_account_failure(acc_id, result)
-        # 400 = prompt rejected by content filter → особое сообщение без кнопки «Повторить»
-        if result.get("error_type") == "prompt_rejected":
-            await status_msg.edit_text(
-                f"❌ {html.escape(str(result['error'])[:300])}",
-                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                    [_menu_button("menu", "m:menu")],
-                ]),
+        try:
+            result = await _client_for_acc(acc_id).generate_images(
+                prompt,
+                aspect_ratio=aspect_ratio,
+                num_images=num_images,
+                progress_cb=update_status,
+                project_id=project_id,
+                image_model=image_model,
             )
-        else:
-            # Тексты ошибок здесь — наша копия из flow_copy, но эскейпим на случай
-            # сырого текста от бэкенда (защита разметки от инъекции).
+        except Exception:
+            log.exception("Generation failed (account %s, attempt %d)", acc_id, attempt)
+            account_pool.mark_failure(acc_id)
+            if attempt == 0:
+                log.info("Тихий фейловер после исключения — пробую другой аккаунт")
+                continue
+            await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
+            return False
+
+        if "error" in result:
+            if result.get("error_type") == "prompt_rejected":
+                # 400 — проблема запроса, не аккаунта: не трогаем health, не фейловеримся
+                await status_msg.edit_text(
+                    f"❌ {html.escape(str(result['error'])[:300])}",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                        [_menu_button("menu", "m:menu")],
+                    ]),
+                )
+                return False
+            # Ошибка аккаунта — помечаем и пробуем другой (один раз)
+            _mark_image_account_failure(acc_id, result)
+            if attempt == 0:
+                log.info(
+                    "Тихий фейловер после ошибки аккаунта %s: %s",
+                    acc_id, str(result.get("error", ""))[:80],
+                )
+                continue
+            # Оба аккаунта не справились
             await status_msg.edit_text(
                 f"❌ {html.escape(str(result['error'])[:300])}",
                 reply_markup=_img_retry_kb(),
             )
+            return False
+
+        break  # успех
+    else:
+        await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
         return False
 
     pairs = result_pairs(result)
