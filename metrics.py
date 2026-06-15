@@ -1829,11 +1829,14 @@ def report_recent_events(limit: int = 50) -> list:
             acc = r["account_id"] or "?"
             model = r["model"] or ""
             dur_s = f"{r['duration_ms'] / 1000:.1f}s" if r["duration_ms"] else ""
+            credits = r["bot_credits_charged"]
+            cost_s = f"{credits}кр" if credits else ""
             text = f"{user_label}  {op}"
             if model:
                 text += f"  [{model}]"
-            if dur_s:
-                text += f"  {dur_s}"
+            parts = [p for p in [dur_s, cost_s] if p]
+            if parts:
+                text += "  " + " · ".join(parts)
 
             ts = str(r["created_at"] or "")
             time_str = ts[11:16] if len(ts) >= 16 else ts

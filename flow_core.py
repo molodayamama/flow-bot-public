@@ -2068,6 +2068,7 @@ class AccountPool:
         if not disabled:
             h["fails"] = 0
             h["cooldown_until"] = 0.0
+        self._save()
         return True
 
     def set_video_allowed(self, account_id: str, allowed: bool) -> bool:
@@ -2235,6 +2236,13 @@ class AccountPool:
                     h = self._health.get(str(acc_id))
                     if h is not None:
                         h["video_allowed"] = bool(allowed)
+            # Восстанавливаем ручные отключения (disabled=True)
+            disabled_cfg = parsed.get("disabled", [])
+            if isinstance(disabled_cfg, list):
+                for acc_id in disabled_cfg:
+                    h = self._health.get(str(acc_id))
+                    if h is not None:
+                        h["disabled"] = True
 
     def _save(self) -> None:
         if self._path is None:
@@ -2246,9 +2254,16 @@ class AccountPool:
             for aid, h in self._health.items()
             if not h.get("video_allowed", True)
         }
+        # Сохраняем список вручную отключённых аккаунтов (disabled=True)
+        disabled_list = [
+            aid for aid, h in self._health.items()
+            if h.get("disabled", False)
+        ]
         payload: dict = {"assignments": self._assign}
         if video_cfg:
             payload["video_allowed"] = video_cfg
+        if disabled_list:
+            payload["disabled"] = disabled_list
         fd, tmp_name = tempfile.mkstemp(dir=str(self._path.parent), suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
