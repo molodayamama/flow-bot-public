@@ -1777,10 +1777,14 @@ def report_recent_events(limit: int = 50) -> list:
     """
     _OP_CHIP = {
         "image":              ("🖼",  "image"),
+        "image_edit":         ("🖼",  "image"),
+        "image_upscale":      ("🖼",  "image"),
         "video":              ("🎬",  "video"),
         "video_ingredients":  ("🎬",  "video"),
         "video_frames":       ("🎬",  "video"),
         "video_text":         ("🎬",  "video"),
+        "video_extend":       ("🎬",  "video"),
+        "video_edit":         ("🎬",  "video"),
     }
     try:
         with _LOCK:
