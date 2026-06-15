@@ -406,24 +406,34 @@ tr:hover td{background:var(--pz-surface-2)}
       <div id="tab-overview" class="tab-panel active">
         <div class="stats-grid">
           <div class="stat-card lime">
-            <div class="stat-label">Пользователей</div>
-            <div class="stat-value" id="stat-users">—</div>
-            <div class="stat-sub">всего в базе</div>
+            <div class="stat-label">Прибыль сегодня</div>
+            <div class="stat-value" id="stat-rev-today">—</div>
+            <div class="stat-sub">рублей за день</div>
           </div>
           <div class="stat-card cyan">
+            <div class="stat-label">Прибыль всего</div>
+            <div class="stat-value" id="stat-rev-total">—</div>
+            <div class="stat-sub">рублей за всё время</div>
+          </div>
+          <div class="stat-card warn">
             <div class="stat-label">Генераций сегодня</div>
             <div class="stat-value" id="stat-gens">—</div>
             <div class="stat-sub">картинки + видео</div>
           </div>
-          <div class="stat-card warn">
-            <div class="stat-label">Аккаунтов</div>
-            <div class="stat-value" id="stat-accounts">—</div>
-            <div class="stat-sub">в пуле / активных</div>
+          <div class="stat-card">
+            <div class="stat-label">Пользователей</div>
+            <div class="stat-value" id="stat-users">—</div>
+            <div class="stat-sub">всего в базе</div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Кредитов продано</div>
+            <div class="stat-label">Аккаунтов</div>
+            <div class="stat-value" id="stat-accounts">—</div>
+            <div class="stat-sub">активных / всего</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Кредитов сегодня</div>
             <div class="stat-value" id="stat-credits">—</div>
-            <div class="stat-sub">за всё время</div>
+            <div class="stat-sub">списано за день</div>
           </div>
         </div>
 
@@ -432,7 +442,10 @@ tr:hover td{background:var(--pz-surface-2)}
           <div style="color:var(--pz-faint);font-size:13px">Загрузка…</div>
         </div>
 
-        <div class="section-title">Последние события</div>
+        <div class="section-title" style="display:flex;align-items:center;gap:8px">
+          Последние события
+          <span id="live-dot" title="Обновляется автоматически" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--pz-cyan);flex-shrink:0;animation:pulse 2s ease-in-out infinite;opacity:.8"></span>
+        </div>
         <div class="card">
           <div class="log-list" id="log-list">
             <div style="color:var(--pz-faint);font-size:13px">Загрузка…</div>
@@ -784,8 +797,8 @@ tr:hover td{background:var(--pz-surface-2)}
               <div style="font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-faint);margin-bottom:8px">Последние 10</div>
               <div class="table-wrap">
                 <table>
-                  <thead><tr><th>Время</th><th>Операция</th><th>Модель</th><th>Тип</th></tr></thead>
-                  <tbody id="err-recent-tbody"><tr><td colspan="4" style="color:var(--pz-faint);padding:16px;text-align:center">—</td></tr></tbody>
+                  <thead><tr><th>Время</th><th>Аккаунт</th><th>Операция</th><th>Модель</th><th>Тип</th></tr></thead>
+                  <tbody id="err-recent-tbody"><tr><td colspan="5" style="color:var(--pz-faint);padding:16px;text-align:center">—</td></tr></tbody>
                 </table>
               </div>
             </div>
@@ -947,6 +960,10 @@ async function loadOverview() {
   document.getElementById('stat-gens').textContent     = fmt(stats.gens_today);
   document.getElementById('stat-accounts').textContent = accs.filter(a=>!a.disabled).length+'/'+accs.length;
   document.getElementById('stat-credits').textContent  = fmt(stats.credits_sold);
+  const todayRub = stats.revenue_today_rub ?? null;
+  const totalRub = stats.revenue_total_rub ?? null;
+  document.getElementById('stat-rev-today').textContent = todayRub != null ? Math.round(todayRub)+'₽' : '—';
+  document.getElementById('stat-rev-total').textContent = totalRub != null ? Math.round(totalRub)+'₽' : '—';
 
   document.getElementById('overview-accounts').innerHTML = `
     <div class="table-wrap">
@@ -986,14 +1003,21 @@ async function loadOverview() {
       </table>
     </div>`;
 
-  document.getElementById('log-list').innerHTML = log.map(e=>`
-    <div class="log-row">
+  renderLog(log);
+}
+
+function renderLog(log) {
+  document.getElementById('log-list').innerHTML = log.length ? log.map(e=>{
+    const accBadge = e.account
+      ? `<span class="mono" style="font-size:12px;color:var(--pz-cyan);flex-shrink:0;background:rgba(84,215,214,.08);border:1px solid rgba(84,215,214,.2);border-radius:4px;padding:1px 6px;margin-right:4px">${esc(e.account)}</span>`
+      : '';
+    return `<div class="log-row">
       <span class="log-time">${esc(e.time)}</span>
-      <span class="log-text">${e.text}</span>
-      ${e.account ? `<span class="mono" style="font-size:10px;color:var(--pz-faint);flex-shrink:0;padding:0 4px">${esc(e.account)}</span>` : ''}
+      ${accBadge}
+      <span class="log-text" style="font-size:13px">${e.text}</span>
       <span class="log-chip" style="background:rgba(${chipColor(e.color)},.12);color:var(--pz-${e.color||'muted'})">${esc(e.chip)}</span>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('') : '<div style="color:var(--pz-faint);font-size:13px;padding:12px 0">Событий пока нет</div>';
 }
 
 /* ── Accounts ──────────────────────────────────────── */
@@ -1380,18 +1404,35 @@ async function loadAnalytics() {
     document.getElementById('err-recent-tbody').innerHTML = errors.recent.length
       ? errors.recent.map(e=>`<tr>
           <td style="font-size:11px;color:var(--pz-faint)">${esc((e.created_at||'').substring(11,19))}</td>
+          <td class="mono" style="font-size:12px;color:var(--pz-cyan)">${esc(e.account_id||'—')}</td>
           <td class="mono" style="font-size:12px">${esc(e.operation_type||'—')}</td>
           <td class="mono" style="font-size:12px;color:var(--pz-muted)">${esc(e.model||'—')}</td>
           <td class="mono" style="font-size:12px;color:var(--pz-coral)">${esc(e.error_type||'—')}</td>
         </tr>`).join('')
-      : `<tr><td colspan="4" style="color:var(--pz-lime);padding:12px;text-align:center">Чисто 🎉</td></tr>`;
+      : `<tr><td colspan="5" style="color:var(--pz-lime);padding:12px;text-align:center">Чисто 🎉</td></tr>`;
   }
+}
+
+/* ── Live event polling ─────────────────────────────── */
+let _logPollTimer = null;
+function startLogPolling() {
+  if (_logPollTimer) return;
+  _logPollTimer = setInterval(async () => {
+    const dot = document.getElementById('live-dot');
+    const tab = document.querySelector('.tab-panel.active');
+    if (!tab || tab.id !== 'tab-overview') return;
+    if (dot) { dot.style.background='#fff'; dot.style.opacity='1'; }
+    const log = await api('GET','/log');
+    if (dot) { dot.style.background='var(--pz-cyan)'; dot.style.opacity='.8'; }
+    if (log) renderLog(log);
+  }, 15_000);
 }
 
 /* ── Init ──────────────────────────────────────────── */
 checkStatus();
 loadOverview();
 setInterval(checkStatus, 30_000);
+startLogPolling();
 </script>
 </body>
 </html>

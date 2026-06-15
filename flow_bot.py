@@ -3226,6 +3226,11 @@ _VID_FMT_NAMES = {"land": "16:9", "port": "9:16"}
 # вернуть фичу = поставить True (и обратно проверить через capture). См. HANDOFF.
 UPLOAD_VIDEO_EDIT_ENABLED = False
 
+# Payment method toggles — can be hot-patched via admin panel (config_store flags).
+# topup_method_kb() reads config_store at call-time so changes survive restarts.
+STARS_PAYMENT_ENABLED: bool = True
+SBP_PAYMENT_ENABLED: bool = True
+
 
 def _vid_clear(user_id: int) -> None:
     """Очистить только видео-ключи (сохранив vlast для повтора и vretry для ретрая)."""
@@ -3684,11 +3689,20 @@ def _robokassa_pack_label(pack_id: str) -> str:
 
 
 def topup_method_kb() -> types.InlineKeyboardMarkup:
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        [_menu_button("pay_stars", "m:pay:stars")],
-        [_menu_button("pay_robo", "m:pay:robo")],
-        [_menu_button("back", "m:balance")],
-    ])
+    try:
+        import config_store as _cs
+        _flags = _cs.get_section("flags")
+        stars_on = bool(_flags.get("stars_pay", STARS_PAYMENT_ENABLED))
+        sbp_on   = bool(_flags.get("sbp_pay",   SBP_PAYMENT_ENABLED))
+    except Exception:
+        stars_on, sbp_on = STARS_PAYMENT_ENABLED, SBP_PAYMENT_ENABLED
+    rows = []
+    if stars_on:
+        rows.append([_menu_button("pay_stars", "m:pay:stars")])
+    if sbp_on:
+        rows.append([_menu_button("pay_robo", "m:pay:robo")])
+    rows.append([_menu_button("back", "m:balance")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def topup_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:

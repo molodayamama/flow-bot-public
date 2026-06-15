@@ -1282,10 +1282,13 @@ def report_errors(days: int = 7) -> dict:
                     "operation_type": r["operation_type"],
                     "model": r["model"],
                     "error_type": r["error_type"],
+                    "account_id": r["account_id"],
+                    "user_id": r["user_id"],
                 }
                 for r in _rows(
                     conn,
-                    f"SELECT created_at, operation_type, model, error_type "
+                    f"SELECT created_at, operation_type, model, error_type, "
+                    f"account_id, user_id "
                     f"FROM flow_jobs WHERE status!='success' AND {since} "
                     f"ORDER BY id DESC LIMIT 10",
                     (window,),
@@ -1779,11 +1782,22 @@ def report_admin_stats() -> dict:
                 conn,
                 f"SELECT COALESCE(SUM(bot_credits_charged),0) FROM flow_jobs WHERE {tx_today}",
             ) or 0
+            revenue_today_rub = _scalar(
+                conn,
+                f"SELECT COALESCE(SUM(amount_rub),0) FROM transactions "
+                f"WHERE status='paid' AND {tx_today}",
+            ) or 0
+            revenue_total_rub = _scalar(
+                conn,
+                "SELECT COALESCE(SUM(amount_rub),0) FROM transactions WHERE status='paid'",
+            ) or 0
 
         return {
             "users": int(total_users),
             "gens_today": int(gens_today),
             "credits_sold": int(credits_sold),
+            "revenue_today_rub": float(revenue_today_rub),
+            "revenue_total_rub": float(revenue_total_rub),
         }
     except Exception:  # noqa: BLE001
         log.warning("report_admin_stats failed", exc_info=True)

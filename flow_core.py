@@ -2059,6 +2059,18 @@ class AccountPool:
         h["cooldown_until"] = self._clock() + self._cooldown_sec
         return True
 
+    def reset_failures(self, account_id: str) -> bool:
+        """Clear failure counter and cooldown; keep disabled state intact.
+
+        Returns True if account id is known, False otherwise.
+        """
+        h = self._health.get(account_id)
+        if h is None:
+            return False
+        h["fails"] = 0
+        h["cooldown_until"] = 0.0
+        return True
+
     def set_disabled(self, account_id: str, disabled: bool) -> bool:
         """Ручное отключение/включение аккаунта; True если id известен."""
         h = self._health.get(account_id)
