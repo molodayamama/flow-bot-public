@@ -945,19 +945,39 @@ async function loadOverview() {
   document.getElementById('stat-accounts').textContent = accs.filter(a=>!a.disabled).length+'/'+accs.length;
   document.getElementById('stat-credits').textContent  = fmt(stats.credits_sold);
 
-  document.getElementById('overview-accounts').innerHTML = accs.map(a=>`
-    <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--pz-line-faint)">
-      <span class="mono" style="width:80px;color:var(--pz-cyan)">${esc(a.id)}</span>
-      ${a.disabled ? '<span class="badge badge-red">выключен</span>' : a.failures>=3 ? '<span class="badge badge-yellow">кулдаун</span>' : '<span class="badge badge-green">OK</span>'}
-      <span style="font-size:12px;color:var(--pz-faint);flex:1">${esc(a.profile_dir)}</span>
-      <span style="font-size:12px;color:var(--pz-muted)">${a.active_jobs>0?`${a.active_jobs} задач`:a.last_success||''}</span>
-    </div>
-  `).join('');
+  document.getElementById('overview-accounts').innerHTML = accs.map(a=>{
+    const badge = a.disabled
+      ? '<span class="badge badge-red">выключен</span>'
+      : (a.fails||0)>=3
+        ? '<span class="badge badge-yellow">кулдаун</span>'
+        : '<span class="badge badge-green">OK</span>';
+    const total   = a.jobs_total   ?? 0;
+    const success = a.jobs_success ?? 0;
+    const fail    = a.jobs_fail    ?? 0;
+    const statsHtml = total > 0
+      ? `<span style="font-size:11px;color:var(--pz-faint);white-space:nowrap">
+           всего&nbsp;<b style="color:var(--pz-ink)">${fmt(total)}</b>
+           &nbsp;·&nbsp;<span style="color:var(--pz-green)">✓&nbsp;${fmt(success)}</span>
+           &nbsp;·&nbsp;<span style="color:var(--pz-coral)">✗&nbsp;${fmt(fail)}</span>
+         </span>`
+      : `<span style="font-size:11px;color:var(--pz-faint)">нет запросов</span>`;
+    const active = a.active_jobs > 0
+      ? `<span style="font-size:11px;color:var(--pz-cyan)">${a.active_jobs} активных</span>`
+      : '';
+    return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--pz-line-faint)">
+      <span class="mono" style="width:70px;color:var(--pz-cyan)">${esc(a.id)}</span>
+      ${badge}
+      ${a.video_allowed ? '<span style="font-size:10px;color:var(--pz-faint)">🎬</span>' : '<span style="font-size:10px;color:var(--pz-faint)">🖼</span>'}
+      <span style="flex:1">${statsHtml}</span>
+      ${active}
+    </div>`;
+  }).join('');
 
   document.getElementById('log-list').innerHTML = log.map(e=>`
     <div class="log-row">
       <span class="log-time">${esc(e.time)}</span>
       <span class="log-text">${e.text}</span>
+      ${e.account ? `<span class="mono" style="font-size:10px;color:var(--pz-faint);flex-shrink:0;padding:0 4px">${esc(e.account)}</span>` : ''}
       <span class="log-chip" style="background:rgba(${chipColor(e.color)},.12);color:var(--pz-${e.color||'muted'})">${esc(e.chip)}</span>
     </div>
   `).join('');

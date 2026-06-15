@@ -74,7 +74,14 @@ async def handle_log(request: web.Request) -> web.Response:
 async def handle_accounts_get(request: web.Request) -> web.Response:
     if _pool is None:
         return _json({"error": "pool not initialized"}, 503)
-    return _json(_pool.status())
+    accounts = _pool.status()
+    stats = metrics.report_account_stats()
+    for acc in accounts:
+        s = stats.get(acc["id"], {})
+        acc["jobs_total"]   = s.get("total",   0)
+        acc["jobs_success"] = s.get("success", 0)
+        acc["jobs_fail"]    = s.get("fail",    0)
+    return _json(accounts)
 
 
 async def handle_account_enable(request: web.Request) -> web.Response:

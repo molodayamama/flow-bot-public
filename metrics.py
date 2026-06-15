@@ -1771,51 +1771,110 @@ def report_admin_stats() -> dict:
 def report_recent_events(limit: int = 50) -> list:
     """Recent events for the admin Overview log panel.
 
-    Returns a list of ``{time, text, chip, color}`` dicts that admin.html
-    renders as log rows.  Newest first.  Falls back to ``[]`` on any error.
+    Sourced from flow_jobs (has account_id) joined with latest username from
+    events.  Returns ``{time, text, chip, color, account}`` dicts.
+    Newest first.  Falls back to ``[]`` on any error.
     """
-    _CHIP_MAP = {
-        "image_success":   ("🖼 ok",    "green"),
-        "image_requested": ("🖼 req",   "cyan"),
-        "image_fail":      ("🖼 fail",  "red"),
-        "image_failed":    ("🖼 fail",  "red"),
-        "video_success":   ("🎬 ok",    "green"),
-        "video_requested": ("🎬 req",   "cyan"),
-        "video_fail":      ("🎬 fail",  "red"),
-        "video_failed":    ("🎬 fail",  "red"),
-        "user_started":    ("👤 new",   "cyan"),
-        "payment_success": ("💳 paid",  "green"),
-        "payment_fail":    ("💳 fail",  "red"),
-        "credits_charged": ("💰 chg",   "muted"),
-        "credits_refunded":("💰 ref",   "yellow"),
-        "animate_started": ("🎬 anim",  "cyan"),
-        "error":           ("⚠ err",    "red"),
+    _OP_CHIP = {
+        "image":              ("🖼",  "image"),
+        "video":              ("🎬",  "video"),
+        "video_ingredients":  ("🎬",  "video"),
+        "video_frames":       ("🎬",  "video"),
+        "video_text":         ("🎬",  "video"),
     }
     try:
         with _LOCK:
             conn = _conn()
             rows = _rows(
                 conn,
-                "SELECT event_name, payload_json, created_at, username, user_id "
-                "FROM events ORDER BY id DESC LIMIT ?",
+                """
+                SELECT fj.account_id,
+                       fj.operation_type,
+                       fj.model,
+                       fj.status,
+                       fj.bot_credits_charged,
+                       fj.duration_ms,
+                       fj.created_at,
+                       fj.user_id,
+                       (SELECT e.username FROM events e
+                        WHERE e.user_id = fj.user_id AND e.username IS NOT NULL
+                        ORDER BY e.id DESC LIMIT 1) AS username
+                FROM flow_jobs fj
+                ORDER BY fj.id DESC LIMIT ?
+                """,
                 (int(limit),),
             )
         result = []
         for r in rows:
-            ev = r["event_name"] or ""
-            chip, color = _CHIP_MAP.get(ev, (ev[:8], "muted"))
+            op   = r["operation_type"] or ""
+            icon, _ = _OP_CHIP.get(op, ("⚙", "op"))
+            status = r["status"] or ""
+            if status == "success":
+                chip_label = f"{icon} ok"
+                color = "green"
+            elif status in ("fail", "error"):
+                chip_label = f"{icon} fail"
+                color = "red"
+            else:
+                chip_label = f"{icon} {status[:4]}"
+                color = "muted"
+
             username = r["username"] or ""
             uid = r["user_id"] or ""
-            label = f"@{username}" if username else f"#{uid}" if uid else "—"
+            user_label = f"@{username}" if username else f"#{uid}" if uid else "—"
+            acc = r["account_id"] or "?"
+            model = r["model"] or ""
+            dur_s = f"{r['duration_ms'] / 1000:.1f}s" if r["duration_ms"] else ""
+            text = f"{user_label}  {op}"
+            if model:
+                text += f"  [{model}]"
+            if dur_s:
+                text += f"  {dur_s}"
+
             ts = str(r["created_at"] or "")
             time_str = ts[11:16] if len(ts) >= 16 else ts
             result.append({
-                "time":  time_str,
-                "text":  f"{label}  {ev}",
-                "chip":  chip,
-                "color": color,
+                "time":    time_str,
+                "text":    text,
+                "chip":    chip_label,
+                "color":   color,
+                "account": acc,
             })
         return result
     except Exception:  # noqa: BLE001
         log.warning("report_recent_events failed", exc_info=True)
         return []
+
+
+def report_account_stats() -> dict:
+    """Per-account job counters for the admin Overview health panel.
+
+    Returns ``{account_id: {total, success, fail}}`` covering all time.
+    Falls back to ``{}`` on any error.
+    """
+    try:
+        with _LOCK:
+            conn = _conn()
+            rows = _rows(
+                conn,
+                """
+                SELECT account_id,
+                       COUNT(*) AS total,
+                       SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success,
+                       SUM(CASE WHEN status IN ('fail','error') THEN 1 ELSE 0 END) AS fail
+                FROM flow_jobs
+                WHERE account_id IS NOT NULL
+                GROUP BY account_id
+                """,
+            )
+        return {
+            r["account_id"]: {
+                "total":   int(r["total"]   or 0),
+                "success": int(r["success"] or 0),
+                "fail":    int(r["fail"]    or 0),
+            }
+            for r in rows
+        }
+    except Exception:  # noqa: BLE001
+        log.warning("report_account_stats failed", exc_info=True)
+        return {}
