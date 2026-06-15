@@ -1732,3 +1732,87 @@ def backfill_users_from_metrics() -> int:
     except Exception:  # noqa: BLE001
         log.warning("backfill_users_from_metrics failed", exc_info=True)
         return 0
+
+
+# ── admin panel convenience helpers ────────────────────────────────────────────
+
+def report_admin_stats() -> dict:
+    """Summary KPIs for the admin Overview tab.
+
+    Returns ``{users, gens_today, credits_sold}`` — the three numbers shown in
+    the header stats-grid of admin.html.  Falls back to zeros on any error.
+    """
+    try:
+        with _LOCK:
+            conn = _conn()
+            ev_today = "date(created_at,'localtime') = date('now','localtime')"
+            tx_today = "date(created_at,'localtime') = date('now','localtime')"
+
+            total_users = _scalar(conn, "SELECT COUNT(*) FROM users") or 0
+            gens_today = (
+                (_scalar(conn, f"SELECT COUNT(*) FROM events WHERE event_name='image_success' AND {ev_today}") or 0)
+                + (_scalar(conn, f"SELECT COUNT(*) FROM events WHERE event_name='video_success' AND {ev_today}") or 0)
+            )
+            credits_sold = _scalar(
+                conn,
+                f"SELECT COALESCE(SUM(bot_credits_charged),0) FROM flow_jobs WHERE {tx_today}",
+            ) or 0
+
+        return {
+            "users": int(total_users),
+            "gens_today": int(gens_today),
+            "credits_sold": int(credits_sold),
+        }
+    except Exception:  # noqa: BLE001
+        log.warning("report_admin_stats failed", exc_info=True)
+        return {"users": 0, "gens_today": 0, "credits_sold": 0}
+
+
+def report_recent_events(limit: int = 50) -> list:
+    """Recent events for the admin Overview log panel.
+
+    Returns a list of ``{time, text, chip, color}`` dicts that admin.html
+    renders as log rows.  Newest first.  Falls back to ``[]`` on any error.
+    """
+    _CHIP_MAP = {
+        "image_success":   ("🖼 ok",    "green"),
+        "image_requested": ("🖼 req",   "cyan"),
+        "image_fail":      ("🖼 fail",  "red"),
+        "video_success":   ("🎬 ok",    "green"),
+        "video_requested": ("🎬 req",   "cyan"),
+        "video_fail":      ("🎬 fail",  "red"),
+        "user_started":    ("👤 new",   "cyan"),
+        "payment_success": ("💳 paid",  "green"),
+        "payment_fail":    ("💳 fail",  "red"),
+        "credits_charged": ("💰 chg",   "muted"),
+        "credits_refunded":("💰 ref",   "yellow"),
+        "error":           ("⚠ err",    "red"),
+    }
+    try:
+        with _LOCK:
+            conn = _conn()
+            rows = _rows(
+                conn,
+                "SELECT event_name, payload, created_at, username, user_id "
+                "FROM events ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            )
+        result = []
+        for r in rows:
+            ev = r["event_name"] or ""
+            chip, color = _CHIP_MAP.get(ev, (ev[:8], "muted"))
+            username = r["username"] or ""
+            uid = r["user_id"] or ""
+            label = f"@{username}" if username else f"#{uid}" if uid else "—"
+            ts = str(r["created_at"] or "")
+            time_str = ts[11:16] if len(ts) >= 16 else ts
+            result.append({
+                "time":  time_str,
+                "text":  f"{label}  {ev}",
+                "chip":  chip,
+                "color": color,
+            })
+        return result
+    except Exception:  # noqa: BLE001
+        log.warning("report_recent_events failed", exc_info=True)
+        return []
