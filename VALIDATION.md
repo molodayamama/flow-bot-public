@@ -332,6 +332,11 @@ Video Ingredients/Frames (Flow API):
   and "download only new segment" all completed through Telegram and Google
   Flow. The r2v/frames request log should show `effective_model_key`, not the
   source UI model id.
+- Live 2026-06-15 evidence in `HANDOFF.md`: after the LF-002/LF-008 follow-up
+  deploy, Ingredients from `kotenok.jpg` and Frames from two `kotenok.jpg`
+  uploads both completed through the Telegram bot on the VPS. Provider logs
+  showed Reference and Frames HTTP 200, polling reached
+  `MEDIA_GENERATION_STATUS_SUCCESSFUL`, and Telegram delivery had `has_video`.
 - Native Video Edit uses the captured
   `video:batchAsyncGenerateVideoEditVideo` endpoint. It requires a stored source
   `mediaId` and `workflowId`; stale or incomplete video refs must fail closed
@@ -512,11 +517,23 @@ Live my-photo edit 403/failover classification:
   flow_core.py flow_bot.py tests\test_flow_accounts.py tests\test_flow_edit.py`,
   `python -m unittest discover -s tests -p "test_flow_accounts.py"`, and
   `python -m unittest discover -s tests -p "test_flow_edit.py"`.
-- A full LF-008 provider-backed retry can spend provider quota if a healthy
-  account succeeds. Run it only with operator approval: `m:myphoto`, upload a
-  safe test image, send a safe edit prompt, and confirm either successful media
-  delivery or no-charge temporary edit-limit copy while `/admin_accounts` shows
-  risky accounts in cooldown.
+- Approved 2026-06-15 LF-008 provider-backed retry confirmed the no-charge
+  temporary edit-limit path and `/admin_accounts` cooldown state when tested
+  image accounts returned provider unusual-activity 403s. A future healthy-image
+  account check can still confirm successful media delivery.
+
+Video account-risk cooldown:
+
+- After `LFX-014`, final video 401 after bounded refresh and all-action video
+  403 should return symbolic `account_risk` markers and immediately put the
+  account into bounded runtime cooldown through `_mark_video_account_failure()`.
+- Safe offline validation: `python -m py_compile flow_bot.py
+  tests\test_flow_menu.py` and `python -m unittest discover -s tests -p
+  "test_flow_menu.py"`.
+- Live recurrence validation is opportunistic: do not force provider failures.
+  If one occurs during normal video testing, inspect sanitized `/admin_accounts`
+  output and recent journal markers to confirm the account moved into cooldown
+  and the next video job routes elsewhere.
 
 Service restart logs:
 

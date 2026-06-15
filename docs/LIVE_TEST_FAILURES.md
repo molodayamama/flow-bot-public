@@ -153,8 +153,8 @@ Resolution:
 ### 2026-06-14 LF-002 text-to-video rejected with 403 on all captcha actions
 
 - Severity: S1
-- Status: mitigated; follow-up recommended
-- Next fix owner: follow-up fixer for automatic video-account quarantine
+- Status: mitigated; automatic runtime cooldown implemented
+- Next fix owner: future live tester for recurrence monitoring
 - Live check approved by: operator request in current Codex session
 - Environment: VPS `/opt/geminifree`; `geminifree-bot` active; `@photozhab_bot`
 - Surface: video text
@@ -220,9 +220,9 @@ Resolution:
 
 Residual risk:
 
-- Video account health is still mostly operator-controlled. Add automatic
-  per-account video quarantine or stronger health scoring if repeated 401/403
-  failures should be removed from routing without manual `/acc_vid_off`.
+- Strong video account-risk responses now place the account into bounded runtime
+  cooldown automatically. Persistent `/acc_vid_off` remains available for
+  operator-confirmed bad accounts.
 
 ### 2026-06-14 LF-003 VPS shell admin helper is absent
 
@@ -427,8 +427,8 @@ Resolution:
 ### 2026-06-14 LF-006 restart emits Event loop is closed cleanup noise
 
 - Severity: S3
-- Status: mitigated; live provider retry pending
-- Next fix owner: operator / future live tester
+- Status: verified fixed
+- Next fix owner: n/a
 - Live check approved by: operator request in current Codex session
 - Environment: VPS `/opt/geminifree`; `geminifree-bot` restart during deploy
 - Surface: service shutdown logs / Playwright cleanup
@@ -569,8 +569,8 @@ Resolution:
 ### 2026-06-14 LF-008 image edit provider unusual-activity on active accounts
 
 - Severity: S2
-- Status: open
-- Next fix owner: unassigned
+- Status: mitigated; clean live retry verified, healthy-account delivery pending
+- Next fix owner: operator for account health / future live tester
 - Live check approved by: operator request in current Codex session
 - Environment: VPS `/opt/geminifree`; `geminifree-bot`; approved live Telegram E2E
 - Surface: image edit / provider account health
@@ -619,6 +619,10 @@ Actual:
 - Both tested accounts returned all-action 403 with provider unusual-activity
   evidence. The bot preserved user credits and showed the temporary edit-limit
   copy, but no edited image was delivered.
+- A 2026-06-15 live retry after `LFX-010` again hit all-action provider
+  `PUBLIC_ERROR_UNUSUAL_ACTIVITY` on the tested image accounts. `/admin_accounts`
+  showed the affected accounts in bounded runtime cooldown, and the user-facing
+  result stayed the no-charge temporary edit-limit copy.
 
 Suspected cause:
 
@@ -640,9 +644,9 @@ Resolution:
 
 - Offline regression tests prove the symbolic provider-risk marker and immediate
   cooldown routing path.
-- A provider-backed live retry is still needed to confirm that future attempts
-  either route to a healthy account and deliver media, or continue to fail
-  cleanly with no charge while risky accounts are cooled down.
+- Provider-backed live retry on 2026-06-15 confirmed the clean no-charge failure
+  path and immediate runtime cooldown for risky image accounts. Successful media
+  delivery still depends on routing to a healthy provider account.
 
 ### 2026-06-14 LF-009 status command exposed backend diagnostics
 
@@ -785,9 +789,9 @@ Resolution:
 ## Closed Failures
 
 - `LF-001`: fixed by Flow upload API path and live-verified with `kotenok.jpg`.
-- `LF-002`: mitigated by bearer retry handling plus manual video quarantine for
-  `main` and `sub1`; live-verified video delivery on `sub2`. Automatic
-  quarantine remains a recommended follow-up.
+- `LF-002`: mitigated by bearer retry handling, manual video quarantine for
+  `main` and `sub1`, and automatic bounded runtime cooldown for future strong
+  video account-risk responses; live-verified video delivery on `sub2`.
 - `LF-003`: fixed by the `admin_help` shell wrapper and live-verified on the VPS.
 - `LF-004`: fixed by single-image result regen and live-verified on the VPS.
 - `LF-005`: fixed by preserving the my-photo upload state on plain text and

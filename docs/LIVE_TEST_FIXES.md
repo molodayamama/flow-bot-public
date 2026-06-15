@@ -184,6 +184,47 @@ Notes:
   per-account video quarantine if repeated video 401/403 failures should stop
   routing without operator action.
 
+### 2026-06-15 LFX-014 automatic video account-risk cooldown
+
+- Failure id: LF-002
+- Status: implemented; live recurrence monitoring pending
+- Priority: S1
+- Fix owner: current Codex session
+- Proposed by: operator follow-up request
+
+Root cause hypothesis:
+
+- Video 401 after bounded bearer refresh and all-action video 403 are strong
+  account-health signals. Waiting for the generic failure threshold can keep
+  routing new video jobs to a risky account.
+- Confidence: medium
+
+Implemented fix:
+
+- Return symbolic `account_risk` markers from `generate_video()` for final video
+  401 and all-action video 403.
+- Add `_mark_video_account_failure()` so strong video account-risk responses put
+  the account into the existing bounded runtime cooldown immediately.
+- Keep manual `/acc_vid_off` available for operator-confirmed long-lived account
+  problems; do not automatically persistently disable video routing.
+
+Owner files:
+
+- `flow_bot.py` - video error classification and account-health marking.
+- `tests/test_flow_menu.py` - source-level regression guard.
+
+Validation:
+
+- Offline syntax and targeted menu tests passed.
+- VPS deploy/restart validation should confirm the service starts cleanly.
+- Future live recurrence check: if a video account returns final 401 or
+  all-action 403, `/admin_accounts` should show that account in cooldown and the
+  next video job should route to another available video-capable account.
+
+Notes:
+
+- This is bounded runtime cooldown, not a permanent account disable.
+
 ### 2026-06-14 LFX-004 VPS admin_help wrapper
 
 - Failure id: LF-003
@@ -405,7 +446,7 @@ Notes:
 ### 2026-06-14 LFX-010 handle repeated image unusual-activity 403s
 
 - Failure id: LF-008
-- Status: implemented; live provider retry pending
+- Status: implemented; clean live retry verified
 - Priority: S2
 - Fix owner: current Codex session
 - Proposed by: current Codex live E2E session
@@ -438,12 +479,14 @@ Owner files:
 Validation:
 
 - Offline syntax and targeted account/edit tests passed.
-- Live/deploy validation may restart the service, but a safe `m:myphoto` edit
-  retry is still pending because it can spend provider quota if a healthy
-  account succeeds.
-- Future live check: retry a safe `m:myphoto` edit after cooldown or after
-  routing away from affected accounts; confirm either successful media delivery
-  or clean no-charge temporary-limit copy.
+- Live/deploy validation restarted the service and kept it active.
+- Approved 2026-06-15 `m:myphoto` retry with `kotenok.jpg` confirmed clean
+  no-charge temporary-limit copy when the tested image accounts returned
+  provider unusual-activity 403s, and `/admin_accounts` showed the risky accounts
+  in cooldown.
+- Future live check with a healthy image account should confirm successful media
+  delivery; repeated unusual-activity 403s remain an account-health issue, not a
+  code classification failure.
 
 Notes:
 

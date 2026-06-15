@@ -2312,11 +2312,17 @@ class FlowHttpClient:
         if not solved_any:
             return {"error": "Не удалось решить капчу для видео"}
         if gen_status == 401:
-            return {"error": "Bearer устарел, попробуйте ещё раз"}
+            return {
+                "error": "Bearer устарел, попробуйте ещё раз",
+                "account_risk": "video_auth",
+            }
         if gen_status == 429:
             return {"error": flow_copy.msg("rate_limited")}
         if gen_status == 403:
-            return {"error": "Сервис отклонил запрос видео (403) на всех action."}
+            return {
+                "error": "Сервис отклонил запрос видео (403) на всех action.",
+                "account_risk": "video_all_actions_403",
+            }
         if gen_status != 200:
             # TEMP (capture-driven): log the real API error body (no auth headers).
             log.warning("🎬 video %s non-200 status=%s body=%s",
@@ -4600,6 +4606,16 @@ def _mark_image_account_failure(account_id: str | None, result: dict | None = No
     account_pool.mark_failure(account_id)
 
 
+def _mark_video_account_failure(account_id: str | None, result: dict | None = None) -> None:
+    if not account_id:
+        return
+    if (result or {}).get("account_risk") in {"video_auth", "video_all_actions_403"}:
+        if account_pool.mark_cooldown(account_id):
+            log.warning("Video account %s cooled down after provider account-risk signal", account_id)
+        return
+    account_pool.mark_failure(account_id)
+
+
 async def _download_ref_image_bytes(ref: ImageRef) -> bytes | None:
     source = ref.source if isinstance(ref.source, dict) else {}
     tg_file_id = source.get("_tg_file_id")
@@ -6238,7 +6254,7 @@ async def _do_video_generate_and_send(
                     "🎬 gen failed: mode=%s model=%s aspect=%s err=%s",
                     vmode, model_id, aspect, str(result.get("error"))[:300],
                 )
-                account_pool.mark_failure(acc_id)
+                _mark_video_account_failure(acc_id, result)
                 await _fail_retry(i)
                 return
 
@@ -6343,7 +6359,7 @@ async def _do_video_generate_and_send(
             credit_store.refund(user_id, remaining)
         metrics.log_event("video_failed", user_id=user_id, source=vmode,
                           payload={"model": model_id, "reason": "exception"})
-        account_pool.mark_failure(acc_id)
+        _mark_video_account_failure(acc_id)
         metrics.log_flow_job(
             user_id=user_id, account_id=acc_id,
             operation_type=f"video_{vmode}", model=model_id, bot_credits_charged=0,

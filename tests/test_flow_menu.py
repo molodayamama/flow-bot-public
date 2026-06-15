@@ -729,6 +729,27 @@ class BotMenuWiringTests(unittest.TestCase):
         tail = self.source[end:self.source.index("if gen_status == 429:", end)]
         self.assertNotIn("await self.keeper._refresh_bearer()", tail)
 
+    def test_video_account_risk_cools_down_account(self) -> None:
+        start = self.source.index("async def generate_video")
+        end = self.source.index("if gen_status != 200:", start)
+        block = self.source[start:end]
+        self.assertIn('"account_risk": "video_auth"', block)
+        self.assertIn('"account_risk": "video_all_actions_403"', block)
+
+        helper = self.source[
+            self.source.index("def _mark_video_account_failure"):
+            self.source.index("async def _download_ref_image_bytes")
+        ]
+        self.assertIn('{"video_auth", "video_all_actions_403"}', helper)
+        self.assertIn("account_pool.mark_cooldown(account_id)", helper)
+        self.assertIn("account_pool.mark_failure(account_id)", helper)
+
+        video = self.source[
+            self.source.index("async def _do_video_generate_and_send"):
+            self.source.index("async def _video_download")
+        ]
+        self.assertIn("_mark_video_account_failure(acc_id, result)", video)
+
     def test_after_result_offers_video_balance_and_menu(self) -> None:
         block = self.source[self.source.index("async def _after_result"):][:700]
         for cb in ('"m:repeat"', '"m:gen"', '"m:vid"', '"m:balance"', '"m:menu"'):
