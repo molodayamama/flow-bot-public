@@ -3000,11 +3000,7 @@ async def ensure_user_project(user_id: int, *, account_id: str | None = None) ->
 
 
 def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
-    """Инлайн-кнопки действий для конкретной выданной картинки.
-
-    Упрощённый набор: правка · варианты · оживить · скачать.
-    Апскейл убран из основного потока (редко используется).
-    """
+    """Инлайн-кнопки под картинкой: Изменить · Повторить · Оживить."""
     B = types.InlineKeyboardButton
 
     def b(action: str, copy_key: str) -> types.InlineKeyboardButton:
@@ -3014,12 +3010,16 @@ def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
             label = f"{label} · {price} кр"
         return B(text=label, callback_data=action_callback_data(action, token))
 
+    edit_price = action_price("edit")
+    edit_label = f"✏️ Изменить · {edit_price} кр" if edit_price > 0 else "✏️ Изменить"
     animate_price = _vid_family_min_price("ing")
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
-            [b("edit", "edit"), b("vary", "revary")],
-            [B(text=f"🎬 Оживить · от {animate_price} кр", callback_data=f"an:img:{token}"),
-             b("download", "dl_raw")],
+            [
+                B(text=edit_label, callback_data=action_callback_data("edit", token)),
+                B(text="🔁 Повторить", callback_data="m:repeat"),
+                B(text=f"🎬 Оживить · от {animate_price} кр", callback_data=f"an:img:{token}"),
+            ],
         ]
     )
 
@@ -3327,20 +3327,22 @@ async def _boost_prompt_with_gemini(prompt: str) -> str | None:
         return None
 
 
+_IDEA_EMOJIS = ["🌺", "🌙", "🎭", "🦋", "🌊", "🎪", "⚡", "🌿", "🔮", "🎯"]
+
+
 def _prompt_picker_text(ideas: list[str]) -> str:
     """Текст экрана с идеями (шаг 1 визарда).
 
-    Каждая идея обёрнута в <code> — в Telegram это моноширинный блок
-    с кнопкой «Скопировать» по нажатию, что позволяет взять любой
-    готовый сюжет одним тапом без набора текста.
+    Каждая идея обёрнута в <code> (tap-to-copy) и предваряется эмодзи.
     """
     lines = [
         "✨ <b>Что рисуем?</b>\n",
         "Опиши идею текстом или выбери готовый сюжет ниже — "
         "нажми на него, скопируй и отправь 👇\n",
     ]
-    for idea in ideas[:3]:
-        lines.append(f"<code>{html.escape(idea)}</code>")
+    for i, idea in enumerate(ideas[:3]):
+        emoji = _IDEA_EMOJIS[i % len(_IDEA_EMOJIS)]
+        lines.append(f"<code>{emoji} {html.escape(idea)}</code>")
     return "\n".join(lines)
 
 
@@ -3348,7 +3350,7 @@ def _prompt_picker_kb(_ideas: list[str]) -> types.InlineKeyboardMarkup:
     """Клавиатура шага 1: только обновление идей и выход (пользователь пишет текстом)."""
     B = types.InlineKeyboardButton
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [B(text="✨ Ещё идеи →", callback_data="w:idea:next")],
+        [B(text="🔄 Ещё идеи", callback_data="w:idea:next")],
         [_menu_button("cancel", "w:cancel")],
     ])
 
@@ -3560,27 +3562,27 @@ def _video_can_extend(ref: VideoRef | None) -> bool:
 
 
 def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
-    """Клавиатура под результатом видео. Скачать всегда первым."""
+    """Клавиатура под результатом видео: Продлить · Изменить · Повторить."""
     B = types.InlineKeyboardButton
     ref = video_registry.get(vtoken)
 
+    action_row: list[types.InlineKeyboardButton] = []
+    if _video_can_extend(ref):
+        next_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
+        action_row.append(B(text=f"➕ Продлить · {next_price} кр", callback_data=f"v:extend:{vtoken}"))
+    if _video_can_edit(ref):
+        edit_price = action_price("video_prompt_edit")
+        action_row.append(B(text=f"✏️ Изменить · {edit_price} кр", callback_data=f"v:edit:{vtoken}"))
+    action_row.append(B(text="🔁 Повторить", callback_data="v:repeat"))
+
+    rows: list[list[types.InlineKeyboardButton]] = []
+    if action_row:
+        rows.append(action_row)
+    # Download в отдельной строке чтобы не загромождать основные кнопки
     dl_row = [B(text=L("vid_dl"), callback_data=f"v:dl:{vtoken}")]
     if ref and ref.mode == "extend" and ref.media_id:
         dl_row.append(B(text=L("vid_dl_seg"), callback_data=f"v:dl_seg:{vtoken}"))
-
-    action_row: list[types.InlineKeyboardButton] = []
-    if _video_can_edit(ref):
-        edit_price = action_price("video_prompt_edit")
-        action_row.append(B(text=f"{L('vid_edit')} · {edit_price} кр", callback_data=f"v:edit:{vtoken}"))
-    if _video_can_extend(ref):
-        next_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
-        action_row.append(B(text=f"{L('vid_extend')} · {next_price} кр", callback_data=f"v:extend:{vtoken}"))
-
-    rows = [dl_row]
-    if action_row:
-        rows.append(action_row)
-    if ref:
-        rows.append([_invite_button(ref.user_id)])
+    rows.append(dl_row)
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -3718,6 +3720,173 @@ async def show_video_frames(message: types.Message, *, user_id: int, edit: bool 
     else:
         sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
         st["vmsg_id"] = sent.message_id
+
+
+# ── Новый видео wizard (prompt-first) ───────────────────────────────────
+#
+# Новый flow: юзер пишет промпт (+ опционально фото) → бот показывает
+# настройки. Без фото → Omni Flash; с фото → Veo (качество тоглом).
+#
+_VID_STYLES: dict[str, tuple[str, str]] = {
+    "":       ("Никакой",           ""),
+    "cine":   ("Кинематографичный", ", cinematic style, film look, dramatic lighting"),
+    "anime":  ("Аниме",             ", anime style, Studio Ghibli animation"),
+    "3d":     ("3D",                ", 3D render, CGI animation, volumetric lighting"),
+    "photo":  ("Фотореализм",       ", photorealistic, 8K, professional photography"),
+    "retro":  ("Ретро",             ", vintage 80s, film grain, retro cinematography"),
+}
+
+_VID_OMNI_DURATIONS = [4, 6, 8, 10]
+_VID_OMNI_DUR_MODEL = {4: "omni-flash-4s", 6: "omni-flash-6s",
+                        8: "omni-flash-8s", 10: "omni-flash-10s"}
+
+_VID_VEO_QUALITY_CYCLE = ["lite", "fast", "quality"]
+_VID_VEO_QUAL_MODEL = {"lite": "veo-lite", "fast": "veo-fast", "quality": "veo-quality"}
+_VID_VEO_QUAL_NAMES = {"lite": "Lite", "fast": "Fast", "quality": "Quality"}
+
+
+def _nwiz_model(st: dict) -> str:
+    """Модель для нового wizard на основе текущего состояния."""
+    if st.get("vphoto"):
+        return _VID_VEO_QUAL_MODEL.get(st.get("vquality", "lite"), "veo-lite")
+    return _VID_OMNI_DUR_MODEL.get(st.get("vdur", 4), "omni-flash-4s")
+
+
+def _nwiz_price(st: dict) -> int:
+    mid = _nwiz_model(st)
+    vmode = "ingredients" if st.get("vphoto") else "text"
+    return video_price(mid, 1, vmode)
+
+
+def _nwiz_text(user_id: int) -> str:
+    st = wizard_state[user_id]
+    prompt = st.get("vprompt", "")
+    has_photo = bool(st.get("vphoto"))
+    vfmt = st.get("vfmt", VID_DEFAULT_FMT)
+    dur = st.get("vdur", 4)
+    style_key = st.get("vstyle", "")
+    style_name = _VID_STYLES.get(style_key, ("Никакой", ""))[0]
+    price = _nwiz_price(st)
+    credits = credit_store.balance(user_id)
+
+    lines: list[str] = []
+    if prompt:
+        lines.append(f"<blockquote>{html.escape(prompt[:300])}</blockquote>")
+    if has_photo:
+        lines.append("📎 <b>Фото (1 шт.) добавлено</b>")
+    lines.append("")
+    if has_photo:
+        quality = st.get("vquality", "lite")
+        q_name = _VID_VEO_QUAL_NAMES.get(quality, "Lite")
+        details = f"Формат: {_VID_FMT_NAMES.get(vfmt, vfmt)} · Veo {q_name}"
+    else:
+        details = f"Формат: {_VID_FMT_NAMES.get(vfmt, vfmt)} · Длительность: {dur}с"
+    if style_key:
+        details += f" · Стиль: {style_name}"
+    lines.append(details)
+    lines.append(f"💰 Стоимость: <b>{price} кр.</b> · Баланс: {credits} кр.")
+    return "\n".join(lines)
+
+
+def _nwiz_kb(user_id: int) -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    st = wizard_state[user_id]
+    has_photo = bool(st.get("vphoto"))
+    vfmt = st.get("vfmt", VID_DEFAULT_FMT)
+    dur = st.get("vdur", 4)
+    style_key = st.get("vstyle", "")
+    style_label = _VID_STYLES.get(style_key, ("Никакой", ""))[0]
+    price = _nwiz_price(st)
+
+    rows: list[list] = []
+
+    # Формат тоггл
+    next_fmt = "port" if vfmt == "land" else "land"
+    fmt_name = _VID_FMT_NAMES.get(vfmt, vfmt)
+    rows.append([B(text=f"🔄 Формат: {fmt_name}", callback_data=f"v:nfmt:{next_fmt}")])
+
+    if has_photo:
+        # Veo: качество тоггл
+        quality = st.get("vquality", "lite")
+        q_idx = _VID_VEO_QUALITY_CYCLE.index(quality) if quality in _VID_VEO_QUALITY_CYCLE else 0
+        next_q = _VID_VEO_QUALITY_CYCLE[(q_idx + 1) % len(_VID_VEO_QUALITY_CYCLE)]
+        q_name = _VID_VEO_QUAL_NAMES.get(quality, "Lite")
+        rows.append([B(text=f"🎥 Качество: {q_name}", callback_data=f"v:nqual:{next_q}")])
+    else:
+        # Omni: длительности
+        rows.append([_sel_btn(f"{d}с", dur == d, f"v:ndur:{d}") for d in _VID_OMNI_DURATIONS])
+
+    # Стили
+    style_btn = f"🎨 Стиль: {style_label}" if style_key else "🎨 Стили"
+    rows.append([B(text=style_btn, callback_data="v:nstyle:screen")])
+
+    # Убрать фото (если есть)
+    if has_photo:
+        rows.append([B(text="🗑 Убрать фотографию", callback_data="v:nremove_photo")])
+
+    # Изменить / Создать
+    rows.append([
+        B(text="✏️ Изменить", callback_data="v:nchange"),
+        B(text=f"🎬 Создать · {price} кр", callback_data="v:ngo"),
+    ])
+    rows.append([B(text=L("cancel"), callback_data="v:cancel")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _nwiz_styles_kb() -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    _STYLE_EMOJI = {"": "❌", "cine": "🎬", "anime": "🎌", "3d": "🖥", "photo": "📷", "retro": "📼"}
+    rows = [
+        [B(text=f"{_STYLE_EMOJI.get(k,'•')} {name}", callback_data=f"v:nstyle:{k}")]
+        for k, (name, _) in _VID_STYLES.items()
+    ]
+    rows.append([B(text="← Назад", callback_data="v:nstyle:back")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def show_video_prompt_input(message: types.Message, *, user_id: int, edit: bool):
+    """Экран 1 нового video wizard: просим описание видео."""
+    st = wizard_state[user_id]
+    _vid_clear(user_id)
+    st["vstep"] = "vprompt_input"
+    st["vmode"] = "text"
+    st.setdefault("vfmt", VID_DEFAULT_FMT)
+    st.setdefault("vdur", 4)
+    st.setdefault("vquality", "lite")
+    st.setdefault("vstyle", "")
+    text = (
+        "🎬 <b>Создать видео</b>\n\n"
+        "Опишите, что должно происходить в видео. "
+        "Можно приложить фото — тогда оживим его в движение 📎"
+    )
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=L("cancel"), callback_data="v:cancel")]
+    ])
+    if edit:
+        await _vid_edit(message, text, kb, user_id, parse_mode="HTML")
+    else:
+        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        st["vmsg_id"] = sent.message_id
+
+
+async def show_new_video_wizard(message: types.Message, *, user_id: int, edit: bool):
+    """Экран 2 нового video wizard: настройки."""
+    st = wizard_state[user_id]
+    st["vstep"] = "vnewwiz"
+    st["vawait"] = None
+    # Синхронизируем vmodel со state
+    st["vmodel"] = _nwiz_model(st)
+    st["vmode"] = "ingredients" if st.get("vphoto") else "text"
+    text = _nwiz_text(user_id)
+    kb = _nwiz_kb(user_id)
+    if edit:
+        await _vid_edit(message, text, kb, user_id, parse_mode="HTML")
+    else:
+        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        st["vmsg_id"] = sent.message_id
+
+
+# ── конец нового wizard ──────────────────────────────────────────────────
 
 
 def _vid_settings_text(user_id: int) -> str:
@@ -4061,7 +4230,9 @@ async def _send_one_image(
     )
     keyboard = _image_keyboard(token)
     try:
-        sent = await message.reply_photo(photo=url, caption=caption, reply_markup=keyboard)
+        sent = await message.reply_photo(
+            photo=url, caption=caption, reply_markup=keyboard, parse_mode="HTML"
+        )
         if sent and sent.photo:
             metrics.save_to_gallery(
                 user_id, sent.photo[-1].file_id, token=token, prompt=prompt[:400] if prompt else None
@@ -4082,6 +4253,7 @@ async def _send_one_image(
                         photo=BufferedInputFile(data, f"img_{index}.png"),
                         caption=caption,
                         reply_markup=keyboard,
+                        parse_mode="HTML",
                     )
                     if sent2 and sent2.photo:
                         metrics.save_to_gallery(
@@ -5009,19 +5181,19 @@ def _days_word(n: int) -> str:
 
 
 async def _after_result(message: types.Message, user_id: int, *, streak_note: str | None = None):
-    """Короткое меню-продолжение под результатом: баланс + повтор/новое/видео/меню."""
-    credits = credit_store.balance(user_id)
+    """Короткое меню после результата: создать ещё · видео · друг · меню."""
+    B = types.InlineKeyboardButton
     kb = types.InlineKeyboardMarkup(
         inline_keyboard=[
-            [_menu_button("repeat_last", "m:repeat")],
             [_menu_button("gen", "m:gen"), _menu_button("vid_gen", "m:vid")],
             [_invite_button(user_id)],
-            [_menu_button("balance", "m:balance")],
             [_menu_button("menu", "m:menu")],
         ]
     )
-    base_text = flow_copy.msg("after_image_screen", credits=credits)
-    text = f"{streak_note}\n\n{base_text}" if streak_note else base_text
+    text = streak_note or flow_copy.msg("after_image_screen",
+                                        credits=credit_store.balance(user_id))
+    if streak_note:
+        text = f"{streak_note}\n\n{flow_copy.msg('after_image_screen', credits=credit_store.balance(user_id))}"
     try:
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
@@ -5041,14 +5213,22 @@ async def _send_result_pairs(
 ):
     """Отправить набор картинок с кнопками действий (общий для всех режимов)."""
     total = len(pairs)
+    # Реферальная ссылка автора — под каждой картинкой
+    ref_link = _referral_link(user_id)
+    if BOT_USERNAME:
+        ref_text = f'\n\n<a href="{html.escape(ref_link)}">Создай своё в @{html.escape(BOT_USERNAME)}</a>'
+    else:
+        ref_text = ""
     for i, (url, img) in enumerate(pairs, 1):
+        counter = f" {i}/{total}" if total > 1 else ""
+        caption = f"{emoji}{counter} · {html.escape(prompt[:80])}{ref_text}"
         await _send_one_image(
             message,
             url=url,
             img=img,
             index=i,
             total=total,
-            caption=f"{emoji} {i}/{total} · {prompt[:80]}",
+            caption=caption,
             user_id=user_id,
             project_id=project_id,
             prompt=prompt,
@@ -5871,8 +6051,8 @@ async def on_menu_action(callback: types.CallbackQuery):
         await show_prompt_picker(msg, user_id=user_id, edit=True)
     elif data == "m:vid":
         await callback.answer()
-        pending_edits.pop(user_id, None)  # бросаем залипшее фото-правку при переходе в видео
-        await show_video_family(msg, user_id=user_id, edit=True)
+        pending_edits.pop(user_id, None)
+        await show_video_prompt_input(msg, user_id=user_id, edit=True)
     elif data == "m:animate":
         # «Оживить фото» из меню = видео из фото+текст (r2v): просим фото.
         await callback.answer()
@@ -6576,6 +6756,116 @@ async def on_video_action(callback: types.CallbackQuery):
         await callback.answer("Повторяю 🔁")
         await _video_repeat_last(callback, user_id)
         return
+
+    # ── Новый prompt-first видео-wizard (v:n* callbacks) ─────────────────
+    if data.startswith("v:n"):
+        # Формат тоггл
+        if data.startswith("v:nfmt:"):
+            fmt = data.split(":", 2)[2]
+            if fmt in ("land", "port"):
+                st["vfmt"] = fmt
+            await callback.answer()
+            await show_new_video_wizard(msg, user_id=user_id, edit=True)
+            return
+
+        # Длительность (Omni)
+        if data.startswith("v:ndur:"):
+            try:
+                dur = int(data.split(":", 2)[2])
+            except (ValueError, IndexError):
+                await callback.answer()
+                return
+            if dur in _VID_OMNI_DURATIONS:
+                st["vdur"] = dur
+            await callback.answer()
+            await show_new_video_wizard(msg, user_id=user_id, edit=True)
+            return
+
+        # Качество Veo — цикл по значениям
+        if data.startswith("v:nqual:"):
+            q = data.split(":", 2)[2]
+            if q in _VID_VEO_QUALITY_CYCLE:
+                st["vquality"] = q
+            await callback.answer()
+            await show_new_video_wizard(msg, user_id=user_id, edit=True)
+            return
+
+        # Стили: открыть экран выбора
+        if data == "v:nstyle:screen":
+            await callback.answer()
+            text_styles = _nwiz_text(user_id)
+            await _vid_edit(msg, text_styles, _nwiz_styles_kb(), user_id, parse_mode="HTML")
+            return
+
+        # Стили: выбрать стиль или вернуться назад
+        if data.startswith("v:nstyle:"):
+            key = data.split(":", 2)[2]
+            if key == "back":
+                await callback.answer()
+                await show_new_video_wizard(msg, user_id=user_id, edit=True)
+                return
+            if key in _VID_STYLES:
+                st["vstyle"] = key
+                await callback.answer(_VID_STYLES[key][0])
+            else:
+                await callback.answer()
+            await show_new_video_wizard(msg, user_id=user_id, edit=True)
+            return
+
+        # Убрать фотографию
+        if data == "v:nremove_photo":
+            st.pop("vphoto", None)
+            st["vmode"] = "text"
+            st["vmodel"] = _nwiz_model(st)
+            await callback.answer("Фото удалено")
+            await show_new_video_wizard(msg, user_id=user_id, edit=True)
+            return
+
+        # Изменить промпт — вернуться к вводу описания
+        if data == "v:nchange":
+            # Сохраним текущий промпт чтобы показать его в подсказке
+            await callback.answer()
+            await show_video_prompt_input(msg, user_id=user_id, edit=True)
+            return
+
+        # Создать видео
+        if data == "v:ngo":
+            prompt = (st.get("vprompt") or "").strip()
+            if not prompt:
+                await callback.answer("Сначала введите описание видео", show_alert=True)
+                return
+            # Применяем стилевой суффикс к промпту
+            style_key = st.get("vstyle", "")
+            style_suffix = _VID_STYLES.get(style_key, ("", ""))[1]
+            full_prompt = prompt + style_suffix
+            # Если прикреплено фото — передаём как референс-изображение
+            if st.get("vphoto"):
+                st["ving_photos"] = [st["vphoto"]]
+            # Финальная синхронизация модели/режима
+            st["vmodel"] = _nwiz_model(st)
+            st["vmode"] = "ingredients" if st.get("vphoto") else "text"
+            st["vcount"] = 1
+            # Проверка баланса
+            price = _nwiz_price(st)
+            if credit_store.balance(user_id) < price:
+                kb_low = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]
+                ])
+                await callback.answer()
+                await _vid_edit(
+                    msg,
+                    flow_copy.msg("low_balance", needed=price, have=credit_store.balance(user_id)),
+                    kb_low, user_id, parse_mode="HTML",
+                )
+                return
+            await callback.answer()
+            await _video_generate_and_send(msg, full_prompt, user_id=user_id)
+            return
+
+        # Неизвестный v:n* — просто игнорируем
+        await callback.answer()
+        return
+    # ── конец нового wizard callbacks ────────────────────────────────────
 
     # ⚡ Быстрый старт — omni-flash-4s, пропускаем пикер семейства и модели.
     if data == "v:quick":
@@ -7984,6 +8274,28 @@ async def handle_photo(message: types.Message):
         await show_video_frames(message, user_id=user_id, edit=False)
         return
 
+    # Новый wizard: фото на шаге ввода промпта или на экране настроек.
+    vstep = st.get("vstep")
+    if vstep in ("vprompt_input", "vnewwiz"):
+        caption_txt = (message.caption or "").strip()
+        if caption_txt:
+            st["vprompt"] = caption_txt
+        status_msg_nw = await message.answer(flow_copy.msg("uploading_photo"))
+        source_nw = await _upload_photo_source_from_message(
+            message, user_id=user_id, status_msg=status_msg_nw
+        )
+        try:
+            await status_msg_nw.delete()
+        except Exception:
+            pass
+        if source_nw:
+            st["vphoto"] = source_nw
+            # Есть фото → переключаемся на Veo
+            st["vmode"] = "ingredients"
+            st["vmodel"] = _nwiz_model(st)
+            await show_new_video_wizard(message, user_id=user_id, edit=(vstep == "vnewwiz"))
+        return
+
     # Video wizard expects text, not a photo.
     if vawait in ("vprompt", "vedit_prompt", "vextend_prompt"):
         await message.answer(flow_copy.msg("vid_text_only_hint"))
@@ -8133,6 +8445,19 @@ async def handle_plain_text(message: types.Message):
             await show_main_menu(message, user_id=user_id)
             return
         await _video_extend_and_send(message, ref, text, user_id=user_id)
+        return
+
+    # Новый wizard: пользователь ввёл описание (шаг 1).
+    if st.get("vstep") == "vprompt_input":
+        st["vprompt"] = text
+        await show_new_video_wizard(message, user_id=user_id, edit=True)
+        return
+
+    # Новый wizard: пользователь отредактировал промпт на экране настроек.
+    if st.get("vstep") == "vnewwiz" and st.get("vawait") == "vnchange":
+        st["vawait"] = None
+        st["vprompt"] = text
+        await show_new_video_wizard(message, user_id=user_id, edit=False)
         return
 
     # Видео-визард ждёт промпт.

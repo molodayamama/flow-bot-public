@@ -499,7 +499,7 @@ class FlowBotWiringStaticTests(unittest.TestCase):
 
     def test_edit_button_and_callback_handler_present(self) -> None:
         # Labels now come from flow_copy; the edit button uses the "edit" action.
-        self.assertIn('b("edit", "edit")', self.source)
+        self.assertIn('action_callback_data("edit", token)', self.source)
         self.assertIn("@dp.callback_query()", self.source)
         self.assertIn("async def on_image_action", self.source)
         self.assertIn("parse_action_callback", self.source)

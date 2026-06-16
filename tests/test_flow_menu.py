@@ -577,9 +577,10 @@ class BotMenuWiringTests(unittest.TestCase):
         block = self.source[start:start + 900]
         self.assertNotIn('b("mix"', block)          # «В микс» removed from results
         self.assertNotIn('b("up2x"', block)         # «Чёткость ×2» removed from results
-        # realup removed from post-result keyboard in UX cleanup (Point 5: cleaner action set)
-        self.assertIn('b("edit", "edit")', block)   # edit stays
-        self.assertIn('b("vary", "revary")', block) # variants stay
+        self.assertNotIn('b("vary"', block)         # Варианты removed from results (UX cleanup)
+        # Edit button wired via action_callback_data; repeat via m:repeat
+        self.assertIn('action_callback_data("edit", token)', block)
+        self.assertIn('"m:repeat"', block)          # Повторить stays
         self.assertIn('· {price} кр', block)        # price tags are credits, not Stars
 
     def test_realup_label_is_improve_quality(self) -> None:
@@ -806,8 +807,9 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_after_result_offers_video_balance_and_menu(self) -> None:
         block = self.source[self.source.index("async def _after_result"):][:700]
-        for cb in ('"m:repeat"', '"m:gen"', '"m:vid"', '"m:balance"', '"m:menu"'):
+        for cb in ('"m:gen"', '"m:vid"', '"m:menu"'):
             self.assertIn(cb, block)
+        self.assertIn("_invite_button", block)      # Позвать друга
         self.assertIn("after_image_screen", block)
         self.assertIn("credit_store.balance", block)
 
@@ -937,7 +939,7 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_animate_image_to_video_wired(self) -> None:
         # "Оживить фото" button under images + main-menu entry → r2v pipeline.
-        kb = self.source[self.source.index("def _image_keyboard"):][:900]
+        kb = self.source[self.source.index("def _image_keyboard"):][:1200]
         self.assertIn('f"an:img:{token}"', kb)
         self.assertIn('@dp.callback_query(F.data.startswith("an:"))', self.source)
         self.assertIn('data == "m:animate"', self.source)
