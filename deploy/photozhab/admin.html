@@ -3,412 +3,1494 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Photozhab · Operator Cockpit</title>
+  <title>Photozhab · Админка</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <style>
-:root{
-  color-scheme:dark;
-  --bg:#0f1210;--nav:#0a0c0b;--panel:#151916;--panel2:#1b211d;--line:rgba(244,241,232,.14);
-  --ink:#f4f1e8;--muted:#b7b4aa;--faint:#727067;--lime:#c8f25f;--cyan:#54d7d6;
-  --coral:#ff7b6d;--warn:#ffc24b;--shadow:0 16px 40px rgba(0,0,0,.44);
-  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--sans:Inter,ui-sans-serif,system-ui,sans-serif;
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap");
+:root {
+  color-scheme: dark;
+  --pz-paper:       #111312;
+  --pz-paper-2:     #171a18;
+  --pz-surface:     #151816;
+  --pz-surface-2:   #1b211d;
+  --pz-surface-3:   #1f2622;
+  --pz-void:        #0d0f0e;
+  --pz-ink:         #f4f1e8;
+  --pz-muted:       #b7b4aa;
+  --pz-faint:       #6f6e67;
+  --pz-lime:        #c8f25f;
+  --pz-lime-ink:    #101210;
+  --pz-cyan:        #54d7d6;
+  --pz-coral:       #ff7b6d;
+  --pz-warn:        #ffc24b;
+  --pz-line:        rgba(244,241,232,.15);
+  --pz-line-strong: rgba(244,241,232,.28);
+  --pz-line-faint:  rgba(244,241,232,.08);
+  --pz-panel:       rgba(18,21,20,.78);
+  --pz-glass:       rgba(17,19,18,.70);
+  --pz-grad-brand:  linear-gradient(135deg,#c8f25f,#54d7d6);
+  --font-sans:"Inter",ui-sans-serif,system-ui,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,monospace;
+  --r-xs:4px; --r-sm:6px; --r-md:8px; --r-lg:12px; --r-xl:18px; --r-pill:999px;
+  --shadow-sm:0 4px 14px rgba(0,0,0,.35);
+  --shadow-md:0 16px 40px rgba(0,0,0,.48);
+  --blur-chrome:blur(18px);
+  --ease-out:cubic-bezier(.22,.61,.36,1);
+  --dur-base:160ms;
+  --sidebar-w:220px;
 }
-*{box-sizing:border-box}html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans)}
-button,input,textarea,select{font:inherit}button{cursor:pointer}a{color:inherit;text-decoration:none}
-#app{display:flex;height:100vh;overflow:hidden}.sidebar{width:236px;flex:0 0 236px;background:var(--nav);border-right:1px solid var(--line);display:flex;flex-direction:column}
-.brand{padding:18px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center}.mark{width:30px;height:30px;border-radius:7px;background:linear-gradient(135deg,var(--lime),var(--cyan));color:#101210;display:grid;place-items:center;font-weight:900}.brand b{display:block}.brand span{font-size:11px;color:var(--faint)}
-.nav{padding:10px 8px;display:flex;flex-direction:column;gap:3px;overflow:auto}.nav button{border:0;background:transparent;color:var(--muted);text-align:left;border-radius:8px;padding:9px 10px;font-weight:650;display:flex;gap:9px;align-items:center}.nav button:hover,.nav button.active{background:var(--panel2);color:var(--ink)}
-.status{margin-top:auto;padding:14px;border-top:1px solid var(--line);display:grid;gap:8px}.status-pill{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:7px;background:var(--panel2);font-size:12px}.dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}.dot.ok{background:var(--lime);box-shadow:0 0 8px rgba(200,242,95,.55)}.dot.bad{background:var(--coral)}.dot.wait{background:var(--warn)}
-.main{flex:1;display:flex;flex-direction:column;min-width:0}.offline{display:none;background:rgba(255,123,109,.12);border-bottom:1px solid rgba(255,123,109,.35);color:var(--coral);padding:9px 24px;font-size:13px}.offline.show{display:block}.topbar{padding:14px 24px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;background:rgba(15,18,16,.82)}.title{font-size:19px;font-weight:850}.subtitle{font-size:13px;color:var(--faint);margin-top:2px}.content{padding:22px 24px;overflow:auto}
-.tab{display:none}.tab.active{display:block}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.toolbar-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.section-title{margin:20px 0 10px;color:var(--faint);font-size:12px;text-transform:uppercase;letter-spacing:.06em;font-weight:850}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.grid.two{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px}.card h3{margin:0 0 4px;font-size:15px}.card p{margin:0;color:var(--muted);font-size:13px;line-height:1.45}.metric{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:15px}.metric .k{color:var(--faint);font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:850}.metric .v{font-family:var(--mono);font-size:28px;font-weight:850;margin-top:5px}.metric .s{font-size:12px;color:var(--muted);margin-top:2px}.lime{color:var(--lime)}.cyan{color:var(--cyan)}.coral{color:var(--coral)}.warn{color:var(--warn)}
-.table-wrap{border:1px solid var(--line);border-radius:8px;overflow:auto;background:var(--panel)}table{width:100%;border-collapse:collapse;min-width:820px}th{background:#0b0d0c;color:var(--faint);font-size:11px;text-transform:uppercase;letter-spacing:.05em;text-align:left;padding:10px 12px}td{border-top:1px solid rgba(244,241,232,.08);padding:11px 12px;font-size:13px;vertical-align:top}tr:hover td{background:rgba(255,255,255,.025)}.mono{font-family:var(--mono);font-size:12px}.muted{color:var(--muted)}.faint{color:var(--faint)}.nowrap{white-space:nowrap}
-.badge{display:inline-flex;align-items:center;height:22px;border-radius:999px;padding:0 8px;font-size:11px;font-weight:800;border:1px solid var(--line);white-space:nowrap}.b-ok{color:var(--lime);background:rgba(200,242,95,.1);border-color:rgba(200,242,95,.3)}.b-warn{color:var(--warn);background:rgba(255,194,75,.1);border-color:rgba(255,194,75,.3)}.b-bad{color:var(--coral);background:rgba(255,123,109,.1);border-color:rgba(255,123,109,.3)}.b-info{color:var(--cyan);background:rgba(84,215,214,.09);border-color:rgba(84,215,214,.25)}.b-muted{color:var(--faint);background:var(--panel2)}
-.btn{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:7px;padding:8px 11px;font-weight:800;font-size:12px}.btn:hover{background:var(--panel2);color:var(--ink)}.btn.primary{background:var(--ink);color:#111;border-color:var(--ink)}.btn.danger{color:var(--coral);border-color:rgba(255,123,109,.35)}.btn:disabled{opacity:.45;cursor:not-allowed}.btn.small{padding:5px 8px}.seg{display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px}.seg button{border:0;border-radius:6px;background:transparent;color:var(--muted);padding:6px 9px;font-weight:800;font-size:12px}.seg button.active{background:var(--panel2);color:var(--ink)}
-.field{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:9px 10px;outline:none}.field:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(84,215,214,.12)}textarea.field{width:100%;min-height:104px;font-family:var(--mono);font-size:12px;line-height:1.45;resize:vertical}input.field{min-width:120px}.toggle{display:inline-flex;align-items:center;gap:7px}.toggle input{accent-color:#aee84b}
-.log{display:grid;gap:6px}.log-row{display:grid;grid-template-columns:48px auto 90px;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(244,241,232,.07)}.log-row:last-child{border-bottom:0}.log-time{font-family:var(--mono);font-size:12px;color:var(--faint)}.log-text{font-size:13px}.empty{padding:22px;color:var(--faint);text-align:center}.errorbox{border:1px solid rgba(255,123,109,.3);background:rgba(255,123,109,.08);color:var(--coral);padding:14px;border-radius:8px}.quick{display:flex;gap:8px;flex-wrap:wrap}.split{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px}.side-card{position:sticky;top:0;align-self:start}.drawer{position:fixed;top:0;right:-520px;width:min(520px,100vw);height:100vh;background:#111512;border-left:1px solid var(--line);box-shadow:var(--shadow);z-index:50;transition:right .18s ease;overflow:auto}.drawer.open{right:0}.drawer-head{position:sticky;top:0;background:#111512;border-bottom:1px solid var(--line);padding:14px 16px;display:flex;justify-content:space-between;gap:12px}.drawer-body{padding:16px}.stack{display:grid;gap:12px}.copy-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:14px}.copy-list{border:1px solid var(--line);border-radius:8px;overflow:auto;max-height:70vh;background:var(--panel)}.copy-key{padding:10px 12px;border-bottom:1px solid rgba(244,241,232,.08);cursor:pointer}.copy-key.active{background:var(--panel2)}.copy-key b{font-family:var(--mono);font-size:12px}.preview{background:#17221d;border:1px solid rgba(84,215,214,.22);border-radius:8px;padding:12px;line-height:1.45;font-size:14px;white-space:pre-wrap}.price-row{display:grid;grid-template-columns:1.3fr 110px 110px 130px 110px;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid rgba(244,241,232,.08)}.price-row:last-child{border-bottom:0}.diff{font-family:var(--mono);font-size:12px}.toastbox{position:fixed;right:18px;bottom:18px;display:grid;gap:8px;z-index:90}.toast{padding:11px 13px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);box-shadow:var(--shadow);font-size:13px}.toast.ok{color:var(--lime)}.toast.bad{color:var(--coral)}
-@media(max-width:900px){.sidebar{width:70px;flex-basis:70px}.brand div:last-child,.nav span.label,.status .status-text{display:none}.split,.copy-layout{grid-template-columns:1fr}.content{padding:16px}.price-row{grid-template-columns:1fr 90px}.price-row .hide-sm{display:none}}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--pz-paper);color:var(--pz-ink);font-family:var(--font-sans)}
+a{color:inherit;text-decoration:none}
+button{font-family:var(--font-sans);cursor:pointer}
+
+/* ── App shell ─────────────────────────────────────── */
+#app{display:flex;height:100vh;overflow:hidden}
+
+/* ── Sidebar ───────────────────────────────────────── */
+.sidebar{
+  width:var(--sidebar-w);flex-shrink:0;
+  display:flex;flex-direction:column;
+  background:var(--pz-void);
+  border-right:1px solid var(--pz-line);
+  overflow-y:auto;
+}
+.sb-brand{
+  display:flex;align-items:center;gap:10px;
+  padding:20px 16px 16px;
+  border-bottom:1px solid var(--pz-line-faint);
+}
+.sb-mark{
+  width:28px;height:28px;display:grid;place-items:center;
+  border-radius:var(--r-sm);background:var(--pz-grad-brand);
+  color:var(--pz-lime-ink);font-weight:900;font-size:14px;flex-shrink:0;
+}
+.sb-name{font-weight:800;font-size:15px}
+.sb-sub{font-size:11px;color:var(--pz-faint)}
+.sb-nav{flex:1;padding:12px 8px;display:flex;flex-direction:column;gap:2px}
+.sb-item{
+  display:flex;align-items:center;gap:10px;
+  padding:9px 10px;border-radius:var(--r-md);
+  border:none;background:transparent;color:var(--pz-muted);
+  font-size:14px;font-weight:500;text-align:left;width:100%;
+  transition:background var(--dur-base),color var(--dur-base);
+}
+.sb-item:hover{background:var(--pz-surface-2);color:var(--pz-ink)}
+.sb-item.active{background:var(--pz-surface-3);color:var(--pz-ink);font-weight:700}
+.sb-icon{font-size:16px;line-height:1;width:20px;text-align:center}
+.sb-footer{
+  padding:16px;border-top:1px solid var(--pz-line-faint);
+  display:flex;flex-direction:column;gap:8px;
+}
+.bot-status{
+  display:flex;align-items:center;gap:8px;
+  padding:8px 10px;border-radius:var(--r-sm);
+  background:var(--pz-surface-2);font-size:12px;
+}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--pz-faint);flex-shrink:0;transition:background .3s}
+.status-dot.online{background:var(--pz-lime);box-shadow:0 0 6px rgba(200,242,95,.6)}
+.status-dot.offline{background:var(--pz-coral)}
+.status-dot.connecting{background:var(--pz-warn);animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.site-link{
+  padding:7px 10px;border-radius:var(--r-sm);border:1px solid var(--pz-line);
+  background:transparent;color:var(--pz-faint);font-size:12px;
+  transition:all var(--dur-base);text-align:center;display:block;
+}
+.site-link:hover{background:var(--pz-surface-2);color:var(--pz-muted)}
+
+/* ── Main area ─────────────────────────────────────── */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.topbar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 24px;border-bottom:1px solid var(--pz-line);
+  background:rgba(17,19,18,.6);backdrop-filter:var(--blur-chrome);
+  position:sticky;top:0;z-index:10;
+}
+.page-title{font-size:18px;font-weight:800;letter-spacing:-.01em}
+.page-sub{font-size:13px;color:var(--pz-faint);margin-top:2px}
+.offline-banner{
+  padding:8px 24px;background:rgba(255,194,75,.12);
+  border-bottom:1px solid rgba(255,194,75,.3);
+  color:var(--pz-warn);font-size:13px;
+  display:none;align-items:center;gap:8px;
+}
+.content{flex:1;overflow-y:auto;padding:24px}
+
+/* ── Tabs ──────────────────────────────────────────── */
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+/* ── Cards & sections ──────────────────────────────── */
+.section-title{
+  font-size:13px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--pz-faint);margin-bottom:14px;
+}
+.card{
+  background:var(--pz-surface);border:1px solid var(--pz-line);
+  border-radius:var(--r-lg);padding:20px;margin-bottom:16px;
+}
+.card-title{font-size:16px;font-weight:700;margin-bottom:4px}
+.card-sub{font-size:13px;color:var(--pz-muted)}
+
+/* ── Stat cards ────────────────────────────────────── */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:24px}
+.stat-card{
+  background:var(--pz-surface);border:1px solid var(--pz-line);
+  border-radius:var(--r-lg);padding:18px;
+}
+.stat-label{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--pz-faint)}
+.stat-value{font-size:32px;font-weight:900;line-height:1.1;margin:6px 0 2px;font-family:var(--font-mono)}
+.stat-sub{font-size:12px;color:var(--pz-muted)}
+.stat-card.lime .stat-value{color:var(--pz-lime)}
+.stat-card.cyan .stat-value{color:var(--pz-cyan)}
+.stat-card.coral .stat-value{color:var(--pz-coral)}
+.stat-card.warn .stat-value{color:var(--pz-warn)}
+
+/* ── Table ─────────────────────────────────────────── */
+.table-wrap{border:1px solid var(--pz-line);border-radius:var(--r-lg);overflow:hidden;margin-bottom:16px}
+table{width:100%;border-collapse:collapse}
+th{
+  padding:10px 14px;text-align:left;font-size:11px;font-weight:800;
+  letter-spacing:.04em;text-transform:uppercase;color:var(--pz-faint);
+  background:var(--pz-void);border-bottom:1px solid var(--pz-line);
+}
+td{
+  padding:12px 14px;font-size:14px;
+  border-bottom:1px solid var(--pz-line-faint);vertical-align:middle;
+}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--pz-surface-2)}
+.mono{font-family:var(--font-mono);font-size:13px}
+
+/* ── Badges ────────────────────────────────────────── */
+.badge{
+  display:inline-flex;align-items:center;height:22px;padding:0 8px;
+  border-radius:var(--r-pill);font-size:11px;font-weight:700;
+}
+.badge-green{color:var(--pz-lime);background:rgba(200,242,95,.12);border:1px solid rgba(200,242,95,.3)}
+.badge-red{color:var(--pz-coral);background:rgba(255,123,109,.12);border:1px solid rgba(255,123,109,.3)}
+.badge-yellow{color:var(--pz-warn);background:rgba(255,194,75,.12);border:1px solid rgba(255,194,75,.3)}
+.badge-muted{color:var(--pz-faint);background:var(--pz-surface-2);border:1px solid var(--pz-line)}
+
+/* ── Toggle switch ─────────────────────────────────── */
+.toggle{position:relative;display:inline-block;width:40px;height:22px;flex-shrink:0}
+.toggle input{opacity:0;width:0;height:0}
+.toggle-slider{
+  position:absolute;inset:0;border-radius:11px;
+  background:var(--pz-surface-3);border:1px solid var(--pz-line);
+  cursor:pointer;transition:all .2s;
+}
+.toggle-slider:before{
+  content:"";position:absolute;height:16px;width:16px;
+  left:2px;top:2px;border-radius:50%;
+  background:var(--pz-muted);transition:.2s;
+}
+.toggle input:checked + .toggle-slider{background:rgba(200,242,95,.2);border-color:var(--pz-lime)}
+.toggle input:checked + .toggle-slider:before{transform:translateX(18px);background:var(--pz-lime)}
+.toggle input:disabled + .toggle-slider{opacity:.4;cursor:not-allowed}
+
+/* ── Buttons ───────────────────────────────────────── */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  padding:8px 16px;border-radius:var(--r-md);border:none;
+  font-family:var(--font-sans);font-size:13px;font-weight:700;
+  cursor:pointer;transition:all var(--dur-base) var(--ease-out);
+}
+.btn-primary{background:var(--pz-ink);color:#111}
+.btn-primary:hover{background:#fff;transform:translateY(-1px)}
+.btn-ghost{background:transparent;color:var(--pz-muted);border:1px solid var(--pz-line)}
+.btn-ghost:hover{background:var(--pz-surface-2);color:var(--pz-ink)}
+.btn-danger{background:transparent;color:var(--pz-coral);border:1px solid rgba(255,123,109,.3)}
+.btn-danger:hover{background:rgba(255,123,109,.1)}
+.btn-sm{padding:5px 10px;font-size:12px}
+.btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+
+/* ── Form fields ───────────────────────────────────── */
+.form-row{margin-bottom:14px}
+.form-label{display:block;font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-muted);margin-bottom:6px}
+.form-input,.form-textarea{
+  width:100%;padding:10px 12px;
+  border:1px solid var(--pz-line);border-radius:var(--r-md);
+  background:var(--pz-surface-2);color:var(--pz-ink);
+  font-family:var(--font-mono);font-size:13px;line-height:1.5;
+  outline:none;transition:border-color .15s;resize:vertical;
+}
+.form-input:focus,.form-textarea:focus{border-color:var(--pz-cyan);box-shadow:0 0 0 3px rgba(84,215,214,.12)}
+.form-input-num{width:90px}
+
+/* ── Copy editor layout ────────────────────────────── */
+.msg-list{display:flex;flex-direction:column;gap:8px}
+.msg-item{border:1px solid var(--pz-line);border-radius:var(--r-md);overflow:hidden}
+.msg-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:10px 14px;background:var(--pz-surface-2);cursor:pointer;
+  user-select:none;
+}
+.msg-key{font-family:var(--font-mono);font-size:12px;color:var(--pz-cyan)}
+.msg-preview{font-size:12px;color:var(--pz-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%;flex:1;margin-left:12px}
+.msg-arrow{color:var(--pz-faint);transition:transform .15s}
+.msg-header.open .msg-arrow{transform:rotate(90deg)}
+.msg-body{display:none;padding:12px 14px;background:var(--pz-surface)}
+.msg-body.visible{display:block}
+.msg-body .form-textarea{min-height:90px}
+
+/* ── Price grid ────────────────────────────────────── */
+.price-group{margin-bottom:24px}
+.price-group-title{font-size:13px;font-weight:700;color:var(--pz-muted);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--pz-line-faint)}
+.price-rows{display:flex;flex-direction:column;gap:4px}
+.price-row-item{
+  display:grid;grid-template-columns:1fr auto 160px;align-items:center;gap:12px;
+  padding:10px 14px;border-radius:var(--r-md);background:var(--pz-surface);
+  border:1px solid var(--pz-line-faint);
+}
+.price-row-name{font-size:14px}
+.price-row-badge{font-family:var(--font-mono);font-size:12px;color:var(--pz-faint)}
+
+/* ── Settings flags ────────────────────────────────── */
+.flag-list{display:flex;flex-direction:column;gap:4px}
+.flag-row{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 16px;border-radius:var(--r-md);
+  background:var(--pz-surface);border:1px solid var(--pz-line-faint);
+}
+.flag-name{font-size:14px;font-weight:600}
+.flag-desc{font-size:12px;color:var(--pz-muted);margin-top:3px}
+
+/* ── Toolbar ───────────────────────────────────────── */
+.toolbar{
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;
+  gap:10px;margin-bottom:16px;
+}
+
+/* ── Activity log ──────────────────────────────────── */
+.log-row{
+  display:flex;align-items:baseline;gap:12px;
+  padding:9px 0;border-bottom:1px solid var(--pz-line-faint);font-size:13px;
+}
+.log-row:last-child{border-bottom:none}
+.log-time{font-family:var(--font-mono);font-size:11px;color:var(--pz-faint);flex-shrink:0;width:80px}
+.log-text{color:var(--pz-muted);flex:1}
+.log-text b{color:var(--pz-ink)}
+.log-chip{
+  padding:1px 7px;border-radius:var(--r-pill);font-size:10px;font-weight:700;flex-shrink:0;
+}
+.log-filter-btn{
+  padding:2px 10px;border-radius:var(--r-pill);font-size:11px;font-weight:600;
+  border:1px solid var(--pz-line);background:var(--pz-surface-2);color:var(--pz-faint);
+  cursor:pointer;transition:all .15s;
+}
+.log-filter-btn.active,.log-filter-btn:hover{
+  background:rgba(84,215,214,.12);border-color:var(--pz-cyan);color:var(--pz-cyan);
+}
+
+/* ── Search bar ────────────────────────────────────── */
+.search-row{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.search-input{
+  flex:1;padding:9px 12px;border:1px solid var(--pz-line);border-radius:var(--r-md);
+  background:var(--pz-surface-2);color:var(--pz-ink);font-family:var(--font-sans);font-size:14px;
+  outline:none;transition:border-color .15s;
+}
+.search-input:focus{border-color:var(--pz-cyan);box-shadow:0 0 0 3px rgba(84,215,214,.12)}
+.search-input::placeholder{color:var(--pz-faint)}
+
+/* ── Pagination ────────────────────────────────────── */
+.pagination{display:flex;align-items:center;gap:6px;margin-top:12px;flex-wrap:wrap}
+.pg-btn{
+  padding:5px 11px;border-radius:var(--r-sm);border:1px solid var(--pz-line);
+  background:transparent;color:var(--pz-muted);font-size:13px;cursor:pointer;transition:all .15s;
+}
+.pg-btn:hover:not(:disabled){background:var(--pz-surface-2);color:var(--pz-ink)}
+.pg-btn.active{background:var(--pz-surface-3);color:var(--pz-ink);border-color:var(--pz-cyan);font-weight:700}
+.pg-btn:disabled{opacity:.35;cursor:not-allowed}
+.pg-info{font-size:12px;color:var(--pz-faint);margin-left:8px}
+
+/* ── Analytics layout ──────────────────────────────── */
+.analytics-section{margin-bottom:28px}
+.analytics-section .section-title{margin-bottom:12px}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:16px}
+.kpi{
+  background:var(--pz-surface);border:1px solid var(--pz-line-faint);
+  border-radius:var(--r-md);padding:14px;
+}
+.kpi-label{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--pz-faint);margin-bottom:4px}
+.kpi-value{font-size:24px;font-weight:900;font-family:var(--font-mono);line-height:1.1}
+.kpi-sub{font-size:11px;color:var(--pz-muted);margin-top:2px}
+.kpi.lime .kpi-value{color:var(--pz-lime)}
+.kpi.cyan .kpi-value{color:var(--pz-cyan)}
+.kpi.coral .kpi-value{color:var(--pz-coral)}
+.kpi.warn .kpi-value{color:var(--pz-warn)}
+
+/* ── Referral badges ───────────────────────────────── */
+.ref-status-joined{color:var(--pz-cyan);background:rgba(84,215,214,.1);border:1px solid rgba(84,215,214,.25)}
+.ref-status-rewarded{color:var(--pz-lime);background:rgba(200,242,95,.1);border:1px solid rgba(200,242,95,.25)}
+.ref-status-pending{color:var(--pz-faint);background:var(--pz-surface-2);border:1px solid var(--pz-line)}
+
+/* ── Toasts ────────────────────────────────────────── */
+#toasts{position:fixed;bottom:24px;right:24px;z-index:999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 16px;border-radius:var(--r-md);
+  font-size:13px;font-weight:600;pointer-events:auto;
+  box-shadow:var(--shadow-md);animation:slide-in .2s var(--ease-out);min-width:260px;max-width:360px;
+}
+@keyframes slide-in{from{opacity:0;transform:translateY(12px)}}
+.toast.success{background:#1a2d12;border:1px solid rgba(200,242,95,.3);color:var(--pz-lime)}
+.toast.error{background:#2d0e0a;border:1px solid rgba(255,123,109,.3);color:var(--pz-coral)}
+.toast.info{background:var(--pz-surface-2);border:1px solid var(--pz-line);color:var(--pz-ink)}
+.toast-fade{animation:fade-out .3s var(--ease-out) forwards}
+@keyframes fade-out{to{opacity:0;transform:translateY(8px)}}
   </style>
 </head>
 <body>
+
 <div id="app">
+
+  <!-- Sidebar -->
   <aside class="sidebar">
-    <div class="brand"><div class="mark">P</div><div><b>Photozhab</b><span>operator cockpit</span></div></div>
-    <nav class="nav" id="nav">
-      <button class="active" data-tab="ops">🟢 <span class="label">Ops Cockpit</span></button>
-      <button data-tab="accounts">🤖 <span class="label">Accounts</span></button>
-      <button data-tab="support">🛟 <span class="label">Support</span></button>
-      <button data-tab="users">👤 <span class="label">Users</span></button>
-      <button data-tab="revenue">💳 <span class="label">Revenue</span></button>
-      <button data-tab="prices">💰 <span class="label">Prices</span></button>
-      <button data-tab="copy">💬 <span class="label">UX Copy</span></button>
-      <button data-tab="settings">⚙ <span class="label">Settings</span></button>
+    <div class="sb-brand">
+      <div class="sb-mark">P</div>
+      <div>
+        <div class="sb-name">Photozhab</div>
+        <div class="sb-sub">Admin Panel</div>
+      </div>
+    </div>
+    <nav class="sb-nav">
+      <button class="sb-item active" data-tab="overview">
+        <span class="sb-icon">📊</span> Обзор
+      </button>
+      <button class="sb-item" data-tab="accounts">
+        <span class="sb-icon">🤖</span> Аккаунты
+      </button>
+      <button class="sb-item" data-tab="messages">
+        <span class="sb-icon">💬</span> Сообщения
+      </button>
+      <button class="sb-item" data-tab="labels">
+        <span class="sb-icon">🏷</span> Кнопки
+      </button>
+      <button class="sb-item" data-tab="prices">
+        <span class="sb-icon">💰</span> Цены
+      </button>
+      <button class="sb-item" data-tab="settings">
+        <span class="sb-icon">🔧</span> Настройки
+      </button>
+      <div style="height:1px;background:var(--pz-line-faint);margin:8px 0"></div>
+      <button class="sb-item" data-tab="users">
+        <span class="sb-icon">👤</span> Пользователи
+      </button>
+      <button class="sb-item" data-tab="referrals">
+        <span class="sb-icon">🤝</span> Рефералки
+      </button>
+      <button class="sb-item" data-tab="analytics">
+        <span class="sb-icon">📈</span> Аналитика
+      </button>
     </nav>
-    <div class="status">
-      <div class="status-pill"><span class="dot wait" id="status-dot"></span><span class="status-text" id="status-text">Проверка API</span></div>
-      <a class="btn small" href="/">← сайт</a>
+    <div class="sb-footer">
+      <div class="bot-status">
+        <div class="status-dot connecting" id="status-dot"></div>
+        <span id="status-text" style="color:var(--pz-muted)">Подключение…</span>
+      </div>
+      <a class="site-link" href="/">← На сайт</a>
     </div>
   </aside>
-  <main class="main">
-    <div class="offline" id="offline">API недоступен. Данные не подменяются демо-значениями, write-действия заблокированы. Не ответили: <span id="offline-list">-</span></div>
-    <header class="topbar">
-      <div><div class="title" id="page-title">Ops Cockpit</div><div class="subtitle" id="page-sub">Жив ли бот и способен ли он генерировать прямо сейчас</div></div>
-      <button class="btn" id="refresh">↻ Обновить</button>
-    </header>
-    <section class="content">
-      <div id="tab-ops" class="tab active"></div>
-      <div id="tab-accounts" class="tab"></div>
-      <div id="tab-support" class="tab"></div>
-      <div id="tab-users" class="tab"></div>
-      <div id="tab-revenue" class="tab"></div>
-      <div id="tab-prices" class="tab"></div>
-      <div id="tab-copy" class="tab"></div>
-      <div id="tab-settings" class="tab"></div>
-    </section>
-  </main>
+
+  <!-- Main -->
+  <div class="main">
+    <div class="offline-banner" id="offline-banner">
+      ⚠️ Бот не отвечает — показаны демо-данные
+    </div>
+    <div class="topbar">
+      <div>
+        <div class="page-title" id="page-title">Обзор</div>
+        <div class="page-sub" id="page-sub">Статус системы и быстрая статистика</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="refresh-btn">↻ Обновить</button>
+    </div>
+
+    <div class="content">
+
+      <!-- ── Tab: Overview ─────────────────────── -->
+      <div id="tab-overview" class="tab-panel active">
+        <div class="stats-grid">
+          <div class="stat-card lime">
+            <div class="stat-label">Прибыль сегодня</div>
+            <div class="stat-value" id="stat-rev-today">—</div>
+            <div class="stat-sub">рублей за день</div>
+          </div>
+          <div class="stat-card cyan">
+            <div class="stat-label">Прибыль всего</div>
+            <div class="stat-value" id="stat-rev-total">—</div>
+            <div class="stat-sub">рублей за всё время</div>
+          </div>
+          <div class="stat-card warn">
+            <div class="stat-label">Генераций сегодня</div>
+            <div class="stat-value" id="stat-gens">—</div>
+            <div class="stat-sub">картинки + видео</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Пользователей</div>
+            <div class="stat-value" id="stat-users">—</div>
+            <div class="stat-sub">всего в базе</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Аккаунтов</div>
+            <div class="stat-value" id="stat-accounts">—</div>
+            <div class="stat-sub">активных / всего</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Кредитов сегодня</div>
+            <div class="stat-value" id="stat-credits">—</div>
+            <div class="stat-sub">списано за день</div>
+          </div>
+        </div>
+
+        <div class="section-title">Здоровье аккаунтов</div>
+        <div class="card" id="overview-accounts">
+          <div style="color:var(--pz-faint);font-size:13px">Загрузка…</div>
+        </div>
+
+        <div class="section-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          Последние события
+          <span id="live-dot" title="Обновляется автоматически" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--pz-cyan);flex-shrink:0;animation:pulse 2s ease-in-out infinite;opacity:.8"></span>
+          <div id="log-filter-btns" style="display:flex;gap:4px;flex-wrap:wrap;margin-left:auto">
+            <button class="log-filter-btn active" data-filter="all" onclick="setLogFilter('all')">Все</button>
+            <button class="log-filter-btn" data-filter="image" onclick="setLogFilter('image')">🖼 Картинки</button>
+            <button class="log-filter-btn" data-filter="video" onclick="setLogFilter('video')">🎬 Видео</button>
+            <button class="log-filter-btn" data-filter="new" onclick="setLogFilter('new')">👤 Новые</button>
+            <button class="log-filter-btn" data-filter="topup" onclick="setLogFilter('topup')">💳 Оплаты</button>
+            <button class="log-filter-btn" data-filter="system" onclick="setLogFilter('system')">⚙ Система</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="log-list" id="log-list">
+            <div style="color:var(--pz-faint);font-size:13px">Загрузка…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Tab: Accounts ─────────────────────── -->
+      <div id="tab-accounts" class="tab-panel">
+        <div class="toolbar">
+          <div>
+            <div class="card-title">Пул аккаунтов</div>
+            <div class="card-sub">Управление Google-аккаунтами бота</div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="loadAccounts()">↻ Обновить</button>
+        </div>
+        <div class="table-wrap">
+          <table id="accounts-table">
+            <thead>
+              <tr>
+                <th>ID / Профиль</th>
+                <th>Статус</th>
+                <th>Задания</th>
+                <th>Отказы</th>
+                <th>Видео</th>
+                <th>Активен</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="accounts-tbody">
+              <tr><td colspan="7" style="color:var(--pz-faint);text-align:center;padding:24px">Загрузка…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="font-size:12px;color:var(--pz-faint)">Изменения применяются мгновенно — рестарт бота не нужен.</p>
+      </div>
+
+      <!-- ── Tab: Messages ─────────────────────── -->
+      <div id="tab-messages" class="tab-panel">
+        <div class="toolbar">
+          <div>
+            <div class="card-title">Тексты сообщений</div>
+            <div class="card-sub">MESSAGES из flow_copy.py</div>
+          </div>
+          <button class="btn btn-primary" onclick="saveMessages()">💾 Сохранить все</button>
+        </div>
+        <div class="msg-list" id="messages-list">
+          <div style="color:var(--pz-faint);font-size:13px">Загрузка…</div>
+        </div>
+      </div>
+
+      <!-- ── Tab: Labels ───────────────────────── -->
+      <div id="tab-labels" class="tab-panel">
+        <div class="toolbar">
+          <div>
+            <div class="card-title">Подписи кнопок</div>
+            <div class="card-sub">LABELS из flow_copy.py</div>
+          </div>
+          <button class="btn btn-primary" onclick="saveLabels()">💾 Сохранить все</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Ключ</th><th>Текущий текст</th><th>Редактировать</th></tr>
+            </thead>
+            <tbody id="labels-tbody">
+              <tr><td colspan="3" style="color:var(--pz-faint);text-align:center;padding:24px">Загрузка…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── Tab: Prices ───────────────────────── -->
+      <div id="tab-prices" class="tab-panel">
+        <div class="toolbar">
+          <div>
+            <div class="card-title">Цены в кредитах</div>
+            <div class="card-sub">Стоимость каждого действия в боте</div>
+          </div>
+          <button class="btn btn-primary" onclick="savePrices()">💾 Сохранить</button>
+        </div>
+        <div id="prices-content">
+          <div style="color:var(--pz-faint);font-size:13px">Загрузка…</div>
+        </div>
+      </div>
+
+      <!-- ── Tab: Settings ─────────────────────── -->
+      <div id="tab-settings" class="tab-panel">
+        <div class="toolbar">
+          <div>
+            <div class="card-title">Настройки бота</div>
+            <div class="card-sub">Флаги фич и глобальные параметры</div>
+          </div>
+          <button class="btn btn-primary" onclick="saveSettings()">💾 Сохранить</button>
+        </div>
+
+        <div class="section-title">Параметры</div>
+        <div class="card" style="margin-bottom:20px">
+          <div class="form-row">
+            <label class="form-label">Стартовые кредиты</label>
+            <div style="display:flex;align-items:center;gap:12px">
+              <input type="number" class="form-input form-input-num" id="starter-credits" min="0" max="9999" step="5" value="30">
+              <span style="font-size:13px;color:var(--pz-muted)">кр. новому пользователю при /start</span>
+            </div>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Кулдаун аккаунта при отказах</label>
+            <div style="display:flex;align-items:center;gap:12px">
+              <input type="number" class="form-input form-input-num" id="cooldown-sec" min="60" max="7200" step="60" value="600">
+              <span style="font-size:13px;color:var(--pz-muted)">сек.</span>
+            </div>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Макс. отказов до кулдауна</label>
+            <div style="display:flex;align-items:center;gap:12px">
+              <input type="number" class="form-input form-input-num" id="max-failures" min="1" max="20" step="1" value="3">
+              <span style="font-size:13px;color:var(--pz-muted)">подряд</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-title">Флаги фич</div>
+        <div class="flag-list" id="flags-list"></div>
+      </div>
+
+      <!-- ── Tab: Users ────────────────────────────── -->
+      <div id="tab-users" class="tab-panel">
+        <div class="toolbar">
+          <div>
+            <div class="card-title">Пользователи</div>
+            <div class="card-sub">База данных юзеров и их балансы</div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="loadUsers(1)">↻ Обновить</button>
+        </div>
+        <div class="stats-grid" style="margin-bottom:20px">
+          <div class="stat-card lime">
+            <div class="stat-label">Всего</div>
+            <div class="stat-value" id="u-total">—</div>
+            <div class="stat-sub">в базе</div>
+          </div>
+          <div class="stat-card cyan">
+            <div class="stat-label">DAU</div>
+            <div class="stat-value" id="u-dau">—</div>
+            <div class="stat-sub">сегодня активны</div>
+            <div style="font-size:9px;color:var(--pz-faint);margin-top:2px;text-transform:none;letter-spacing:0">Daily Active Users</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">WAU</div>
+            <div class="stat-value" id="u-wau">—</div>
+            <div class="stat-sub">за 7 дней</div>
+            <div style="font-size:9px;color:var(--pz-faint);margin-top:2px;text-transform:none;letter-spacing:0">Weekly Active Users</div>
+          </div>
+          <div class="stat-card warn">
+            <div class="stat-label">MAU</div>
+            <div class="stat-value" id="u-mau">—</div>
+            <div class="stat-sub">за 30 дней</div>
+            <div style="font-size:9px;color:var(--pz-faint);margin-top:2px;text-transform:none;letter-spacing:0">Monthly Active Users</div>
+          </div>
+        </div>
+        <div class="search-row">
+          <input id="users-search" class="search-input" type="text" placeholder="Поиск по username или user_id…" oninput="usersSearchDebounce()">
+          <span id="users-count-label" style="font-size:13px;color:var(--pz-faint);white-space:nowrap"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>User ID</th>
+                <th>Username</th>
+                <th>Имя</th>
+                <th>Баланс</th>
+                <th>Выдано</th>
+                <th>Канал</th>
+                <th>Активен</th>
+                <th>Регистрация</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="users-tbody">
+              <tr><td colspan="9" style="color:var(--pz-faint);text-align:center;padding:32px">Загрузка…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pagination" id="users-pagination"></div>
+      </div>
+
+      <!-- ── Tab: Referrals ──────────────────────── -->
+      <div id="tab-referrals" class="tab-panel">
+        <div class="toolbar">
+          <div>
+            <div class="card-title">Реферальная программа</div>
+            <div class="card-sub">Приглашения, вознаграждения, топ рефереров</div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="loadReferrals()">↻ Обновить</button>
+        </div>
+        <div class="stats-grid" style="margin-bottom:20px">
+          <div class="stat-card lime">
+            <div class="stat-label">Всего</div>
+            <div class="stat-value" id="ref-total">—</div>
+            <div class="stat-sub">реферальных связей</div>
+          </div>
+          <div class="stat-card cyan">
+            <div class="stat-label">Пришли</div>
+            <div class="stat-value" id="ref-joined">—</div>
+            <div class="stat-sub">зарегистрировались</div>
+          </div>
+          <div class="stat-card warn">
+            <div class="stat-label">Вознаграждены</div>
+            <div class="stat-value" id="ref-rewarded">—</div>
+            <div class="stat-sub">заплатили</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Кредитов выдано</div>
+            <div class="stat-value" id="ref-credits">—</div>
+            <div class="stat-sub">реферерам</div>
+          </div>
+        </div>
+
+        <div class="section-title">Топ рефереров</div>
+        <div class="table-wrap" style="margin-bottom:20px">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Реферер</th>
+                <th>Приглашено</th>
+                <th>Выручка от них</th>
+                <th>Кредитов получил</th>
+              </tr>
+            </thead>
+            <tbody id="top-ref-tbody">
+              <tr><td colspan="5" style="color:var(--pz-faint);text-align:center;padding:24px">Загрузка…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section-title">Последние реферальные записи</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Реферер</th>
+                <th>Приглашённый</th>
+                <th>Статус</th>
+                <th>Кредиты</th>
+                <th>Создан</th>
+                <th>Вознагражд.</th>
+              </tr>
+            </thead>
+            <tbody id="ref-tbody">
+              <tr><td colspan="7" style="color:var(--pz-faint);text-align:center;padding:24px">Загрузка…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── Tab: Analytics ─────────────────────── -->
+      <div id="tab-analytics" class="tab-panel">
+        <div class="toolbar">
+          <div>
+            <div class="card-title">Аналитика</div>
+            <div class="card-sub">Сегодня · Выручка · Нагрузка · Каналы · Ошибки</div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="loadAnalytics()">↻ Обновить</button>
+        </div>
+
+        <div class="analytics-section">
+          <div class="section-title">Сегодня</div>
+          <div class="kpi-grid" id="kpi-today">
+            <div class="kpi"><div class="kpi-label">Загрузка…</div></div>
+          </div>
+        </div>
+
+        <div class="analytics-section">
+          <div class="section-title">Выручка · 30 дней</div>
+          <div class="kpi-grid" id="kpi-revenue" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">
+            <div class="kpi"><div class="kpi-label">Загрузка…</div></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div>
+              <div style="font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-faint);margin-bottom:8px">По пакетам</div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Пакет</th><th>Кол-во</th><th>₽</th><th>Stars</th></tr></thead>
+                  <tbody id="rev-packages-tbody"><tr><td colspan="4" style="color:var(--pz-faint);padding:16px;text-align:center">—</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <div style="font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-faint);margin-bottom:8px">По дням (последние 14)</div>
+              <!-- Bar chart -->
+              <div id="rev-chart" style="margin-bottom:12px;height:80px;display:flex;align-items:flex-end;gap:3px"></div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Дата</th><th>₽</th><th>Платежи</th></tr></thead>
+                  <tbody id="rev-days-tbody"><tr><td colspan="3" style="color:var(--pz-faint);padding:16px;text-align:center">—</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="analytics-section">
+          <div class="section-title">Нагрузка на бэкенд</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div>
+              <div style="font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-faint);margin-bottom:8px">По операциям</div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Тип</th><th>Всего</th><th>✅</th><th>❌</th><th>Ср. мс</th></tr></thead>
+                  <tbody id="flow-ops-tbody"><tr><td colspan="5" style="color:var(--pz-faint);padding:16px;text-align:center">—</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <div style="font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-faint);margin-bottom:8px">Расход кредитов по моделям</div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Модель</th><th>Задач</th><th>Кр. бота</th></tr></thead>
+                  <tbody id="flow-models-tbody"><tr><td colspan="3" style="color:var(--pz-faint);padding:16px;text-align:center">—</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="analytics-section">
+          <div class="section-title">Каналы привлечения</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Канал</th><th>Юзеров</th><th>Платящих</th><th>Stars</th><th>₽</th></tr></thead>
+              <tbody id="channels-tbody"><tr><td colspan="5" style="color:var(--pz-faint);padding:16px;text-align:center">—</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="analytics-section">
+          <div class="section-title">Ошибки · 7 дней</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div>
+              <div style="font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-faint);margin-bottom:8px">По типу</div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Тип ошибки</th><th>Кол-во</th></tr></thead>
+                  <tbody id="err-types-tbody"><tr><td colspan="2" style="color:var(--pz-faint);padding:16px;text-align:center">—</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <div style="font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-faint);margin-bottom:8px">Последние 10</div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Время</th><th>Аккаунт</th><th>Операция</th><th>Модель</th><th>Тип</th></tr></thead>
+                  <tbody id="err-recent-tbody"><tr><td colspan="5" style="color:var(--pz-faint);padding:16px;text-align:center">—</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
 </div>
-<aside class="drawer" id="drawer"><div class="drawer-head"><b id="drawer-title">Detail</b><button class="btn small" onclick="closeDrawer()">✕</button></div><div class="drawer-body" id="drawer-body"></div></aside>
-<div class="toastbox" id="toasts"></div>
+
+<div id="toasts"></div>
 
 <script>
 const API_BASE = '/api/admin';
-const state = { tab:'ops', offline:false, failed:new Set(), copyKind:'message', copyItems:[], selectedCopy:null, supportStatus:'open', usersPage:1, usersQ:'' };
-const tabs = {
-  ops:['Ops Cockpit','Жив ли бот и способен ли он генерировать прямо сейчас',loadOps],
-  accounts:['Accounts Cockpit','Производственная мощность Flow/browser аккаунтов',loadAccounts],
-  support:['Support Cockpit','Тикеты, пользовательский контекст, платежи и последние генерации',loadSupport],
-  users:['Users Debug','Кто платил, у кого проблемы, баланс и последние действия',()=>loadUsers(1)],
-  revenue:['Revenue Cockpit','Деньги, платежи, каналы и рефералка',loadRevenue],
-  prices:['Financial Console','Цены, overrides и защита от случайных изменений',loadPrices],
-  copy:['UX Copy Console','Тексты, кнопки, preview и placeholder validation',loadCopy],
-  settings:['Settings & Flags','Флаги фич и параметры с подтверждением опасных изменений',loadSettings],
+
+/* ── Demo fallback data ────────────────────────────── */
+const DEMO = {
+  stats: { users:247, gens_today:83, credits_sold:14870 },
+  accounts: [
+    { id:'acc1', profile_dir:'./google_profile',   disabled:false, video_allowed:true,  failures:0, active_jobs:2, last_success:'только что' },
+    { id:'acc2', profile_dir:'./google_profile_2', disabled:false, video_allowed:false, failures:1, active_jobs:0, last_success:'7 мин назад' },
+    { id:'acc3', profile_dir:'./google_profile_3', disabled:true,  video_allowed:false, failures:3, active_jobs:0, last_success:'2 ч назад' },
+  ],
+  log: [
+    { time:'14:32:11', text:'Пользователь <b>@anon123</b> сгенерировал картинку', chip:'IMG', color:'lime' },
+    { time:'14:31:04', text:'Пополнение баланса <b>100 кр.</b> (СБП)', chip:'PAY', color:'cyan' },
+    { time:'14:29:55', text:'Аккаунт <b>acc3</b> ушёл в кулдаун (3 отказа)', chip:'ERR', color:'coral' },
+    { time:'14:27:22', text:'Создано видео Veo Lite', chip:'VID', color:'warn' },
+    { time:'14:26:10', text:'Новый пользователь зарегистрирован', chip:'NEW', color:'lime' },
+  ],
+  messages: {
+    welcome: "👋 Привет! Я делаю картинки и видео по описанию — просто скажи словами, что хочешь увидеть.\n\n🎨 <b>Картинка по тексту.</b> Опиши идею — пришлю готовое изображение.\n🎬 <b>Видео.</b> Сниму ролик по тексту, оживлю твоё фото в движение.\n💡 <b>Не знаешь, с чего начать?</b> Нажми «Идеи и шаблоны».\n🤝 <b>Зови друзей.</b> За каждое их пополнение начислю тебе кредиты.\n\nЖми кнопку ниже — и поехали!",
+    menu_title: "Главное меню. Выбери, что сделать:",
+    low_balance: "Не хватает кредитов: нужно <b>{needed} кр.</b>, а у тебя {have} кр.\nПополни баланс удобным способом — и продолжим!",
+    topup_done: "✅ Баланс пополнен на {credits} кр. Теперь у тебя {balance} кр.",
+    gen_failed: "Что-то пошло не так при создании. Кредиты не списаны, попробуй ещё раз!",
+    generating: "🎨 Создаю изображение… займёт несколько секунд.",
+    vid_gen_failed: "Не удалось создать видео. Кредиты возвращены — попробуй ещё раз!",
+    accounts_unavailable: "😴 Сервис сейчас перегружен — попробуй через несколько минут. Кредиты не списаны.",
+    rate_limited: "⏱️ Слишком много запросов. Подождите минуту и попробуйте снова.",
+    busy: "Твой предыдущий запрос ещё выполняется — дождись результата 🙏",
+    referral_reward_got: "🎉 Твой друг пополнил баланс — тебе начислено <b>{bonus} кр.</b>\nСпасибо, что зовёшь! 🤝",
+    invite_share_text: "Попробуй этого бота — рисует картинки и снимает видео по тексту 🎨🎬 Новым пользователям — бесплатные кредиты на старте!",
+    vid_upload_disabled: "Правка загруженного видео пока недоступна — чиним. А вот видео, созданное здесь, можно изменить кнопкой ✏️ под роликом.",
+  },
+  labels: {
+    gen:'🎨 Создать картинку', balance:'💳 Баланс и пополнение',
+    help:'❓ Как пользоваться', menu:'🏠 Главное меню',
+    topup:'➕ Пополнить баланс', pay_stars:'Оплата через Stars',
+    pay_robo:'СБП/Карта · выгоднее', invite_friend:'🎁 Позвать друга',
+    ideas:'💡 Идеи и шаблоны', vid_gen:'🎬 Создать видео',
+    animate:'🎬 Оживить фото', go:'✨ Сгенерировать',
+    back:'← Назад', cancel:'✕ Отмена', repeat_last:'🔁 Повторить так же',
+  },
+  prices: {
+    'Картинки': {
+      image_nano:  { label:'Картинка Nano Banana 2',   cr:10  },
+      image_pro:   { label:'Картинка Nano Banana Pro', cr:15  },
+      edit_photo:  { label:'Редактирование фото',      cr:15  },
+    },
+    'Видео': {
+      omni_4s:     { label:'Omni Flash 4s',            cr:50  },
+      omni_6s:     { label:'Omni Flash 6s',            cr:75  },
+      omni_8s:     { label:'Omni Flash 8s',            cr:90  },
+      omni_10s:    { label:'Omni Flash 10s',           cr:100 },
+      veo_lite:    { label:'Veo Lite',                 cr:60  },
+      veo_fast:    { label:'Veo Fast',                 cr:120 },
+      veo_quality: { label:'Veo Quality',              cr:450 },
+    },
+    'Постпродакшн': {
+      animate:      { label:'Оживить фото (Veo Lite)',  cr:75  },
+      extend_video: { label:'Продлить видео',           cr:60  },
+      edit_video:   { label:'Изменить видео',           cr:150 },
+      frames_extra: { label:'Start→Finish надбавка',    cr:25  },
+    },
+  },
+  flags: {
+    upload_video_edit: { label:'Правка загруженного видео', desc:'UPLOAD_VIDEO_EDIT_ENABLED', value:false },
+    ideas_hub:         { label:'Идеи и шаблоны',            desc:'IDEAS_HUB_ENABLED',         value:true  },
+    referrals:         { label:'Реферальная система',       desc:'REFERRAL_ENABLED',          value:true  },
+    stars_pay:         { label:'Оплата Telegram Stars',     desc:'STARS_PAYMENT_ENABLED',     value:true  },
+    sbp_pay:           { label:'Оплата СБП/Карта',         desc:'SBP_PAYMENT_ENABLED',       value:true  },
+  },
+  settings: { starter_credits:30, cooldown_sec:600, max_failures:3 },
 };
 
-document.getElementById('nav').addEventListener('click', e=>{
-  const btn=e.target.closest('button[data-tab]'); if(!btn) return; switchTab(btn.dataset.tab);
-});
-document.getElementById('refresh').addEventListener('click',()=>tabs[state.tab][2]());
-setInterval(checkPing,30000);
-checkPing(); loadOps();
-
-function switchTab(name){
-  state.tab=name;
-  document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
-  document.querySelectorAll('.tab').forEach(p=>p.classList.toggle('active',p.id===`tab-${name}`));
-  document.getElementById('page-title').textContent=tabs[name][0];
-  document.getElementById('page-sub').textContent=tabs[name][1];
-  tabs[name][2]();
+/* ── API ───────────────────────────────────────────── */
+async function api(method, path, body) {
+  try {
+    const r = await fetch(API_BASE + path, {
+      method,
+      headers: { 'Content-Type':'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
 }
 
-async function api(method,path,body,{write=false}={}){
-  if(write && state.offline){ toast('bad','API недоступен, запись заблокирована'); return null; }
-  try{
-    const r=await fetch(API_BASE+path,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(8000)});
-    if(!r.ok){
-      if(method==='GET' || r.status>=500){ state.failed.add(path); setOffline(true); }
-      return {__error:true,status:r.status,body:await safeJson(r)};
-    }
-    state.failed.delete(path); if(state.failed.size===0) setOffline(false); return await r.json();
-  }catch(_){ state.failed.add(path); setOffline(true); return null; }
+/* ── Status ping ───────────────────────────────────── */
+async function checkStatus() {
+  const dot  = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  dot.className = 'status-dot connecting';
+  text.textContent = 'Подключение…';
+  const r = await api('GET', '/ping');
+  if (r) {
+    dot.className = 'status-dot online';
+    text.textContent = 'Бот онлайн';
+    document.getElementById('offline-banner').style.display = 'none';
+  } else {
+    dot.className = 'status-dot offline';
+    text.textContent = 'Бот оффлайн';
+    document.getElementById('offline-banner').style.display = 'flex';
+  }
 }
-async function safeJson(r){ try{return await r.json()}catch(_){return null} }
-function setOffline(v){
-  state.offline=v;
-  document.getElementById('offline').classList.toggle('show',v);
-  document.getElementById('offline-list').textContent=[...state.failed].join(', ') || '-';
-  document.getElementById('status-dot').className='dot '+(v?'bad':'ok');
-  document.getElementById('status-text').textContent=v?'API недоступен':'API online';
-  document.querySelectorAll('[data-write]').forEach(b=>b.disabled=v);
+
+/* ── Tab routing ───────────────────────────────────── */
+const tabMeta = {
+  overview:  ['Обзор',           'Статус системы и быстрая статистика'],
+  accounts:  ['Аккаунты',        'Управление пулом Google-аккаунтов'],
+  messages:  ['Сообщения бота',  'Тексты ответов и уведомлений'],
+  labels:    ['Кнопки',          'Подписи инлайн-кнопок'],
+  prices:    ['Цены',            'Стоимость действий в кредитах'],
+  settings:  ['Настройки',       'Флаги фич и глобальные параметры'],
+  users:     ['Пользователи',    'База юзеров, балансы и активность'],
+  referrals: ['Рефералки',       'Приглашения, вознаграждения, топ рефереров'],
+  analytics: ['Аналитика',       'Сегодня · Выручка · Нагрузка · Каналы · Ошибки'],
+};
+const tabLoaders = {
+  overview:loadOverview, accounts:loadAccounts, messages:loadMessages,
+  labels:loadLabels, prices:loadPrices, settings:loadSettings,
+  users:()=>loadUsers(1), referrals:loadReferrals, analytics:loadAnalytics,
+};
+let currentTab = 'overview';
+
+function switchTab(name) {
+  document.querySelectorAll('.sb-item').forEach(b => b.classList.toggle('active', b.dataset.tab===name));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id===`tab-${name}`));
+  const m = tabMeta[name]||['',''];
+  document.getElementById('page-title').textContent = m[0];
+  document.getElementById('page-sub').textContent   = m[1];
+  currentTab = name;
+  tabLoaders[name]?.();
 }
-async function checkPing(){ const r=await api('GET','/ping'); if(r&&!r.__error) setOffline(false); }
 
-function html(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
-function fmt(n){return Number(n??0).toLocaleString('ru-RU')}
-function rub(n){return Number(n||0).toFixed(0)+'₽'}
-function pct(x){return x==null?'нет данных':(Number(x)*100).toFixed(1)+'%'}
-function when(s){return s?String(s).slice(0,16):'—'}
-function badge(text,type='muted'){return `<span class="badge b-${type}">${html(text)}</span>`}
-function toast(type,msg){const el=document.createElement('div');el.className='toast '+(type==='bad'?'bad':'ok');el.textContent=msg;document.getElementById('toasts').appendChild(el);setTimeout(()=>el.remove(),3200)}
-function tabEl(name=state.tab){return document.getElementById(`tab-${name}`)}
-function errorView(msg){return `<div class="errorbox">${html(msg)}</div>`}
-function empty(msg){return `<div class="empty">${html(msg)}</div>`}
-function confirmDanger(msg){return window.confirm(msg)}
-function closeDrawer(){document.getElementById('drawer').classList.remove('open')}
-function openDrawer(title,body){document.getElementById('drawer-title').textContent=title;document.getElementById('drawer-body').innerHTML=body;document.getElementById('drawer').classList.add('open')}
+document.querySelectorAll('.sb-item').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+document.getElementById('refresh-btn').addEventListener('click', () => tabLoaders[currentTab]?.());
 
-async function loadOps(){
-  const el=tabEl('ops'); el.innerHTML=empty('Загрузка операционного состояния...');
-  const data=await api('GET','/ops');
-  if(!data||data.__error){ el.innerHTML=errorView('API недоступен: невозможно оценить, способен ли бот генерировать.'); return; }
-  const h=data.health||{}, a=data.accounts||{}, st=data.stats||{};
-  const fail1=pct(h.jobs_1h?.fail_rate), fail24=pct(h.jobs_24h?.fail_rate);
-  const serviceOk = a.active>0 && (h.jobs_1h?.fail_rate==null || h.jobs_1h.fail_rate<0.5);
-  el.innerHTML=`
-    <div class="grid">
-      <div class="metric"><div class="k">API / bot</div><div class="v ${serviceOk?'lime':'coral'}">${serviceOk?'LIVE':'RISK'}</div><div class="s">admin API отвечает, capacity ниже</div></div>
-      <div class="metric"><div class="k">Аккаунты</div><div class="v cyan">${fmt(a.active)}/${fmt(a.total)}</div><div class="s">${fmt(a.video_active)} видео-ready · ${fmt(a.disabled)} disabled</div></div>
-      <div class="metric"><div class="k">Cooldown</div><div class="v ${a.cooldown?'warn':'lime'}">${fmt(a.cooldown)}</div><div class="s">аккаунтов ждут восстановления</div></div>
-      <div class="metric"><div class="k">Jobs 1h</div><div class="v">${fmt(h.jobs_1h?.success)}/${fmt(h.jobs_1h?.total)}</div><div class="s">fail rate ${fail1}</div></div>
-      <div class="metric"><div class="k">Jobs 24h</div><div class="v">${fmt(h.jobs_24h?.success)}/${fmt(h.jobs_24h?.total)}</div><div class="s">fail rate ${fail24}</div></div>
-      <div class="metric"><div class="k">Support open</div><div class="v ${h.open_tickets?'warn':'lime'}">${fmt(h.open_tickets)}</div><div class="s">тикетов требуют внимания</div></div>
-    </div>
-    <div class="section-title">Быстрые действия</div>
-    <div class="quick">
-      <button class="btn primary" onclick="switchTab('accounts')">Перейти к Accounts</button>
-      <button class="btn" onclick="switchTab('support')">Перейти к Support</button>
-      <button class="btn" onclick="switchTab('settings')">Feature flags</button>
-      <button class="btn" onclick="switchTab('prices')">Цены</button>
-    </div>
-    <div class="section-title">Критичные ошибки</div>
-    ${renderCritical(h.critical_errors||[])}
-    <div class="grid two">
-      <div><div class="section-title">Последние jobs</div>${renderJobs(h.last_jobs||[])}</div>
-      <div><div class="section-title">Последние события</div>${renderEvents(data.events||[])}</div>
-    </div>
-    <div class="section-title">Деньги ниже операционного статуса</div>
-    <div class="grid">
-      <div class="metric"><div class="k">Выручка сегодня</div><div class="v lime">${rub(st.revenue_today_rub)}</div><div class="s">paid transactions</div></div>
-      <div class="metric"><div class="k">Выручка всего</div><div class="v cyan">${rub(st.revenue_total_rub)}</div><div class="s">за всё время</div></div>
-      <div class="metric"><div class="k">Кредиты сегодня</div><div class="v">${fmt(st.credits_sold)}</div><div class="s">списано flow_jobs</div></div>
+/* ── Overview ──────────────────────────────────────── */
+async function loadOverview() {
+  const stats = (await api('GET','/stats'))    || DEMO.stats;
+  const accs  = (await api('GET','/accounts')) || DEMO.accounts;
+  const log   = (await api('GET','/log'))      || DEMO.log;
+
+  document.getElementById('stat-users').textContent    = fmt(stats.users);
+  document.getElementById('stat-gens').textContent     = fmt(stats.gens_today);
+  document.getElementById('stat-accounts').textContent = accs.filter(a=>!a.disabled).length+'/'+accs.length;
+  document.getElementById('stat-credits').textContent  = fmt(stats.credits_sold);
+  const todayRub = stats.revenue_today_rub ?? null;
+  const totalRub = stats.revenue_total_rub ?? null;
+  document.getElementById('stat-rev-today').textContent = todayRub != null ? Math.round(todayRub)+'₽' : '—';
+  document.getElementById('stat-rev-total').textContent = totalRub != null ? Math.round(totalRub)+'₽' : '—';
+
+  document.getElementById('overview-accounts').innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Аккаунт</th>
+          <th>Статус</th>
+          <th style="text-align:right">Запросы</th>
+          <th style="text-align:right">✓ Успешные</th>
+          <th style="text-align:right">✗ Неудачные</th>
+          <th style="text-align:right">% успеха</th>
+        </tr></thead>
+        <tbody>${accs.map(a=>{
+          const badge = a.disabled
+            ? '<span class="badge badge-red">выключен</span>'
+            : (a.cooldown_left||0) > 0
+              ? `<span class="badge badge-yellow">кулдаун ${a.cooldown_left}с</span>`
+              : '<span class="badge badge-green">OK</span>';
+          const total   = a.jobs_total   ?? 0;
+          const success = a.jobs_success ?? 0;
+          const fail    = a.jobs_fail    ?? 0;
+          const pct     = total > 0 ? Math.round(success/total*100)+'%' : '—';
+          const icon    = a.video_allowed ? '🎬' : '🖼';
+          const activeLbl = a.active_jobs > 0
+            ? `<span style="font-size:10px;color:var(--pz-cyan);margin-left:4px">${a.active_jobs}↻</span>`
+            : '';
+          return `<tr>
+            <td><span class="mono" style="color:var(--pz-cyan)">${esc(a.id)}</span>
+                <span style="font-size:10px;color:var(--pz-faint);margin-left:4px">${icon}</span>${activeLbl}</td>
+            <td>${badge}</td>
+            <td class="mono" style="text-align:right">${fmt(total)}</td>
+            <td class="mono" style="text-align:right;color:var(--pz-green)">${fmt(success)}</td>
+            <td class="mono" style="text-align:right;color:var(--pz-coral)">${fmt(fail)}</td>
+            <td class="mono" style="text-align:right;font-weight:700">${pct}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
     </div>`;
-}
-function renderCritical(rows){
-  if(!rows.length) return `<div class="card"><p class="lime">Последних critical backend errors нет.</p></div>`;
-  return `<div class="table-wrap"><table><thead><tr><th>Время</th><th>Аккаунт</th><th>Операция</th><th>Модель</th><th>Reason</th><th>User</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${when(r.created_at)}</td><td class="mono cyan">${html(r.account_id||'—')}</td><td>${html(r.operation_type||'—')}</td><td class="mono">${html(r.model||'—')}</td><td class="coral">${html(r.error_type||'—')}</td><td class="mono">${html(r.user_id||'—')}</td></tr>`).join('')}</tbody></table></div>`;
-}
-function renderJobs(rows){
-  if(!rows.length) return empty('Jobs пока нет');
-  return `<div class="table-wrap"><table><thead><tr><th>Время</th><th>Acc</th><th>Op</th><th>Status</th><th>User</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${when(r.created_at)}</td><td class="mono cyan">${html(r.account_id||'—')}</td><td>${html(r.operation_type||'—')}</td><td>${jobBadge(r.status)}</td><td class="mono">${html(r.user_id||'—')}</td></tr>`).join('')}</tbody></table></div>`;
-}
-function renderEvents(rows){
-  if(!rows.length) return empty('Событий нет');
-  return `<div class="card log">${rows.slice(0,16).map(e=>`<div class="log-row"><span class="log-time">${html(e.time)}</span><span class="log-text">${html(e.text)}</span><span>${badge(e.chip||'event',e.color==='coral'?'bad':e.color==='warn'?'warn':e.color==='lime'?'ok':'info')}</span></div>`).join('')}</div>`;
-}
-function jobBadge(s){return s==='success'?badge('success','ok'):s==='fail'||s==='error'?badge(s,'bad'):badge(s||'—','muted')}
 
-async function loadAccounts(){
-  const el=tabEl('accounts'); el.innerHTML=empty('Загрузка аккаунтов...');
-  const accs=await api('GET','/accounts');
-  if(!accs||accs.__error){el.innerHTML=errorView('Accounts API недоступен. Управление аккаунтами заблокировано.');return}
-  const active=accs.filter(a=>!a.disabled && !(a.cooldown_left>0));
-  el.innerHTML=`
-    <div class="grid">
-      <div class="metric"><div class="k">Доступны</div><div class="v cyan">${fmt(active.length)}/${fmt(accs.length)}</div><div class="s">не disabled и не cooldown</div></div>
-      <div class="metric"><div class="k">Видео-ready</div><div class="v">${fmt(active.filter(a=>a.video_allowed).length)}</div><div class="s">можно брать video jobs</div></div>
-      <div class="metric"><div class="k">Cooldown</div><div class="v warn">${fmt(accs.filter(a=>a.cooldown_left>0).length)}</div><div class="s">временно исключены</div></div>
-    </div>
-    <div class="section-title">Production capacity</div>
-    <div class="table-wrap"><table><thead><tr><th>Аккаунт</th><th>Health</th><th>Enabled</th><th>Video</th><th>Jobs</th><th>Failures</th><th>Last activity</th><th>Last error</th><th>Actions</th></tr></thead><tbody>
-    ${accs.map(a=>`<tr>
-      <td><div class="mono cyan">${html(a.id)}</div><div class="faint">assigned users: ${fmt(a.users||0)}</div></td>
-      <td>${accountHealth(a)}</td>
-      <td>${a.disabled?badge('disabled','bad'):badge('enabled','ok')}</td>
-      <td>${a.video_allowed?badge('video on','info'):badge('image only','muted')}</td>
-      <td class="mono">${fmt(a.jobs_total||0)} <span class="lime">✓${fmt(a.jobs_success||0)}</span> <span class="coral">✗${fmt(a.jobs_fail||0)}</span></td>
-      <td class="mono ${a.fails?'coral':'faint'}">${fmt(a.fails||0)}${a.cooldown_left?` · cooldown ${fmt(a.cooldown_left)}s`:''}</td>
-      <td>${when(a.last_activity)}</td><td class="coral">${html(a.last_error||'—')}</td>
-      <td class="nowrap">
-        <button data-write class="btn small ${a.disabled?'':'danger'}" onclick="setAccountDisabled('${html(a.id)}',${!a.disabled})">${a.disabled?'Enable':'Disable'}</button>
-        <button data-write class="btn small" onclick="setAccountVideo('${html(a.id)}',${!a.video_allowed})">${a.video_allowed?'Video off':'Video on'}</button>
-        <button data-write class="btn small danger" onclick="resetAccount('${html(a.id)}')">Reset failures</button>
+  renderLog(log);
+}
+
+let _logCache = [];
+let _logFilter = 'all';
+
+const _LOG_FILTER_MAP = {
+  'image':  e => (e.chip||'').includes('🖼') || (e.chip||'').includes('image'),
+  'video':  e => (e.chip||'').includes('🎬') || (e.chip||'').includes('video'),
+  'new':    e => (e.chip||'').includes('👤') || (e.chip||'').includes('new'),
+  'topup':  e => (e.chip||'').includes('💳') || (e.chip||'').includes('topup'),
+  'system': e => (e.chip||'').includes('failover') || (e.chip||'').includes('cooldown'),
+};
+
+function setLogFilter(f) {
+  _logFilter = f;
+  document.querySelectorAll('.log-filter-btn').forEach(b=>{
+    b.classList.toggle('active', b.dataset.filter === f);
+  });
+  renderLog(_logCache);
+}
+
+function renderLog(log) {
+  _logCache = log;
+  const filtered = _logFilter === 'all' ? log : log.filter(_LOG_FILTER_MAP[_logFilter] || (()=>true));
+  document.getElementById('log-list').innerHTML = filtered.length ? filtered.map(e=>{
+    const accBadge = e.account && e.account !== '—'
+      ? `<span class="mono" style="font-size:12px;color:var(--pz-cyan);flex-shrink:0;background:rgba(84,215,214,.08);border:1px solid rgba(84,215,214,.2);border-radius:4px;padding:1px 6px;margin-right:4px">${esc(e.account)}</span>`
+      : '';
+    return `<div class="log-row">
+      <span class="log-time">${esc(e.time)}</span>
+      ${accBadge}
+      <span class="log-text" style="font-size:13px">${esc(e.text)}</span>
+      <span class="log-chip" style="background:rgba(${chipColor(e.color)},.12);color:var(--pz-${e.color||'muted'})">${esc(e.chip)}</span>
+    </div>`;
+  }).join('') : '<div style="color:var(--pz-faint);font-size:13px;padding:12px 0">Событий по фильтру нет</div>';
+}
+
+/* ── Accounts ──────────────────────────────────────── */
+async function loadAccounts() {
+  const accs = (await api('GET','/accounts')) || DEMO.accounts;
+  document.getElementById('accounts-tbody').innerHTML = accs.map(a=>`
+    <tr>
+      <td>
+        <div class="mono" style="color:var(--pz-cyan)">${esc(a.id)}</div>
+        <div style="font-size:11px;color:var(--pz-faint);margin-top:2px">${esc(a.profile_dir)}</div>
       </td>
-    </tr>`).join('')}</tbody></table></div>`;
-  setOffline(state.offline);
-}
-function accountHealth(a){
-  if(a.disabled) return badge('Disabled','bad');
-  if(a.cooldown_left>0) return badge(`Cooldown ${a.cooldown_left}s`,'warn');
-  if((a.fails||0)>0) return badge('Warning','warn');
-  if((a.jobs_fail||0)>0 && (a.jobs_success||0)===0) return badge('Failing','bad');
-  return badge('OK','ok');
-}
-async function setAccountDisabled(id,disabled){
-  if(!confirmDanger(`${disabled?'Disable':'Enable'} account ${id}? Это меняет production routing сразу.`)) return;
-  const r=await api('POST',`/accounts/${encodeURIComponent(id)}/${disabled?'disable':'enable'}`,{}, {write:true});
-  if(r&&!r.__error){toast('ok',`Account ${id}: ${disabled?'disabled':'enabled'}`);loadAccounts()} else toast('bad','Не удалось изменить account');
-}
-async function setAccountVideo(id,allowed){
-  if(!confirmDanger(`Toggle video for ${id} to ${allowed?'ON':'OFF'}? Это меняет доступность video jobs.`)) return;
-  const r=await api('POST',`/accounts/${encodeURIComponent(id)}/video`,{allowed},{write:true});
-  if(r&&!r.__error){toast('ok',`Video ${id}: ${allowed?'on':'off'}`);loadAccounts()} else toast('bad','Не удалось изменить video flag');
-}
-async function resetAccount(id){
-  if(!confirmDanger(`Reset failures/cooldown for ${id}? Аккаунт может сразу вернуться в routing.`)) return;
-  const r=await api('POST',`/accounts/${encodeURIComponent(id)}/reset`,{}, {write:true});
-  if(r&&!r.__error){toast('ok',`Failures reset: ${id}`);loadAccounts()} else toast('bad','Не удалось сбросить failures');
+      <td>${a.disabled ? '<span class="badge badge-red">выключен</span>' : (a.cooldown_left||0)>0 ? `<span class="badge badge-yellow">кулдаун ${a.cooldown_left}с</span>` : '<span class="badge badge-green">активен</span>'}</td>
+      <td class="mono">
+        ${a.jobs_total??0}
+        ${(a.jobs_total??0)>0?`<div style="font-size:10px;font-weight:400;color:var(--pz-faint);margin-top:1px"><span style="color:var(--pz-green)">✓${a.jobs_success??0}</span>&thinsp;<span style="color:var(--pz-coral)">✗${a.jobs_fail??0}</span></div>`:''}
+      </td>
+      <td class="mono" style="color:${(a.fails||0)>0?'var(--pz-coral)':'var(--pz-faint)'}">${a.fails??0}</td>
+      <td><label class="toggle"><input type="checkbox" ${a.video_allowed?'checked':''} onchange="toggleVideo('${esc(a.id)}',this.checked)"><span class="toggle-slider"></span></label></td>
+      <td><label class="toggle"><input type="checkbox" ${!a.disabled?'checked':''} onchange="toggleDisabled('${esc(a.id)}',!this.checked)"><span class="toggle-slider"></span></label></td>
+      <td><button class="btn btn-ghost btn-sm" onclick="resetFailures('${esc(a.id)}')">Сбросить ошибки</button></td>
+    </tr>
+  `).join('');
 }
 
-async function loadSupport(){
-  const el=tabEl('support'); el.innerHTML=empty('Загрузка тикетов...');
-  const data=await api('GET',`/support?status=${state.supportStatus}`);
-  if(!data||data.__error){el.innerHTML=errorView('Support API недоступен.');return}
-  el.innerHTML=`
-    <div class="toolbar"><div class="seg">${['open','replied','closed','all'].map(s=>`<button class="${state.supportStatus===s?'active':''}" onclick="state.supportStatus='${s}';loadSupport()">${s}</button>`).join('')}</div><span class="faint">${html(data.note)}</span></div>
-    <div class="split"><div>${renderSupportTable(data.tickets||[])}</div><div class="card side-card" id="support-detail"><h3>Выбери тикет</h3><p>Здесь появится пользователь, баланс, платежи и последние операции. Ответ из веба не отправляется.</p></div></div>`;
-  setOffline(state.offline);
+async function toggleVideo(id, allowed) {
+  const r = await api('POST',`/accounts/${id}/video`,{allowed});
+  r ? toast('success',`Видео ${id}: ${allowed?'вкл':'откл'}`) : toast('error','Бот оффлайн');
 }
-function renderSupportTable(rows){
-  if(!rows.length) return empty('Тикетов в этом фильтре нет');
-  return `<div class="table-wrap"><table><thead><tr><th>Ticket</th><th>User</th><th>Problem context</th><th>Money</th><th>Message</th><th>Actions</th></tr></thead><tbody>${rows.map(t=>`<tr>
-    <td><div class="mono cyan">#${t.id}</div>${statusBadge(t.status)}<div class="faint">${when(t.created_at)}</div></td>
-    <td><button class="btn small" onclick="openUser(${t.user_id})">${html(t.username?'@'+t.username:t.user_id)}</button><div class="faint">bal ${fmt(t.balance)} кр</div></td>
-    <td>${t.last_error?badge(t.last_error,'bad'):badge('no recent error','muted')}<div class="faint">last job ${when(t.last_job_at)}</div></td>
-    <td><div>${fmt(t.payments_count)} payments</div><div class="lime">${rub(t.rub_total)} · ${fmt(t.stars_total)}⭐</div></td>
-    <td>${html((t.message_text||'').slice(0,180))}</td>
-    <td class="nowrap"><button class="btn small" onclick="showTicket(${t.id})">Открыть</button>${t.status!=='closed'?`<button data-write class="btn small danger" onclick="setTicketStatus(${t.id},'closed')">Close</button>`:''}</td>
-  </tr>`).join('')}</tbody></table></div>`;
+async function toggleDisabled(id, disabled) {
+  const r = await api('POST',`/accounts/${id}/${disabled?'disable':'enable'}`);
+  r ? (toast('success',`Аккаунт ${id} ${disabled?'выключен':'включён'}`), loadAccounts()) : toast('error','Бот оффлайн');
 }
-function statusBadge(s){return s==='open'?badge('open','warn'):s==='replied'?badge('replied','info'):s==='closed'?badge('closed','muted'):badge(s,'muted')}
-async function showTicket(id){
-  const d=await api('GET',`/support/${id}`); if(!d||d.__error){toast('bad','Тикет не найден');return}
-  const t=d.ticket,u=d.user?.profile||{}, jobs=d.user?.recent_jobs||[], pays=d.user?.recent_payments||[], credits=d.user?.credit_events||[];
-  document.getElementById('support-detail').innerHTML=`
-    <h3>Ticket #${t.id} ${statusBadge(t.status)}</h3><p>${when(t.created_at)} · ${html(t.username?'@'+t.username:t.user_id)}</p>
-    <div class="section-title">Обращение</div><div class="preview">${html(t.message_text)}</div>
-    <div class="section-title">Ответ админа</div><div class="preview">${t.reply_text?html(t.reply_text):'Ответ из веб-админки не отправляется. Используй Telegram admin reply flow.'}</div>
-    <div class="quick" style="margin-top:12px">
-      <button class="btn" onclick="openUser(${t.user_id})">Профиль пользователя</button>
-      <button data-write class="btn" onclick="setTicketStatus(${t.id},'open')">Mark open</button>
-      <button data-write class="btn" onclick="setTicketStatus(${t.id},'replied')">Mark replied</button>
-      <button data-write class="btn danger" onclick="setTicketStatus(${t.id},'closed')">Close</button>
+async function resetFailures(id) {
+  const r = await api('POST',`/accounts/${id}/reset`);
+  r ? (toast('success',`Счётчик ошибок ${id} сброшен`), loadAccounts()) : toast('error','Бот оффлайн');
+}
+
+/* ── Messages ──────────────────────────────────────── */
+async function loadMessages() {
+  const data = (await api('GET','/config/messages')) || DEMO.messages;
+  document.getElementById('messages-list').innerHTML = Object.entries(data).map(([k,v])=>`
+    <div class="msg-item">
+      <div class="msg-header" onclick="toggleMsg(this)">
+        <span class="msg-key">${esc(k)}</span>
+        <span class="msg-preview">${esc(v.replace(/<[^>]*>/g,'').substring(0,70))}</span>
+        <span class="msg-arrow">›</span>
+      </div>
+      <div class="msg-body">
+        <textarea class="form-textarea" data-key="${esc(k)}" rows="5">${esc(v)}</textarea>
+      </div>
     </div>
-    <div class="section-title">Пользователь</div>${userMini(u)}
-    <div class="section-title">Последние платежи</div>${miniPayments(pays)}
-    <div class="section-title">Последние генерации</div>${miniJobs(jobs)}
-    <div class="section-title">Credit events / refunds</div>${miniCredits(credits)}`;
-  setOffline(state.offline);
+  `).join('');
 }
-async function setTicketStatus(id,status){
-  if(!confirmDanger(`Поставить тикету #${id} статус ${status}? Сообщение пользователю из веба не отправится.`)) return;
-  const r=await api('POST',`/support/${id}/status`,{status},{write:true});
-  if(r&&!r.__error){toast('ok',`Ticket #${id}: ${status}`);loadSupport()} else toast('bad','Не удалось изменить статус');
+function toggleMsg(h) {
+  h.classList.toggle('open');
+  h.nextElementSibling.classList.toggle('visible');
+}
+async function saveMessages() {
+  const p={};
+  document.querySelectorAll('#messages-list textarea[data-key]').forEach(el=>p[el.dataset.key]=el.value);
+  const r = await api('POST','/config/messages',p);
+  r ? toast('success','Сообщения сохранены') : toast('error','Бот оффлайн — сохранение недоступно');
 }
 
-let usersTimer=null;
-async function loadUsers(page=1){
-  state.usersPage=page;
-  const el=tabEl('users'); el.innerHTML=empty('Загрузка пользователей...');
-  const [active,data]=await Promise.all([api('GET','/analytics/active'),api('GET',`/users?page=${page}&limit=50${state.usersQ?'&q='+encodeURIComponent(state.usersQ):''}`)]);
-  if(!data||data.__error){el.innerHTML=errorView('Users API недоступен.');return}
-  el.innerHTML=`
-    <div class="grid">
-      <div class="metric"><div class="k">Всего</div><div class="v">${fmt(data.total)}</div><div class="s">users table</div></div>
-      <div class="metric"><div class="k">DAU</div><div class="v cyan">${fmt(active?.dau)}</div><div class="s">не blocked</div></div>
-      <div class="metric"><div class="k">WAU / MAU</div><div class="v">${fmt(active?.wau)} / ${fmt(active?.mau)}</div><div class="s">debug, не vanity</div></div>
+/* ── Labels ────────────────────────────────────────── */
+async function loadLabels() {
+  const data = (await api('GET','/config/labels')) || DEMO.labels;
+  document.getElementById('labels-tbody').innerHTML = Object.entries(data).map(([k,v])=>`
+    <tr>
+      <td class="mono" style="color:var(--pz-cyan);width:200px">${esc(k)}</td>
+      <td style="color:var(--pz-muted);font-size:13px">${esc(v)}</td>
+      <td><input type="text" class="form-input" data-key="${esc(k)}" value="${esc(v)}" style="max-width:320px"></td>
+    </tr>
+  `).join('');
+}
+async function saveLabels() {
+  const p={};
+  document.querySelectorAll('#labels-tbody input[data-key]').forEach(el=>p[el.dataset.key]=el.value);
+  const r = await api('POST','/config/labels',p);
+  r ? toast('success','Кнопки сохранены') : toast('error','Бот оффлайн');
+}
+
+/* ── Prices ────────────────────────────────────────── */
+async function loadPrices() {
+  const raw = await api('GET','/config/prices');
+  const data = raw ? flatToPriceGroups(raw) : DEMO.prices;
+  document.getElementById('prices-content').innerHTML = Object.entries(data).map(([grp,items])=>`
+    <div class="price-group">
+      <div class="price-group-title">${esc(grp)}</div>
+      <div class="price-rows">
+        ${Object.entries(items).map(([key,item])=>`
+          <div class="price-row-item">
+            <span class="price-row-name">${esc(item.label)}</span>
+            <span class="price-row-badge">кр.</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input type="number" class="form-input form-input-num" data-key="${esc(key)}" value="${item.cr}" min="0" max="9999" step="5">
+              <span class="rub-label" style="font-size:12px;color:var(--pz-faint)">≈${rub(item.cr)}</span>
+            </div>
+          </div>
+        `).join('')}
+      </div>
     </div>
-    <div class="toolbar"><input class="field" id="user-search" value="${html(state.usersQ)}" placeholder="user_id или username" oninput="clearTimeout(usersTimer);usersTimer=setTimeout(()=>{state.usersQ=this.value.trim();loadUsers(1)},300)"><span class="faint">стр. ${data.page}/${data.pages}</span></div>
-    <div class="table-wrap"><table><thead><tr><th>User</th><th>Платил</th><th>Balance</th><th>Problems</th><th>Last action</th><th>Channel</th><th>Actions</th></tr></thead><tbody>
-    ${(data.users||[]).map(u=>`<tr><td><div class="mono cyan">${u.user_id}</div><div>${u.username?'@'+html(u.username):html(u.first_name||'—')}</div></td><td>${u.payments_count?badge(`${u.payments_count} payments`,'ok'):badge('no pay','muted')}<div class="lime">${rub(u.rub_total)}</div></td><td class="mono ${u.balance>0?'lime':'warn'}">${fmt(u.balance)} кр</td><td>${userProblems(u)}</td><td>${jobBadge(u.last_job_status)}<div class="faint">${when(u.last_active)}</div></td><td>${u.acq_channel?badge(u.acq_channel,'info'):badge('organic','muted')}</td><td><button class="btn small" onclick="openUser(${u.user_id})">Detail</button></td></tr>`).join('')}</tbody></table></div>
-    <div class="quick" style="margin-top:12px">${page>1?`<button class="btn" onclick="loadUsers(${page-1})">← Пред</button>`:''}${page<data.pages?`<button class="btn" onclick="loadUsers(${page+1})">След →</button>`:''}</div>`;
+  `).join('');
+  document.querySelectorAll('#prices-content input[data-key]').forEach(inp=>{
+    inp.addEventListener('input',()=>{
+      inp.closest('div').querySelector('.rub-label').textContent = '≈'+rub(Number(inp.value));
+    });
+  });
 }
-function userProblems(u){let out=[];if(u.is_blocked)out.push(badge('blocked','bad'));if(u.open_tickets)out.push(badge(`${u.open_tickets} open ticket`,'warn'));if(u.last_error)out.push(badge(u.last_error,'bad'));if(!out.length)out.push(badge('none','muted'));return out.join(' ')}
-async function openUser(id){
-  const d=await api('GET',`/users/${id}`); if(!d||d.__error){toast('bad','Профиль недоступен');return}
-  const p=d.profile||{};
-  openDrawer(`User ${id}`,`
-    ${userMini(p)}
-    <div class="section-title">Payments</div>${miniPayments(d.recent_payments||[])}
-    <div class="section-title">Generations / operations</div>${miniJobs(d.recent_jobs||[])}
-    <div class="section-title">Credit events / refunds</div>${miniCredits(d.credit_events||[])}
-    <div class="section-title">Support tickets</div>${miniTickets(d.support_tickets||[])}
-    <div class="section-title">Referral info</div><div class="card"><p>Invited: ${fmt(p.referrals?.invited)} · paid: ${fmt(p.referrals?.invited_paid)} · earned: ${fmt(p.referrals?.reward_credits_earned)} кр</p><p class="faint">Channel: ${html(p.acq_channel||'organic')} · blocked: ${p.is_blocked?'yes':'no'}</p></div>
-    <div class="section-title">Technical IDs</div><div class="card mono">user_id=${html(p.user_id)}<br>username=${html(p.username||'—')}</div>`);
+function flatToPriceGroups(flat) {
+  const g = JSON.parse(JSON.stringify(DEMO.prices));
+  Object.keys(flat).forEach(k=>{ for(const grp of Object.values(g)) { if(grp[k]) grp[k].cr=flat[k]; } });
+  return g;
 }
-function userMini(p){return `<div class="card"><h3>${html(p.username?'@'+p.username:p.user_id||'—')}</h3><p>Баланс: <b class="lime">${fmt(p.balance)} кр</b> · платежей: ${fmt(p.spend?.payments)} · RUB: ${rub(p.spend?.rub)} · Stars: ${fmt(p.spend?.stars)}</p><p class="faint">first ${when(p.first_seen)} · last ${when(p.last_active)} · generated ${fmt(p.requests?.total)}</p></div>`}
-function miniPayments(rows){return rows.length?`<div class="table-wrap"><table><thead><tr><th>Время</th><th>Pack</th><th>Amount</th><th>Credits</th><th>Status</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${when(r.created_at)}</td><td class="mono">${html(r.package_id||'—')}</td><td>${rub(r.amount_rub)} · ${fmt(r.stars_amount)}⭐</td><td class="mono">${fmt(r.credits_issued)}</td><td>${html(r.status)}</td></tr>`).join('')}</tbody></table></div>`:empty('Платежей нет')}
-function miniJobs(rows){return rows.length?`<div class="table-wrap"><table><thead><tr><th>Время</th><th>Acc</th><th>Op</th><th>Status</th><th>Credits</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${when(r.created_at)}</td><td class="mono cyan">${html(r.account_id||'—')}</td><td>${html(r.operation_type||'—')}</td><td>${jobBadge(r.status)} ${r.error_type?badge(r.error_type,'bad'):''}</td><td class="mono">${fmt(r.bot_credits_charged)} / refund ${fmt(r.refund_amount)}</td></tr>`).join('')}</tbody></table></div>`:empty('Операций нет')}
-function miniCredits(rows){return rows.length?`<div class="table-wrap"><table><thead><tr><th>Время</th><th>Op</th><th>Charged</th><th>Refund</th><th>Status</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${when(r.created_at)}</td><td>${html(r.operation_type)}</td><td class="mono">${fmt(r.charged)}</td><td class="mono warn">${fmt(r.refunded)}</td><td>${jobBadge(r.status)}</td></tr>`).join('')}</tbody></table></div>`:empty('Credit events нет')}
-function miniTickets(rows){return rows.length?`<div class="stack">${rows.map(t=>`<div class="card"><b>#${t.id}</b> ${statusBadge(t.status)}<p>${html(t.message_text)}</p>${t.reply_text?`<p class="cyan">Ответ: ${html(t.reply_text)}</p>`:''}<p class="faint">${when(t.created_at)}</p></div>`).join('')}</div>`:empty('Тикетов нет')}
+async function savePrices() {
+  const p={};
+  document.querySelectorAll('#prices-content input[data-key]').forEach(el=>p[el.dataset.key]=Number(el.value));
+  const r = await api('POST','/config/prices',p);
+  r ? toast('success','Цены сохранены') : toast('error','Бот оффлайн');
+}
+function rub(cr){ return Math.round(cr*.9)+'₽'; }
 
-async function loadRevenue(){
-  const el=tabEl('revenue'); el.innerHTML=empty('Загрузка revenue...');
-  const [today,rev,refs,channels]=await Promise.all([api('GET','/analytics/today'),api('GET','/analytics/revenue'),api('GET','/referrals'),api('GET','/analytics/channels')]);
-  if(!rev||rev.__error){el.innerHTML=errorView('Revenue API недоступен.');return}
-  const avg=rev.transactions_count?Number(rev.revenue_rub||0)/rev.transactions_count:0;
-  el.innerHTML=`<div class="grid">
-    <div class="metric"><div class="k">Сегодня ₽</div><div class="v lime">${rub(today?.revenue_rub)}</div><div class="s">${fmt(today?.revenue_stars)} Stars</div></div>
-    <div class="metric"><div class="k">30 дней ₽</div><div class="v lime">${rub(rev.revenue_rub)}</div><div class="s">${fmt(rev.revenue_stars)} Stars</div></div>
-    <div class="metric"><div class="k">Payments</div><div class="v cyan">${fmt(rev.transactions_count)}</div><div class="s">avg ${rub(avg)}</div></div>
-    <div class="metric"><div class="k">Paying users</div><div class="v">${fmt(rev.paying_users)}</div><div class="s">уникальные</div></div>
-  </div>
-  <div class="grid two">
-    <div><div class="section-title">Популярные пакеты</div>${tablePackages(rev.by_package||[])}</div>
-    <div><div class="section-title">Каналы</div>${tableChannels(channels?.channels||[])}</div>
-  </div>
-  <div class="section-title">Referral performance</div>${tableRefs(refs?.top_referrers||[],refs?.summary||{})}`;
+/* ── Settings ──────────────────────────────────────── */
+async function loadSettings() {
+  const cfg   = (await api('GET','/config/settings')) || DEMO.settings;
+  const flags = (await api('GET','/config/flags'))    || DEMO.flags;
+  if (cfg.starter_credits!==undefined) document.getElementById('starter-credits').value = cfg.starter_credits;
+  if (cfg.cooldown_sec!==undefined)    document.getElementById('cooldown-sec').value    = cfg.cooldown_sec;
+  if (cfg.max_failures!==undefined)    document.getElementById('max-failures').value    = cfg.max_failures;
+  document.getElementById('flags-list').innerHTML = Object.entries(flags).map(([k,f])=>`
+    <div class="flag-row">
+      <div>
+        <div class="flag-name">${esc(f.label)}</div>
+        <div class="flag-desc mono" style="font-size:11px;color:var(--pz-faint);margin-top:3px">${esc(f.desc)}</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" data-flag="${esc(k)}" ${f.value?'checked':''}>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+  `).join('');
 }
-function tablePackages(rows){return rows.length?`<div class="table-wrap"><table><thead><tr><th>Pack</th><th>Count</th><th>RUB</th><th>Stars</th></tr></thead><tbody>${rows.map(p=>`<tr><td class="mono cyan">${html(p.package_id||'—')}</td><td>${fmt(p.count)}</td><td class="lime">${rub(p.rub)}</td><td class="warn">${fmt(p.stars)}</td></tr>`).join('')}</tbody></table></div>`:empty('Нет paid packages')}
-function tableChannels(rows){return rows.length?`<div class="table-wrap"><table><thead><tr><th>Channel</th><th>Users</th><th>Paid</th><th>Revenue</th></tr></thead><tbody>${rows.map(c=>`<tr><td class="mono cyan">${html(c.channel)}</td><td>${fmt(c.users)}</td><td>${fmt(c.paid_users)}</td><td class="lime">${rub(c.revenue_rub)} · ${fmt(c.revenue_stars)}⭐</td></tr>`).join('')}</tbody></table></div>`:empty('Каналы не размечены')}
-function tableRefs(rows,s){return `<div class="grid"><div class="metric"><div class="k">Referrals</div><div class="v">${fmt(s.total_referrals)}</div><div class="s">${fmt(s.rewarded)} rewarded · ${fmt(s.total_reward_credits)} кр</div></div></div>`+(rows.length?`<div class="table-wrap"><table><thead><tr><th>Referrer</th><th>Invited</th><th>Revenue</th><th>Reward</th></tr></thead><tbody>${rows.map(r=>`<tr><td><button class="btn small" onclick="openUser(${r.referrer_user_id})">${html(r.username?'@'+r.username:r.referrer_user_id)}</button></td><td>${fmt(r.invited)}</td><td class="lime">${rub(r.referred_revenue_rub)}</td><td>${fmt(r.reward_credits_earned)} кр</td></tr>`).join('')}</tbody></table></div>`:empty('Реферальных данных нет'))}
-
-let priceItems=[];
-async function loadPrices(){
-  const el=tabEl('prices'); el.innerHTML=empty('Загрузка цен...');
-  const data=await api('GET','/config/prices?meta=1');
-  if(!data||data.__error){el.innerHTML=errorView('Prices API недоступен. Сохранение заблокировано.');return}
-  priceItems=data.items||[];
-  const groups=[...new Set(priceItems.map(i=>i.group))];
-  el.innerHTML=`<div class="card"><p class="warn">${html(data.warning||'Изменение цены применяется к новым операциям сразу.')}</p></div>${groups.map(g=>`<div class="section-title">${html(g)}</div><div class="card">${priceItems.filter(i=>i.group===g).map(priceRow).join('')}</div>`).join('')}<div class="quick"><button data-write class="btn primary" onclick="savePrices()">Сохранить цены</button></div>`;
-  bindPriceInputs(); setOffline(state.offline);
-}
-function priceRow(i){return `<div class="price-row" data-key="${html(i.key)}" data-default="${i.default}"><div><b>${html(i.label)}</b><div class="mono faint">${html(i.key)} ${i.override?badge('override','warn'):badge('default','muted')}</div></div><div class="hide-sm mono">default ${fmt(i.default)}</div><div class="hide-sm mono">current ${fmt(i.value)}</div><input class="field" type="number" min="${i.free_allowed?0:1}" step="1" value="${i.value}" data-price="${html(i.key)}"><div class="diff faint" id="diff-${html(i.key)}">без изменений</div></div>`}
-function bindPriceInputs(){document.querySelectorAll('[data-price]').forEach(inp=>inp.addEventListener('input',()=>{const row=inp.closest('.price-row');const d=Number(row.dataset.default),v=Number(inp.value);document.getElementById('diff-'+inp.dataset.price).innerHTML=v===d?'без override':`${fmt(d)} → <span class="${v>d?'warn':'cyan'}">${fmt(v)}</span>`}))}
-async function savePrices(){
-  const payload={}, diffs=[]; let bad=null;
-  priceItems.forEach(i=>{const el=document.querySelector(`[data-price="${CSS.escape(i.key)}"]`);const v=Number(el.value);if(v<0||(!i.free_allowed&&v===0)) bad=i.key;if(v!==Number(i.default)){payload[i.key]=v;diffs.push(`${i.label}: ${i.value} → ${v}`)}});
-  if(bad){toast('bad',`Некорректная цена: ${bad}`);return}
-  if(!confirmDanger(`Сохранить изменения цен?\n\n${diffs.length?diffs.join('\n'):'Все overrides будут сброшены к default.'}\n\nПрименяется к новым операциям сразу.`))return;
-  const r=await api('POST','/config/prices',payload,{write:true});
-  if(r&&!r.__error){toast('ok','Цены сохранены');loadPrices()}else toast('bad',r?.body?.errors?.[0]?.error||'Ошибка сохранения цен');
+async function saveSettings() {
+  const settings = {
+    starter_credits: Number(document.getElementById('starter-credits').value),
+    cooldown_sec:    Number(document.getElementById('cooldown-sec').value),
+    max_failures:    Number(document.getElementById('max-failures').value),
+  };
+  const flags={};
+  document.querySelectorAll('#flags-list input[data-flag]').forEach(el=>flags[el.dataset.flag]=el.checked);
+  const r1 = await api('POST','/config/settings',settings);
+  const r2 = await api('POST','/config/flags',flags);
+  (r1||r2) ? toast('success','Настройки сохранены') : toast('error','Бот оффлайн');
 }
 
-async function loadCopy(){
-  const el=tabEl('copy'); el.innerHTML=empty('Загрузка copy...');
-  const path=state.copyKind==='label'?'/config/labels?meta=1':'/config/messages?meta=1';
-  const data=await api('GET',path);
-  if(!data||data.__error){el.innerHTML=errorView('Copy API недоступен. Сохранение заблокировано.');return}
-  state.copyItems=data.items||[]; state.selectedCopy=state.copyItems[0]?.key||null;
-  renderCopy();
-}
-function renderCopy(){
-  const el=tabEl('copy'); const groups=[...new Set(state.copyItems.map(i=>i.group))]; const sel=state.copyItems.find(i=>i.key===state.selectedCopy);
-  el.innerHTML=`<div class="toolbar"><div class="seg"><button class="${state.copyKind==='message'?'active':''}" onclick="state.copyKind='message';loadCopy()">Messages</button><button class="${state.copyKind==='label'?'active':''}" onclick="state.copyKind='label';loadCopy()">Labels</button></div><input class="field" id="copy-search" placeholder="search key/text" oninput="filterCopy()"><button data-write class="btn primary" onclick="saveCopy()">Сохранить changed overrides</button></div>
-  <div class="copy-layout"><div><div class="copy-list" id="copy-list">${copyList(groups)}</div></div><div id="copy-editor">${sel?copyEditor(sel):empty('Нет ключей')}</div></div>`;
-  setOffline(state.offline);
-}
-function copyList(groups){return groups.map(g=>`<div class="section-title" style="padding-left:12px">${html(g)}</div>${state.copyItems.filter(i=>i.group===g).map(i=>`<div class="copy-key ${i.key===state.selectedCopy?'active':''}" data-search="${html((i.key+' '+i.value).toLowerCase())}" onclick="state.selectedCopy='${html(i.key)}';renderCopy()"><b>${html(i.key)}</b><div class="faint">${i.override?'override':'default'} ${i.warnings?.length?'· '+i.warnings.join(', '):''}</div></div>`).join('')}`).join('')}
-function copyEditor(i){return `<div class="card"><h3>${html(i.key)}</h3><p>${html(i.group)} · placeholders: ${i.placeholders?.length?i.placeholders.map(p=>'{'+p+'}').join(', '):'none'} ${i.editable?'':badge('read only','bad')}</p></div>${i.editable?`<textarea class="field" data-copy="${html(i.key)}" oninput="updateCopy('${html(i.key)}',this.value)">${html(i.value)}</textarea><div class="section-title">Telegram preview</div><div class="preview" id="copy-preview">${tgPreview(i.value)}</div><div class="section-title">Validation</div><div id="copy-validation">${copyValidation(i)}</div><div class="quick" style="margin-top:12px"><button class="btn" onclick="resetCopy('${html(i.key)}')">Reset to default</button></div>`:empty('Этот ключ не строка в default MESSAGES и не редактируется из админки.')}`}
-function updateCopy(key,value){const i=state.copyItems.find(x=>x.key===key);i.value=value;document.getElementById('copy-preview').innerHTML=tgPreview(value);document.getElementById('copy-validation').innerHTML=copyValidation(i)}
-function resetCopy(key){const i=state.copyItems.find(x=>x.key===key);if(i&&i.default!=null){i.value=i.default;renderCopy()}}
-function copyValidation(i){let errs=[];const placeholders=[...String(i.value).matchAll(/\{([a-zA-Z_][\w]*)\}/g)].map(m=>m[1]);(i.placeholders||[]).forEach(p=>{if(!placeholders.includes(p))errs.push(`missing {${p}}`)});if(/\d+\s*(кр|кредит)/i.test(i.value))errs.push('manual price text warning');if(state.copyKind==='label'&&i.value.length>64)errs.push('button text too long');return errs.length?errs.map(e=>badge(e,'warn')).join(' '):badge('ok','ok')}
-function filterCopy(){const q=document.getElementById('copy-search').value.toLowerCase();document.querySelectorAll('.copy-key').forEach(k=>k.style.display=k.dataset.search.includes(q)?'block':'none')}
-function tgPreview(s){return html(s).replace(/\n/g,'<br>').replace(/&lt;b&gt;(.*?)&lt;\/b&gt;/g,'<b>$1</b>').replace(/&lt;i&gt;(.*?)&lt;\/i&gt;/g,'<i>$1</i>').replace(/&lt;code&gt;(.*?)&lt;\/code&gt;/g,'<code>$1</code>')}
-async function saveCopy(){
-  const payload={}; let errors=[];
-  state.copyItems.filter(i=>i.editable).forEach(i=>{if(i.default==null||i.value!==i.default)payload[i.key]=i.value;const text=copyValidation(i);if(text.includes('missing'))errors.push(i.key)});
-  if(errors.length){toast('bad','Потеряны обязательные placeholders: '+errors.join(', '));return}
-  const hard=state.copyItems.filter(i=>/\d+\s*(кр|кредит)/i.test(i.value)); if(hard.length&&!confirmDanger('В copy найдены ручные цены. Продолжить?'))return;
-  const r=await api('POST',state.copyKind==='label'?'/config/labels':'/config/messages',payload,{write:true});
-  if(r&&!r.__error){toast('ok','Copy сохранена');loadCopy()}else toast('bad',r?.body?.errors?.[0]?.error||'Ошибка сохранения copy');
+/* ── Revenue bar chart ─────────────────────────────── */
+function renderRevenueChart(days) {
+  const el = document.getElementById('rev-chart');
+  if (!el || !days || !days.length) return;
+  const maxVal = Math.max(...days.map(d => +(d.rub)||0), 1);
+  const H = 72;
+  el.innerHTML = days.map(d => {
+    const val = +(d.rub) || 0;
+    const h = Math.max(2, Math.round((val / maxVal) * H));
+    const label = (d.day||'').slice(5);
+    return `<div title="${esc(label+': '+val.toFixed(0)+'₽')}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:default">
+      <div style="width:100%;height:${h}px;background:rgba(200,242,95,.55);border-radius:2px 2px 0 0;min-height:2px"></div>
+      <div style="font-size:9px;color:var(--pz-faint);writing-mode:vertical-rl;transform:rotate(180deg);height:28px;overflow:hidden">${esc(label)}</div>
+    </div>`;
+  }).join('');
 }
 
-async function loadSettings(){
-  const el=tabEl('settings'); el.innerHTML=empty('Загрузка настроек...');
-  const [cfg,flags]=await Promise.all([api('GET','/config/settings'),api('GET','/config/flags')]);
-  if(!cfg||cfg.__error||!flags||flags.__error){el.innerHTML=errorView('Settings API недоступен.');return}
-  el.innerHTML=`<div class="grid two"><div class="card"><h3>Параметры</h3>${numField('starter_credits','Стартовые кредиты',cfg.starter_credits,0)}${numField('cooldown_sec','Cooldown аккаунта, сек',cfg.cooldown_sec,30)}${numField('max_failures','Отказов до cooldown',cfg.max_failures,1)}</div><div class="card"><h3>Audit</h3><p>Write endpoints пишут best-effort event <span class="mono">admin_action</span>: action, old/new, timestamp/source через request headers.</p></div></div><div class="section-title">Feature flags</div><div class="stack">${Object.entries(flags).map(([k,f])=>flagRow(k,f)).join('')}</div><div class="quick" style="margin-top:14px"><button data-write class="btn primary" onclick="saveSettings()">Сохранить настройки и флаги</button></div>`;
-  setOffline(state.offline);
+/* ── Toasts ────────────────────────────────────────── */
+function toast(type, msg) {
+  const icons={success:'✓',error:'✕',info:'ℹ'};
+  const el=document.createElement('div');
+  el.className=`toast ${type}`;
+  el.innerHTML=`<span>${icons[type]||'·'}</span> ${esc(msg)}`;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(()=>{el.classList.add('toast-fade');setTimeout(()=>el.remove(),320);},3200);
 }
-function numField(id,label,val,min){return `<label style="display:block;margin-top:12px"><div class="faint" style="font-size:12px">${html(label)}</div><input class="field" type="number" min="${min}" id="set-${id}" value="${html(val)}"></label>`}
-function flagRow(k,f){return `<div class="card" data-flagrow="${html(k)}"><div style="display:flex;justify-content:space-between;gap:12px"><div><h3>${html(f.label)} ${f.dangerous?badge('dangerous','bad'):badge('normal','muted')}</h3><p>${html(f.impact||f.desc)}</p><p class="mono faint">${html(k)} · ${html(f.desc)} · default ${f.default}</p></div><label class="toggle"><input type="checkbox" data-flag="${html(k)}" ${f.value?'checked':''} data-danger="${f.dangerous?'1':'0'}" data-original="${f.value?'1':'0'}"> on</label></div></div>`}
-async function saveSettings(){
-  const settings={starter_credits:Number(document.getElementById('set-starter_credits').value),cooldown_sec:Number(document.getElementById('set-cooldown_sec').value),max_failures:Number(document.getElementById('set-max_failures').value)};
-  const flags={};let dangerous=[];
-  document.querySelectorAll('[data-flag]').forEach(el=>{flags[el.dataset.flag]=el.checked;if(el.dataset.danger==='1'&&((el.checked?'1':'0')!==el.dataset.original))dangerous.push(el.dataset.flag)});
-  if(dangerous.length&&!confirmDanger('Dangerous flags изменятся: '+dangerous.join(', ')+'\nЭто влияет на деньги/генерацию/видео. Продолжить?'))return;
-  const [r1,r2]=await Promise.all([api('POST','/config/settings',settings,{write:true}),api('POST','/config/flags',flags,{write:true})]);
-  if((r1&&!r1.__error)||(r2&&!r2.__error)){toast('ok','Настройки сохранены');loadSettings()}else toast('bad','Ошибка сохранения настроек');
+
+/* ── Utils ─────────────────────────────────────────── */
+function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function fmt(n){ return Number(n??0).toLocaleString('ru'); }
+function chipColor(c){ return {lime:'200,242,95',cyan:'84,215,214',coral:'255,123,109',warn:'255,194,75'}[c]||'183,180,170'; }
+
+/* ── Users ─────────────────────────────────────────── */
+let _usersPage = 1;
+let _usersQ    = '';
+let _usersSearchTimer = null;
+
+function usersSearchDebounce() {
+  clearTimeout(_usersSearchTimer);
+  _usersSearchTimer = setTimeout(() => {
+    _usersQ = document.getElementById('users-search').value.trim();
+    loadUsers(1);
+  }, 350);
 }
+
+async function loadUsers(page=1) {
+  _usersPage = page;
+  const q = _usersQ;
+
+  // DAU/WAU/MAU
+  const active = await api('GET', '/analytics/active');
+  if (active) {
+    document.getElementById('u-dau').textContent = fmt(active.dau);
+    document.getElementById('u-wau').textContent = fmt(active.wau);
+    document.getElementById('u-mau').textContent = fmt(active.mau);
+  }
+
+  const url  = `/users?page=${page}&limit=50${q?'&q='+encodeURIComponent(q):''}`;
+  const data = await api('GET', url);
+  if (!data) {
+    document.getElementById('users-tbody').innerHTML =
+      `<tr><td colspan="9" style="color:var(--pz-coral);text-align:center;padding:24px">Бот оффлайн</td></tr>`;
+    return;
+  }
+
+  document.getElementById('u-total').textContent = fmt(data.total);
+  document.getElementById('users-count-label').textContent =
+    `${fmt(data.total)} пользователей · стр. ${data.page}/${data.pages}`;
+
+  document.getElementById('users-tbody').innerHTML = data.users.length
+    ? data.users.map(u => `
+      <tr>
+        <td class="mono" style="color:var(--pz-cyan)">${u.user_id}</td>
+        <td>${u.username ? '<span style="color:var(--pz-muted)">@</span>'+esc(u.username) : '<span style="color:var(--pz-faint)">—</span>'}</td>
+        <td style="color:var(--pz-muted)">${esc(u.first_name||'')}</td>
+        <td class="mono" style="color:${u.balance>0?'var(--pz-lime)':'var(--pz-faint)'};font-weight:700">${fmt(u.balance)}</td>
+        <td class="mono" style="color:var(--pz-faint)">${fmt(u.granted)}</td>
+        <td>${u.acq_channel ? `<span class="badge badge-muted">${esc(u.acq_channel)}</span>` : '<span style="color:var(--pz-faint);font-size:12px">органика</span>'}</td>
+        <td style="font-size:12px;color:var(--pz-faint)">${u.last_active||'—'}</td>
+        <td style="font-size:12px;color:var(--pz-faint)">${u.first_seen||'—'}</td>
+        <td>${u.is_blocked?'<span class="badge badge-red">блок</span>':''}</td>
+      </tr>
+    `).join('')
+    : `<tr><td colspan="9" style="color:var(--pz-faint);text-align:center;padding:24px">Нет результатов</td></tr>`;
+
+  // Pagination
+  const pg = document.getElementById('users-pagination');
+  if (data.pages <= 1) { pg.innerHTML=''; return; }
+  let html = `<button class="pg-btn" ${page<=1?'disabled':''} onclick="loadUsers(${page-1})">← Пред</button>`;
+  const start = Math.max(1, page-2), end = Math.min(data.pages, page+2);
+  if (start>1) html += `<button class="pg-btn" onclick="loadUsers(1)">1</button>${start>2?'<span class="pg-info">…</span>':''}`;
+  for (let i=start;i<=end;i++)
+    html += `<button class="pg-btn ${i===page?'active':''}" onclick="loadUsers(${i})">${i}</button>`;
+  if (end<data.pages) html += `${end<data.pages-1?'<span class="pg-info">…</span>':''}<button class="pg-btn" onclick="loadUsers(${data.pages})">${data.pages}</button>`;
+  html += `<button class="pg-btn" ${page>=data.pages?'disabled':''} onclick="loadUsers(${page+1})">След →</button>`;
+  html += `<span class="pg-info">${fmt(data.total)} записей</span>`;
+  pg.innerHTML = html;
+}
+
+/* ── Referrals ─────────────────────────────────────── */
+async function loadReferrals() {
+  const data = await api('GET', '/referrals');
+  if (!data) {
+    document.getElementById('ref-tbody').innerHTML =
+      `<tr><td colspan="7" style="color:var(--pz-coral);text-align:center;padding:24px">Бот оффлайн</td></tr>`;
+    return;
+  }
+
+  const s = data.summary;
+  document.getElementById('ref-total').textContent    = fmt(s.total_referrals);
+  document.getElementById('ref-joined').textContent   = fmt(s.joined);
+  document.getElementById('ref-rewarded').textContent = fmt(s.rewarded);
+  document.getElementById('ref-credits').textContent  = fmt(s.total_reward_credits);
+
+  document.getElementById('top-ref-tbody').innerHTML = data.top_referrers.length
+    ? data.top_referrers.map((r,i) => `
+      <tr>
+        <td class="mono" style="color:var(--pz-faint)">${i+1}</td>
+        <td>
+          <div class="mono" style="color:var(--pz-cyan)">${r.referrer_user_id}</div>
+          ${r.username ? `<div style="font-size:11px;color:var(--pz-faint)">@${esc(r.username)}</div>` : ''}
+        </td>
+        <td class="mono">${fmt(r.invited)}</td>
+        <td class="mono" style="color:var(--pz-lime)">${r.referred_revenue_rub>0?r.referred_revenue_rub.toFixed(0)+'₽':'—'}</td>
+        <td class="mono" style="color:var(--pz-cyan)">${fmt(r.reward_credits_earned)} кр.</td>
+      </tr>
+    `).join('')
+    : `<tr><td colspan="5" style="color:var(--pz-faint);text-align:center;padding:20px">Пока нет данных</td></tr>`;
+
+  const refStatusBadge = s => {
+    const cls = s==='rewarded'?'ref-status-rewarded':s==='joined'?'ref-status-joined':'ref-status-pending';
+    return `<span class="badge ${cls}">${esc(s)}</span>`;
+  };
+  document.getElementById('ref-tbody').innerHTML = data.recent.length
+    ? data.recent.map(r => `
+      <tr>
+        <td class="mono" style="color:var(--pz-faint)">${r.id}</td>
+        <td>
+          <div class="mono" style="color:var(--pz-cyan)">${r.referrer_user_id}</div>
+          ${r.referrer_username?`<div style="font-size:11px;color:var(--pz-faint)">@${esc(r.referrer_username)}</div>`:''}
+        </td>
+        <td>
+          <div class="mono">${r.referred_user_id||'—'}</div>
+          ${r.referred_username?`<div style="font-size:11px;color:var(--pz-faint)">@${esc(r.referred_username)}</div>`:''}
+        </td>
+        <td>${refStatusBadge(r.status)}</td>
+        <td class="mono" style="color:${r.reward_credits>0?'var(--pz-lime)':'var(--pz-faint)'}">${r.reward_credits>0?fmt(r.reward_credits)+' кр.':'—'}</td>
+        <td style="font-size:12px;color:var(--pz-faint)">${r.created_at||'—'}</td>
+        <td style="font-size:12px;color:var(--pz-muted)">${r.rewarded_at||'—'}</td>
+      </tr>
+    `).join('')
+    : `<tr><td colspan="7" style="color:var(--pz-faint);text-align:center;padding:20px">Пока нет реферальных записей</td></tr>`;
+}
+
+/* ── Analytics ─────────────────────────────────────── */
+async function loadAnalytics() {
+  const [today, revenue, flow, channels, errors] = await Promise.all([
+    api('GET', '/analytics/today'),
+    api('GET', '/analytics/revenue'),
+    api('GET', '/analytics/flow'),
+    api('GET', '/analytics/channels'),
+    api('GET', '/analytics/errors'),
+  ]);
+
+  // Today KPIs
+  if (today) {
+    const sr = today.success_rate != null ? (today.success_rate*100).toFixed(1)+'%' : '—';
+    document.getElementById('kpi-today').innerHTML = `
+      <div class="kpi lime"><div class="kpi-label">Новые</div><div class="kpi-value">${fmt(today.new_users)}</div><div class="kpi-sub">пользователей</div></div>
+      <div class="kpi cyan"><div class="kpi-label">Активные</div><div class="kpi-value">${fmt(today.active_users)}</div><div class="kpi-sub">сегодня</div></div>
+      <div class="kpi warn"><div class="kpi-label">Платящие</div><div class="kpi-value">${fmt(today.paying_users)}</div><div class="kpi-sub">сегодня</div></div>
+      <div class="kpi lime"><div class="kpi-label">Картинок</div><div class="kpi-value">${fmt(today.image_generations)}</div><div class="kpi-sub">из ${fmt(today.image_requested||0)} запрошено</div></div>
+      <div class="kpi cyan"><div class="kpi-label">Видео</div><div class="kpi-value">${fmt(today.video_generations)}</div><div class="kpi-sub">из ${fmt(today.video_requested||0)} запрошено</div></div>
+      <div class="kpi"><div class="kpi-label">Success</div><div class="kpi-value" style="font-size:20px">${sr}</div><div class="kpi-sub">success rate</div></div>
+      <div class="kpi warn"><div class="kpi-label">Выручка</div><div class="kpi-value" style="font-size:20px">${today.revenue_rub!=null?(+today.revenue_rub).toFixed(0)+'₽':'—'}</div><div class="kpi-sub">${fmt(today.revenue_stars||0)} Stars</div></div>
+      <div class="kpi"><div class="kpi-label">Кредиты</div><div class="kpi-value" style="font-size:20px">${fmt(today.credits_charged||0)}</div><div class="kpi-sub">−${fmt(today.credits_refunded||0)} возврат</div></div>
+    `;
+  }
+
+  // Revenue KPIs + tables
+  if (revenue) {
+    document.getElementById('kpi-revenue').innerHTML = `
+      <div class="kpi lime"><div class="kpi-label">Выручка ₽</div><div class="kpi-value">${(+revenue.revenue_rub).toFixed(0)}</div><div class="kpi-sub">рублей</div></div>
+      <div class="kpi cyan"><div class="kpi-label">Stars</div><div class="kpi-value">${fmt(revenue.revenue_stars)}</div><div class="kpi-sub">звёзд</div></div>
+      <div class="kpi warn"><div class="kpi-label">Платежей</div><div class="kpi-value">${fmt(revenue.transactions_count)}</div><div class="kpi-sub">транзакций</div></div>
+      <div class="kpi"><div class="kpi-label">Плательщики</div><div class="kpi-value">${fmt(revenue.paying_users)}</div><div class="kpi-sub">уникальных</div></div>
+    `;
+    document.getElementById('rev-packages-tbody').innerHTML = revenue.by_package.length
+      ? revenue.by_package.map(p=>`<tr>
+          <td class="mono" style="color:var(--pz-cyan)">${esc(p.package_id||'—')}</td>
+          <td class="mono">${fmt(p.count)}</td>
+          <td class="mono" style="color:var(--pz-lime)">${(+p.rub).toFixed(0)}</td>
+          <td class="mono" style="color:var(--pz-warn)">${fmt(p.stars)}</td>
+        </tr>`).join('')
+      : `<tr><td colspan="4" style="color:var(--pz-faint);padding:12px;text-align:center">—</td></tr>`;
+    document.getElementById('rev-days-tbody').innerHTML = revenue.by_day.slice(0,14).length
+      ? revenue.by_day.slice(0,14).map(d=>`<tr>
+          <td style="font-size:12px;color:var(--pz-faint)">${esc(d.day)}</td>
+          <td class="mono" style="color:var(--pz-lime)">${(+d.rub).toFixed(0)}</td>
+          <td class="mono">${fmt(d.count)}</td>
+        </tr>`).join('')
+      : `<tr><td colspan="3" style="color:var(--pz-faint);padding:12px;text-align:center">—</td></tr>`;
+    // SVG bar chart: last 14 days
+    renderRevenueChart(revenue.by_day.slice(0,14).reverse());
+  }
+
+  // Flow
+  if (flow) {
+    document.getElementById('flow-ops-tbody').innerHTML = flow.by_operation.length
+      ? flow.by_operation.map(op=>`<tr>
+          <td class="mono" style="color:var(--pz-cyan);font-size:12px">${esc(op.operation_type)}</td>
+          <td class="mono">${fmt(op.count)}</td>
+          <td class="mono" style="color:var(--pz-lime)">${fmt(op.success)}</td>
+          <td class="mono" style="color:var(--pz-coral)">${fmt(op.fail)}</td>
+          <td class="mono" style="color:var(--pz-faint)">${op.avg_duration_ms!=null?Math.round(op.avg_duration_ms):'—'}</td>
+        </tr>`).join('')
+      : `<tr><td colspan="5" style="color:var(--pz-faint);padding:12px;text-align:center">—</td></tr>`;
+    document.getElementById('flow-models-tbody').innerHTML = flow.by_model_credits.length
+      ? flow.by_model_credits.map(m=>`<tr>
+          <td class="mono" style="color:var(--pz-cyan);font-size:12px">${esc(m.model||'—')}</td>
+          <td class="mono">${fmt(m.jobs)}</td>
+          <td class="mono" style="color:var(--pz-lime)">${fmt(m.bot_credits_sum??0)}</td>
+        </tr>`).join('')
+      : `<tr><td colspan="3" style="color:var(--pz-faint);padding:12px;text-align:center">—</td></tr>`;
+  }
+
+  // Channels
+  if (channels) {
+    document.getElementById('channels-tbody').innerHTML = channels.channels.length
+      ? channels.channels.map(c=>`<tr>
+          <td class="mono" style="color:var(--pz-cyan)">${esc(c.channel)}</td>
+          <td class="mono">${fmt(c.users)}</td>
+          <td class="mono" style="color:var(--pz-warn)">${fmt(c.paid_users)}</td>
+          <td class="mono" style="color:var(--pz-warn)">${fmt(c.revenue_stars)}</td>
+          <td class="mono" style="color:var(--pz-lime)">${(+c.revenue_rub).toFixed(0)}₽</td>
+        </tr>`).join('')
+      : `<tr><td colspan="5" style="color:var(--pz-faint);padding:12px;text-align:center">Нет данных по каналам</td></tr>`;
+  }
+
+  // Errors
+  if (errors) {
+    document.getElementById('err-types-tbody').innerHTML = errors.errors_by_type.length
+      ? errors.errors_by_type.map(e=>`<tr>
+          <td class="mono" style="color:var(--pz-coral);font-size:12px">${esc(e.error_type)}</td>
+          <td class="mono">${fmt(e.count)}</td>
+        </tr>`).join('')
+      : `<tr><td colspan="2" style="color:var(--pz-lime);padding:12px;text-align:center">Ошибок нет 🎉</td></tr>`;
+    document.getElementById('err-recent-tbody').innerHTML = errors.recent.length
+      ? errors.recent.map(e=>`<tr>
+          <td style="font-size:11px;color:var(--pz-faint)">${esc((e.created_at||'').substring(11,19))}</td>
+          <td class="mono" style="font-size:12px;color:var(--pz-cyan)">${esc(e.account_id||'—')}</td>
+          <td class="mono" style="font-size:12px">${esc(e.operation_type||'—')}</td>
+          <td class="mono" style="font-size:12px;color:var(--pz-muted)">${esc(e.model||'—')}</td>
+          <td class="mono" style="font-size:12px;color:var(--pz-coral)">${esc(e.error_type||'—')}</td>
+        </tr>`).join('')
+      : `<tr><td colspan="5" style="color:var(--pz-lime);padding:12px;text-align:center">Чисто 🎉</td></tr>`;
+  }
+}
+
+/* ── Live event polling ─────────────────────────────── */
+let _logPollTimer = null;
+function startLogPolling() {
+  if (_logPollTimer) return;
+  _logPollTimer = setInterval(async () => {
+    const dot = document.getElementById('live-dot');
+    const tab = document.querySelector('.tab-panel.active');
+    if (!tab || tab.id !== 'tab-overview') return;
+    if (dot) { dot.style.background='#fff'; dot.style.opacity='1'; }
+    const log = await api('GET','/log');
+    if (dot) { dot.style.background='var(--pz-cyan)'; dot.style.opacity='.8'; }
+    if (log) renderLog(log);
+  }, 15_000);
+}
+
+/* ── Init ──────────────────────────────────────────── */
+checkStatus();
+loadOverview();
+setInterval(checkStatus, 30_000);
+startLogPolling();
 </script>
 </body>
 </html>

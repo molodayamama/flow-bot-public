@@ -3328,12 +3328,19 @@ async def _boost_prompt_with_gemini(prompt: str) -> str | None:
 
 
 def _prompt_picker_text(ideas: list[str]) -> str:
-    """Текст экрана с идеями (шаг 1 визарда)."""
-    nums = ["1️⃣", "2️⃣", "3️⃣"]
-    lines = ["💡 <b>Идеи для вдохновения</b>\n"]
-    for i, idea in enumerate(ideas[:3]):
-        lines.append(f"{nums[i]} {idea}")
-    lines.append("\n✍️ Или напиши свой запрос прямо в чат:")
+    """Текст экрана с идеями (шаг 1 визарда).
+
+    Каждая идея обёрнута в <code> — в Telegram это моноширинный блок
+    с кнопкой «Скопировать» по нажатию, что позволяет взять любой
+    готовый сюжет одним тапом без набора текста.
+    """
+    lines = [
+        "✨ <b>Что рисуем?</b>\n",
+        "Опиши идею текстом или выбери готовый сюжет ниже — "
+        "нажми на него, скопируй и отправь 👇\n",
+    ]
+    for idea in ideas[:3]:
+        lines.append(f"<code>{html.escape(idea)}</code>")
     return "\n".join(lines)
 
 
