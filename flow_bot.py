@@ -4161,6 +4161,55 @@ async def cmd_balance(message: types.Message):
     await show_balance(message, user_id=message.from_user.id, edit=False)
 
 
+@dp.message(Command("promo"))
+async def cmd_promo(message: types.Message):
+    """Ввести промокод: /promo КОД"""
+    user_id = message.from_user.id
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await message.answer(flow_copy.msg("promo_ask"))
+        _ws(user_id)["await"] = "promo"
+        return
+    code = parts[1].strip()
+    credits_got = metrics.redeem_promo(code, user_id)
+    if credits_got is None:
+        await message.answer(flow_copy.msg("promo_invalid"))
+        return
+    balance = credit_store.add(user_id, credits_got)
+    metrics.log_event("promo_redeemed", user_id=user_id, payload={"code": code, "credits": credits_got})
+    await message.answer(
+        flow_copy.msg("promo_success", credits=credits_got, balance=balance),
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("addpromo"))
+async def cmd_addpromo(message: types.Message):
+    """Владелец: создать промокод. /addpromo КОД КРЕДИТЫ [МАКС_ИСПОЛЬЗОВАНИЙ]"""
+    if message.from_user.id not in OWNER_IDS:
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 3 or not parts[2].isdigit():
+        await message.answer("Использование: /addpromo КОД КРЕДИТЫ [макс_использований]")
+        return
+    code = parts[1].upper().strip()
+    credits = int(parts[2])
+    max_uses = int(parts[3]) if len(parts) >= 4 and parts[3].isdigit() else 1
+    if credits <= 0 or max_uses <= 0:
+        await message.answer("Кредиты и количество использований должны быть > 0.")
+        return
+    ok = metrics.create_promo_code(code, credits, max_uses, created_by=message.from_user.id)
+    if ok:
+        await message.answer(
+            f"✅ Промокод <code>{code}</code> создан: <b>{credits} кр.</b>, "
+            f"использований: {max_uses}.",
+            parse_mode="HTML",
+        )
+    else:
+        await message.answer(f"❌ Промокод <code>{code}</code> уже существует.", parse_mode="HTML")
+
+
 @dp.message(Command("grant"))
 async def cmd_grant(message: types.Message):
     """Админ-команда: начислить кредиты пользователю. `/grant <user_id> <кредиты>`.
@@ -4547,6 +4596,7 @@ _HELP_SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         ("/start", "запуск и главное меню"),
         ("/menu", "главное меню"),
         ("/balance", "баланс и пополнение через Stars"),
+        ("/promo &lt;код&gt;", "активировать промокод"),
         ("/img &lt;промпт&gt;", "4 картинки по тексту"),
         ("/one &lt;промпт&gt;", "1 картинка"),
         ("/portrait &lt;промпт&gt;", "2 вертикальные картинки"),
@@ -4572,6 +4622,7 @@ _HELP_SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     )),
     ("👑 Владелец (OWNER_ID)", (
         ("/admin_help", "этот справочник команд"),
+        ("/addpromo &lt;код&gt; &lt;кредиты&gt; [N]", "создать промокод (N использований, по умолч. 1)"),
     )),
 )
 
@@ -7925,6 +7976,21 @@ async def handle_plain_text(message: types.Message):
                 await message.answer(f"⚠️ Ответ записан, но не доставлен: {exc}")
         else:
             await message.answer(f"⚠️ Тикет #{ticket_id} не найден.")
+        return
+
+    # Промокод: ждём ввода кода после /promo без аргумента.
+    if awaiting == "promo":
+        st["await"] = None
+        credits_got = metrics.redeem_promo(text.strip(), user_id)
+        if credits_got is None:
+            await message.answer(flow_copy.msg("promo_invalid"))
+        else:
+            balance = credit_store.add(user_id, credits_got)
+            metrics.log_event("promo_redeemed", user_id=user_id, payload={"code": text.strip().upper(), "credits": credits_got})
+            await message.answer(
+                flow_copy.msg("promo_success", credits=credits_got, balance=balance),
+                parse_mode="HTML",
+            )
         return
 
     # Photo-edit entry is waiting for an upload; plain text must not open the image wizard.

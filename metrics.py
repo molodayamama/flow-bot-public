@@ -72,6 +72,10 @@ __all__ = [
     "report_top_referrers",
     "backfill_users_from_metrics",
     "user_exists",
+    # promo codes
+    "create_promo_code",
+    "redeem_promo",
+    "list_promo_codes",
 ]
 
 log = logging.getLogger("flow.metrics")
@@ -231,6 +235,24 @@ CREATE TABLE IF NOT EXISTS support_tickets (
 );
 CREATE INDEX IF NOT EXISTS idx_tickets_user   ON support_tickets(user_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_admin  ON support_tickets(admin_msg_id);
+
+CREATE TABLE IF NOT EXISTS promo_codes (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    code         TEXT UNIQUE NOT NULL COLLATE NOCASE,
+    credits      INTEGER NOT NULL,
+    max_uses     INTEGER NOT NULL DEFAULT 1,
+    uses         INTEGER NOT NULL DEFAULT 0,
+    created_by   INTEGER,
+    created_at   TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS promo_redemptions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    code         TEXT NOT NULL COLLATE NOCASE,
+    user_id      INTEGER NOT NULL,
+    redeemed_at  TEXT DEFAULT (datetime('now')),
+    UNIQUE(code, user_id)
+);
 """
 
 
@@ -2151,6 +2173,81 @@ def reply_ticket(ticket_id: int, reply_text: str) -> dict | None:
     except Exception:  # noqa: BLE001
         log.warning("reply_ticket failed for ticket_id=%r", ticket_id, exc_info=True)
         return None
+
+
+# ── promo codes ───────────────────────────────────────────────────────────
+
+
+def create_promo_code(code: str, credits: int, max_uses: int = 1, created_by: int | None = None) -> bool:
+    """Insert a new promo code; returns True on success, False if code already exists."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                "INSERT INTO promo_codes (code, credits, max_uses, created_by) VALUES (?,?,?,?)",
+                (code.upper().strip(), credits, max(1, max_uses), created_by),
+            )
+            conn.commit()
+            return True
+    except sqlite3.IntegrityError:
+        return False
+    except Exception:  # noqa: BLE001
+        log.warning("create_promo_code failed for code=%r", code, exc_info=True)
+        return False
+
+
+def redeem_promo(code: str, user_id: int) -> int | None:
+    """Attempt to redeem a promo code for a user.
+
+    Returns the number of credits if successful, or None if:
+    - code not found / exhausted
+    - user already redeemed this code
+    """
+    code = code.upper().strip()
+    try:
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT credits, max_uses, uses FROM promo_codes WHERE code=?",
+                (code,),
+            ).fetchone()
+            if not row:
+                return None
+            if row["uses"] >= row["max_uses"]:
+                return None
+            # Check if user already redeemed
+            dup = conn.execute(
+                "SELECT 1 FROM promo_redemptions WHERE code=? AND user_id=?",
+                (code, user_id),
+            ).fetchone()
+            if dup:
+                return None
+            # Claim redemption + increment counter atomically
+            conn.execute(
+                "INSERT INTO promo_redemptions (code, user_id) VALUES (?,?)",
+                (code, user_id),
+            )
+            conn.execute(
+                "UPDATE promo_codes SET uses = uses + 1 WHERE code=?",
+                (code,),
+            )
+            conn.commit()
+            return row["credits"]
+    except Exception:  # noqa: BLE001
+        log.warning("redeem_promo failed for code=%r user_id=%r", code, user_id, exc_info=True)
+        return None
+
+
+def list_promo_codes() -> list[dict]:
+    """Return all promo codes for admin reporting."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            rows = _rows(conn, "SELECT code, credits, max_uses, uses, created_at FROM promo_codes ORDER BY created_at DESC")
+            return [dict(r) for r in rows]
+    except Exception:  # noqa: BLE001
+        log.warning("list_promo_codes failed", exc_info=True)
+        return []
 
 
 def get_users_for_digest(min_days: int = 3, max_days: int = 7, limit: int = 100) -> list[dict]:
