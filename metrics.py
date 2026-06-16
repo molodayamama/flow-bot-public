@@ -207,6 +207,30 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_last_active ON users(last_active);
 CREATE INDEX IF NOT EXISTS idx_users_first_seen  ON users(first_seen);
 CREATE INDEX IF NOT EXISTS idx_users_channel     ON users(acq_channel);
+
+CREATE TABLE IF NOT EXISTS user_gallery (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    file_id    TEXT NOT NULL,
+    token      TEXT,
+    prompt     TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_gallery_user ON user_gallery(user_id, id);
+
+CREATE TABLE IF NOT EXISTS support_tickets (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL,
+    username      TEXT,
+    status        TEXT NOT NULL DEFAULT 'open',
+    message_text  TEXT NOT NULL,
+    reply_text    TEXT,
+    admin_msg_id  INTEGER,
+    created_at    TEXT DEFAULT (datetime('now')),
+    replied_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tickets_user   ON support_tickets(user_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_admin  ON support_tickets(admin_msg_id);
 """
 
 
@@ -1965,3 +1989,151 @@ def report_account_stats() -> dict:
     except Exception:  # noqa: BLE001
         log.warning("report_account_stats failed", exc_info=True)
         return {}
+
+
+# ── gallery ────────────────────────────────────────────────────────────
+
+
+def save_to_gallery(
+    user_id: int,
+    file_id: str,
+    *,
+    token: str | None = None,
+    prompt: str | None = None,
+) -> None:
+    """Persist an image file_id to the user's personal gallery (last 20 kept)."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                "INSERT INTO user_gallery (user_id, file_id, token, prompt) VALUES (?,?,?,?)",
+                (user_id, file_id, token, (prompt or "")[:400]),
+            )
+            # Prune to last 20 entries for this user.
+            conn.execute(
+                "DELETE FROM user_gallery WHERE user_id=? AND id NOT IN "
+                "(SELECT id FROM user_gallery WHERE user_id=? ORDER BY id DESC LIMIT 20)",
+                (user_id, user_id),
+            )
+            conn.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("save_to_gallery failed for user_id=%r", user_id, exc_info=True)
+
+
+def get_gallery(user_id: int, limit: int = 20) -> list:
+    """Return last ``limit`` gallery entries for a user; newest first."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            return [
+                {
+                    "file_id":    r["file_id"],
+                    "token":      r["token"],
+                    "prompt":     r["prompt"],
+                    "created_at": r["created_at"],
+                }
+                for r in _rows(
+                    conn,
+                    "SELECT file_id, token, prompt, created_at "
+                    "FROM user_gallery WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                    (user_id, int(limit)),
+                )
+            ]
+    except Exception:  # noqa: BLE001
+        log.warning("get_gallery failed for user_id=%r", user_id, exc_info=True)
+        return []
+
+
+# ── support tickets ────────────────────────────────────────────────────
+
+
+def create_ticket(user_id: int, username: str | None, text: str) -> int:
+    """Create a new support ticket; returns the ticket id (0 on error)."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            cur = conn.execute(
+                "INSERT INTO support_tickets (user_id, username, message_text) VALUES (?,?,?)",
+                (user_id, username, text[:2000]),
+            )
+            conn.commit()
+            return cur.lastrowid or 0
+    except Exception:  # noqa: BLE001
+        log.warning("create_ticket failed for user_id=%r", user_id, exc_info=True)
+        return 0
+
+
+def set_ticket_admin_msg(ticket_id: int, admin_msg_id: int) -> None:
+    """Store the admin-facing Telegram message id so we can resolve replies."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                "UPDATE support_tickets SET admin_msg_id=? WHERE id=?",
+                (admin_msg_id, ticket_id),
+            )
+            conn.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("set_ticket_admin_msg failed", exc_info=True)
+
+
+def get_ticket_by_admin_msg(admin_msg_id: int) -> dict | None:
+    """Look up a ticket by the message id we sent to the admin."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT id, user_id, username, message_text, status "
+                "FROM support_tickets WHERE admin_msg_id=?",
+                (admin_msg_id,),
+            ).fetchone()
+            return dict(row) if row else None
+    except Exception:  # noqa: BLE001
+        log.warning("get_ticket_by_admin_msg failed", exc_info=True)
+        return None
+
+
+def reply_ticket(ticket_id: int, reply_text: str) -> dict | None:
+    """Mark ticket as replied; returns {user_id, username, message_text} or None."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                "UPDATE support_tickets SET reply_text=?, status='replied', "
+                "replied_at=datetime('now') WHERE id=?",
+                (reply_text[:2000], ticket_id),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT user_id, username, message_text FROM support_tickets WHERE id=?",
+                (ticket_id,),
+            ).fetchone()
+            return dict(row) if row else None
+    except Exception:  # noqa: BLE001
+        log.warning("reply_ticket failed for ticket_id=%r", ticket_id, exc_info=True)
+        return None
+
+
+def get_user_tickets(user_id: int) -> list:
+    """Return all tickets for a user (newest first, up to 20)."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            return [
+                {
+                    "id":           r["id"],
+                    "status":       r["status"],
+                    "message_text": r["message_text"],
+                    "reply_text":   r["reply_text"],
+                    "created_at":   r["created_at"],
+                }
+                for r in _rows(
+                    conn,
+                    "SELECT id, status, message_text, reply_text, created_at "
+                    "FROM support_tickets WHERE user_id=? ORDER BY id DESC LIMIT 20",
+                    (user_id,),
+                )
+            ]
+    except Exception:  # noqa: BLE001
+        log.warning("get_user_tickets failed for user_id=%r", user_id, exc_info=True)
+        return []

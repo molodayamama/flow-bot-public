@@ -513,7 +513,8 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("result = await _client_for_acc(ref.account_id).upsample_image", self.source)
         self.assertIn("build_upsample_payload", self.source)
         self.assertIn("parse_upsample_response", self.source)
-        self.assertIn('b("realup", "realup")', self.source)
+        # Note: realup button was removed from _image_keyboard in UX cleanup (Point 5).
+        # The handler remains wired via action_callback_data / action == "realup".
         self.assertIn('elif action == "realup"', self.source)
         # realup must NOT silently fall back to the prompt enhance anymore.
         real_start = self.source.index("async def _real_upscale_and_send")
@@ -525,7 +526,9 @@ class BotMenuWiringTests(unittest.TestCase):
         block = self.source[start:start + 900]
         self.assertNotIn('b("mix"', block)          # «В микс» removed from results
         self.assertNotIn('b("up2x"', block)         # «Чёткость ×2» removed from results
-        self.assertIn('b("realup", "realup")', block)  # HD-upscale button kept
+        # realup removed from post-result keyboard in UX cleanup (Point 5: cleaner action set)
+        self.assertIn('b("edit", "edit")', block)   # edit stays
+        self.assertIn('b("vary", "revary")', block) # variants stay
         self.assertIn('· {price} кр', block)        # price tags are credits, not Stars
 
     def test_realup_label_is_improve_quality(self) -> None:
@@ -817,7 +820,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('"acquired_from_channel"', self.source)
         # Атрибуция стоит внутри cmd_start (рядом с рефералкой), не где попало.
         start = self.source.index("async def cmd_start")
-        block = self.source[start:start + 1600]
+        block = self.source[start:start + 2400]
         self.assertIn("channel = parse_channel_seed(payload)", block)
         self.assertIn("metrics.record_acquisition(user_id=user_id, channel=channel)", block)
         # Админ-отчёт по каналам читает report_channels и умеет выдавать ссылку.
@@ -1327,7 +1330,8 @@ class BotImportSmokeTests(unittest.TestCase):
             robo_texts = [b.text for row in fb.topup_robo_kb().inline_keyboard for b in row]
             self.assertIn("45 кр · только картинки · ~4 карт. · 45 ₽", robo_texts)
             self.assertTrue(any("100 кр" in text and "2 видео" in text and "90 ₽" in text for text in robo_texts))
-            self.assertTrue(any("1500 кр" in text and "1050 ₽" in text and "🔥 +30%" in text for text in robo_texts))
+            # rub badge: 1.0₽/кр (trial) vs 0.70₽/кр (1500) → +43% more credits
+            self.assertTrue(any("1500 кр" in text and "1050 ₽" in text and "🔥 +" in text for text in robo_texts))
             fb._image_keyboard("abcd1234")
             fb.video_family_kb()           # family buttons now carry "· от N кр"
             fb.ingredients_kb(1, "land", 1, "veo-fast", has_caption=True)

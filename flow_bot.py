@@ -2985,24 +2985,26 @@ async def ensure_user_project(user_id: int, *, account_id: str | None = None) ->
 
 
 def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
-    """Инлайн-кнопки действий для конкретной выданной картинки."""
+    """Инлайн-кнопки действий для конкретной выданной картинки.
+
+    Упрощённый набор: правка · варианты · оживить · скачать.
+    Апскейл убран из основного потока (редко используется).
+    """
     B = types.InlineKeyboardButton
 
     def b(action: str, copy_key: str) -> types.InlineKeyboardButton:
-        # Show the credit cost on paid actions; free ones (download) stay clean.
         label = flow_copy.label(copy_key)
         price = action_price(copy_key)
         if price > 0:
             label = f"{label} · {price} кр"
         return B(text=label, callback_data=action_callback_data(action, token))
 
+    animate_price = _vid_family_min_price("ing")
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
             [b("edit", "edit"), b("vary", "revary")],
-            [b("regen", "regen"), b("realup", "realup")],
-            [B(text=f"{L('animate')} · от {_vid_family_min_price('ing')} кр",
-               callback_data=f"an:img:{token}")],
-            [b("download", "dl_raw")],
+            [B(text=f"🎬 Оживить · от {animate_price} кр", callback_data=f"an:img:{token}"),
+             b("download", "dl_raw")],
         ]
     )
 
@@ -3024,15 +3026,20 @@ def _img_retry_kb() -> types.InlineKeyboardMarkup:
     ])
 
 
-def main_menu_kb(show_repeat: bool = False) -> types.InlineKeyboardMarkup:
+def main_menu_kb(show_repeat: bool = False, credits: int | None = None) -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    balance_label = (
+        f"💳 {credits} кр · Пополнить" if credits is not None
+        else L("balance")
+    )
     rows = [
         [_menu_button("gen", "m:gen")],
         [_menu_button("vid_gen", "m:vid")],
         [_menu_button("ideas", "m:ideas")],
         [_menu_button("myphoto", "m:myphoto")],
-        [_menu_button("balance", "m:balance")],
-        [_menu_button("invite", "m:invite")],
-        [_menu_button("help", "m:help")],
+        [B(text=balance_label, callback_data="m:balance")],
+        [_menu_button("gallery", "m:gallery"), _menu_button("invite", "m:invite")],
+        [_menu_button("support", "m:support"), _menu_button("help", "m:help")],
     ]
     if show_repeat:
         rows.insert(0, [_menu_button("repeat_last", "m:repeat")])
@@ -3092,22 +3099,57 @@ def _fmt_rows(fmt: str, prefix: str = "w:fmt") -> list:
     ]
 
 
-def wizard_kb(count: int, fmt: str, imodel: str = DEFAULT_IMAGE_MODEL) -> types.InlineKeyboardMarkup:
+_QUICK_IDEAS: list[str] = [
+    "котик в стиле студии Гибли, мягкий свет",
+    "киберпанк Москва ночью, неоновые вывески",
+    "акварельный портрет девушки с рыжими кудрями",
+    "уютная кофейня осенью, дождь за окном, тёплый свет",
+    "астронавт на Марсе, алый закат, одиночество",
+    "дракон из кристаллов льда, горы на фоне",
+    "магический лес с грибами-фонарями ночью",
+    "ретро-автомобиль 60-х, пастельные тона, поп-арт",
+    "детёныш лисы в снегу, крупный план, профессиональное фото",
+    "японский сад сакуры на рассвете, туман",
+    "пиратский корабль в шторм, масло, кино-кадр",
+    "город-пузырь под водой, биолюминесценция",
+    "девушка читает книгу в библиотеке с высокими потолками",
+    "волк воет на луну, силуэт, минимализм",
+    "тёплая кухня бабушки с пирогами, солнечный полдень",
+    "неоновый самурай в пустом метро",
+    "зачарованный замок в облаках, золотой час",
+    "фотореализм: капля воды на лепестке розы, макро",
+    "медведь-художник рисует пейзаж в берёзовом лесу",
+    "будущее: летающие сады над мегаполисом",
+]
+
+
+def wizard_kb(
+    count: int,
+    fmt: str,
+    imodel: str = DEFAULT_IMAGE_MODEL,
+    ideas: list[str] | None = None,
+) -> types.InlineKeyboardMarkup:
     """Один экран: количество + формат + модель + «Сгенерировать» (выбор — зелёная кнопка)."""
     B = types.InlineKeyboardButton
-    return types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                _sel_btn(L("cnt:1"), count == 1, "w:cnt:1"),
-                _sel_btn(L("cnt:2"), count == 2, "w:cnt:2"),
-                _sel_btn(L("cnt:4"), count == 4, "w:cnt:4"),
-            ],
-            *_fmt_rows(fmt, "w:fmt"),
-            _imodel_row(imodel, "w:imodel"),
-            [_menu_button("go", "w:go")],
-            [_menu_button("cancel", "w:cancel")],
-        ]
-    )
+    total_price = price_gen(count) + image_model_extra(imodel) * count
+    go_label = f"{L('go')} · {total_price} кр"
+    rows: list[list[types.InlineKeyboardButton]] = [
+        [
+            _sel_btn(L("cnt:1"), count == 1, "w:cnt:1"),
+            _sel_btn(L("cnt:2"), count == 2, "w:cnt:2"),
+            _sel_btn(L("cnt:4"), count == 4, "w:cnt:4"),
+        ],
+        *_fmt_rows(fmt, "w:fmt"),
+        _imodel_row(imodel, "w:imodel"),
+        [B(text=go_label, callback_data="w:go")],
+    ]
+    # Быстрые идеи — 3 кнопки-подсказки + «Ещё →»
+    if ideas:
+        idea_row = [B(text=f"💡 {ideas[i][:28]}…" if len(ideas[i]) > 28 else f"💡 {ideas[i]}", callback_data=f"w:idea:{i}") for i in range(min(3, len(ideas)))]
+        rows.append(idea_row)
+        rows.append([B(text="✨ Ещё идеи →", callback_data="w:idea:next")])
+    rows.append([_menu_button("cancel", "w:cancel")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def edit_settings_kb(fmt: str, imodel: str) -> types.InlineKeyboardMarkup:
@@ -3191,12 +3233,21 @@ async def _edit_or_answer(
 
 
 async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
+    import random as _random
     st = _ws(user_id)
     st.setdefault("count", DEFAULT_COUNT)
     st.setdefault("fmt", DEFAULT_FMT)
     st.setdefault("imodel", DEFAULT_IMAGE_MODEL)
     st["step"] = "wizard"
-    kb = wizard_kb(st["count"], st["fmt"], st["imodel"])
+    # Инициализируем перемешанный список идей один раз за сессию визарда
+    if "ideas_pool" not in st:
+        pool = list(_QUICK_IDEAS)
+        _random.shuffle(pool)
+        st["ideas_pool"] = pool
+        st["ideas_offset"] = 0
+    offset = st.get("ideas_offset", 0)
+    ideas = st["ideas_pool"][offset:offset + 3]
+    kb = wizard_kb(st["count"], st["fmt"], st["imodel"], ideas=ideas)
     text = _wizard_text(user_id)
     if edit:
         await _edit_or_answer(message, text, kb, parse_mode="HTML")
@@ -3295,6 +3346,10 @@ def _vid_family_min_price(code: str) -> int:
     return 0
 
 
+_VID_QUICKSTART_MODEL = "omni-flash-4s"
+_VID_QUICKSTART_FAMILY = "omni-flash"
+
+
 def video_family_kb() -> types.InlineKeyboardMarkup:
     B = types.InlineKeyboardButton
 
@@ -3304,7 +3359,12 @@ def video_family_kb() -> types.InlineKeyboardMarkup:
             callback_data=f"v:fam:{code}",
         )
 
+    # Быстрый старт — omni-flash-4s без пикера модели
+    quick_price = video_price(_VID_QUICKSTART_MODEL, 1, "text")
+    quick_btn = B(text=f"⚡ Быстро · {quick_price} кр", callback_data="v:quick")
+
     return types.InlineKeyboardMarkup(inline_keyboard=[
+        [quick_btn],
         [fam("omni")],
         [fam("veo")],
         [fam("ing")],
@@ -3377,20 +3437,25 @@ def _video_can_extend(ref: VideoRef | None) -> bool:
 
 
 def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
+    """Клавиатура под результатом видео. Скачать всегда первым."""
     B = types.InlineKeyboardButton
     ref = video_registry.get(vtoken)
-    rows = [
-        [B(text=L("vid_dl"), callback_data=f"v:dl:{vtoken}")],
-    ]
+
+    dl_row = [B(text=L("vid_dl"), callback_data=f"v:dl:{vtoken}")]
     if ref and ref.mode == "extend" and ref.media_id:
-        rows.append([B(text=L("vid_dl_seg"), callback_data=f"v:dl_seg:{vtoken}")])
+        dl_row.append(B(text=L("vid_dl_seg"), callback_data=f"v:dl_seg:{vtoken}"))
+
+    action_row: list[types.InlineKeyboardButton] = []
     if _video_can_edit(ref):
         edit_price = action_price("video_prompt_edit")
-        rows.append([B(text=f"{L('vid_edit')} · {edit_price} кр", callback_data=f"v:edit:{vtoken}")])
+        action_row.append(B(text=f"{L('vid_edit')} · {edit_price} кр", callback_data=f"v:edit:{vtoken}"))
     if _video_can_extend(ref):
-        # Extension is always priced as the configured extend action.
         next_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
-        rows.append([B(text=f"{L('vid_extend')} · {next_price} кр", callback_data=f"v:extend:{vtoken}")])
+        action_row.append(B(text=f"{L('vid_extend')} · {next_price} кр", callback_data=f"v:extend:{vtoken}"))
+
+    rows = [dl_row]
+    if action_row:
+        rows.append(action_row)
     if ref:
         rows.append([_invite_button(ref.user_id)])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
@@ -3667,6 +3732,51 @@ def _value_suffix(pack_id: str) -> str:
     return f" 🔥 +{pct}%" if pct else ""
 
 
+def _stars_per_credit(pack_id: str) -> float | None:
+    """Stars cost per 1 credit for this pack; None if unknown."""
+    p = credit_pack(pack_id)
+    if not p or not p.get("stars") or not p.get("credits"):
+        return None
+    return float(p["stars"]) / float(p["credits"])
+
+
+def _rub_per_credit(pack_id: str) -> float | None:
+    """Rub cost per 1 credit; None if unknown."""
+    p = credit_pack(pack_id)
+    if not p or not p.get("credits"):
+        return None
+    try:
+        amount = float(_robokassa_pack_amount(pack_id))
+        return amount / float(p["credits"])
+    except Exception:
+        return None
+
+
+def _discount_badge(pack_id: str, base_id: str = "trial") -> str:
+    """Returns ' 🔥 +N%' (extra credits vs base pack), or ''."""
+    base_rate = _stars_per_credit(base_id)
+    this_rate = _stars_per_credit(pack_id)
+    if base_rate is None or this_rate is None or this_rate >= base_rate:
+        return ""
+    # "+N%" = сколько кредитов больше получаешь за те же Stars
+    pct = round((base_rate / this_rate - 1.0) * 100)
+    return f" 🔥 +{pct}%" if pct >= 5 else ""
+
+
+def _pack_usage_hint(credits: int) -> str:
+    """Краткий hint сколько видео/картинок можно создать на этот пак."""
+    min_vid = min(
+        video_price(m, 1, "text")
+        for m in ("omni-flash-4s", "veo-lite")
+        if video_price(m, 1, "text") > 0
+    )
+    vids = credits // min_vid
+    if vids >= 1:
+        return f"~{vids} видео"
+    imgs = credits // max(price_gen(1), 1)
+    return f"~{imgs} карт."
+
+
 def _stars_pack_label(pack_id: str) -> str:
     p = credit_pack(pack_id)
     if not p:
@@ -3675,7 +3785,10 @@ def _stars_pack_label(pack_id: str) -> str:
         return f"🧪 Тест · {p['credits']} кр · {p['stars']}⭐"
     if pack_id == "trial":
         return f"{p['credits']} кр · только картинки · ~{p['credits'] // price_gen(1)} карт. · {p['stars']}⭐"
-    return f"{p['credits']} кр · {_pack_usage_hint(p['credits'])} · {p['stars']}⭐{_value_suffix(pack_id)}"
+    rate = _stars_per_credit(pack_id)
+    rate_str = f" · {rate:.1f}⭐/кр" if rate else ""
+    badge = _discount_badge(pack_id)
+    return f"{p['credits']} кр{rate_str} · {p['stars']}⭐{badge}"
 
 
 def _robokassa_pack_label(pack_id: str) -> str:
@@ -3685,7 +3798,15 @@ def _robokassa_pack_label(pack_id: str) -> str:
     amount = _rub_display(_robokassa_pack_amount(pack_id))
     if pack_id == "trial":
         return f"{p['credits']} кр · только картинки · ~{p['credits'] // price_gen(1)} карт. · {amount} ₽"
-    return f"{p['credits']} кр · {_pack_usage_hint(p['credits'])} · {amount} ₽{_value_suffix(pack_id)}"
+    rate = _rub_per_credit(pack_id)
+    # для рублёвых пакетов сравниваем через рублёвую ставку: +N% = больше кредитов за те же ₽
+    base_r = _rub_per_credit("trial")
+    badge = ""
+    if base_r and rate and rate < base_r:
+        pct = round((base_r / rate - 1.0) * 100)
+        badge = f" 🔥 +{pct}%" if pct >= 5 else ""
+    usage = _pack_usage_hint(p["credits"])
+    return f"{p['credits']} кр · {usage} · {amount} ₽{badge}"
 
 
 def topup_method_kb() -> types.InlineKeyboardMarkup:
@@ -3736,7 +3857,8 @@ async def show_main_menu(
         except Exception:
             pass
     last = _ws(user_id).get("last")
-    kb = main_menu_kb(show_repeat=bool(last))
+    credits = credit_store.balance(user_id)
+    kb = main_menu_kb(show_repeat=bool(last), credits=credits)
     text = flow_copy.msg("menu_title")
     try:
         if edit:
@@ -3794,7 +3916,11 @@ async def _send_one_image(
     )
     keyboard = _image_keyboard(token)
     try:
-        await message.reply_photo(photo=url, caption=caption, reply_markup=keyboard)
+        sent = await message.reply_photo(photo=url, caption=caption, reply_markup=keyboard)
+        if sent and sent.photo:
+            metrics.save_to_gallery(
+                user_id, sent.photo[-1].file_id, token=token, prompt=prompt[:400] if prompt else None
+            )
         return
     except Exception as e:
         log.error(f"Ошибка отправки фото {index}/{total}: {e}")
@@ -3807,11 +3933,16 @@ async def _send_one_image(
                     data = await r.read()
                     from aiogram.types import BufferedInputFile
 
-                    await message.reply_photo(
+                    sent2 = await message.reply_photo(
                         photo=BufferedInputFile(data, f"img_{index}.png"),
                         caption=caption,
                         reply_markup=keyboard,
                     )
+                    if sent2 and sent2.photo:
+                        metrics.save_to_gallery(
+                            user_id, sent2.photo[-1].file_id, token=token,
+                            prompt=prompt[:400] if prompt else None,
+                        )
     except Exception as e2:
         log.error(f"Повторная ошибка отправки фото {index}/{total}: {e2}")
 
@@ -3833,6 +3964,7 @@ async def cmd_start(message: types.Message):
     # Deep-link приглашение: /start ref_<id> — фиксируем рефералку (один раз).
     parts = (message.text or "").split(maxsplit=1)
     payload = parts[1].strip() if len(parts) > 1 else ""
+    _referral_welcome_bonus: int = 0
     if payload.startswith(REFERRAL_PARAM_PREFIX) and not getattr(message.from_user, "is_bot", False):
         raw = payload[len(REFERRAL_PARAM_PREFIX):]
         if raw.isdigit():
@@ -3842,6 +3974,7 @@ async def cmd_start(message: types.Message):
             ):
                 metrics.log_event("referral_joined", user_id=user_id,
                                   payload={"referrer": referrer_id})
+                _referral_welcome_bonus = credit_store.balance(user_id)
     # Рекламный deep-link: /start seed_<канал> — first-touch атрибуция канала.
     channel = parse_channel_seed(payload)
     if channel and not getattr(message.from_user, "is_bot", False):
@@ -3849,6 +3982,12 @@ async def cmd_start(message: types.Message):
             metrics.log_event("acquired_from_channel", user_id=user_id,
                               username=_username(message), payload={"channel": channel})
     # Показываем приветствие вместе с постоянной нижней клавиатурой.
+    if _referral_welcome_bonus > 0:
+        gens = _referral_welcome_bonus // price_gen(1)
+        await message.answer(
+            flow_copy.msg("referral_welcome", bonus=_referral_welcome_bonus, gens=gens),
+            parse_mode="HTML",
+        )
     await message.answer(flow_copy.msg("welcome"), reply_markup=reply_menu_kb(), parse_mode="HTML")
     await show_main_menu(message, user_id=user_id)
 
@@ -5257,6 +5396,73 @@ async def _do_mix_and_send(
     await status_msg.delete()
 
 
+async def _show_gallery(message: types.Message, *, user_id: int) -> None:
+    """Показываем последние 20 изображений из галереи пользователя."""
+    rows = metrics.get_gallery(user_id, limit=20)
+    back_kb = types.InlineKeyboardMarkup(inline_keyboard=[[_menu_button("menu", "m:menu")]])
+    if not rows:
+        await message.answer(flow_copy.msg("gallery_empty"), reply_markup=back_kb)
+        return
+    # Разбиваем на группы по 10 (Telegram media group limit)
+    header_sent = False
+    for chunk_start in range(0, len(rows), 10):
+        chunk = rows[chunk_start:chunk_start + 10]
+        media_group = [
+            types.InputMediaPhoto(media=r["file_id"])
+            for r in chunk
+        ]
+        if not header_sent:
+            media_group[0] = types.InputMediaPhoto(
+                media=chunk[0]["file_id"],
+                caption=flow_copy.msg("gallery_header", count=len(rows)),
+            )
+            header_sent = True
+        try:
+            await message.answer_media_group(media=media_group)
+        except Exception as exc:
+            log.warning(f"Gallery send error: {exc}")
+    # Кнопка «назад» отдельным сообщением
+    await message.answer("⬆️ Вот твои последние работы", reply_markup=back_kb)
+
+
+async def _show_support_menu(message: types.Message, *, user_id: int, edit: bool) -> None:
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=L("support_new"), callback_data="m:support:new")],
+        [types.InlineKeyboardButton(text=L("support_my"), callback_data="m:support:my")],
+        [_menu_button("menu", "m:menu")],
+    ])
+    if edit:
+        await message.edit_text(flow_copy.msg("support_menu"), reply_markup=kb)
+    else:
+        await message.answer(flow_copy.msg("support_menu"), reply_markup=kb)
+
+
+async def _show_my_tickets(message: types.Message, *, user_id: int, edit: bool) -> None:
+    tickets = metrics.get_user_tickets(user_id)
+    back_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [_menu_button("support", "m:support")],
+        [_menu_button("menu", "m:menu")],
+    ])
+    if not tickets:
+        text = flow_copy.msg("support_no_tickets")
+    else:
+        items = "\n\n".join(
+            flow_copy.msg(
+                "support_ticket_item",
+                n=i + 1,
+                status="✅ Отвечен" if t["status"] == "replied" else "⏳ Ожидает",
+                text=t["message_text"][:80],
+                reply=t["reply_text"] or "",
+            )
+            for i, t in enumerate(tickets)
+        )
+        text = flow_copy.msg("support_tickets_list", items=items)
+    if edit:
+        await message.edit_text(text, reply_markup=back_kb)
+    else:
+        await message.answer(text, reply_markup=back_kb)
+
+
 @dp.callback_query(F.data.startswith("m:"))
 async def on_menu_action(callback: types.CallbackQuery):
     """Кнопки главного меню и экранов (генерация/баланс/пополнение/помощь)."""
@@ -5337,6 +5543,30 @@ async def on_menu_action(callback: types.CallbackQuery):
         pending_edits.pop(user_id, None)
         _ws(user_id)["await"] = None
         await show_main_menu(msg, user_id=user_id, edit=True)
+    elif data == "m:gallery":
+        await callback.answer()
+        await _show_gallery(msg, user_id=user_id)
+    elif data == "m:support":
+        await callback.answer()
+        await _show_support_menu(msg, user_id=user_id, edit=True)
+    elif data == "m:support:new":
+        await callback.answer()
+        st = _ws(user_id)
+        st["support_await"] = True
+        await msg.edit_text(flow_copy.msg("support_ask"))
+    elif data == "m:support:my":
+        await callback.answer()
+        await _show_my_tickets(msg, user_id=user_id, edit=True)
+    elif data.startswith("m:sreply:"):
+        # Админ нажал «Ответить» под тикетом
+        if user_id in ADMIN_IDS:
+            ticket_id = int(data.split(":", 2)[2])
+            st = _ws(user_id)
+            st["admin_reply_ticket"] = ticket_id
+            await callback.answer()
+            await msg.reply(f"✏️ Введи ответ на тикет #{ticket_id}:")
+        else:
+            await callback.answer()
     else:
         await callback.answer()
 
@@ -5786,6 +6016,34 @@ async def on_wizard_action(callback: types.CallbackQuery):
         await callback.answer()
         await show_wizard(msg, user_id=user_id, edit=True)
         return
+    if data == "w:idea:next":
+        pool = st.get("ideas_pool", [])
+        offset = st.get("ideas_offset", 0) + 3
+        if offset + 3 > len(pool):
+            # Конец пула — перемешиваем заново
+            import random as _random
+            pool = list(_QUICK_IDEAS)
+            _random.shuffle(pool)
+            st["ideas_pool"] = pool
+            offset = 0
+        st["ideas_offset"] = offset
+        await callback.answer()
+        await show_wizard(msg, user_id=user_id, edit=True)
+        return
+    if data.startswith("w:idea:"):
+        try:
+            idx = int(data.split(":")[2])
+        except (IndexError, ValueError):
+            await callback.answer()
+            return
+        pool = st.get("ideas_pool", [])
+        offset = st.get("ideas_offset", 0)
+        idea = pool[offset + idx] if 0 <= offset + idx < len(pool) else None
+        if idea:
+            st["pending_prompt"] = idea
+            await callback.answer(f"💡 {idea[:40]}", show_alert=False)
+        await show_wizard(msg, user_id=user_id, edit=True)
+        return
     if data == "w:go":
         pending = st.get("pending_prompt")
         if pending:
@@ -5847,6 +6105,14 @@ async def on_video_action(callback: types.CallbackQuery):
     if data == "v:repeat":
         await callback.answer("Повторяю 🔁")
         await _video_repeat_last(callback, user_id)
+        return
+
+    # ⚡ Быстрый старт — omni-flash-4s, пропускаем пикер семейства и модели.
+    if data == "v:quick":
+        await callback.answer()
+        st["vfamily"] = _VID_QUICKSTART_FAMILY
+        st["vmodel"] = _VID_QUICKSTART_MODEL
+        await show_video_settings(msg, user_id=user_id)
         return
 
     # Выбор семейства.
@@ -7437,6 +7703,46 @@ async def handle_plain_text(message: types.Message):
         return
 
     awaiting = st.get("await")
+
+    # ─── Поддержка: пользователь вводит сообщение для нового тикета ───────────
+    if st.get("support_await"):
+        st.pop("support_await", None)
+        ticket_id = metrics.create_ticket(user_id, username=_username(message), text=text)
+        # Пересылаем администратору
+        admin_id = ADMIN_IDS[0] if ADMIN_IDS else None
+        if admin_id:
+            reply_btn = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text=f"📝 Ответить #{ticket_id}", callback_data=f"m:sreply:{ticket_id}")]
+            ])
+            try:
+                fwd = await message.bot.send_message(
+                    admin_id,
+                    f"🎫 Тикет #{ticket_id} от @{_username(message) or user_id}:\n\n{text}",
+                    reply_markup=reply_btn,
+                )
+                metrics.set_ticket_admin_msg(ticket_id, fwd.message_id)
+            except Exception as exc:
+                log.warning(f"Не удалось переслать тикет #{ticket_id} админу: {exc}")
+        back_kb = types.InlineKeyboardMarkup(inline_keyboard=[[_menu_button("menu", "m:menu")]])
+        await message.answer(flow_copy.msg("support_submitted", n=ticket_id), reply_markup=back_kb)
+        return
+
+    # ─── Ответ администратора на тикет ──────────────────────────────────────
+    if user_id in ADMIN_IDS and st.get("admin_reply_ticket"):
+        ticket_id = st.pop("admin_reply_ticket")
+        ticket_row = metrics.reply_ticket(ticket_id, reply_text=text)
+        if ticket_row:
+            try:
+                await message.bot.send_message(
+                    ticket_row["user_id"],
+                    flow_copy.msg("support_reply", n=ticket_id, text=text),
+                )
+                await message.answer(f"✅ Ответ на тикет #{ticket_id} отправлен пользователю.")
+            except Exception as exc:
+                await message.answer(f"⚠️ Ответ записан, но не доставлен: {exc}")
+        else:
+            await message.answer(f"⚠️ Тикет #{ticket_id} не найден.")
+        return
 
     # Photo-edit entry is waiting for an upload; plain text must not open the image wizard.
     if awaiting == "photo":
