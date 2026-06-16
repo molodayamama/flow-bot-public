@@ -276,6 +276,14 @@ tr:hover td{background:var(--pz-surface-2)}
 .log-chip{
   padding:1px 7px;border-radius:var(--r-pill);font-size:10px;font-weight:700;flex-shrink:0;
 }
+.log-filter-btn{
+  padding:2px 10px;border-radius:var(--r-pill);font-size:11px;font-weight:600;
+  border:1px solid var(--pz-line);background:var(--pz-surface-2);color:var(--pz-faint);
+  cursor:pointer;transition:all .15s;
+}
+.log-filter-btn.active,.log-filter-btn:hover{
+  background:rgba(84,215,214,.12);border-color:var(--pz-cyan);color:var(--pz-cyan);
+}
 
 /* ── Search bar ────────────────────────────────────── */
 .search-row{display:flex;align-items:center;gap:10px;margin-bottom:16px}
@@ -442,9 +450,17 @@ tr:hover td{background:var(--pz-surface-2)}
           <div style="color:var(--pz-faint);font-size:13px">Загрузка…</div>
         </div>
 
-        <div class="section-title" style="display:flex;align-items:center;gap:8px">
+        <div class="section-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           Последние события
           <span id="live-dot" title="Обновляется автоматически" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--pz-cyan);flex-shrink:0;animation:pulse 2s ease-in-out infinite;opacity:.8"></span>
+          <div id="log-filter-btns" style="display:flex;gap:4px;flex-wrap:wrap;margin-left:auto">
+            <button class="log-filter-btn active" data-filter="all" onclick="setLogFilter('all')">Все</button>
+            <button class="log-filter-btn" data-filter="image" onclick="setLogFilter('image')">🖼 Картинки</button>
+            <button class="log-filter-btn" data-filter="video" onclick="setLogFilter('video')">🎬 Видео</button>
+            <button class="log-filter-btn" data-filter="new" onclick="setLogFilter('new')">👤 Новые</button>
+            <button class="log-filter-btn" data-filter="topup" onclick="setLogFilter('topup')">💳 Оплаты</button>
+            <button class="log-filter-btn" data-filter="system" onclick="setLogFilter('system')">⚙ Система</button>
+          </div>
         </div>
         <div class="card">
           <div class="log-list" id="log-list">
@@ -737,6 +753,8 @@ tr:hover td{background:var(--pz-surface-2)}
             </div>
             <div>
               <div style="font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-faint);margin-bottom:8px">По дням (последние 14)</div>
+              <!-- Bar chart -->
+              <div id="rev-chart" style="margin-bottom:12px;height:80px;display:flex;align-items:flex-end;gap:3px"></div>
               <div class="table-wrap">
                 <table>
                   <thead><tr><th>Дата</th><th>₽</th><th>Платежи</th></tr></thead>
@@ -1006,18 +1024,39 @@ async function loadOverview() {
   renderLog(log);
 }
 
+let _logCache = [];
+let _logFilter = 'all';
+
+const _LOG_FILTER_MAP = {
+  'image':  e => (e.chip||'').includes('🖼') || (e.chip||'').includes('image'),
+  'video':  e => (e.chip||'').includes('🎬') || (e.chip||'').includes('video'),
+  'new':    e => (e.chip||'').includes('👤') || (e.chip||'').includes('new'),
+  'topup':  e => (e.chip||'').includes('💳') || (e.chip||'').includes('topup'),
+  'system': e => (e.chip||'').includes('failover') || (e.chip||'').includes('cooldown'),
+};
+
+function setLogFilter(f) {
+  _logFilter = f;
+  document.querySelectorAll('.log-filter-btn').forEach(b=>{
+    b.classList.toggle('active', b.dataset.filter === f);
+  });
+  renderLog(_logCache);
+}
+
 function renderLog(log) {
-  document.getElementById('log-list').innerHTML = log.length ? log.map(e=>{
-    const accBadge = e.account
+  _logCache = log;
+  const filtered = _logFilter === 'all' ? log : log.filter(_LOG_FILTER_MAP[_logFilter] || (()=>true));
+  document.getElementById('log-list').innerHTML = filtered.length ? filtered.map(e=>{
+    const accBadge = e.account && e.account !== '—'
       ? `<span class="mono" style="font-size:12px;color:var(--pz-cyan);flex-shrink:0;background:rgba(84,215,214,.08);border:1px solid rgba(84,215,214,.2);border-radius:4px;padding:1px 6px;margin-right:4px">${esc(e.account)}</span>`
       : '';
     return `<div class="log-row">
       <span class="log-time">${esc(e.time)}</span>
       ${accBadge}
-      <span class="log-text" style="font-size:13px">${e.text}</span>
+      <span class="log-text" style="font-size:13px">${esc(e.text)}</span>
       <span class="log-chip" style="background:rgba(${chipColor(e.color)},.12);color:var(--pz-${e.color||'muted'})">${esc(e.chip)}</span>
     </div>`;
-  }).join('') : '<div style="color:var(--pz-faint);font-size:13px;padding:12px 0">Событий пока нет</div>';
+  }).join('') : '<div style="color:var(--pz-faint);font-size:13px;padding:12px 0">Событий по фильтру нет</div>';
 }
 
 /* ── Accounts ──────────────────────────────────────── */
@@ -1171,6 +1210,23 @@ async function saveSettings() {
   const r1 = await api('POST','/config/settings',settings);
   const r2 = await api('POST','/config/flags',flags);
   (r1||r2) ? toast('success','Настройки сохранены') : toast('error','Бот оффлайн');
+}
+
+/* ── Revenue bar chart ─────────────────────────────── */
+function renderRevenueChart(days) {
+  const el = document.getElementById('rev-chart');
+  if (!el || !days || !days.length) return;
+  const maxVal = Math.max(...days.map(d => +(d.rub)||0), 1);
+  const H = 72;
+  el.innerHTML = days.map(d => {
+    const val = +(d.rub) || 0;
+    const h = Math.max(2, Math.round((val / maxVal) * H));
+    const label = (d.day||'').slice(5);
+    return `<div title="${esc(label+': '+val.toFixed(0)+'₽')}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:default">
+      <div style="width:100%;height:${h}px;background:rgba(200,242,95,.55);border-radius:2px 2px 0 0;min-height:2px"></div>
+      <div style="font-size:9px;color:var(--pz-faint);writing-mode:vertical-rl;transform:rotate(180deg);height:28px;overflow:hidden">${esc(label)}</div>
+    </div>`;
+  }).join('');
 }
 
 /* ── Toasts ────────────────────────────────────────── */
@@ -1358,6 +1414,8 @@ async function loadAnalytics() {
           <td class="mono">${fmt(d.count)}</td>
         </tr>`).join('')
       : `<tr><td colspan="3" style="color:var(--pz-faint);padding:12px;text-align:center">—</td></tr>`;
+    // SVG bar chart: last 14 days
+    renderRevenueChart(revenue.by_day.slice(0,14).reverse());
   }
 
   // Flow

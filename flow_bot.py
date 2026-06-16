@@ -5484,16 +5484,15 @@ async def _show_gallery(message: types.Message, *, user_id: int) -> None:
     rows = metrics.get_gallery(user_id, limit=20)
     back_kb = types.InlineKeyboardMarkup(inline_keyboard=[[_menu_button("menu", "m:menu")]])
     if not rows:
-        await message.answer(flow_copy.msg("gallery_empty"), reply_markup=back_kb)
+        await message.answer(
+            flow_copy.msg("gallery_empty"), reply_markup=back_kb, parse_mode="HTML"
+        )
         return
     # Разбиваем на группы по 10 (Telegram media group limit)
     header_sent = False
     for chunk_start in range(0, len(rows), 10):
         chunk = rows[chunk_start:chunk_start + 10]
-        media_group = [
-            types.InputMediaPhoto(media=r["file_id"])
-            for r in chunk
-        ]
+        media_group = [types.InputMediaPhoto(media=r["file_id"]) for r in chunk]
         if not header_sent:
             media_group[0] = types.InputMediaPhoto(
                 media=chunk[0]["file_id"],
@@ -5504,8 +5503,21 @@ async def _show_gallery(message: types.Message, *, user_id: int) -> None:
             await message.answer_media_group(media=media_group)
         except Exception as exc:
             log.warning(f"Gallery send error: {exc}")
-    # Кнопка «назад» отдельным сообщением
-    await message.answer("⬆️ Вот твои последние работы", reply_markup=back_kb)
+
+    # Кнопки под галереей — включая «Улучшить последнюю» если есть живой токен
+    bottom_rows: list[list[types.InlineKeyboardButton]] = []
+    latest_token = rows[0].get("token") if rows else None
+    if latest_token and image_registry.get(latest_token):
+        realup_price = action_price("realup")
+        label_up = f"🔍 Улучшить последнюю · {realup_price} кр" if realup_price else "🔍 Улучшить последнюю"
+        bottom_rows.append([types.InlineKeyboardButton(
+            text=label_up, callback_data=action_callback_data("realup", latest_token)
+        )])
+    bottom_rows.append([_menu_button("menu", "m:menu")])
+    await message.answer(
+        "⬆️ Вот твои последние работы",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=bottom_rows),
+    )
 
 
 async def _show_support_menu(message: types.Message, *, user_id: int, edit: bool) -> None:
@@ -8033,6 +8045,7 @@ async def _main_impl():
         log.exception("Robokassa callback server failed to start")
 
     log.info("🤖 Бот запущен!")
+    asyncio.create_task(_daily_digest_loop())
     try:
         await dp.start_polling(bot)
     finally:
@@ -8047,6 +8060,47 @@ async def _main_impl():
                 await kp.close()
             except Exception:
                 log.exception("Flow account %s cleanup failed", acc_id)
+
+
+_DIGEST_INTERVAL_H = 6    # Как часто проверяем (не чаще чем раз в N часов)
+_DIGEST_HOUR = 12         # Целевой час UTC для отправки (12:00 UTC = 15:00 MSK)
+_DIGEST_BATCH = 80        # Юзеров за один прогон (throttle)
+_DIGEST_DELAY_S = 0.5     # Пауза между отправками (не спамим Telegram API)
+
+
+async def _daily_digest_loop() -> None:
+    """Фоновый луп: раз в 6 часов шлём дайджест пользователям, неактивным 3-7 дней."""
+    import random as _random
+    while True:
+        try:
+            now_h = __import__("datetime").datetime.utcnow().hour
+            # Отправляем только в окно 11:00–13:00 UTC (гибко).
+            if abs(now_h - _DIGEST_HOUR) <= 1:
+                users = metrics.get_users_for_digest(min_days=3, max_days=7, limit=_DIGEST_BATCH)
+                log.info("📨 Дайджест: найдено %d кандидатов", len(users))
+                ideas = list(_QUICK_IDEAS)
+                for entry in users:
+                    uid = entry["user_id"]
+                    try:
+                        bal = credit_store.balance(uid)
+                        if bal <= 0:
+                            text = flow_copy.msg("digest_nudge_empty")
+                        else:
+                            idea = _random.choice(ideas)
+                            text = flow_copy.msg("digest_nudge", idea=idea)
+                        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                            [types.InlineKeyboardButton(text="🎨 Создать", callback_data="m:gen")],
+                            [types.InlineKeyboardButton(text="🏠 Меню", callback_data="m:menu")],
+                        ])
+                        await bot.send_message(uid, text, reply_markup=kb, parse_mode="HTML")
+                        metrics.log_event("digest_sent", user_id=uid)
+                        await asyncio.sleep(_DIGEST_DELAY_S)
+                    except Exception as exc:
+                        log.debug("Дайджест не доставлен uid=%s: %s", uid, exc)
+        except Exception:
+            log.warning("_daily_digest_loop iteration failed", exc_info=True)
+        # Спим 6 часов до следующей проверки
+        await asyncio.sleep(_DIGEST_INTERVAL_H * 3600)
 
 
 async def main():

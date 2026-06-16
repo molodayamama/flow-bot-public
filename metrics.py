@@ -2153,6 +2153,42 @@ def reply_ticket(ticket_id: int, reply_text: str) -> dict | None:
         return None
 
 
+def get_users_for_digest(min_days: int = 3, max_days: int = 7, limit: int = 100) -> list[dict]:
+    """Return users inactive for min_days..max_days who haven't received a digest recently.
+
+    «Last activity» is the latest event row for the user.
+    Excludes users who already got a ``digest_sent`` event within ``max_days`` days.
+    """
+    try:
+        with _LOCK:
+            conn = _conn()
+            rows = _rows(
+                conn,
+                """
+                SELECT u.user_id,
+                       MAX(e.created_at) AS last_event
+                FROM users u
+                LEFT JOIN events e ON e.user_id = u.user_id
+                WHERE u.user_id IS NOT NULL
+                GROUP BY u.user_id
+                HAVING last_event IS NOT NULL
+                   AND last_event <= datetime('now', ? || ' days')
+                   AND last_event >= datetime('now', ? || ' days')
+                   AND u.user_id NOT IN (
+                       SELECT user_id FROM events
+                       WHERE event_name = 'digest_sent'
+                         AND created_at >= datetime('now', ? || ' days')
+                   )
+                LIMIT ?
+                """,
+                (f"-{min_days}", f"-{max_days}", f"-{max_days}", limit),
+            )
+            return [{"user_id": r["user_id"], "last_event": r["last_event"]} for r in rows]
+    except Exception:  # noqa: BLE001
+        log.warning("get_users_for_digest failed", exc_info=True)
+        return []
+
+
 def get_user_tickets(user_id: int) -> list:
     """Return all tickets for a user (newest first, up to 20)."""
     try:
