@@ -2385,6 +2385,78 @@ def get_streak(user_id: int) -> tuple[int, int]:
         return (0, 0)
 
 
+# ── retention cohorts ─────────────────────────────────────────────────────────
+
+#: Events that count as "user was active on that day".
+_ACTIVE_EVENTS = ("wizard_completed", "image_success", "video_completed")
+
+
+def report_cohort_retention(
+    periods: tuple[int, ...] = (1, 7, 30),
+    cohorts_per_period: int = 7,
+) -> list[dict]:
+    """D1 / D7 / D30 retention per cohort (daily).
+
+    For each *period* p we look at the most recent ``cohorts_per_period`` cohort
+    days for which the full window has elapsed (i.e. cohort_date ≤ today − p−1).
+    Each cohort is users whose *first* ``user_started`` event occurred on
+    ``cohort_date``.  A user "retained" if they had any active event exactly on
+    ``cohort_date + p`` (calendar day).
+
+    Returns a list of dicts sorted by period asc, then cohort_date desc:
+      ``{period, cohort_date, cohort_size, retained, rate}``
+    Never raises.
+    """
+    placeholders = "(" + ", ".join(f"'{e}'" for e in _ACTIVE_EVENTS) + ")"
+    rows_out: list[dict] = []
+    try:
+        from datetime import datetime as _dt, timedelta as _td  # local import
+        with _LOCK:
+            con = _conn()
+            for p in periods:
+                for offset in range(cohorts_per_period):
+                    # Cohort date: far enough back that day+p has fully elapsed.
+                    cohort_date = (
+                        _dt.utcnow() - _td(days=p + 1 + offset)
+                    ).strftime("%Y-%m-%d")
+                    active_date = (
+                        _dt.utcnow() - _td(days=1 + offset)
+                    ).strftime("%Y-%m-%d")
+                    sql = f"""
+                    WITH cohort AS (
+                        SELECT DISTINCT user_id
+                        FROM   events
+                        WHERE  event_name = 'user_started'
+                          AND  date(created_at) = ?
+                    ),
+                    active AS (
+                        SELECT DISTINCT e.user_id
+                        FROM   cohort c
+                        JOIN   events e ON c.user_id = e.user_id
+                        WHERE  date(e.created_at) = ?
+                          AND  e.event_name IN {placeholders}
+                    )
+                    SELECT
+                        (SELECT COUNT(*) FROM cohort) AS cohort_size,
+                        (SELECT COUNT(*) FROM active)  AS retained
+                    """
+                    row = con.execute(sql, (cohort_date, active_date)).fetchone()
+                    if row is None:
+                        continue
+                    size = row["cohort_size"] or 0
+                    ret = row["retained"] or 0
+                    rows_out.append({
+                        "period": p,
+                        "cohort_date": cohort_date,
+                        "cohort_size": size,
+                        "retained": ret,
+                        "rate": round(ret / size, 3) if size else 0.0,
+                    })
+    except Exception:  # noqa: BLE001
+        log.warning("report_cohort_retention failed", exc_info=True)
+    return rows_out
+
+
 def get_users_for_digest(min_days: int = 3, max_days: int = 7, limit: int = 100) -> list[dict]:
     """Return users inactive for min_days..max_days who haven't received a digest recently.
 

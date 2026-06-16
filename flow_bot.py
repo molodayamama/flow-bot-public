@@ -4642,6 +4642,43 @@ async def cmd_admin_errors(message: types.Message):
     )
 
 
+@dp.message(Command("admin_cohort"))
+async def cmd_admin_cohort(message: types.Message):
+    """D1/D7/D30 retention cohorts (последние 7 когорт на каждый период)."""
+    if not _admin_only(message):
+        await message.answer(flow_copy.msg("admin_denied"))
+        return
+    rows = metrics.report_cohort_retention()
+    if not rows:
+        await message.answer("📊 Недостаточно данных для когортного анализа.")
+        return
+
+    # Group by period, average across cohorts.
+    from collections import defaultdict
+    by_period: dict[int, list[dict]] = defaultdict(list)
+    for r in rows:
+        by_period[r["period"]].append(r)
+
+    lines = ["📊 <b>Retention когорты</b>"]
+    for p in sorted(by_period):
+        cohorts = by_period[p]
+        total_size = sum(c["cohort_size"] for c in cohorts)
+        total_ret = sum(c["retained"] for c in cohorts)
+        avg_rate = (total_ret / total_size * 100) if total_size else 0.0
+        lines.append(
+            f"\n<b>D{p}</b>  (когорт: {len(cohorts)}, "
+            f"всего юзеров: {total_size}, удержано: {total_ret}, "
+            f"avg {avg_rate:.1f}%)"
+        )
+        for c in cohorts:
+            pct = f"{c['rate']*100:.1f}%" if c["cohort_size"] else "—"
+            lines.append(
+                f"  {c['cohort_date']}  {c['retained']}/{c['cohort_size']}  {pct}"
+            )
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
 # Справочник команд для /admin_help. Угловые скобки экранированы (HTML parse_mode).
 # Держим единым местом, чтобы при добавлении команды правка была одна.
 _HELP_SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
@@ -4672,6 +4709,7 @@ _HELP_SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         ("/admin_refs", "рефералы: приглашения/награды/топ"),
         ("/admin_channels [ярлык]", "каналы (атрибуция); с ярлыком — выдать ссылку"),
         ("/admin_errors", "ошибки бэкенда за 7 дней"),
+        ("/admin_cohort", "D1/D7/D30 retention когорты"),
     )),
     ("👑 Владелец (OWNER_ID)", (
         ("/admin_help", "этот справочник команд"),
