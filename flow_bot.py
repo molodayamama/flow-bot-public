@@ -5833,10 +5833,12 @@ async def _show_my_tickets(message: types.Message, *, user_id: int, edit: bool) 
         items = "\n\n".join(
             flow_copy.msg(
                 "support_ticket_item",
-                n=i + 1,
-                status="✅ Отвечен" if t["status"] == "replied" else "⏳ Ожидает",
-                text=t["message_text"][:80],
-                reply=t["reply_text"] or "",
+                id=t["id"],
+                status_emoji="✅" if t["status"] == "replied" else "⏳",
+                status_label="Отвечен" if t["status"] == "replied" else "Ожидает",
+                question=html.escape(t["message_text"][:80]),
+                reply_line=(f"↪️ {html.escape(t['reply_text'][:120])}\n" if t["reply_text"] else ""),
+                date=(t.get("created_at") or "")[:16],
             )
             for i, t in enumerate(tickets)
         )
@@ -8192,7 +8194,7 @@ async def handle_plain_text(message: types.Message):
             except Exception as exc:
                 log.warning(f"Не удалось переслать тикет #{ticket_id} админу: {exc}")
         back_kb = types.InlineKeyboardMarkup(inline_keyboard=[[_menu_button("menu", "m:menu")]])
-        await message.answer(flow_copy.msg("support_submitted", n=ticket_id), reply_markup=back_kb)
+        await message.answer(flow_copy.msg("support_submitted", ticket_id=ticket_id), reply_markup=back_kb)
         return
 
     # ─── Ответ администратора на тикет ──────────────────────────────────────
@@ -8203,7 +8205,7 @@ async def handle_plain_text(message: types.Message):
             try:
                 await message.bot.send_message(
                     ticket_row["user_id"],
-                    flow_copy.msg("support_reply", n=ticket_id, text=text),
+                    flow_copy.msg("support_reply", ticket_id=ticket_id, reply=text),
                 )
                 await message.answer(f"✅ Ответ на тикет #{ticket_id} отправлен пользователю.")
             except Exception as exc:

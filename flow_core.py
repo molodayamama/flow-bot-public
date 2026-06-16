@@ -82,7 +82,13 @@ def image_model_key(model_id: str) -> str:
 def image_model_extra(model_id: str) -> int:
     """Per-image credit surcharge for the chosen model (0 for the default)."""
     meta = image_model_meta(model_id)
-    return int(meta["extra"]) if meta else 0
+    if not meta:
+        return 0
+    if (model_id or "").lower().strip() == "nbpro":
+        base = _price_override("image_nano", PRICE_PER_IMAGE)
+        pro = _price_override("image_pro", PRICE_PER_IMAGE + int(meta["extra"]))
+        return max(0, int(pro) - int(base))
+    return int(meta["extra"])
 
 # Сколько изображений можно просить за один запрос (защита от абуза/квоты).
 MIN_NUM_IMAGES = 1
@@ -1026,6 +1032,25 @@ DEFAULT_NUM_VIDEOS = 1
 # Video aspect ratios offered in the UI (square is image-only).
 VIDEO_UI_ASPECTS = ("landscape", "portrait")
 
+_VIDEO_PRICE_KEYS = {
+    "omni-flash-4s": "omni_4s",
+    "omni-flash-6s": "omni_6s",
+    "omni-flash-8s": "omni_8s",
+    "omni-flash-10s": "omni_10s",
+    "veo-lite": "veo_lite",
+    "veo-fast": "veo_fast",
+    "veo-quality": "veo_quality",
+}
+
+
+def _price_override(key: str, default: int) -> int:
+    """Read a runtime price override, falling back to the code default."""
+    try:
+        import config_store
+        return int(config_store.get_price(key, int(default)))
+    except Exception:
+        return int(default)
+
 
 def video_model_meta(model_id: str) -> dict | None:
     """Return the catalog entry for a friendly model id, or ``None``."""
@@ -1038,18 +1063,20 @@ def video_price(model_id: str, num_videos: int = 1, mode: str = "text") -> int:
     Unknown model ids fall back to the cheapest (omni-flash-4s) price so the
     user is never under-charged for a real generation.
     """
-    meta = video_model_meta(model_id) or VIDEO_MODELS["omni-flash-4s"]
+    mid = (model_id or "").lower().strip()
+    meta = video_model_meta(mid) or VIDEO_MODELS["omni-flash-4s"]
+    base = _price_override(_VIDEO_PRICE_KEYS.get(mid, "omni_4s"), int(meta["price"]))
     surcharge = 0
     if mode == "ingredients":
-        surcharge = VIDEO_INGREDIENTS_SURCHARGE
+        surcharge = _price_override("ingredients_extra", VIDEO_INGREDIENTS_SURCHARGE)
     elif mode == "frames":
-        surcharge = VIDEO_FRAMES_SURCHARGE
-    return (meta["price"] + surcharge) * clamp_num_videos(num_videos)
+        surcharge = _price_override("frames_extra", VIDEO_FRAMES_SURCHARGE)
+    return (base + surcharge) * clamp_num_videos(num_videos)
 
 
 def video_extend_price(model_id: str, extend_index: int) -> int:
     """Credits for extending a video."""
-    return VIDEO_EXTEND_PRICE
+    return _price_override("extend_video", VIDEO_EXTEND_PRICE)
 
 
 def clamp_num_videos(value: object, default: int = DEFAULT_NUM_VIDEOS) -> int:
@@ -2300,7 +2327,7 @@ LOW_BALANCE_THRESHOLD = 20  # nudge to top up below this
 
 def price_gen(num_images: int) -> int:
     """Credits for generating ``num_images`` images (10 each)."""
-    return max(1, int(num_images)) * PRICE_PER_IMAGE
+    return max(1, int(num_images)) * _price_override("image_nano", PRICE_PER_IMAGE)
 
 
 def action_price(action: str, num_images: int = 1) -> int:
@@ -2317,11 +2344,11 @@ def action_price(action: str, num_images: int = 1) -> int:
     if action == "revary":
         return price_gen(2)
     if action in ("edit", "myphoto"):
-        return IMAGE_EDIT_PRICE
+        return _price_override("edit_photo", IMAGE_EDIT_PRICE)
     if action in ("up2x", "realup"):
-        return UPSCALE_PRICE
+        return _price_override("upscale", UPSCALE_PRICE)
     if action == "video_prompt_edit":
-        return VIDEO_PROMPT_EDIT_PRICE
+        return _price_override("edit_video", VIDEO_PROMPT_EDIT_PRICE)
     if action == "dl_raw":
         return 0
     return 0

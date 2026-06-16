@@ -420,6 +420,68 @@ class ReportResilienceTests(MetricsTestBase):
         types = {e["error_type"]: e["count"] for e in rep["errors_by_type"]}
         self.assertEqual(types.get("timeout"), 1)
 
+    def test_recent_events_includes_payment_success_events(self) -> None:
+        metrics.log_event(
+            "payment_success",
+            user_id=99,
+            username="payer",
+            source="stars",
+            payload={"credits": 100, "stars": 75},
+        )
+
+        events = metrics.report_recent_events(10)
+        self.assertEqual(events[0]["chip"], "💳 topup")
+        self.assertIn("+100кр", events[0]["text"])
+
+    def test_report_ops_health_summarizes_recent_jobs_and_tickets(self) -> None:
+        metrics.log_flow_job(
+            user_id=10, account_id="acc1", operation_type="image_generate",
+            model="nb2", status="success", bot_credits_charged=10,
+        )
+        metrics.log_flow_job(
+            user_id=11, account_id="acc2", operation_type="video_text",
+            model="veo-lite", status="error", error_type="timeout",
+        )
+        metrics.create_ticket(11, "bob", "video failed")
+
+        rep = metrics.report_ops_health()
+        self.assertEqual(rep["jobs_1h"]["total"], 2)
+        self.assertEqual(rep["jobs_1h"]["success"], 1)
+        self.assertEqual(rep["jobs_1h"]["fail"], 1)
+        self.assertEqual(rep["open_tickets"], 1)
+        self.assertEqual(rep["critical_errors"][0]["error_type"], "timeout")
+        self.assertEqual(rep["last_jobs"][0]["status"], "error")
+
+    def test_support_ticket_reports_include_user_context_and_status_updates(self) -> None:
+        metrics.upsert_user(42, username="alice", first_name="Alice", channel="seed")
+        metrics.credits_add(42, 100, starter=0)
+        metrics.record_transaction(
+            provider="telegram", provider_payment_id="chg_support", user_id=42,
+            package_id="small", amount_rub=90.0, stars_amount=75,
+            credits_issued=100, status="paid",
+        )
+        metrics.log_flow_job(
+            user_id=42, account_id="acc1", operation_type="video_text",
+            status="error", error_type="quota", refund_amount=60,
+        )
+        ticket_id = metrics.create_ticket(42, "alice", "where is my video?")
+
+        rows = metrics.list_support_tickets("open")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], ticket_id)
+        self.assertEqual(rows[0]["balance"], 100)
+        self.assertEqual(rows[0]["payments_count"], 1)
+        self.assertEqual(rows[0]["last_error"], "quota")
+
+        detail = metrics.get_support_ticket_detail(ticket_id)
+        self.assertIsNotNone(detail)
+        self.assertEqual(detail["user"]["profile"]["user_id"], 42)
+        self.assertEqual(detail["user"]["recent_payments"][0]["package_id"], "small")
+        self.assertEqual(detail["user"]["recent_jobs"][0]["error_type"], "quota")
+
+        self.assertTrue(metrics.set_support_ticket_status(ticket_id, "closed"))
+        self.assertEqual(metrics.list_support_tickets("closed")[0]["status"], "closed")
+
 
 class LazyInitTests(unittest.TestCase):
     def test_functions_work_without_explicit_init(self) -> None:

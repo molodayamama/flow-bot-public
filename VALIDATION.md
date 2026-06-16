@@ -126,6 +126,21 @@ Python code change:
 - Add targeted offline tests before external validation where possible.
 - Avoid running Telegram/Google scripts unless explicitly approved.
 
+Admin UI/API change:
+
+- Syntax check, assumption:
+  `python -m py_compile admin_api.py metrics.py flow_core.py flow_copy.py flow_bot.py`
+- Static admin JavaScript parse check, assumption:
+  `node -e "const fs=require('fs'); const html=fs.readFileSync('deploy/photozhab/admin.html','utf8'); const scripts=[...html.matchAll(/<script>([\\s\\S]*?)<\\/script>/g)].map(m=>m[1]); for (const s of scripts) new Function(s); console.log('admin.html scripts parse OK');"`
+- Offline tests, assumption:
+  `python -m unittest discover -s tests -p "test_*.py"`
+- Optional local static/offline visual check: serve `deploy/photozhab/` on a
+  temporary localhost port and open `/admin.html`; with no admin API present,
+  the page must show explicit API unavailable state and no fake production
+  data.
+- Do not run Flow, Telegram, captcha, Robokassa, browser-profile, or payment
+  checks unless the operator explicitly approves that external/stateful action.
+
 Flow quota profiler RL-001A:
 
 - Syntax check, assumption:

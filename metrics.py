@@ -56,6 +56,7 @@ __all__ = [
     "report_refs",
     "report_channels",
     "report_errors",
+    "report_ops_health",
     # credits store
     "credits_balance",
     "credits_charge",
@@ -72,6 +73,10 @@ __all__ = [
     "report_top_referrers",
     "backfill_users_from_metrics",
     "user_exists",
+    "get_admin_user_detail",
+    "list_support_tickets",
+    "get_support_ticket_detail",
+    "set_support_ticket_status",
     # promo codes
     "create_promo_code",
     "redeem_promo",
@@ -1938,7 +1943,7 @@ def report_recent_events(limit: int = 50) -> list:
             system_event_rows = _rows(
                 conn,
                 """
-                SELECT event_name, user_id, username, payload_json, created_at
+                SELECT event_name, user_id, username, source, payload_json, created_at
                 FROM events
                 WHERE event_name IN (
                     'gen_failover', 'user_started', 'account_cooldown', 'payment_success'
@@ -2039,7 +2044,7 @@ def report_recent_events(limit: int = 50) -> list:
 
             elif ev == "payment_success":
                 credits = payload.get("credits", "?")
-                source = fr.get("source") or payload.get("source", "")
+                source = fr["source"] or payload.get("source", "")
                 stars = payload.get("stars")
                 rub = payload.get("amount_rub")
                 amount_str = f"{stars}⭐" if stars else (f"{rub}₽" if rub else "")
@@ -2077,7 +2082,15 @@ def report_account_stats() -> dict:
                 SELECT account_id,
                        COUNT(*) AS total,
                        SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success,
-                       SUM(CASE WHEN status IN ('fail','error') THEN 1 ELSE 0 END) AS fail
+                       SUM(CASE WHEN status IN ('fail','error') THEN 1 ELSE 0 END) AS fail,
+                       MAX(created_at) AS last_activity,
+                       (
+                         SELECT fj2.error_type FROM flow_jobs fj2
+                         WHERE fj2.account_id = flow_jobs.account_id
+                           AND fj2.status IN ('fail','error')
+                           AND fj2.error_type IS NOT NULL
+                         ORDER BY fj2.id DESC LIMIT 1
+                       ) AS last_error
                 FROM flow_jobs
                 WHERE account_id IS NOT NULL
                 GROUP BY account_id
@@ -2088,12 +2101,110 @@ def report_account_stats() -> dict:
                 "total":   int(r["total"]   or 0),
                 "success": int(r["success"] or 0),
                 "fail":    int(r["fail"]    or 0),
+                "last_activity": r["last_activity"],
+                "last_error": r["last_error"],
             }
             for r in rows
         }
     except Exception:  # noqa: BLE001
         log.warning("report_account_stats failed", exc_info=True)
         return {}
+
+
+def report_ops_health() -> dict:
+    """Operator health snapshot from local telemetry only.
+
+    No live provider/bot calls are made here; this report answers what the bot
+    has observed recently from ``flow_jobs``/``support_tickets``.
+    """
+    def _window(conn: sqlite3.Connection, modifier: str) -> dict:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success,
+                   SUM(CASE WHEN status!='success' THEN 1 ELSE 0 END) AS fail
+            FROM flow_jobs
+            WHERE created_at >= datetime('now', ?)
+            """,
+            (modifier,),
+        ).fetchone()
+        total = int(row["total"] or 0) if row else 0
+        success = int(row["success"] or 0) if row else 0
+        fail = int(row["fail"] or 0) if row else 0
+        return {
+            "total": total,
+            "success": success,
+            "fail": fail,
+            "success_rate": (success / total) if total else None,
+            "fail_rate": (fail / total) if total else None,
+        }
+
+    try:
+        with _LOCK:
+            conn = _conn()
+            jobs_1h = _window(conn, "-1 hour")
+            jobs_24h = _window(conn, "-24 hours")
+            critical_errors = [
+                {
+                    "created_at": r["created_at"],
+                    "account_id": r["account_id"],
+                    "operation_type": r["operation_type"],
+                    "model": r["model"],
+                    "error_type": r["error_type"] or r["status"],
+                    "user_id": r["user_id"],
+                }
+                for r in _rows(
+                    conn,
+                    """
+                    SELECT created_at, account_id, operation_type, model,
+                           error_type, status, user_id
+                    FROM flow_jobs
+                    WHERE status!='success'
+                    ORDER BY id DESC LIMIT 8
+                    """,
+                )
+            ]
+            last_jobs = [
+                {
+                    "id": int(r["id"]),
+                    "created_at": r["created_at"],
+                    "account_id": r["account_id"],
+                    "operation_type": r["operation_type"],
+                    "model": r["model"],
+                    "status": r["status"],
+                    "error_type": r["error_type"],
+                    "duration_ms": r["duration_ms"],
+                    "user_id": r["user_id"],
+                }
+                for r in _rows(
+                    conn,
+                    """
+                    SELECT id, created_at, account_id, operation_type, model,
+                           status, error_type, duration_ms, user_id
+                    FROM flow_jobs
+                    ORDER BY id DESC LIMIT 12
+                    """,
+                )
+            ]
+            open_tickets = _scalar(
+                conn, "SELECT COUNT(*) FROM support_tickets WHERE status='open'"
+            ) or 0
+        return {
+            "jobs_1h": jobs_1h,
+            "jobs_24h": jobs_24h,
+            "critical_errors": critical_errors,
+            "last_jobs": last_jobs,
+            "open_tickets": int(open_tickets),
+        }
+    except Exception:  # noqa: BLE001
+        log.warning("report_ops_health failed", exc_info=True)
+        return {
+            "jobs_1h": {"total": 0, "success": 0, "fail": 0, "success_rate": None, "fail_rate": None},
+            "jobs_24h": {"total": 0, "success": 0, "fail": 0, "success_rate": None, "fail_rate": None},
+            "critical_errors": [],
+            "last_jobs": [],
+            "open_tickets": 0,
+        }
 
 
 # ── gallery ────────────────────────────────────────────────────────────
@@ -2542,3 +2653,258 @@ def get_user_tickets(user_id: int) -> list:
     except Exception:  # noqa: BLE001
         log.warning("get_user_tickets failed for user_id=%r", user_id, exc_info=True)
         return []
+
+
+def _recent_payments(conn: sqlite3.Connection, user_id: int, limit: int = 10) -> list[dict]:
+    return [
+        {
+            "id": int(r["id"]),
+            "provider": r["provider"],
+            "package_id": r["package_id"],
+            "amount_rub": float(r["amount_rub"] or 0.0),
+            "stars_amount": int(r["stars_amount"] or 0),
+            "credits_issued": int(r["credits_issued"] or 0),
+            "status": r["status"],
+            "created_at": r["created_at"],
+        }
+        for r in _rows(
+            conn,
+            """
+            SELECT id, provider, package_id, amount_rub, stars_amount,
+                   credits_issued, status, created_at
+            FROM transactions
+            WHERE user_id=?
+            ORDER BY id DESC LIMIT ?
+            """,
+            (user_id, int(limit)),
+        )
+    ]
+
+
+def _recent_flow_jobs(conn: sqlite3.Connection, user_id: int, limit: int = 12) -> list[dict]:
+    return [
+        {
+            "id": int(r["id"]),
+            "created_at": r["created_at"],
+            "account_id": r["account_id"],
+            "operation_type": r["operation_type"],
+            "model": r["model"],
+            "status": r["status"],
+            "error_type": r["error_type"],
+            "bot_credits_charged": int(r["bot_credits_charged"] or 0),
+            "refund_amount": int(r["refund_amount"] or 0),
+            "duration_ms": r["duration_ms"],
+        }
+        for r in _rows(
+            conn,
+            """
+            SELECT id, created_at, account_id, operation_type, model, status,
+                   error_type, bot_credits_charged, refund_amount, duration_ms
+            FROM flow_jobs
+            WHERE user_id=?
+            ORDER BY id DESC LIMIT ?
+            """,
+            (user_id, int(limit)),
+        )
+    ]
+
+
+def _support_tickets_for_admin(conn: sqlite3.Connection, user_id: int, limit: int = 20) -> list[dict]:
+    return [
+        {
+            "id": int(r["id"]),
+            "status": r["status"],
+            "message_text": r["message_text"],
+            "reply_text": r["reply_text"],
+            "created_at": r["created_at"],
+            "replied_at": r["replied_at"],
+        }
+        for r in _rows(
+            conn,
+            """
+            SELECT id, status, message_text, reply_text, created_at, replied_at
+            FROM support_tickets
+            WHERE user_id=?
+            ORDER BY id DESC LIMIT ?
+            """,
+            (user_id, int(limit)),
+        )
+    ]
+
+
+def get_admin_user_detail(user_id: int) -> dict:
+    """Return an operator/debug dossier for one Telegram user."""
+    profile = get_user_profile(int(user_id))
+    try:
+        with _LOCK:
+            conn = _conn()
+            recent_jobs = _recent_flow_jobs(conn, int(user_id), 12)
+            recent_payments = _recent_payments(conn, int(user_id), 10)
+            support_tickets = _support_tickets_for_admin(conn, int(user_id), 20)
+            credit_events = [
+                {
+                    "id": int(r["id"]),
+                    "created_at": r["created_at"],
+                    "operation_type": r["operation_type"],
+                    "charged": int(r["bot_credits_charged"] or 0),
+                    "refunded": int(r["refund_amount"] or 0),
+                    "status": r["status"],
+                }
+                for r in _rows(
+                    conn,
+                    """
+                    SELECT id, created_at, operation_type, bot_credits_charged,
+                           refund_amount, status
+                    FROM flow_jobs
+                    WHERE user_id=?
+                      AND (bot_credits_charged != 0 OR refund_amount != 0)
+                    ORDER BY id DESC LIMIT 20
+                    """,
+                    (int(user_id),),
+                )
+            ]
+        return {
+            "profile": profile,
+            "recent_payments": recent_payments,
+            "recent_jobs": recent_jobs,
+            "credit_events": credit_events,
+            "support_tickets": support_tickets,
+        }
+    except Exception:  # noqa: BLE001
+        log.warning("get_admin_user_detail failed for user_id=%r", user_id, exc_info=True)
+        return {
+            "profile": profile,
+            "recent_payments": [],
+            "recent_jobs": [],
+            "credit_events": [],
+            "support_tickets": [],
+        }
+
+
+def list_support_tickets(status: str = "open", limit: int = 100) -> list[dict]:
+    """Return support tickets enriched with user/payment/generation context."""
+    allowed = {"open", "replied", "closed", "all"}
+    status = status if status in allowed else "open"
+    limit = max(1, min(int(limit), 200))
+    where = "" if status == "all" else "WHERE st.status=?"
+    params: tuple = (limit,) if status == "all" else (status, limit)
+    try:
+        with _LOCK:
+            conn = _conn()
+            rows = _rows(
+                conn,
+                f"""
+                SELECT st.id, st.user_id, st.username, st.status,
+                       st.message_text, st.reply_text, st.created_at, st.replied_at,
+                       COALESCE(c.balance, 0) AS balance,
+                       u.first_name, u.last_active, u.is_blocked,
+                       (SELECT COUNT(*) FROM transactions t
+                        WHERE t.user_id=st.user_id AND t.status='paid') AS payments_count,
+                       (SELECT COALESCE(SUM(t.amount_rub),0) FROM transactions t
+                        WHERE t.user_id=st.user_id AND t.status='paid') AS rub_total,
+                       (SELECT COALESCE(SUM(t.stars_amount),0) FROM transactions t
+                        WHERE t.user_id=st.user_id AND t.status='paid') AS stars_total,
+                       (SELECT fj.created_at FROM flow_jobs fj
+                        WHERE fj.user_id=st.user_id ORDER BY fj.id DESC LIMIT 1) AS last_job_at,
+                       (SELECT fj.error_type FROM flow_jobs fj
+                        WHERE fj.user_id=st.user_id AND fj.status!='success'
+                        ORDER BY fj.id DESC LIMIT 1) AS last_error
+                FROM support_tickets st
+                LEFT JOIN credits c ON c.user_id = st.user_id
+                LEFT JOIN users u ON u.user_id = st.user_id
+                {where}
+                ORDER BY CASE st.status
+                           WHEN 'open' THEN 0
+                           WHEN 'replied' THEN 1
+                           WHEN 'closed' THEN 2
+                           ELSE 3
+                         END,
+                         st.id DESC
+                LIMIT ?
+                """,
+                params,
+            )
+        return [
+            {
+                "id": int(r["id"]),
+                "user_id": int(r["user_id"]),
+                "username": r["username"],
+                "first_name": r["first_name"],
+                "status": r["status"],
+                "message_text": r["message_text"],
+                "reply_text": r["reply_text"],
+                "created_at": r["created_at"],
+                "replied_at": r["replied_at"],
+                "balance": int(r["balance"] or 0),
+                "last_active": r["last_active"],
+                "is_blocked": bool(r["is_blocked"]),
+                "payments_count": int(r["payments_count"] or 0),
+                "rub_total": float(r["rub_total"] or 0.0),
+                "stars_total": int(r["stars_total"] or 0),
+                "last_job_at": r["last_job_at"],
+                "last_error": r["last_error"],
+            }
+            for r in rows
+        ]
+    except Exception:  # noqa: BLE001
+        log.warning("list_support_tickets failed", exc_info=True)
+        return []
+
+
+def get_support_ticket_detail(ticket_id: int) -> dict | None:
+    """Return one support ticket with the related user dossier."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                """
+                SELECT id, user_id, username, status, message_text, reply_text,
+                       admin_msg_id, created_at, replied_at
+                FROM support_tickets
+                WHERE id=?
+                """,
+                (int(ticket_id),),
+            ).fetchone()
+        if not row:
+            return None
+        ticket = {
+            "id": int(row["id"]),
+            "user_id": int(row["user_id"]),
+            "username": row["username"],
+            "status": row["status"],
+            "message_text": row["message_text"],
+            "reply_text": row["reply_text"],
+            "admin_msg_id": row["admin_msg_id"],
+            "created_at": row["created_at"],
+            "replied_at": row["replied_at"],
+        }
+        return {"ticket": ticket, "user": get_admin_user_detail(int(row["user_id"]))}
+    except Exception:  # noqa: BLE001
+        log.warning("get_support_ticket_detail failed for ticket_id=%r", ticket_id, exc_info=True)
+        return None
+
+
+def set_support_ticket_status(ticket_id: int, status: str) -> bool:
+    """Set a support ticket status without sending Telegram messages."""
+    if status not in {"open", "replied", "closed"}:
+        return False
+    try:
+        with _LOCK:
+            conn = _conn()
+            cur = conn.execute(
+                """
+                UPDATE support_tickets
+                SET status=?,
+                    replied_at=CASE
+                      WHEN ?='replied' AND replied_at IS NULL THEN datetime('now')
+                      ELSE replied_at
+                    END
+                WHERE id=?
+                """,
+                (status, status, int(ticket_id)),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    except Exception:  # noqa: BLE001
+        log.warning("set_support_ticket_status failed for ticket_id=%r", ticket_id, exc_info=True)
+        return False

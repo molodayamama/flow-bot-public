@@ -524,12 +524,26 @@ MESSAGES = {
 
 def label(key: str) -> str:
     """Button label for ``key`` (falls back to the key itself)."""
+    try:
+        import config_store
+        override = config_store.get_label(key)
+        if isinstance(override, str):
+            return override
+    except Exception:
+        pass
     return LABELS.get(key, key)
 
 
 def msg(key: str, **kwargs) -> str:
     """Message text for ``key``, ``.format(**kwargs)``-ed when placeholders exist."""
     template = MESSAGES.get(key, key)
+    try:
+        import config_store
+        override = config_store.get_message(key)
+        if isinstance(override, str):
+            template = override
+    except Exception:
+        pass
     if kwargs:
         try:
             return template.format(**kwargs)

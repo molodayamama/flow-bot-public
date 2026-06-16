@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import flow_core
 import flow_copy
+import config_store
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +78,56 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.referral_ongoing_bonus(290), 29)
         self.assertEqual(flow_core.referral_ongoing_bonus(1500), 150)
         self.assertEqual(flow_core.referral_ongoing_bonus(5), 0)  # floor < 1 → 0
+
+
+class RuntimeOverrideTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self._old_path = config_store._PATH
+        self._old_cache = config_store._cache
+        self._old_mtime = config_store._mtime
+        config_store._PATH = str(Path(self._tmp.name) / "config_override.json")
+        config_store._cache = None
+        config_store._mtime = -1.0
+
+    def tearDown(self) -> None:
+        config_store._PATH = self._old_path
+        config_store._cache = self._old_cache
+        config_store._mtime = self._old_mtime
+        self._tmp.cleanup()
+
+    def test_price_overrides_drive_runtime_pricing_helpers(self) -> None:
+        config_store.set_section("prices", {
+            "image_nano": 12,
+            "image_pro": 19,
+            "edit_photo": 21,
+            "upscale": 7,
+            "veo_lite": 80,
+            "ingredients_extra": 20,
+            "frames_extra": 30,
+            "extend_video": 90,
+            "edit_video": 160,
+        })
+
+        self.assertEqual(flow_core.price_gen(2), 24)
+        self.assertEqual(flow_core.image_model_extra("nbpro"), 7)
+        self.assertEqual(flow_core.action_price("edit"), 21)
+        self.assertEqual(flow_core.action_price("realup"), 7)
+        self.assertEqual(flow_core.action_price("video_prompt_edit"), 160)
+        self.assertEqual(flow_core.video_price("veo-lite", mode="text"), 80)
+        self.assertEqual(flow_core.video_price("veo-lite", mode="ingredients"), 100)
+        self.assertEqual(flow_core.video_price("veo-lite", mode="frames"), 110)
+        self.assertEqual(flow_core.video_extend_price("veo-lite", 1), 90)
+
+    def test_copy_overrides_are_read_at_runtime(self) -> None:
+        config_store.set_section("labels", {"gen": "Generate"})
+        config_store.set_section("messages", {"low_balance": "Need {needed}, have {have}"})
+
+        self.assertEqual(flow_copy.label("gen"), "Generate")
+        self.assertEqual(
+            flow_copy.msg("low_balance", needed=10, have=3),
+            "Need 10, have 3",
+        )
 
     def test_extend_price_is_fixed(self) -> None:
         self.assertEqual(flow_core.video_extend_price("veo-lite", 1), 60)
