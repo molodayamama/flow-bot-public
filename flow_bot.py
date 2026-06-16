@@ -3053,7 +3053,7 @@ def main_menu_kb(show_repeat: bool = False, credits: int | None = None) -> types
         [_menu_button("ideas", "m:ideas")],
         [_menu_button("myphoto", "m:myphoto")],
         [B(text=balance_label, callback_data="m:balance")],
-        [_menu_button("gallery", "m:gallery"), _menu_button("invite", "m:invite")],
+        [_menu_button("gallery", "m:gallery"), _menu_button("history", "m:history"), _menu_button("invite", "m:invite")],
         [_menu_button("support", "m:support"), _menu_button("help", "m:help")],
     ]
     if show_repeat:
@@ -4759,6 +4759,7 @@ async def _generate_and_send(
                           payload={"amount": charged, "action": action})
         if action == "gen":
             metrics.log_event("wizard_completed", user_id=user_id, source=action)
+            metrics.save_prompt_history(user_id, prompt)
     _log_image_job(user_id, action, image_model, started, ok=ok, charged=charged)
 
 
@@ -5648,6 +5649,29 @@ async def _show_gallery(message: types.Message, *, user_id: int) -> None:
     )
 
 
+async def _show_prompt_history(message: types.Message, *, user_id: int) -> None:
+    """Показать историю промптов пользователя с кнопками «Повторить»."""
+    prompts = metrics.get_prompt_history(user_id, limit=10)
+    back_kb = types.InlineKeyboardMarkup(inline_keyboard=[[_menu_button("menu", "m:menu")]])
+    if not prompts:
+        await message.answer(flow_copy.msg("history_empty"), reply_markup=back_kb, parse_mode="HTML")
+        return
+    B = types.InlineKeyboardButton
+    # Build numbered list in message text
+    lines = [flow_copy.msg("history_title", n=len(prompts))]
+    rows: list[list[types.InlineKeyboardButton]] = []
+    nums = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+    for i, p in enumerate(prompts):
+        emoji = nums[i] if i < len(nums) else f"{i+1}."
+        lines.append(f"{emoji} {html.escape(p[:100])}")
+        rows.append([B(text=f"{emoji} Использовать", callback_data=f"w:hist:{i}")])
+    rows.append([_menu_button("menu", "m:menu")])
+    text = "\n".join(lines)
+    # Stash the history list in wizard state so w:hist:N can retrieve it
+    _ws(user_id)["_hist_cache"] = prompts
+    await message.answer(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+
+
 async def _show_support_menu(message: types.Message, *, user_id: int, edit: bool) -> None:
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text=L("support_new"), callback_data="m:support:new")],
@@ -5769,6 +5793,9 @@ async def on_menu_action(callback: types.CallbackQuery):
     elif data == "m:gallery":
         await callback.answer()
         await _show_gallery(msg, user_id=user_id)
+    elif data == "m:history":
+        await callback.answer()
+        await _show_prompt_history(msg, user_id=user_id)
     elif data == "m:support":
         await callback.answer()
         await _show_support_menu(msg, user_id=user_id, edit=True)
@@ -6277,6 +6304,22 @@ async def on_wizard_action(callback: types.CallbackQuery):
             st["imodel"] = choice
         await callback.answer()
         await show_wizard(msg, user_id=user_id, edit=True)
+        return
+    if data.startswith("w:hist:"):
+        try:
+            idx = int(data.split(":")[2])
+        except (IndexError, ValueError):
+            await callback.answer()
+            return
+        cache = st.get("_hist_cache", [])
+        if 0 <= idx < len(cache):
+            chosen = cache[idx]
+            _reset_image_flow(user_id, keep_last=True)
+            st["pending_prompt"] = chosen
+            await callback.answer(f"📋 {chosen[:40]}", show_alert=False)
+            await show_wizard(msg, user_id=user_id, edit=False)
+        else:
+            await callback.answer()
         return
     if data == "w:idea:next":
         pool = st.get("ideas_pool", [])

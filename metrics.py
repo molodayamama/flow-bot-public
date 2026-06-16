@@ -76,6 +76,9 @@ __all__ = [
     "create_promo_code",
     "redeem_promo",
     "list_promo_codes",
+    # prompt history
+    "save_prompt_history",
+    "get_prompt_history",
 ]
 
 log = logging.getLogger("flow.metrics")
@@ -235,6 +238,14 @@ CREATE TABLE IF NOT EXISTS support_tickets (
 );
 CREATE INDEX IF NOT EXISTS idx_tickets_user   ON support_tickets(user_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_admin  ON support_tickets(admin_msg_id);
+
+CREATE TABLE IF NOT EXISTS prompt_history (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    prompt     TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_history_user ON prompt_history(user_id, id DESC);
 
 CREATE TABLE IF NOT EXISTS promo_codes (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2247,6 +2258,55 @@ def list_promo_codes() -> list[dict]:
             return [dict(r) for r in rows]
     except Exception:  # noqa: BLE001
         log.warning("list_promo_codes failed", exc_info=True)
+        return []
+
+
+# ── prompt history ────────────────────────────────────────────────────────────
+
+_PROMPT_HISTORY_KEEP = 20  # max stored per user (trim older ones)
+
+
+def save_prompt_history(user_id: int, prompt: str) -> None:
+    """Persist a generated prompt; trims to keep only the latest N per user."""
+    if not prompt or len(prompt) < 3:
+        return
+    try:
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                "INSERT INTO prompt_history (user_id, prompt) VALUES (?,?)",
+                (user_id, prompt[:500]),
+            )
+            # Trim to N most recent
+            conn.execute(
+                """
+                DELETE FROM prompt_history
+                WHERE user_id=? AND id NOT IN (
+                    SELECT id FROM prompt_history
+                    WHERE user_id=?
+                    ORDER BY id DESC
+                    LIMIT ?
+                )
+                """,
+                (user_id, user_id, _PROMPT_HISTORY_KEEP),
+            )
+            conn.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("save_prompt_history failed for user_id=%r", user_id, exc_info=True)
+
+
+def get_prompt_history(user_id: int, limit: int = 10) -> list[str]:
+    """Return the user's most recent prompts, newest first."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            rows = conn.execute(
+                "SELECT prompt FROM prompt_history WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+            return [r["prompt"] for r in rows]
+    except Exception:  # noqa: BLE001
+        log.warning("get_prompt_history failed for user_id=%r", user_id, exc_info=True)
         return []
 
 
