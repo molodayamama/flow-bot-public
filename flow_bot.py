@@ -4896,11 +4896,44 @@ async def _do_generate_and_send(
         prompt=prompt, aspect_ratio=aspect_ratio, emoji="🎨", account_id=acc_id,
     )
     await status_msg.delete()
-    await _after_result(message, user_id)
+    streak_note = _streak_note(user_id)
+    await _after_result(message, user_id, streak_note=streak_note)
     return True
 
 
-async def _after_result(message: types.Message, user_id: int):
+def _streak_note(user_id: int) -> str | None:
+    """Return a short streak congratulation if today is the user's first generation.
+
+    Returns ``None`` when the user already generated today (no-op call) or on
+    any error, so the caller can always safely prepend it to a message.
+    """
+    try:
+        current, _max, is_new_day = metrics.update_streak(user_id)
+        if not is_new_day:
+            return None
+        if current == 1:
+            return flow_copy.msg("streak_day_1")
+        if current in (3, 7, 14, 30):
+            return flow_copy.msg(f"streak_milestone_{current}")
+        days_word = _days_word(current)
+        return flow_copy.msg("streak_ongoing", n=current, days=days_word)
+    except Exception:
+        return None
+
+
+def _days_word(n: int) -> str:
+    """Russian plural form for 'день/дня/дней'."""
+    if 11 <= n % 100 <= 19:
+        return "дней"
+    rem = n % 10
+    if rem == 1:
+        return "день"
+    if 2 <= rem <= 4:
+        return "дня"
+    return "дней"
+
+
+async def _after_result(message: types.Message, user_id: int, *, streak_note: str | None = None):
     """Короткое меню-продолжение под результатом: баланс + повтор/новое/видео/меню."""
     credits = credit_store.balance(user_id)
     kb = types.InlineKeyboardMarkup(
@@ -4912,12 +4945,10 @@ async def _after_result(message: types.Message, user_id: int):
             [_menu_button("menu", "m:menu")],
         ]
     )
+    base_text = flow_copy.msg("after_image_screen", credits=credits)
+    text = f"{streak_note}\n\n{base_text}" if streak_note else base_text
     try:
-        await message.answer(
-            flow_copy.msg("after_image_screen", credits=credits),
-            reply_markup=kb,
-            parse_mode="HTML",
-        )
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         pass
 

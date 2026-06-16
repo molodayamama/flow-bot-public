@@ -264,6 +264,13 @@ CREATE TABLE IF NOT EXISTS promo_redemptions (
     redeemed_at  TEXT DEFAULT (datetime('now')),
     UNIQUE(code, user_id)
 );
+
+CREATE TABLE IF NOT EXISTS user_streaks (
+    user_id          INTEGER PRIMARY KEY,
+    last_active_date TEXT NOT NULL,
+    current_streak   INTEGER NOT NULL DEFAULT 1,
+    max_streak       INTEGER NOT NULL DEFAULT 1
+);
 """
 
 
@@ -2308,6 +2315,74 @@ def get_prompt_history(user_id: int, limit: int = 10) -> list[str]:
     except Exception:  # noqa: BLE001
         log.warning("get_prompt_history failed for user_id=%r", user_id, exc_info=True)
         return []
+
+
+# ── daily streaks ─────────────────────────────────────────────────────────────
+
+
+def update_streak(user_id: int) -> tuple[int, int, bool]:
+    """Update the daily generation streak for *user_id*.
+
+    Returns ``(current_streak, max_streak, is_new_day)`` where *is_new_day* is
+    ``True`` when this call represents the user's first generation today (i.e.
+    the streak counter just changed).  Consecutive calls on the same UTC date
+    are no-ops and return ``is_new_day=False``.  Never raises.
+    """
+    from datetime import datetime as _dt, timedelta as _td  # local to avoid circular
+
+    try:
+        today = _dt.utcnow().strftime("%Y-%m-%d")
+        yesterday = (_dt.utcnow() - _td(days=1)).strftime("%Y-%m-%d")
+        with _LOCK:
+            con = _conn()
+            row = con.execute(
+                "SELECT last_active_date, current_streak, max_streak FROM user_streaks WHERE user_id=?",
+                (user_id,),
+            ).fetchone()
+            if row is None:
+                con.execute(
+                    "INSERT INTO user_streaks(user_id, last_active_date, current_streak, max_streak)"
+                    " VALUES(?,?,1,1)",
+                    (user_id, today),
+                )
+                con.commit()
+                return (1, 1, True)
+            last_date = row["last_active_date"]
+            current = row["current_streak"]
+            maximum = row["max_streak"]
+            if last_date == today:
+                return (current, maximum, False)
+            if last_date == yesterday:
+                current += 1
+            else:
+                current = 1  # gap → reset
+            maximum = max(maximum, current)
+            con.execute(
+                "UPDATE user_streaks SET last_active_date=?, current_streak=?, max_streak=? WHERE user_id=?",
+                (today, current, maximum, user_id),
+            )
+            con.commit()
+            return (current, maximum, True)
+    except Exception:  # noqa: BLE001
+        log.warning("update_streak failed for user_id=%r", user_id, exc_info=True)
+        return (1, 1, False)
+
+
+def get_streak(user_id: int) -> tuple[int, int]:
+    """Return ``(current_streak, max_streak)`` without mutating anything."""
+    try:
+        with _LOCK:
+            con = _conn()
+            row = con.execute(
+                "SELECT current_streak, max_streak FROM user_streaks WHERE user_id=?",
+                (user_id,),
+            ).fetchone()
+            if row is None:
+                return (0, 0)
+            return (row["current_streak"], row["max_streak"])
+    except Exception:  # noqa: BLE001
+        log.warning("get_streak failed for user_id=%r", user_id, exc_info=True)
+        return (0, 0)
 
 
 def get_users_for_digest(min_days: int = 3, max_days: int = 7, limit: int = 100) -> list[dict]:
