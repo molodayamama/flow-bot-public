@@ -65,6 +65,8 @@ LABELS = {
     # referrals
     "invite": "🤝 Пригласи друга",
     "invite_friend": "🎁 Позвать друга",
+    # wizard step 2 action
+    "change_prompt": "✏️ Изменить запрос",
     # ideas hub
     "ideas": "💡 Идеи и шаблоны",
     "ideas_templates": "📦 Готовые решения",

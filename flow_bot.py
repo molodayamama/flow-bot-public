@@ -3159,9 +3159,8 @@ def wizard_kb(
     count: int,
     fmt: str,
     imodel: str = DEFAULT_IMAGE_MODEL,
-    ideas: list[str] | None = None,
 ) -> types.InlineKeyboardMarkup:
-    """Один экран: количество + формат + модель + «Сгенерировать» (выбор — зелёная кнопка)."""
+    """Шаг 2: настройки генерации (количество + формат + модель + «Сгенерировать»)."""
     B = types.InlineKeyboardButton
     total_price = price_gen(count) + image_model_extra(imodel) * count
     go_label = f"{L('go')} · {total_price} кр"
@@ -3174,13 +3173,11 @@ def wizard_kb(
         *_fmt_rows(fmt, "w:fmt"),
         _imodel_row(imodel, "w:imodel"),
         [B(text=go_label, callback_data="w:go")],
+        [
+            B(text=L("change_prompt"), callback_data="w:change_prompt"),
+            _menu_button("cancel", "w:cancel"),
+        ],
     ]
-    # Быстрые идеи — 3 кнопки-подсказки + «Ещё →»
-    if ideas:
-        idea_row = [B(text=f"💡 {ideas[i][:28]}…" if len(ideas[i]) > 28 else f"💡 {ideas[i]}", callback_data=f"w:idea:{i}") for i in range(min(3, len(ideas)))]
-        rows.append(idea_row)
-        rows.append([B(text="✨ Ещё идеи →", callback_data="w:idea:next")])
-    rows.append([_menu_button("cancel", "w:cancel")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -3265,13 +3262,52 @@ async def _edit_or_answer(
 
 
 async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
-    import random as _random
+    """Шаг 2 визарда: настройки (количество/формат/модель) + промпт уже задан."""
     st = _ws(user_id)
     st.setdefault("count", DEFAULT_COUNT)
     st.setdefault("fmt", DEFAULT_FMT)
     st.setdefault("imodel", DEFAULT_IMAGE_MODEL)
     st["step"] = "wizard"
-    # Инициализируем перемешанный список идей один раз за сессию визарда
+    kb = wizard_kb(st["count"], st["fmt"], st["imodel"])
+    text = _wizard_text(user_id)
+    if edit:
+        await _edit_or_answer(message, text, kb, parse_mode="HTML")
+    else:
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+def _prompt_picker_text(ideas: list[str]) -> str:
+    """Текст экрана с идеями (шаг 1 визарда)."""
+    nums = ["1️⃣", "2️⃣", "3️⃣"]
+    lines = ["💡 <b>Идеи для вдохновения</b>\n"]
+    for i, idea in enumerate(ideas[:3]):
+        lines.append(f"{nums[i]} {idea}")
+    lines.append("\n✍️ Или напиши свой запрос прямо в чат:")
+    return "\n".join(lines)
+
+
+def _prompt_picker_kb(ideas: list[str]) -> types.InlineKeyboardMarkup:
+    """Клавиатура шага 1: выбрать идею по номеру, обновить идеи или выйти."""
+    B = types.InlineKeyboardButton
+    n = min(3, len(ideas))
+    nums = ["1️⃣", "2️⃣", "3️⃣"]
+    pick_row = [B(text=nums[i], callback_data=f"w:idea:{i}") for i in range(n)]
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        pick_row,
+        [B(text="✨ Ещё идеи →", callback_data="w:idea:next")],
+        [_menu_button("cancel", "w:cancel")],
+    ])
+
+
+async def show_prompt_picker(message: types.Message, *, user_id: int, edit: bool):
+    """Шаг 1 визарда: список идей в тексте + ввод своего промпта."""
+    import random as _random
+    st = _ws(user_id)
+    st.setdefault("count", DEFAULT_COUNT)
+    st.setdefault("fmt", DEFAULT_FMT)
+    st.setdefault("imodel", DEFAULT_IMAGE_MODEL)
+    st["step"] = "prompt_picker"
+    # Инициализируем или переиспользуем перемешанный пул идей
     if "ideas_pool" not in st:
         pool = list(_QUICK_IDEAS)
         _random.shuffle(pool)
@@ -3279,13 +3315,14 @@ async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
         st["ideas_offset"] = 0
     offset = st.get("ideas_offset", 0)
     ideas = st["ideas_pool"][offset:offset + 3]
-    kb = wizard_kb(st["count"], st["fmt"], st["imodel"], ideas=ideas)
-    text = _wizard_text(user_id)
+    text = _prompt_picker_text(ideas)
+    kb = _prompt_picker_kb(ideas)
     if edit:
         await _edit_or_answer(message, text, kb, parse_mode="HTML")
     else:
         metrics.log_event("wizard_started", user_id=user_id, source="image")
-        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        st["picker_msg_id"] = sent.message_id
 
 
 # ── видео-визард (кнопочный UX, префикс v:) ────────────────────────────
@@ -5570,7 +5607,7 @@ async def on_menu_action(callback: types.CallbackQuery):
     if data == "m:gen":
         await callback.answer()
         _reset_image_flow(user_id)  # сбрасывает и pending_edits (залипшее фото)
-        await show_wizard(msg, user_id=user_id, edit=True)
+        await show_prompt_picker(msg, user_id=user_id, edit=True)
     elif data == "m:vid":
         await callback.answer()
         pending_edits.pop(user_id, None)  # бросаем залипшее фото-правку при переходе в видео
@@ -5692,7 +5729,7 @@ async def on_onboarding_action(callback: types.CallbackQuery):
         await callback.answer()
         if kind == "img":
             _reset_image_flow(user_id)
-            await show_wizard(msg, user_id=user_id, edit=True)
+            await show_prompt_picker(msg, user_id=user_id, edit=True)
         elif kind == "vid":
             _vid_clear(user_id)
             await show_video_family(msg, user_id=user_id, edit=True)
@@ -6162,7 +6199,7 @@ async def on_wizard_action(callback: types.CallbackQuery):
             offset = 0
         st["ideas_offset"] = offset
         await callback.answer()
-        await show_wizard(msg, user_id=user_id, edit=True)
+        await show_prompt_picker(msg, user_id=user_id, edit=True)
         return
     if data.startswith("w:idea:"):
         try:
@@ -6177,6 +6214,11 @@ async def on_wizard_action(callback: types.CallbackQuery):
             st["pending_prompt"] = idea
             await callback.answer(f"💡 {idea[:40]}", show_alert=False)
         await show_wizard(msg, user_id=user_id, edit=True)
+        return
+    if data == "w:change_prompt":
+        st.pop("pending_prompt", None)
+        await callback.answer()
+        await show_prompt_picker(msg, user_id=user_id, edit=True)
         return
     if data == "w:go":
         pending = st.get("pending_prompt")
@@ -7727,7 +7769,7 @@ async def handle_plain_text(message: types.Message):
     # Постоянная нижняя клавиатура: её нажатия приходят как обычный текст.
     if text == L("kb_gen"):
         _reset_image_flow(user_id)  # чистит и pending_edits (залипшее фото)
-        await show_wizard(message, user_id=user_id, edit=False)
+        await show_prompt_picker(message, user_id=user_id, edit=False)
         return
     if text == L("kb_menu"):
         pending_edits.pop(user_id, None)
@@ -7947,6 +7989,31 @@ async def handle_plain_text(message: types.Message):
             aspect_ratio=_fmt_to_aspect(fmt), actor_id=user_id,
             image_model=imodel,
         )
+        return
+
+    # Пользователь на экране идей (шаг 1) и ввёл свой промпт — переходим к настройкам.
+    if st.get("step") == "prompt_picker":
+        if len(text) < 3:
+            await message.answer(flow_copy.msg("prompt_too_short"))
+            return
+        st["pending_prompt"] = text
+        st["step"] = "wizard"
+        picker_msg_id = st.get("picker_msg_id")
+        if picker_msg_id:
+            kb = wizard_kb(st.get("count", DEFAULT_COUNT), st.get("fmt", DEFAULT_FMT), st.get("imodel", DEFAULT_IMAGE_MODEL))
+            wtext = _wizard_text(user_id)
+            try:
+                await message.bot.edit_message_text(
+                    wtext,
+                    chat_id=message.chat.id,
+                    message_id=picker_msg_id,
+                    reply_markup=kb,
+                    parse_mode="HTML",
+                )
+                return
+            except Exception:
+                pass  # fallback: send new message below
+        await show_wizard(message, user_id=user_id, edit=False)
         return
 
     # Иначе пользователь прислал промпт «вхолодную», не открыв визард. Не генерируем
