@@ -327,6 +327,26 @@ tr:hover td{background:var(--pz-surface-2)}
 .ref-status-rewarded{color:var(--pz-lime);background:rgba(200,242,95,.1);border:1px solid rgba(200,242,95,.25)}
 .ref-status-pending{color:var(--pz-faint);background:var(--pz-surface-2);border:1px solid var(--pz-line)}
 
+/* ── Support cockpit ───────────────────────────────── */
+.support-layout{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;align-items:start}
+.support-detail-card{position:sticky;top:0}
+.support-detail-card .section-title{margin-top:14px}
+.ticket-status-bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.ticket-filter-btn{
+  padding:4px 12px;border-radius:var(--r-pill);font-size:12px;font-weight:600;
+  border:1px solid var(--pz-line);background:var(--pz-surface-2);color:var(--pz-faint);
+  cursor:pointer;transition:all .15s;
+}
+.ticket-filter-btn.active,.ticket-filter-btn:hover{
+  background:rgba(84,215,214,.12);border-color:var(--pz-cyan);color:var(--pz-cyan);
+}
+.support-preview{
+  background:var(--pz-surface-2);border:1px solid var(--pz-line);border-radius:var(--r-md);
+  padding:10px 12px;font-size:13px;line-height:1.5;white-space:pre-wrap;
+  color:var(--pz-muted);max-height:120px;overflow:auto;
+}
+@media(max-width:900px){.support-layout{grid-template-columns:1fr}}
+
 /* ── Toasts ────────────────────────────────────────── */
 #toasts{position:fixed;bottom:24px;right:24px;z-index:999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
 .toast{
@@ -376,6 +396,9 @@ tr:hover td{background:var(--pz-surface-2)}
         <span class="sb-icon">🔧</span> Настройки
       </button>
       <div style="height:1px;background:var(--pz-line-faint);margin:8px 0"></div>
+      <button class="sb-item" data-tab="support">
+        <span class="sb-icon">🛟</span> Support
+      </button>
       <button class="sb-item" data-tab="users">
         <span class="sb-icon">👤</span> Пользователи
       </button>
@@ -497,6 +520,32 @@ tr:hover td{background:var(--pz-surface-2)}
           </table>
         </div>
         <p style="font-size:12px;color:var(--pz-faint)">Изменения применяются мгновенно — рестарт бота не нужен.</p>
+      </div>
+
+      <!-- ── Tab: Support ──────────────────────── -->
+      <div id="tab-support" class="tab-panel">
+        <div class="toolbar">
+          <div>
+            <div class="card-title">Support Cockpit</div>
+            <div class="card-sub">Тикеты, пользовательский контекст, баланс и генерации</div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="loadSupport()">↻ Обновить</button>
+        </div>
+        <div class="ticket-status-bar" id="support-filter-bar">
+          <button class="ticket-filter-btn active" data-sf="open"    onclick="setSupportFilter('open')">Открытые</button>
+          <button class="ticket-filter-btn"         data-sf="replied" onclick="setSupportFilter('replied')">Отвечено</button>
+          <button class="ticket-filter-btn"         data-sf="closed"  onclick="setSupportFilter('closed')">Закрытые</button>
+          <button class="ticket-filter-btn"         data-sf="all"     onclick="setSupportFilter('all')">Все</button>
+        </div>
+        <div class="support-layout">
+          <div id="support-table-wrap">
+            <div style="color:var(--pz-faint);font-size:13px">Загрузка…</div>
+          </div>
+          <div class="card support-detail-card" id="support-detail">
+            <div class="card-title">Выбери тикет</div>
+            <p style="color:var(--pz-faint);font-size:13px;margin-top:6px">Нажми «Открыть» — появятся баланс, платежи и генерации пользователя.</p>
+          </div>
+        </div>
       </div>
 
       <!-- ── Tab: Messages ─────────────────────── -->
@@ -940,6 +989,7 @@ async function checkStatus() {
 const tabMeta = {
   overview:  ['Обзор',           'Статус системы и быстрая статистика'],
   accounts:  ['Аккаунты',        'Управление пулом Google-аккаунтов'],
+  support:   ['Support',         'Тикеты пользователей, статусы и контекст'],
   messages:  ['Сообщения бота',  'Тексты ответов и уведомлений'],
   labels:    ['Кнопки',          'Подписи инлайн-кнопок'],
   prices:    ['Цены',            'Стоимость действий в кредитах'],
@@ -949,9 +999,10 @@ const tabMeta = {
   analytics: ['Аналитика',       'Сегодня · Выручка · Нагрузка · Каналы · Ошибки'],
 };
 const tabLoaders = {
-  overview:loadOverview, accounts:loadAccounts, messages:loadMessages,
-  labels:loadLabels, prices:loadPrices, settings:loadSettings,
-  users:()=>loadUsers(1), referrals:loadReferrals, analytics:loadAnalytics,
+  overview:loadOverview, accounts:loadAccounts, support:loadSupport,
+  messages:loadMessages, labels:loadLabels, prices:loadPrices,
+  settings:loadSettings, users:()=>loadUsers(1),
+  referrals:loadReferrals, analytics:loadAnalytics,
 };
 let currentTab = 'overview';
 
@@ -1210,6 +1261,165 @@ async function saveSettings() {
   const r1 = await api('POST','/config/settings',settings);
   const r2 = await api('POST','/config/flags',flags);
   (r1||r2) ? toast('success','Настройки сохранены') : toast('error','Бот оффлайн');
+}
+
+/* ── Support ───────────────────────────────────────── */
+let _supportFilter = 'open';
+
+function setSupportFilter(f) {
+  _supportFilter = f;
+  document.querySelectorAll('.ticket-filter-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.sf === f);
+  });
+  loadSupport();
+}
+
+function _ticketStatusBadge(s) {
+  if (s === 'open')    return `<span class="badge badge-yellow">открыт</span>`;
+  if (s === 'replied') return `<span class="badge" style="color:var(--pz-cyan);background:rgba(84,215,214,.1);border:1px solid rgba(84,215,214,.25)">отвечено</span>`;
+  if (s === 'closed')  return `<span class="badge badge-muted">закрыт</span>`;
+  return `<span class="badge badge-muted">${esc(s)}</span>`;
+}
+
+async function loadSupport() {
+  const wrap = document.getElementById('support-table-wrap');
+  wrap.innerHTML = `<div style="color:var(--pz-faint);font-size:13px">Загрузка тикетов…</div>`;
+  const data = await api('GET', `/support?status=${_supportFilter}`);
+  if (!data) {
+    wrap.innerHTML = `<div style="color:var(--pz-coral);padding:24px;text-align:center">Бот оффлайн</div>`;
+    return;
+  }
+  const tickets = data.tickets || [];
+  if (!tickets.length) {
+    wrap.innerHTML = `<div style="color:var(--pz-faint);padding:24px;text-align:center">Тикетов нет</div>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Пользователь</th>
+            <th>Статус</th>
+            <th>Баланс</th>
+            <th>Ошибка</th>
+            <th>Сообщение</th>
+            <th>Создан</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>${tickets.map(t => `
+          <tr>
+            <td class="mono" style="color:var(--pz-faint)">#${t.id}</td>
+            <td>
+              <div class="mono" style="color:var(--pz-cyan)">${t.user_id}</div>
+              ${t.username ? `<div style="font-size:11px;color:var(--pz-faint)">@${esc(t.username)}</div>` : ''}
+            </td>
+            <td>${_ticketStatusBadge(t.status)}</td>
+            <td class="mono" style="color:${(t.balance||0)>0?'var(--pz-lime)':'var(--pz-faint)'}">${fmt(t.balance||0)} кр.</td>
+            <td>${t.last_error ? `<span class="badge badge-red" style="font-size:10px">${esc(t.last_error)}</span>` : '<span style="color:var(--pz-faint);font-size:12px">—</span>'}</td>
+            <td style="font-size:13px;color:var(--pz-muted);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((t.message_text||'').slice(0,120))}</td>
+            <td style="font-size:12px;color:var(--pz-faint)">${(t.created_at||'').slice(0,16)}</td>
+            <td class="nowrap" style="white-space:nowrap">
+              <button class="btn btn-ghost btn-sm" onclick="showTicket(${t.id})">Открыть</button>
+              ${t.status !== 'closed' ? `<button class="btn btn-ghost btn-sm" style="margin-left:4px;color:var(--pz-faint)" onclick="setTicketStatus(${t.id},'closed')">Закрыть</button>` : ''}
+            </td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    </div>`;
+}
+
+async function showTicket(id) {
+  const detail = document.getElementById('support-detail');
+  detail.innerHTML = `<div style="color:var(--pz-faint);font-size:13px">Загрузка…</div>`;
+  const d = await api('GET', `/support/${id}`);
+  if (!d) { detail.innerHTML = `<div style="color:var(--pz-coral)">Не удалось загрузить тикет</div>`; return; }
+  const t  = d.ticket   || {};
+  const u  = (d.user    || {}).profile || {};
+  const jobs = (d.user  || {}).recent_jobs || [];
+  const pays = (d.user  || {}).recent_payments || [];
+  const creds = (d.user || {}).credit_events || [];
+
+  detail.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:12px">
+      <div>
+        <div class="card-title">Тикет #${t.id}</div>
+        <div style="margin-top:4px">${_ticketStatusBadge(t.status)} <span style="font-size:12px;color:var(--pz-faint)">${(t.created_at||'').slice(0,16)}</span></div>
+      </div>
+    </div>
+
+    <div class="section-title">Обращение</div>
+    <div class="support-preview">${esc(t.message_text||'—')}</div>
+    ${t.reply_text ? `
+    <div class="section-title">Ответ (зафиксирован)</div>
+    <div class="support-preview" style="border-color:rgba(84,215,214,.2)">${esc(t.reply_text)}</div>` : ''}
+
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 16px">
+      <button class="btn btn-ghost btn-sm" onclick="setTicketStatus(${t.id},'open')">Mark open</button>
+      <button class="btn btn-ghost btn-sm" onclick="setTicketStatus(${t.id},'replied')">Mark replied</button>
+      <button class="btn btn-sm" style="background:transparent;color:var(--pz-coral);border:1px solid rgba(255,123,109,.3)" onclick="setTicketStatus(${t.id},'closed')">Закрыть</button>
+    </div>
+
+    <div class="section-title">Пользователь</div>
+    <div class="card" style="padding:12px;margin-bottom:0">
+      <div class="mono" style="color:var(--pz-cyan);margin-bottom:4px">${u.user_id||t.user_id}</div>
+      ${u.username?`<div style="font-size:12px;color:var(--pz-faint)">@${esc(u.username)}</div>`:''}
+      <div style="margin-top:6px;font-size:13px">
+        Баланс: <b style="color:var(--pz-lime)">${fmt(u.balance||0)} кр.</b>
+        · платежей: ${fmt((u.spend||{}).payments||0)}
+        · ₽: ${((u.spend||{}).rub||0).toFixed(0)}
+      </div>
+      <div style="font-size:12px;color:var(--pz-faint);margin-top:4px">
+        Регистрация: ${(u.first_seen||'—').slice(0,16)} · Активен: ${(u.last_active||'—').slice(0,16)}
+      </div>
+    </div>
+
+    ${pays.length ? `
+    <div class="section-title">Платежи</div>
+    <div class="table-wrap" style="margin-bottom:0">
+      <table>
+        <thead><tr><th>Дата</th><th>Пакет</th><th>₽</th><th>Stars</th><th>Кредиты</th></tr></thead>
+        <tbody>${pays.map(p=>`<tr>
+          <td style="font-size:11px;color:var(--pz-faint)">${(p.created_at||'').slice(0,16)}</td>
+          <td class="mono" style="font-size:12px">${esc(p.package_id||'—')}</td>
+          <td class="mono" style="color:var(--pz-lime)">${(+(p.amount_rub||0)).toFixed(0)}</td>
+          <td class="mono" style="color:var(--pz-warn)">${fmt(p.stars_amount||0)}</td>
+          <td class="mono">${fmt(p.credits_issued||0)}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>` : ''}
+
+    ${jobs.length ? `
+    <div class="section-title">Последние генерации</div>
+    <div class="table-wrap" style="margin-bottom:0">
+      <table>
+        <thead><tr><th>Дата</th><th>Операция</th><th>Статус</th><th>Кр.</th></tr></thead>
+        <tbody>${jobs.map(j=>`<tr>
+          <td style="font-size:11px;color:var(--pz-faint)">${(j.created_at||'').slice(11,19)}</td>
+          <td class="mono" style="font-size:12px">${esc(j.operation_type||'—')}</td>
+          <td>${j.status==='success'?'<span class="badge badge-green">✓</span>':j.status?`<span class="badge badge-red">${esc(j.status)}</span>`:'<span class="badge badge-muted">—</span>'}</td>
+          <td class="mono">${fmt(j.bot_credits_charged||0)}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>` : ''}
+  `;
+}
+
+async function setTicketStatus(id, status) {
+  const r = await api('POST', `/support/${id}/status`, { status });
+  if (r) {
+    toast('success', `Тикет #${id}: ${status}`);
+    loadSupport();
+    // обновить detail если открыт
+    const detail = document.getElementById('support-detail');
+    if (detail && detail.querySelector('.card-title')?.textContent?.includes('#'+id)) {
+      showTicket(id);
+    }
+  } else {
+    toast('error', 'Бот оффлайн');
+  }
 }
 
 /* ── Revenue bar chart ─────────────────────────────── */
