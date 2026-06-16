@@ -581,7 +581,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # Edit button wired via action_callback_data; repeat via m:repeat
         self.assertIn('action_callback_data("edit", token)', block)
         self.assertIn('"m:repeat"', block)          # Повторить stays
-        self.assertIn('· {price} кр', block)        # price tags are credits, not Stars
+        self.assertIn('· {edit_price} кр', block)   # price tags are credits, not Stars
 
     def test_realup_label_is_improve_quality(self) -> None:
         import flow_copy
@@ -943,9 +943,8 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('f"an:img:{token}"', kb)
         self.assertIn('@dp.callback_query(F.data.startswith("an:"))', self.source)
         self.assertIn('data == "m:animate"', self.source)
-        # Seeds the generated image as the single r2v reference, then reuses the
-        # existing ingredients flow.
-        self.assertIn('st["ving_photos"] = [ref.source]', self.source)
+        # Seeds the generated image into the new video wizard as vphoto reference.
+        self.assertIn('st["vphoto"] = ref.source', self.source)
         self.assertIn('st["vmode"] = "ingredients"', self.source)
         # The animate prefix handler is registered before the catch-all image one.
         self.assertLess(

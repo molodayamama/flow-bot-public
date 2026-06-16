@@ -3003,13 +3003,6 @@ def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
     """Инлайн-кнопки под картинкой: Изменить · Повторить · Оживить."""
     B = types.InlineKeyboardButton
 
-    def b(action: str, copy_key: str) -> types.InlineKeyboardButton:
-        label = flow_copy.label(copy_key)
-        price = action_price(copy_key)
-        if price > 0:
-            label = f"{label} · {price} кр"
-        return B(text=label, callback_data=action_callback_data(action, token))
-
     edit_price = action_price("edit")
     edit_label = f"✏️ Изменить · {edit_price} кр" if edit_price > 0 else "✏️ Изменить"
     animate_price = _vid_family_min_price("ing")
@@ -3018,7 +3011,9 @@ def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
             [
                 B(text=edit_label, callback_data=action_callback_data("edit", token)),
                 B(text="🔁 Повторить", callback_data="m:repeat"),
-                B(text=f"🎬 Оживить · от {animate_price} кр", callback_data=f"an:img:{token}"),
+            ],
+            [
+                B(text=f"🎬 Оживить фото · от {animate_price} кр", callback_data=f"an:img:{token}"),
             ],
         ]
     )
@@ -6189,7 +6184,7 @@ async def on_onboarding_action(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("an:"))
 async def on_animate_action(callback: types.CallbackQuery):
-    """«Оживить фото»: взять сгенерированную картинку как референс для r2v-видео."""
+    """«Оживить фото»: взять сгенерированную картинку как референс для нового video wizard."""
     data = callback.data or ""
     user_id = callback.from_user.id
     msg = callback.message
@@ -6204,13 +6199,25 @@ async def on_animate_action(callback: types.CallbackQuery):
         _vid_clear(user_id)
         st = _ws(user_id)
         _clear_image_flow_keys(st)  # чтобы промпт из чата ушёл в видео, а не в картинки
+        # Новый wizard: фото предзаполнено, ждём описание сцены от пользователя.
+        st["vphoto"] = ref.source
+        st["vstep"] = "vprompt_input"
         st["vmode"] = "ingredients"
-        st["vmodel"] = VID_REF_DEFAULT_MODEL
-        st["vcount"] = 1
-        st["ving_photos"] = [ref.source]  # картинка уже задана как референс
+        st["vmodel"] = _nwiz_model(st)
+        st.setdefault("vfmt", VID_DEFAULT_FMT)
+        st.setdefault("vdur", 4)
+        st.setdefault("vquality", "lite")
+        st.setdefault("vstyle", "")
         metrics.log_event("animate_started", user_id=user_id, source="image")
-        # Новый экран настроек под картинкой (можно добавить ещё фото или жать «Готово»).
-        await show_video_ingredients(msg, user_id=user_id, edit=False)
+        text = (
+            "🎬 <b>Оживить фото</b>\n\n"
+            "📎 <b>Фото добавлено.</b> Опишите, что должно происходить в видео."
+        )
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text=L("cancel"), callback_data="v:cancel")]
+        ])
+        sent = await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+        st["vmsg_id"] = sent.message_id
         return
     await callback.answer()
 
