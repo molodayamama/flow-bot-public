@@ -274,6 +274,31 @@ CREATE TABLE IF NOT EXISTS user_streaks (
 """
 
 
+# ── schema migrations ─────────────────────────────────────────────────
+
+# Columns added after the initial release.  Each entry is one ALTER TABLE
+# statement; we try every statement on every startup and silently swallow
+# "duplicate column name" (the column already exists from a previous run).
+_COLUMN_MIGRATIONS: list[str] = [
+    # flow_jobs — added in 2025-Q4
+    "ALTER TABLE flow_jobs ADD COLUMN status TEXT DEFAULT 'success'",
+    "ALTER TABLE flow_jobs ADD COLUMN error_type TEXT",
+    "ALTER TABLE flow_jobs ADD COLUMN refund_amount INTEGER DEFAULT 0",
+    # events — source column added for filtering
+    "ALTER TABLE events ADD COLUMN source TEXT",
+]
+
+
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    """Apply additive column migrations (idempotent — ignores duplicate-column errors)."""
+    for sql in _COLUMN_MIGRATIONS:
+        try:
+            conn.execute(sql)
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # "duplicate column name" — already present, skip
+
+
 # ── connection lifecycle ───────────────────────────────────────────────
 
 
@@ -298,6 +323,7 @@ def init_db(path: str | None = None) -> None:
         conn = sqlite3.connect(target, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.executescript(_SCHEMA)
+        _migrate_columns(conn)
         # PII-ретеншн: username в events — персональные данные; чистим старое
         # при каждом старте. Денежные таблицы не трогаем (нужны для сверки).
         days = _events_retention_days()
