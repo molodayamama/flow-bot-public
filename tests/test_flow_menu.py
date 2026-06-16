@@ -1083,12 +1083,21 @@ class BotMenuWiringTests(unittest.TestCase):
     def test_no_backend_or_captcha_words_in_user_messages(self) -> None:
         # User-facing copy must not reveal the backend or mention captcha.
         import flow_copy
-        for key, text in flow_copy.MESSAGES.items():
-            low = text.lower()
-            self.assertNotIn("flow", low, key)
-            self.assertNotIn("google", low, key)
-            self.assertNotIn("капч", low, key)
-            self.assertNotIn("recaptcha", low, key)
+        def _texts(val):
+            """Yield all strings from a value (str or list of str)."""
+            if isinstance(val, list):
+                for item in val:
+                    if isinstance(item, str):
+                        yield item
+            elif isinstance(val, str):
+                yield val
+        for key, val in flow_copy.MESSAGES.items():
+            for text in _texts(val):
+                low = text.lower()
+                self.assertNotIn("flow", low, key)
+                self.assertNotIn("google", low, key)
+                self.assertNotIn("капч", low, key)
+                self.assertNotIn("recaptcha", low, key)
         for key, text in flow_copy.LABELS.items():
             self.assertNotIn("flow", text.lower(), key)
 

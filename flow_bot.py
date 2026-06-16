@@ -2362,8 +2362,13 @@ class FlowHttpClient:
             poll_num += 1
 
             if progress_cb and poll_num % 3 == 0:
-                elapsed = int(poll_num * VIDEO_POLL_INTERVAL)
-                await progress_cb(f"⏳ Генерация видео… {elapsed}с")
+                _phrases = flow_copy.MESSAGES.get("vid_status_phrases") or []
+                if _phrases:
+                    phrase = _phrases[(poll_num // 3 - 1) % len(_phrases)]
+                else:
+                    elapsed = int(poll_num * VIDEO_POLL_INTERVAL)
+                    phrase = f"⏳ Генерация видео… {elapsed}с"
+                await progress_cb(phrase)
 
             try:
                 async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
@@ -2912,13 +2917,20 @@ async def credit_gate(
 
     have = credit_store.balance(user_id)
     if have < price:
-        kb = types.InlineKeyboardMarkup(
-            inline_keyboard=[[_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]]
-        )
-        await message.answer(
-            flow_copy.msg("low_balance", needed=price, have=have), reply_markup=kb,
-            parse_mode="HTML",
-        )
+        if have == 0:
+            await message.answer(
+                flow_copy.msg("zero_balance"),
+                reply_markup=_zero_balance_kb(),
+                parse_mode="HTML",
+            )
+        else:
+            kb = types.InlineKeyboardMarkup(
+                inline_keyboard=[[_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]]
+            )
+            await message.answer(
+                flow_copy.msg("low_balance", needed=price, have=have), reply_markup=kb,
+                parse_mode="HTML",
+            )
         raise NotEnoughCredits
 
     credit_store.charge(user_id, price)
@@ -3823,6 +3835,28 @@ def topup_method_kb() -> types.InlineKeyboardMarkup:
     if sbp_on:
         rows.append([_menu_button("pay_robo", "m:pay:robo")])
     rows.append([_menu_button("back", "m:balance")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _zero_balance_kb() -> types.InlineKeyboardMarkup:
+    """Клавиатура экрана «кончились кредиты»: прямые кнопки trial-пака + все пакеты."""
+    B = types.InlineKeyboardButton
+    rows: list[list[types.InlineKeyboardButton]] = []
+    try:
+        import config_store as _cs
+        _flags = _cs.get_section("flags")
+        stars_on = bool(_flags.get("stars_pay", STARS_PAYMENT_ENABLED))
+        sbp_on   = bool(_flags.get("sbp_pay",   SBP_PAYMENT_ENABLED))
+    except Exception:
+        stars_on, sbp_on = STARS_PAYMENT_ENABLED, SBP_PAYMENT_ENABLED
+
+    # Предпочтительный способ: сначала СБП (выгоднее), потом Stars
+    if sbp_on and _robokassa_configured():
+        rows.append([B(text=_robokassa_pack_label("trial"), callback_data="m:robo:trial")])
+    if stars_on:
+        rows.append([B(text=_stars_pack_label("trial"), callback_data="m:pack:trial")])
+    rows.append([_menu_button("topup", "m:topup")])  # Все пакеты
+    rows.append([_menu_button("menu", "m:menu")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -6513,13 +6547,20 @@ async def _do_video_generate_and_send(
 
     have = credit_store.balance(user_id)
     if have < total_price:
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]
-        ])
-        await message.answer(
-            flow_copy.msg("low_balance", needed=total_price, have=have), reply_markup=kb,
-            parse_mode="HTML",
-        )
+        if have == 0:
+            await message.answer(
+                flow_copy.msg("zero_balance"),
+                reply_markup=_zero_balance_kb(),
+                parse_mode="HTML",
+            )
+        else:
+            kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                [_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]
+            ])
+            await message.answer(
+                flow_copy.msg("low_balance", needed=total_price, have=have), reply_markup=kb,
+                parse_mode="HTML",
+            )
         return
 
     credit_store.charge(user_id, total_price)
