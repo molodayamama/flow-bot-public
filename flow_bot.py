@@ -3960,7 +3960,8 @@ async def cmd_start(message: types.Message):
     is_new = not metrics.user_exists(user_id)  # DB надёжнее in-memory _granted после рестарта
     credit_store.balance(user_id)  # начисляем стартовые кредиты при первом старте
     metrics.log_event("user_started", user_id=user_id,
-                      username=_username(message), source="command")
+                      username=_username(message), source="command",
+                      payload={"is_new": is_new})
     # Deep-link приглашение: /start ref_<id> — фиксируем рефералку (один раз).
     parts = (message.text or "").split(maxsplit=1)
     payload = parts[1].strip() if len(parts) > 1 else ""
@@ -4809,6 +4810,10 @@ def _mark_image_account_failure(account_id: str | None, result: dict | None = No
     if (result or {}).get("account_risk") == "unusual_activity":
         if account_pool.mark_cooldown(account_id):
             log.warning("Image account %s cooled down after provider unusual-activity", account_id)
+            metrics.log_event(
+                "account_cooldown",
+                payload={"account": account_id, "reason": "unusual_activity", "op": "image"},
+            )
         return
     account_pool.mark_failure(account_id)
 
@@ -4816,9 +4821,14 @@ def _mark_image_account_failure(account_id: str | None, result: dict | None = No
 def _mark_video_account_failure(account_id: str | None, result: dict | None = None) -> None:
     if not account_id:
         return
-    if (result or {}).get("account_risk") in {"video_auth", "video_all_actions_403"}:
+    risk = (result or {}).get("account_risk")
+    if risk in {"video_auth", "video_all_actions_403"}:
         if account_pool.mark_cooldown(account_id):
             log.warning("Video account %s cooled down after provider account-risk signal", account_id)
+            metrics.log_event(
+                "account_cooldown",
+                payload={"account": account_id, "reason": risk, "op": "video"},
+            )
         return
     account_pool.mark_failure(account_id)
 

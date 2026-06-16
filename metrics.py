@@ -1868,13 +1868,15 @@ def report_recent_events(limit: int = 50) -> list:
                 """,
                 (int(limit),),
             )
-            # Фейловер-события из таблицы events
-            failover_rows = _rows(
+            # Системные события из таблицы events (фейловер, новый юзер, кулдаун, оплата)
+            system_event_rows = _rows(
                 conn,
                 """
-                SELECT user_id, username, payload_json, created_at
+                SELECT event_name, user_id, username, payload_json, created_at
                 FROM events
-                WHERE event_name = 'gen_failover'
+                WHERE event_name IN (
+                    'gen_failover', 'user_started', 'account_cooldown', 'payment_success'
+                )
                 ORDER BY id DESC LIMIT ?
                 """,
                 (int(limit),),
@@ -1922,7 +1924,7 @@ def report_recent_events(limit: int = 50) -> list:
             })
 
         import json as _json
-        for fr in failover_rows:
+        for fr in system_event_rows:
             try:
                 payload = _json.loads(fr["payload_json"] or "{}")
             except Exception:
@@ -1930,22 +1932,59 @@ def report_recent_events(limit: int = 50) -> list:
             username = fr["username"] or ""
             uid = fr["user_id"] or ""
             user_label = f"@{username}" if username else f"#{uid}" if uid else "—"
-            from_acc = payload.get("from_account", "?")
-            reason = payload.get("reason", "")
-            reason_short = reason[:40] if reason else ""
-            text = f"{user_label}  → фейловер с {from_acc}"
-            if reason_short:
-                text += f"  ({reason_short})"
             ts = str(fr["created_at"] or "")
             time_str = ts[11:16] if len(ts) >= 16 else ts
-            result.append({
-                "time":     time_str,
-                "text":     text,
-                "chip":     "⚠ failover",
-                "color":    "warn",
-                "account":  from_acc,
-                "_sort_ts": ts,
-            })
+            ev = fr["event_name"]
+
+            if ev == "gen_failover":
+                from_acc = payload.get("from_account", "?")
+                reason = payload.get("reason", "")[:40]
+                text = f"{user_label}  → фейловер с {from_acc}"
+                if reason:
+                    text += f"  ({reason})"
+                result.append({
+                    "time": time_str, "text": text,
+                    "chip": "⚠ failover", "color": "warn",
+                    "account": from_acc, "_sort_ts": ts,
+                })
+
+            elif ev == "user_started":
+                is_new = payload.get("is_new", False)
+                if is_new:
+                    text = f"🆕 новый юзер  {user_label}"
+                    result.append({
+                        "time": time_str, "text": text,
+                        "chip": "👤 new", "color": "cyan",
+                        "account": "—", "_sort_ts": ts,
+                    })
+
+            elif ev == "account_cooldown":
+                acc = payload.get("account", "?")
+                reason = payload.get("reason", "")[:30]
+                op = payload.get("op", "")
+                text = f"❄️ кулдаун  {acc}  ({op})"
+                if reason:
+                    text += f"  · {reason}"
+                result.append({
+                    "time": time_str, "text": text,
+                    "chip": "❄ cooldown", "color": "coral",
+                    "account": acc, "_sort_ts": ts,
+                })
+
+            elif ev == "payment_success":
+                credits = payload.get("credits", "?")
+                source = fr.get("source") or payload.get("source", "")
+                stars = payload.get("stars")
+                rub = payload.get("amount_rub")
+                amount_str = f"{stars}⭐" if stars else (f"{rub}₽" if rub else "")
+                text = f"💳 пополнение  {user_label}  +{credits}кр"
+                if amount_str:
+                    text += f"  ({amount_str})"
+                result.append({
+                    "time": time_str, "text": text,
+                    "chip": "💳 topup", "color": "lime",
+                    "account": "—", "_sort_ts": ts,
+                })
 
         # Сортируем по времени (новейшие первыми), обрезаем до limit
         result.sort(key=lambda x: x.get("_sort_ts", ""), reverse=True)
