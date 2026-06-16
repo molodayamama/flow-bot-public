@@ -232,7 +232,7 @@ class BotPoolWiringTests(unittest.TestCase):
         )
         # Image: роутинг по аккаунту + health-отметки.
         start = self.source.index("async def _do_generate_and_send")
-        block = self.source[start:start + 4500]
+        block = self.source[start:start + 5500]
         self.assertIn("acc_id = _account_for_image(user_id", block)  # may have exclude= kwarg
         self.assertIn('flow_copy.msg("accounts_unavailable")', block)
         self.assertIn("account_pool.mark_failure(acc_id)", block)

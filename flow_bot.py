@@ -4093,6 +4093,12 @@ async def cmd_start(message: types.Message):
     metrics.log_event("user_started", user_id=user_id,
                       username=_username(message), source="command",
                       payload={"is_new": is_new})
+    if is_new:
+        uname = _username(message)
+        uname_str = f"@{uname}" if uname else f"id {user_id}"
+        asyncio.create_task(_send_owner_alert(
+            f"👤 <b>Новый пользователь</b>\n{uname_str}"
+        ))
     # Deep-link приглашение: /start ref_<id> — фиксируем рефералку (один раз).
     parts = (message.text or "").split(maxsplit=1)
     payload = parts[1].strip() if len(parts) > 1 else ""
@@ -4217,6 +4223,13 @@ async def cmd_promo(message: types.Message):
         return
     balance = credit_store.add(user_id, credits_got)
     metrics.log_event("promo_redeemed", user_id=user_id, payload={"code": code, "credits": credits_got})
+    uname = _username(message)
+    uname_str = f"@{uname}" if uname else f"id {user_id}"
+    asyncio.create_task(_send_owner_alert(
+        f"🎟 <b>Промокод активирован</b>\n"
+        f"Юзер: {uname_str}\n"
+        f"Код: <code>{code.upper()}</code>  +{credits_got} кр."
+    ))
     await message.answer(
         flow_copy.msg("promo_success", credits=credits_got, balance=balance),
         parse_mode="HTML",
@@ -4835,7 +4848,12 @@ async def _do_generate_and_send(
         except asyncio.TimeoutError:
             log.warning("Generation timed out after %ds (account %s, attempt %d)",
                         _GEN_ATTEMPT_TIMEOUT, acc_id, attempt)
-            account_pool.mark_failure(acc_id)
+            if account_pool.mark_failure(acc_id):
+                _fire_owner_alert(
+                    f"⚠️ <b>Аккаунт кулдаун</b>\n"
+                    f"Аккаунт: <code>{acc_id}</code>\n"
+                    f"Причина: timeout ({_GEN_ATTEMPT_TIMEOUT}s, image)"
+                )
             if attempt == 0:
                 _log_failover(acc_id, "timeout")
                 continue
@@ -4843,7 +4861,12 @@ async def _do_generate_and_send(
             return False
         except Exception:
             log.exception("Generation failed (account %s, attempt %d)", acc_id, attempt)
-            account_pool.mark_failure(acc_id)
+            if account_pool.mark_failure(acc_id):
+                _fire_owner_alert(
+                    f"⚠️ <b>Аккаунт кулдаун</b>\n"
+                    f"Аккаунт: <code>{acc_id}</code>\n"
+                    f"Причина: exception (image)"
+                )
             if attempt == 0:
                 _log_failover(acc_id, "exception")
                 continue
@@ -5037,6 +5060,24 @@ def _is_rate_limit_error(result: dict) -> bool:
     )
 
 
+async def _send_owner_alert(text: str) -> None:
+    """Send a plain-text Telegram message to every OWNER_ID.  Never raises."""
+    for oid in OWNER_IDS:
+        try:
+            await bot.send_message(oid, text, parse_mode="HTML")
+        except Exception:
+            pass
+
+
+def _fire_owner_alert(text: str) -> None:
+    """Schedule owner alert from a synchronous call-site (fire-and-forget)."""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_send_owner_alert(text))
+    except RuntimeError:
+        pass  # no running loop — silently drop
+
+
 def _mark_image_account_failure(account_id: str | None, result: dict | None = None) -> None:
     if not account_id:
         return
@@ -5047,8 +5088,18 @@ def _mark_image_account_failure(account_id: str | None, result: dict | None = No
                 "account_cooldown",
                 payload={"account": account_id, "reason": "unusual_activity", "op": "image"},
             )
+            _fire_owner_alert(
+                f"⚠️ <b>Аккаунт кулдаун</b>\n"
+                f"Аккаунт: <code>{account_id}</code>\n"
+                f"Причина: unusual_activity (image)"
+            )
         return
-    account_pool.mark_failure(account_id)
+    if account_pool.mark_failure(account_id):
+        _fire_owner_alert(
+            f"⚠️ <b>Аккаунт кулдаун</b>\n"
+            f"Аккаунт: <code>{account_id}</code>\n"
+            f"Причина: N ошибок подряд (image)"
+        )
 
 
 def _mark_video_account_failure(account_id: str | None, result: dict | None = None) -> None:
@@ -5062,8 +5113,18 @@ def _mark_video_account_failure(account_id: str | None, result: dict | None = No
                 "account_cooldown",
                 payload={"account": account_id, "reason": risk, "op": "video"},
             )
+            _fire_owner_alert(
+                f"⚠️ <b>Аккаунт кулдаун</b>\n"
+                f"Аккаунт: <code>{account_id}</code>\n"
+                f"Причина: {risk} (video)"
+            )
         return
-    account_pool.mark_failure(account_id)
+    if account_pool.mark_failure(account_id):
+        _fire_owner_alert(
+            f"⚠️ <b>Аккаунт кулдаун</b>\n"
+            f"Аккаунт: <code>{account_id}</code>\n"
+            f"Причина: N ошибок подряд (video)"
+        )
 
 
 async def _download_ref_image_bytes(ref: ImageRef) -> bytes | None:
@@ -8109,12 +8170,20 @@ async def handle_plain_text(message: types.Message):
     # Промокод: ждём ввода кода после /promo без аргумента.
     if awaiting == "promo":
         st["await"] = None
-        credits_got = metrics.redeem_promo(text.strip(), user_id)
+        code_raw = text.strip()
+        credits_got = metrics.redeem_promo(code_raw, user_id)
         if credits_got is None:
             await message.answer(flow_copy.msg("promo_invalid"))
         else:
             balance = credit_store.add(user_id, credits_got)
-            metrics.log_event("promo_redeemed", user_id=user_id, payload={"code": text.strip().upper(), "credits": credits_got})
+            metrics.log_event("promo_redeemed", user_id=user_id, payload={"code": code_raw.upper(), "credits": credits_got})
+            uname = _username(message)
+            uname_str = f"@{uname}" if uname else f"id {user_id}"
+            asyncio.create_task(_send_owner_alert(
+                f"🎟 <b>Промокод активирован</b>\n"
+                f"Юзер: {uname_str}\n"
+                f"Код: <code>{code_raw.upper()}</code>  +{credits_got} кр."
+            ))
             await message.answer(
                 flow_copy.msg("promo_success", credits=credits_got, balance=balance),
                 parse_mode="HTML",
