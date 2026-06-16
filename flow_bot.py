@@ -3800,10 +3800,11 @@ def _nwiz_kb(user_id: int) -> types.InlineKeyboardMarkup:
 
     rows: list[list] = []
 
-    # Формат тоггл
+    # Формат тоггл — 🖥 горизонталь / 📱 вертикаль
     next_fmt = "port" if vfmt == "land" else "land"
     fmt_name = _VID_FMT_NAMES.get(vfmt, vfmt)
-    rows.append([B(text=f"🔄 Формат: {fmt_name}", callback_data=f"v:nfmt:{next_fmt}")])
+    fmt_emoji = "📱" if vfmt == "port" else "🖥"
+    rows.append([B(text=f"{fmt_emoji} {fmt_name}", callback_data=f"v:nfmt:{next_fmt}")])
 
     if has_photo:
         # Veo: качество тоггл
@@ -7356,8 +7357,49 @@ async def _do_video_generate_and_send(
                     vmode, model_id, aspect, str(result.get("error"))[:300],
                 )
                 _mark_video_account_failure(acc_id, result)
-                await _fail_retry(i)
-                return
+                # Прозрачный фейловер на другой аккаунт для text-to-video (403/auth риски).
+                # Ingredients/frames используют account-bound media — фейловер там невозможен.
+                _failover_risk = (result or {}).get("account_risk")
+                if (
+                    _failover_risk in {"video_auth", "video_all_actions_403"}
+                    and vmode == "text"
+                    and video_operation == "generate"
+                    and not source_video
+                ):
+                    failover_acc = _account_for_video(user_id)
+                    if failover_acc and failover_acc != acc_id:
+                        log.info("🔄 video failover: %s → %s", acc_id, failover_acc)
+                        acc_id = failover_acc
+                        video_project_id = await ensure_user_project(
+                            user_id, account_id=acc_id
+                        )
+                        await update_status("⏳ Отправляю запрос на генерацию видео…")
+                        result = await _client_for_acc(acc_id).generate_video(
+                            prompt,
+                            model_key=model_key,
+                            aspect=aspect,
+                            project_id=video_project_id,
+                            reference_sources=None,
+                            start_source=None,
+                            end_source=None,
+                            operation=video_operation,
+                            source_media_id=None,
+                            source_workflow_id=None,
+                            source_scene_id=None,
+                            source_duration_s=None,
+                            progress_cb=update_status,
+                        )
+                        if "error" not in result:
+                            # Фейловер успешен — продолжаем нормальный путь.
+                            log.info("🎬 video failover succeeded on %s", acc_id)
+                            # Не возвращаемся — упадём ниже в success-ветку.
+                            pass
+                        else:
+                            log.warning("🎬 video failover also failed: %s", result.get("error"))
+                            _mark_video_account_failure(acc_id, result)
+                if "error" in result:
+                    await _fail_retry(i)
+                    return
 
             media_id = result["media_id"]
             await update_status("⬇️ Готовлю видео для отправки…")
