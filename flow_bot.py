@@ -3101,6 +3101,17 @@ def _imodel_row(
     return row
 
 
+def _imodel_toggle_btn(selected: str, prefix: str = "w:imodel") -> types.InlineKeyboardButton:
+    """Одна кнопка-тогл модели: показывает текущую, клик → следующая по кругу."""
+    ids = list(IMAGE_MODELS.keys())
+    meta = IMAGE_MODELS.get(selected, IMAGE_MODELS[ids[0]])
+    # Следующая модель по кругу
+    cur_idx = ids.index(selected) if selected in ids else 0
+    next_id = ids[(cur_idx + 1) % len(ids)]
+    label = f"🎨 Модель: {meta['label']}"
+    return types.InlineKeyboardButton(text=label, callback_data=f"{prefix}:{next_id}")
+
+
 def _onboarding_step1_kb() -> types.InlineKeyboardMarkup:
     """Первый шаг онбординга: что хочет создать новый пользователь?"""
     B = types.InlineKeyboardButton
@@ -3165,7 +3176,7 @@ def wizard_kb(
     *,
     show_boost: bool = False,
 ) -> types.InlineKeyboardMarkup:
-    """Шаг 2: настройки генерации (количество + формат + модель + «Сгенерировать»)."""
+    """Шаг 2: настройки генерации (количество + формат + модель-тогл + «Сгенерировать»)."""
     B = types.InlineKeyboardButton
     total_price = price_gen(count) + image_model_extra(imodel) * count
     go_label = f"{L('go')} · {total_price} кр"
@@ -3176,7 +3187,7 @@ def wizard_kb(
             _sel_btn(L("cnt:4"), count == 4, "w:cnt:4"),
         ],
         *_fmt_rows(fmt, "w:fmt"),
-        _imodel_row(imodel, "w:imodel"),
+        [_imodel_toggle_btn(imodel, "w:imodel")],
         [B(text=go_label, callback_data="w:go")],
     ]
     if show_boost:
@@ -3233,19 +3244,19 @@ def _wizard_text(user_id: int) -> str:
     fmt = st.get("fmt", DEFAULT_FMT)
     imodel = st.get("imodel", DEFAULT_IMAGE_MODEL)
     total_price = price_gen(count) + image_model_extra(imodel) * count
-    text = flow_copy.msg(
+    settings = flow_copy.msg(
         "wizard_screen",
         count=count,
         fmt=_FMT_NAMES.get(fmt, fmt),
         price=total_price,
         credits=credit_store.balance(user_id),
     )
-    # Если пользователь уже прислал промпт в чат — показываем его над настройками.
+    # Промпт — в blockquote вверху, чтобы сразу бросался в глаза.
     pending = st.get("pending_prompt")
     if pending:
-        # HTML screen → escape the echoed user prompt (could contain < > &).
-        return flow_copy.msg("wizard_prompt_note", prompt=html.escape(pending[:80])) + text
-    return text
+        prompt_block = flow_copy.msg("wizard_prompt_note", prompt=html.escape(pending))
+        return prompt_block + settings
+    return settings
 
 
 async def _edit_or_answer(
@@ -3326,14 +3337,10 @@ def _prompt_picker_text(ideas: list[str]) -> str:
     return "\n".join(lines)
 
 
-def _prompt_picker_kb(ideas: list[str]) -> types.InlineKeyboardMarkup:
-    """Клавиатура шага 1: выбрать идею по номеру, обновить идеи или выйти."""
+def _prompt_picker_kb(_ideas: list[str]) -> types.InlineKeyboardMarkup:
+    """Клавиатура шага 1: только обновление идей и выход (пользователь пишет текстом)."""
     B = types.InlineKeyboardButton
-    n = min(3, len(ideas))
-    nums = ["1️⃣", "2️⃣", "3️⃣"]
-    pick_row = [B(text=nums[i], callback_data=f"w:idea:{i}") for i in range(n)]
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        pick_row,
         [B(text="✨ Ещё идеи →", callback_data="w:idea:next")],
         [_menu_button("cancel", "w:cancel")],
     ])

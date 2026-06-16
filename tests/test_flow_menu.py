@@ -363,9 +363,9 @@ class BotMenuWiringTests(unittest.TestCase):
         end = self.source.index("def reply_menu_kb")
         block = self.source[start:end]
         self.assertIn('"w:cnt:1"', block)
-        # Format + model rows come from shared helpers (also reused by edit).
+        # Format rows from shared helper; model is now a single toggle button.
         self.assertIn('_fmt_rows(fmt, "w:fmt")', block)
-        self.assertIn('_imodel_row(imodel, "w:imodel")', block)
+        self.assertIn('_imodel_toggle_btn(imodel, "w:imodel")', block)
         self.assertIn('"w:go"', block)
 
     def test_fmt_rows_cover_five_formats(self) -> None:
@@ -1318,14 +1318,17 @@ class BotImportSmokeTests(unittest.TestCase):
             fb.wizard_kb(2, "sq")          # single-screen count+format
             fb.wizard_kb(4, "f43", "nbpro")  # new format + model picker
             fb.edit_settings_kb("f34", "nbpro")  # edit-flow format/model picker
+            # Модель — одна кнопка-тогл: показывает текущую, cb_data → следующая.
             model_buttons = [
-                b.text
+                b
                 for row in fb.wizard_kb(1, "sq", "nb2").inline_keyboard
                 for b in row
                 if (b.callback_data or "").startswith("w:imodel:")
             ]
-            self.assertIn("Nano Banana 2 · 10 кр", model_buttons)
-            self.assertIn("Nano Banana Pro · 15 кр", model_buttons)
+            self.assertEqual(len(model_buttons), 1, "должна быть ровно одна кнопка модели")
+            self.assertIn("Nano Banana 2", model_buttons[0].text)
+            # callback_data ведёт на следующую модель (nbpro)
+            self.assertEqual(model_buttons[0].callback_data, "w:imodel:nbpro")
             fb.reply_menu_kb()             # persistent bottom keyboard
             methods = fb.topup_kb()
             method_texts = [b.text for row in methods.inline_keyboard for b in row]
