@@ -3098,6 +3098,26 @@ def _imodel_row(
     return row
 
 
+def _onboarding_step1_kb() -> types.InlineKeyboardMarkup:
+    """Первый шаг онбординга: что хочет создать новый пользователь?"""
+    B = types.InlineKeyboardButton
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [B(text=L("ob_img"),   callback_data="ob:img")],
+        [B(text=L("ob_vid"),   callback_data="ob:vid")],
+        [B(text=L("ob_photo"), callback_data="ob:photo")],
+        [B(text=L("ob_skip"),  callback_data="ob:skip")],
+    ])
+
+
+def _onboarding_step2_kb(kind: str) -> types.InlineKeyboardMarkup:
+    """Второй шаг онбординга: пример + кнопка «Попробовать»."""
+    B = types.InlineKeyboardButton
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [B(text=L("ob_go"), callback_data=f"ob:go:{kind}")],
+        [B(text=L("ob_skip"), callback_data="ob:skip")],
+    ])
+
+
 def _fmt_rows(fmt: str, prefix: str = "w:fmt") -> list:
     """Два ряда выбора формата картинки (16:9 / 4:3 / 1:1 / 3:4 / 9:16)."""
     B = types.InlineKeyboardButton
@@ -4016,14 +4036,33 @@ async def cmd_start(message: types.Message):
         if metrics.record_acquisition(user_id=user_id, channel=channel):
             metrics.log_event("acquired_from_channel", user_id=user_id,
                               username=_username(message), payload={"channel": channel})
-    # Показываем приветствие вместе с постоянной нижней клавиатурой.
+    # Постоянная нижняя клавиатура всегда показывается при /start
+    await message.answer("👇", reply_markup=reply_menu_kb())
+
     if _referral_welcome_bonus > 0:
+        # Пришёл по реф-ссылке → эмоциональный бонус + онбординг
         gens = _referral_welcome_bonus // price_gen(1)
         await message.answer(
             flow_copy.msg("referral_welcome", bonus=_referral_welcome_bonus, gens=gens),
             parse_mode="HTML",
         )
-    await message.answer(flow_copy.msg("welcome"), reply_markup=reply_menu_kb(), parse_mode="HTML")
+        # После реф-приветствия → онбординг
+        if is_new:
+            await message.answer(
+                flow_copy.msg("onboarding_step1"),
+                reply_markup=_onboarding_step1_kb(),
+            )
+            return
+    elif is_new:
+        # Новый пользователь без реф-ссылки → онбординг
+        await message.answer(
+            flow_copy.msg("onboarding_step1"),
+            reply_markup=_onboarding_step1_kb(),
+        )
+        return
+
+    # Старый пользователь → обычный welcome + меню
+    await message.answer(flow_copy.msg("welcome"), parse_mode="HTML")
     await show_main_menu(message, user_id=user_id)
 
 
@@ -5613,6 +5652,45 @@ async def on_menu_action(callback: types.CallbackQuery):
             await callback.answer()
     else:
         await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("ob:"))
+async def on_onboarding_action(callback: types.CallbackQuery):
+    """Онбординг новых пользователей: 2-шаговый выбор что создавать."""
+    user_id = callback.from_user.id
+    data = callback.data or ""
+    msg = callback.message
+    credits = credit_store.balance(user_id)
+
+    if data == "ob:skip":
+        await callback.answer()
+        await show_main_menu(msg, user_id=user_id, edit=True)
+        return
+
+    if data in ("ob:img", "ob:vid", "ob:photo"):
+        kind = data.split(":")[1]
+        copy_key = f"onboarding_step2_{kind}"
+        text = flow_copy.msg(copy_key, credits=credits)
+        await callback.answer()
+        await msg.edit_text(text, reply_markup=_onboarding_step2_kb(kind), parse_mode="HTML")
+        return
+
+    if data.startswith("ob:go:"):
+        kind = data.split(":")[2]
+        await callback.answer()
+        if kind == "img":
+            _reset_image_flow(user_id)
+            await show_wizard(msg, user_id=user_id, edit=True)
+        elif kind == "vid":
+            _vid_clear(user_id)
+            await show_video_family(msg, user_id=user_id, edit=True)
+        elif kind == "photo":
+            _reset_image_flow(user_id, keep_last=False)
+            _ws(user_id)["await"] = "photo"
+            await msg.edit_text(flow_copy.msg("ask_photo"))
+        return
+
+    await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("an:"))
