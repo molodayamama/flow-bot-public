@@ -263,6 +263,9 @@ OWNER_IDS = _parse_ids(os.getenv("OWNER_ID", ""))
 # Админы бота — могут начислять кредиты командой /grant и видят тест-пакет.
 # Объединяем с владельцами: каждый owner — администратор.
 ADMIN_IDS = _parse_ids(os.getenv("ADMIN_IDS", "")) | OWNER_IDS
+# Gemini API key for prompt enhancement (optional). When absent, «Улучшить промпт»
+# button is hidden from the image wizard settings screen.
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 FLOW_URL = "https://labs.google/fx/tools/flow"
 # Файл с картой telegram_user_id -> flow_project_id (каждый юзер = свой проект).
 USER_PROJECTS_FILE = os.getenv("USER_PROJECTS_FILE", "user_projects.json")
@@ -3159,6 +3162,8 @@ def wizard_kb(
     count: int,
     fmt: str,
     imodel: str = DEFAULT_IMAGE_MODEL,
+    *,
+    show_boost: bool = False,
 ) -> types.InlineKeyboardMarkup:
     """Шаг 2: настройки генерации (количество + формат + модель + «Сгенерировать»)."""
     B = types.InlineKeyboardButton
@@ -3173,11 +3178,13 @@ def wizard_kb(
         *_fmt_rows(fmt, "w:fmt"),
         _imodel_row(imodel, "w:imodel"),
         [B(text=go_label, callback_data="w:go")],
-        [
-            B(text=L("change_prompt"), callback_data="w:change_prompt"),
-            _menu_button("cancel", "w:cancel"),
-        ],
     ]
+    if show_boost:
+        rows.append([B(text=L("boost_prompt"), callback_data="w:boost_prompt")])
+    rows.append([
+        B(text=L("change_prompt"), callback_data="w:change_prompt"),
+        _menu_button("cancel", "w:cancel"),
+    ])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -3268,12 +3275,45 @@ async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
     st.setdefault("fmt", DEFAULT_FMT)
     st.setdefault("imodel", DEFAULT_IMAGE_MODEL)
     st["step"] = "wizard"
-    kb = wizard_kb(st["count"], st["fmt"], st["imodel"])
+    kb = wizard_kb(st["count"], st["fmt"], st["imodel"], show_boost=bool(GEMINI_API_KEY))
     text = _wizard_text(user_id)
     if edit:
         await _edit_or_answer(message, text, kb, parse_mode="HTML")
     else:
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def _boost_prompt_with_gemini(prompt: str) -> str | None:
+    """Расширить короткий промпт через Gemini Flash. Возвращает улучшенный текст или None."""
+    if not GEMINI_API_KEY:
+        return None
+    system = (
+        "You improve image generation prompts. The user gave a short prompt; you expand it "
+        "with lighting, composition, style, mood, and artistic detail. "
+        "Reply ONLY with the improved prompt. No quotes, no explanation, no intro. "
+        "Keep the same language as the input. Length: 1-3 sentences max."
+    )
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "systemInstruction": {"parts": [{"text": system}]},
+        "generationConfig": {"maxOutputTokens": 200, "temperature": 0.7},
+    }
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+    )
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as sess:
+            async with sess.post(url, json=payload) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                return (
+                    data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                ) or None
+    except Exception as exc:
+        log.warning("Gemini prompt boost failed: %s", exc)
+        return None
 
 
 def _prompt_picker_text(ideas: list[str]) -> str:
@@ -6266,6 +6306,20 @@ async def on_wizard_action(callback: types.CallbackQuery):
             await callback.answer(f"💡 {idea[:40]}", show_alert=False)
         await show_wizard(msg, user_id=user_id, edit=True)
         return
+    if data == "w:boost_prompt":
+        pending = st.get("pending_prompt")
+        if not pending:
+            await callback.answer("Сначала введи запрос", show_alert=True)
+            return
+        await callback.answer("✨ Улучшаю промпт…")
+        improved = await _boost_prompt_with_gemini(pending)
+        if improved:
+            st["pending_prompt"] = improved
+            metrics.log_event("prompt_boosted", user_id=user_id)
+            await show_wizard(msg, user_id=user_id, edit=True)
+        else:
+            await callback.answer("Не удалось улучшить — попробуй позже", show_alert=True)
+        return
     if data == "w:change_prompt":
         st.pop("pending_prompt", None)
         await callback.answer()
@@ -8066,7 +8120,7 @@ async def handle_plain_text(message: types.Message):
         st["step"] = "wizard"
         picker_msg_id = st.get("picker_msg_id")
         if picker_msg_id:
-            kb = wizard_kb(st.get("count", DEFAULT_COUNT), st.get("fmt", DEFAULT_FMT), st.get("imodel", DEFAULT_IMAGE_MODEL))
+            kb = wizard_kb(st.get("count", DEFAULT_COUNT), st.get("fmt", DEFAULT_FMT), st.get("imodel", DEFAULT_IMAGE_MODEL), show_boost=bool(GEMINI_API_KEY))
             wtext = _wizard_text(user_id)
             try:
                 await message.bot.edit_message_text(
