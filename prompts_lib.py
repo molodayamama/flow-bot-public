@@ -89,6 +89,7 @@ _TEMPLATES: list[dict[str, Any]] = [
     {
         "id": "pet_photo_animation",
         "title": "🐾 Оживи фото питомца",
+        "target": "video",
         "questions": [
             _text("pet", "Кто на фото? Например: рыжий кот, корги, попугай."),
             _choice(
@@ -581,6 +582,12 @@ def get_template(tid: str) -> dict | None:
         "title": t["title"],
         "questions": template_questions(tid),
     }
+
+
+def template_target(tid: str) -> str:
+    """Return 'video' if the template should route to the video wizard, else 'image'."""
+    t = _TEMPLATES_BY_ID.get(tid)
+    return (t or {}).get("target", "image")
 
 
 def template_questions(tid: str) -> list[dict]:

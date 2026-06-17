@@ -4163,14 +4163,16 @@ async def show_main_menu(
     last = _ws(user_id).get("last")
     credits = credit_store.balance(user_id)
     kb = main_menu_kb(show_repeat=bool(last), credits=credits)
-    text = flow_copy.msg("menu_title")
+    import random as _random
+    _variants = flow_copy.MESSAGES.get("menu_title_variants") or [flow_copy.msg("menu_title")]
+    text = _random.choice(_variants)
     try:
         if edit:
-            await message.edit_text(text, reply_markup=kb)
+            await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         else:
-            await message.answer(text, reply_markup=kb)
+            await message.answer(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        await message.answer(text, reply_markup=kb)
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 async def show_balance(message: types.Message, *, user_id: int, edit: bool = True):
@@ -4289,6 +4291,13 @@ async def cmd_start(message: types.Message):
                 metrics.log_event("referral_joined", user_id=user_id,
                                   payload={"referrer": referrer_id})
                 _referral_welcome_bonus = credit_store.balance(user_id)
+                # Реферер сразу получает +20 кр за факт регистрации друга
+                _JOIN_BONUS = 20
+                credit_store.add(referrer_id, _JOIN_BONUS)
+                metrics.log_event("referral_reward_paid", user_id=referrer_id,
+                                  payload={"tier": "join", "bonus": _JOIN_BONUS,
+                                           "referred": user_id})
+                _notify_referrer(referrer_id, _JOIN_BONUS)
     # Рекламный deep-link: /start seed_<канал> — first-touch атрибуция канала.
     channel = parse_channel_seed(payload)
     if channel and not getattr(message.from_user, "is_bot", False):
@@ -5963,7 +5972,7 @@ async def _show_gallery(message: types.Message, *, user_id: int) -> None:
         if not header_sent:
             media_group[0] = types.InputMediaPhoto(
                 media=chunk[0]["file_id"],
-                caption=flow_copy.msg("gallery_header", count=len(rows)),
+                caption=flow_copy.msg("gallery_header", total=len(rows)),
             )
             header_sent = True
         try:
@@ -6292,12 +6301,24 @@ async def _render_template_step(message: types.Message, *, user_id: int):
     if not tid or step >= len(questions):
         # Все ответы собраны → компонуем промпт и открываем экран генерации.
         prompt = prompts_lib.compose_template_prompt(tid, st.get("tp_answers", {}))
+        target = prompts_lib.template_target(tid)
         metrics.log_event("template_used", user_id=user_id, source="ideas",
-                          payload={"template": tid})
+                          payload={"template": tid, "target": target})
         for k in ("tp_tpl", "tp_step", "tp_answers", "tp_await"):
             st.pop(k, None)
-        st["pending_prompt"] = prompt or "high quality image"
-        await show_wizard(message, user_id=user_id, edit=True)
+        if target == "video":
+            # Шаблон-видео: идём в новый video wizard с предзаполненным промптом.
+            _vid_clear(user_id)
+            _clear_image_flow_keys(st)
+            st["vprompt"] = prompt or ""
+            st.setdefault("vfmt", VID_DEFAULT_FMT)
+            st.setdefault("vdur", 4)
+            st.setdefault("vquality", "lite")
+            st.setdefault("vstyle", "")
+            await show_new_video_wizard(message, user_id=user_id, edit=True)
+        else:
+            st["pending_prompt"] = prompt or "high quality image"
+            await show_wizard(message, user_id=user_id, edit=True)
         return
     q = questions[step]
     B = types.InlineKeyboardButton
