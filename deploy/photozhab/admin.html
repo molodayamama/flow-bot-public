@@ -509,13 +509,14 @@ tr:hover td{background:var(--pz-surface-2)}
                 <th>Статус</th>
                 <th>Задания</th>
                 <th>Отказы</th>
+                <th>G-кредиты</th>
                 <th>Видео</th>
                 <th>Активен</th>
                 <th></th>
               </tr>
             </thead>
             <tbody id="accounts-tbody">
-              <tr><td colspan="7" style="color:var(--pz-faint);text-align:center;padding:24px">Загрузка…</td></tr>
+              <tr><td colspan="8" style="color:var(--pz-faint);text-align:center;padding:24px">Загрузка…</td></tr>
             </tbody>
           </table>
         </div>
@@ -1125,6 +1126,7 @@ async function loadAccounts() {
         ${(a.jobs_total??0)>0?`<div style="font-size:10px;font-weight:400;color:var(--pz-faint);margin-top:1px"><span style="color:var(--pz-green)">✓${a.jobs_success??0}</span>&thinsp;<span style="color:var(--pz-coral)">✗${a.jobs_fail??0}</span></div>`:''}
       </td>
       <td class="mono" style="color:${(a.fails||0)>0?'var(--pz-coral)':'var(--pz-faint)'}">${a.fails??0}</td>
+      <td class="mono">${a.g_credits ? `${a.g_credits.credits}${a.g_credits.is_paid?' 💳':' 🆓'}` : '<span style="color:var(--pz-faint)">—</span>'}</td>
       <td><label class="toggle"><input type="checkbox" ${a.video_allowed?'checked':''} onchange="toggleVideo('${esc(a.id)}',this.checked)"><span class="toggle-slider"></span></label></td>
       <td><label class="toggle"><input type="checkbox" ${!a.disabled?'checked':''} onchange="toggleDisabled('${esc(a.id)}',!this.checked)"><span class="toggle-slider"></span></label></td>
       <td><button class="btn btn-ghost btn-sm" onclick="resetFailures('${esc(a.id)}')">Сбросить ошибки</button></td>

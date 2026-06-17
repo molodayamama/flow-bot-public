@@ -1907,16 +1907,22 @@ class FlowHttpClient:
             return {"error": flow_copy.msg("service_error", status=status)}
 
         # Все actions провалились
+        if saw_unusual_activity:
+            # Флаг уровня аккаунта/сессии (см. комментарий у RECAPTCHA_ACTIONS) —
+            # браузерный фолбэк упрётся в то же ограничение и просто потратит
+            # ~25-50с на ожидание textarea, которая не появится. Сигналим
+            # account_risk сразу, чтобы вызывающий код ушёл в кулдаун и
+            # фейловернулся на другой аккаунт без лишнего ожидания.
+            log.warning("Все actions провалились (unusual_activity) — без браузерного фолбэка")
+            return {
+                "error": flow_copy.msg("rate_limited"),
+                "account_risk": "unusual_activity",
+            }
         if allow_browser_fallback:
             log.warning("Все actions провалились, фолбек в браузер")
             return await self.keeper.generate_via_browser(prompt)
         log.warning("Все actions провалились (без браузерного фолбэка)")
         if saw_403:
-            if saw_unusual_activity:
-                return {
-                    "error": flow_copy.msg("rate_limited"),
-                    "account_risk": "unusual_activity",
-                }
             return {"error": flow_copy.msg("rate_limited")}
         return {"error": flow_copy.msg("gen_failed")}
 
