@@ -3081,17 +3081,25 @@ async def ensure_user_project(user_id: int, *, account_id: str | None = None) ->
 
 
 def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
-    """Инлайн-кнопки под картинкой: Изменить · Повторить · Оживить."""
+    """Инлайн-кнопки под картинкой: Изменить · Повторить · Улучшить качество · Оживить."""
     B = types.InlineKeyboardButton
 
     edit_price = action_price("edit")
     edit_label = f"✏️ Изменить · {edit_price} кр" if edit_price > 0 else "✏️ Изменить"
+    upscale_price = action_price("realup")
+    upscale_label = (
+        f"{L('realup')} · {upscale_price} кр" if upscale_price > 0 else L("realup")
+    )
     animate_price = _vid_family_min_price("ing")
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 B(text=edit_label, callback_data=action_callback_data("edit", token)),
                 B(text="🔁 Повторить", callback_data="m:repeat"),
+            ],
+            [
+                # Родной апскейл сервиса (2K): присылает улучшенную картинку.
+                B(text=upscale_label, callback_data=action_callback_data("realup", token)),
             ],
             [
                 B(text=f"🎬 Оживить фото · от {animate_price} кр", callback_data=f"an:img:{token}"),

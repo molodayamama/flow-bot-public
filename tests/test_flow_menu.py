@@ -564,8 +564,8 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("result = await _client_for_acc(ref.account_id).upsample_image", self.source)
         self.assertIn("build_upsample_payload", self.source)
         self.assertIn("parse_upsample_response", self.source)
-        # Note: realup button was removed from _image_keyboard in UX cleanup (Point 5).
-        # The handler remains wired via action_callback_data / action == "realup".
+        # realup button lives under each generated image (restored by operator
+        # request) and is wired via action_callback_data / action == "realup".
         self.assertIn('elif action == "realup"', self.source)
         # realup must NOT silently fall back to the prompt enhance anymore.
         real_start = self.source.index("async def _real_upscale_and_send")
@@ -574,7 +574,7 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_image_keyboard_has_no_mix_button_and_credit_prices(self) -> None:
         start = self.source.index("def _image_keyboard")
-        block = self.source[start:start + 900]
+        block = self.source[start:start + 1300]
         self.assertNotIn('b("mix"', block)          # «В микс» removed from results
         self.assertNotIn('b("up2x"', block)         # «Чёткость ×2» removed from results
         self.assertNotIn('b("vary"', block)         # Варианты removed from results (UX cleanup)
@@ -582,6 +582,10 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('action_callback_data("edit", token)', block)
         self.assertIn('"m:repeat"', block)          # Повторить stays
         self.assertIn('· {edit_price} кр', block)   # price tags are credits, not Stars
+        # «Улучшить качество» (родной апскейл) восстановлена под картинкой и
+        # отправляет апскейленное фото через action == "realup".
+        self.assertIn('action_callback_data("realup", token)', block)
+        self.assertIn("action_price(\"realup\")", block)
 
     def test_realup_label_is_improve_quality(self) -> None:
         import flow_copy
