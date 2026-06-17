@@ -2695,9 +2695,20 @@ if isinstance(credit_store, CreditStoreSQLite):
 
 
 def _username(message_or_user) -> str | None:
-    """Best-effort @username/имя для метрик (никогда не бросает)."""
+    """Best-effort @username/имя для метрик (никогда не бросает).
+
+    Возвращает None если резолвится в самого бота — частый источник этого:
+    ``callback.message.from_user`` это бот (сообщение с кнопками отправил он),
+    а не нажавший юзер. Вызывающий код должен передавать ``callback.from_user``,
+    но эта защита не даёт "@botname" протечь в события/метрики, даже если
+    где-то по ошибке передали callback.message. report_recent_events() в
+    metrics.py берёт последний НЕ-null username по user_id, так что None
+    здесь просто откатывается на последнее известное настоящее имя.
+    """
     try:
         u = getattr(message_or_user, "from_user", message_or_user)
+        if BOT_USERNAME and u.username == BOT_USERNAME:
+            return None
         return u.username or u.full_name
     except Exception:
         return None
@@ -8177,7 +8188,7 @@ async def robokassa_health(request: web.Request) -> web.Response:
 async def _start_web_server() -> web.AppRunner:
     import admin_api as _admin_api
     app = web.Application()
-    _admin_api.register_admin_routes(app, account_pool)
+    _admin_api.register_admin_routes(app, account_pool, keepers)
     if _robokassa_configured():
         app.router.add_route("*", "/robokassa/result", robokassa_result)
         app.router.add_get("/robokassa/success", robokassa_success)

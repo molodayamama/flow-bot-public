@@ -11,6 +11,7 @@ Usage in flow_bot.py:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -29,6 +30,9 @@ if TYPE_CHECKING:
 log = logging.getLogger("flow.admin_api")
 
 _pool: "AccountPool | None" = None
+# Optional: account_id -> SessionKeeper, for live G-credits lookup. Injected
+# by register_admin_routes(); None means /api/admin/accounts skips g_credits.
+_keepers: dict | None = None
 
 
 # ── helpers ────────────────────────────────────────────────────────────
@@ -177,6 +181,19 @@ async def handle_accounts_get(request: web.Request) -> web.Response:
         return _json({"error": "pool not initialized"}, 503)
     accounts = _pool.status()
     stats = metrics.report_account_stats()
+
+    gcredits_map: dict = {}
+    if _keepers:
+        ids = [acc["id"] for acc in accounts if acc["id"] in _keepers]
+        results = await asyncio.gather(
+            *[_keepers[aid].get_g_credits() for aid in ids],
+            return_exceptions=True,
+        )
+        gcredits_map = {
+            aid: (res if isinstance(res, dict) else None)
+            for aid, res in zip(ids, results)
+        }
+
     for acc in accounts:
         s = stats.get(acc["id"], {})
         acc["jobs_total"]   = s.get("total",   0)
@@ -184,6 +201,7 @@ async def handle_accounts_get(request: web.Request) -> web.Response:
         acc["jobs_fail"]    = s.get("fail",    0)
         acc["last_activity"] = s.get("last_activity")
         acc["last_error"] = s.get("last_error")
+        acc["g_credits"] = gcredits_map.get(acc["id"])
         if acc.get("disabled"):
             acc["health"] = "disabled"
         elif int(acc.get("cooldown_left") or 0) > 0:
@@ -889,10 +907,15 @@ async def handle_analytics_active(request: web.Request) -> web.Response:
 
 # ── registration ───────────────────────────────────────────────────────
 
-def register_admin_routes(app: web.Application, pool: "AccountPool") -> None:
-    """Register all /api/admin/* routes into an existing aiohttp Application."""
-    global _pool
+def register_admin_routes(app: web.Application, pool: "AccountPool", keepers: dict | None = None) -> None:
+    """Register all /api/admin/* routes into an existing aiohttp Application.
+
+    ``keepers`` (account_id -> SessionKeeper) is optional and only used by
+    /api/admin/accounts to attach a live G-credits balance per account.
+    """
+    global _pool, _keepers
     _pool = pool
+    _keepers = keepers
     r = app.router
     r.add_get ("/api/admin/ping",                      handle_ping)
     r.add_get ("/api/admin/ops",                       handle_ops_get)
