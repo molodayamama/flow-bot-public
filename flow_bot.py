@@ -703,46 +703,15 @@ class SessionKeeper:
         return ["browser", "capmonster", "2captcha"]
 
     async def solve_captcha(self, action: str = "IMAGE_GENERATION") -> str:
-        """Решает reCAPTCHA для конкретного ``action`` и возвращает токен.
+        """Решает reCAPTCHA через browser JS (grecaptcha.enterprise.execute).
 
-        Провайдеры пробуются в порядке ``_provider_order()`` (управляется
-        ``CAPTCHA_PROVIDER``):
-        - ``browser`` — ``grecaptcha.enterprise.execute()`` прямо в живом Chrome;
-        - ``capmonster`` — CapMonster Cloud с куками браузера и опциональным прокси;
-        - ``2captcha`` — 2captcha (без кук → обычно 403 от Google Flow).
-        Финальный фолбэк: перехват токена из реального запроса браузера.
+        Без фолбэка на capmonster/2captcha — они добавляют десятки секунд задержки
+        и всё равно не работают с Google Flow (нет кук + score слишком низкий).
+        Если JS-капча не дала токен → возвращаем '', поколение падает на фейловер
+        аккаунта, что быстрее любого платного решателя.
         """
         await self.ensure_browser()
-
-        for provider in self._provider_order():
-            if provider == "browser":
-                browser_token = await self._solve_via_browser_js(action)
-                if browser_token:
-                    return browser_token
-            elif provider == "capmonster":
-                if not CAPMONSTER_KEY:
-                    continue
-                token = await self._solve_via_capmonster(action)
-                if token:
-                    return token
-                log.warning("⚠️ CapMonster не дала токен, пробую следующий способ...")
-            elif provider == "2captcha":
-                if not TWOCAPTCHA_KEY:
-                    continue
-                token = await self._solve_via_2captcha(action)
-                if token:
-                    return token
-                log.warning("⚠️ 2captcha не дала токен, пробую следующий способ...")
-
-        # Финальный фолбэк: перехват из реального запроса браузера.
-        try:
-            return await self._get_fresh_captcha() or ""
-        except Exception as e:
-            if not self._is_target_closed_error(e):
-                raise
-            log.warning("Browser context closed while refreshing captcha, restarting...")
-            await self.ensure_browser()
-            return ""
+        return await self._solve_via_browser_js(action)
 
     async def _solve_via_browser_js(self, action: str) -> str:
         """Вызывает grecaptcha.enterprise.execute() прямо в живом Chrome."""
