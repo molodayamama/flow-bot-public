@@ -742,6 +742,25 @@ class BotMenuWiringTests(unittest.TestCase):
         line = self.source[start:start + 200]
         self.assertIn("html.escape(_short_prompt(prompt, 60))", line)
 
+    def test_ideas_template_photo_becomes_edit_base(self) -> None:
+        # Фото внутри Q&A картиночного шаблона не должно уходить в общий
+        # «Изменить моё фото» — оно становится основой, к которой применяется
+        # собранный промпт шаблона как правка (запрос оператора).
+        self.assertIn("async def _template_photo_received", self.source)
+        # handle_photo перехватывает фото для НЕ-видео шаблона.
+        self.assertIn(
+            'if tp_tpl and prompts_lib.template_target(tp_tpl) != "video":',
+            self.source,
+        )
+        self.assertIn("await _template_photo_received(message, user_id=user_id)", self.source)
+        # При завершении шаблона с фото — идём через _edit_and_send, а не show_wizard.
+        start = self.source.index("async def _render_template_step")
+        block = self.source[start:start + 3000]
+        self.assertIn("elif tp_photo:", block)
+        self.assertIn("await _edit_and_send(message, ref, prompt", block)
+        # Видео-шаблоны фото-основу не используют (upload идёт в видео-визарде).
+        self.assertIn("tp_photo для видео не используем", block)
+
     def test_video_result_edit_and_extend_wiring(self) -> None:
         self.assertIn("def _video_can_edit", self.source)
         self.assertIn("def _video_can_extend", self.source)

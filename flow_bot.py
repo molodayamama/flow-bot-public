@@ -6461,10 +6461,15 @@ async def _render_template_step(message: types.Message, *, user_id: int):
         target = prompts_lib.template_target(tid)
         metrics.log_event("template_used", user_id=user_id, source="ideas",
                           payload={"template": tid, "target": target})
-        for k in ("tp_tpl", "tp_step", "tp_answers", "tp_await"):
+        tp_photo = st.get("tp_photo")
+        tp_photo_project = st.get("tp_photo_project")
+        tp_photo_acc = st.get("tp_photo_acc")
+        for k in ("tp_tpl", "tp_step", "tp_answers", "tp_await", *_TP_PHOTO_KEYS):
             st.pop(k, None)
         if target == "video":
             # Шаблон-видео: идём в новый video wizard с предзаполненным промптом.
+            # (Фото для видео-шаблонов собирается уже в видео-визарде — там корректный
+            # upload на видео-аккаунт; раннее tp_photo для видео не используем.)
             _vid_clear(user_id)
             _clear_image_flow_keys(st)
             st["vprompt"] = prompt or ""
@@ -6473,6 +6478,15 @@ async def _render_template_step(message: types.Message, *, user_id: int):
             st.setdefault("vquality", "lite")
             st.setdefault("vstyle", "")
             await show_new_video_wizard(message, user_id=user_id, edit=True)
+        elif tp_photo:
+            # «Фото = основа»: применяем собранный промпт шаблона как правку к
+            # загруженному пользователем фото (тот же пайплайн, что «Изменить фото»).
+            ref = ImageRef(
+                user_id=user_id, project_id=tp_photo_project, source=tp_photo,
+                prompt=prompt or "uploaded image", aspect_ratio="landscape",
+                account_id=tp_photo_acc,
+            )
+            await _edit_and_send(message, ref, prompt or "high quality image")
         else:
             st["pending_prompt"] = prompt or "high quality image"
             await show_wizard(message, user_id=user_id, edit=True)
@@ -6506,6 +6520,58 @@ def _tp_store_answer(st: dict, value: str):
         st.setdefault("tp_answers", {})[questions[step]["key"]] = value
     st["tp_step"] = step + 1
     st["tp_await"] = None
+
+
+_TP_PHOTO_KEYS = ("tp_photo", "tp_photo_project", "tp_photo_acc")
+
+
+async def _template_photo_received(message: types.Message, *, user_id: int) -> None:
+    """Фото внутри Q&A готового шаблона (Идеи): становится основой, к которой
+    при завершении шаблона применится собранный промпт как правка («фото = основа»).
+
+    Без этого фото перехватывал бы общий хендлер «Изменить моё фото» и присылал
+    бы картинку с чужой правкой вместо продолжения шаблона.
+    """
+    st = _ws(user_id)
+    caption = (message.caption or "").strip()
+    status_msg = await message.answer(flow_copy.msg("uploading_photo"))
+    try:
+        photo = message.photo[-1]
+        buf = await bot.download(photo.file_id)
+        data = buf.read() if hasattr(buf, "read") else bytes(buf)
+    except Exception:
+        log.exception("download template photo failed")
+        await status_msg.edit_text("❌ Не удалось получить ваше фото.")
+        return
+
+    acc_id = _account_for_image(user_id, prefer_image_only=True)
+    if acc_id is None:
+        await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
+        return
+    project_id = await ensure_user_project(user_id, account_id=acc_id)
+    try:
+        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png")
+    except Exception:
+        log.exception("template upload_image failed")
+        source = None
+    if not source or not source.get("mediaId"):
+        await status_msg.edit_text(flow_copy.msg("upload_failed"))
+        return
+
+    source.setdefault("_tg_file_id", photo.file_id)
+    st["tp_photo"] = source
+    st["tp_photo_project"] = source.pop("_project_id", None) or project_id
+    st["tp_photo_acc"] = acc_id
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
+    # Подпись на текстовом шаге = ответ на текущий вопрос → двигаемся дальше.
+    if caption and st.get("tp_await") == "text":
+        _tp_store_answer(st, caption)
+    await message.answer(flow_copy.msg("ideas_photo_attached"))
+    await _render_template_step(message, user_id=user_id)
 
 
 @dp.callback_query(F.data.startswith("ih:"))
@@ -6566,7 +6632,7 @@ async def on_template_action(callback: types.CallbackQuery):
         await callback.answer()
         await _render_template_step(msg, user_id=user_id)
     elif data == "tp:cancel":
-        for k in ("tp_tpl", "tp_step", "tp_answers", "tp_await"):
+        for k in ("tp_tpl", "tp_step", "tp_answers", "tp_await", *_TP_PHOTO_KEYS):
             st.pop(k, None)
         await callback.answer("Отменено")
         await _show_ideas_root(msg, user_id=user_id, edit=True)
@@ -8611,6 +8677,14 @@ async def handle_photo(message: types.Message):
             st["vmode"] = "ingredients"
             st["vmodel"] = _nwiz_model(st)
             await show_new_video_wizard(message, user_id=user_id, edit=(vstep == "vnewwiz"))
+        return
+
+    # Активен Q&A готового шаблона (Идеи) для картинки: фото становится основой,
+    # а собранный промпт шаблона применится к нему как правка. Видео-шаблоны не
+    # трогаем — там фото собирается уже в видео-визарде.
+    tp_tpl = st.get("tp_tpl")
+    if tp_tpl and prompts_lib.template_target(tp_tpl) != "video":
+        await _template_photo_received(message, user_id=user_id)
         return
 
     # Video wizard expects text, not a photo.
