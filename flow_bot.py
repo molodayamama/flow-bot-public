@@ -155,6 +155,9 @@ from flow_core import (
     video_duration_from_poll_item,
     video_frames_model_key,
     video_reference_model_key,
+    CREDITS_ENDPOINT,
+    FLOW_BROWSER_API_KEY,
+    parse_credits_response,
 )
 from flow_core import (
     FlowAccount,
@@ -303,6 +306,7 @@ ACC_IMAGE_CAPACITY = max(1, int(os.getenv("ACC_IMAGE_CAPACITY", "2")))
 # Максимум параллельных video-джобов на video-capable аккаунт.
 ACC_VIDEO_CAPACITY = max(1, int(os.getenv("ACC_VIDEO_CAPACITY", "1")))
 TOKEN_TTL_SEC = 50 * 60  # обновлять Bearer каждые 50 минут
+GCREDITS_CACHE_SEC = 300  # не дёргать /v1/credits чаще раза в 5 минут на аккаунт
 
 logging.basicConfig(
     level=logging.INFO,
@@ -405,6 +409,10 @@ class SessionKeeper:
         self._recaptcha_sitekey = ""
         self._lock = asyncio.Lock()
         self._ready = asyncio.Event()
+        # Кэш баланса G-кредитов (см. get_g_credits) — не дёргаем Google на
+        # каждый /admin_accounts, обновляем не чаще GCREDITS_CACHE_SEC.
+        self._gcredits_cache: dict | None = None
+        self._gcredits_cache_ts = 0.0
         # Недавно выданные картинки (сырые dict от Google) — чтобы при перехвате
         # реальной правки найти, какое поле imageInputs ссылается на картинку.
         self._recent_sources: deque = deque(maxlen=50)
@@ -928,6 +936,42 @@ class SessionKeeper:
             return f"${float(balance):.4f}"
         except Exception as e:
             return f"Ошибка: {e}"
+
+    async def get_g_credits(self, *, force: bool = False) -> dict | None:
+        """Текущий остаток провайдерских G-credits для этого аккаунта.
+
+        Дёргает ``CREDITS_ENDPOINT`` со свежим bearer/cookies из get_session().
+        Кэшируется на GCREDITS_CACHE_SEC секунд — не бьём Google на каждый
+        /admin_accounts. Любая ошибка (нет bearer, сеть, неожиданный формат)
+        → None, чтобы админ-команда не падала из-за недоступности баланса.
+        """
+        now = time.time()
+        if not force and self._gcredits_cache is not None and (now - self._gcredits_cache_ts) < GCREDITS_CACHE_SEC:
+            return self._gcredits_cache
+        try:
+            session = await self.get_session()
+            if not session["bearer"]:
+                return None
+            proxy_raw = self.api_proxy_url if self.api_proxy_url is not None else API_PROXY_URL
+            proxy = _effective_proxy_url(proxy_raw) or None
+            async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
+                async with http.get(
+                    f"{CREDITS_ENDPOINT}?key={FLOW_BROWSER_API_KEY}",
+                    headers={"authorization": f"Bearer {session['bearer']}"},
+                    proxy=proxy,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json(content_type=None)
+        except Exception as e:
+            log.warning("get_g_credits failed for %s: %s", self.account_id, e)
+            return None
+        parsed = parse_credits_response(data)
+        if parsed:
+            self._gcredits_cache = parsed
+            self._gcredits_cache_ts = now
+        return parsed
 
     async def get_capmonster_balance(self) -> str:
         """Возвращает баланс CapMonster в виде строки."""
@@ -4630,14 +4674,29 @@ async def cmd_admin_accounts(message: types.Message):
         await message.answer(flow_copy.msg("admin_denied"))
         return
     # Живое состояние пула (роутинг/health) + статистика jobs за сегодня.
+    acc_ids = account_pool.account_ids()
+    gcredit_results = await asyncio.gather(
+        *[_keeper_for_acc(aid).get_g_credits() for aid in acc_ids],
+        return_exceptions=True,
+    )
+    gcredits_map = {
+        aid: (res if isinstance(res, dict) else None)
+        for aid, res in zip(acc_ids, gcredit_results)
+    }
     pool_lines = []
     for s in account_pool.status():
         state = "⛔ выключен" if s["disabled"] else (
             f"🧊 кулдаун {s['cooldown_left']}с" if s["cooldown_left"] else "✅ активен"
         )
         media_cap = "🎬+🖼" if s.get("video_allowed", True) else "🖼 only"
+        gc = gcredits_map.get(s["id"])
+        if gc:
+            paid = "💳" if gc.get("is_paid") else "🆓"
+            gc_str = f" · G {gc['credits']}{paid}"
+        else:
+            gc_str = " · G ?"
         pool_lines.append(
-            f"  • <b>{html.escape(s['id'])}</b>: {state} · {media_cap} · 👥{s['users']} · сбоев {s['fails']}"
+            f"  • <b>{html.escape(s['id'])}</b>: {state} · {media_cap} · 👥{s['users']} · сбоев {s['fails']}{gc_str}"
         )
     text = "🧮 <b>Пул аккаунтов</b>\n" + "\n".join(pool_lines)
     accounts = metrics.report_accounts().get("accounts", [])

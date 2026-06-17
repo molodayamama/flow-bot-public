@@ -45,6 +45,9 @@ from flow_core import (
     VIDEO_UPLOAD_PUT_URL,
     video_edit_end_frame,
     video_duration_from_poll_item,
+    CREDITS_ENDPOINT,
+    FLOW_BROWSER_API_KEY,
+    parse_credits_response,
 )
 
 FAKE_BATCH_ID = "619ce05f-5416-4ca4-8840-0a74a1f669f2"
@@ -687,6 +690,39 @@ class TestEditEndFrame(unittest.TestCase):
         self.assertEqual(ref.duration_s, 4.0)
         bare = VideoRef(user_id=1, project_id=REAL_PROJECT_ID, media_id=REAL_MEDIA_ID)
         self.assertIsNone(bare.duration_s)
+
+
+class TestCreditsResponse(unittest.TestCase):
+    """Confirmed against a real /v1/credits capture (free-tier account)."""
+
+    REAL_RESPONSE = {
+        "credits": 50,
+        "userPaygateTier": "PAYGATE_TIER_NOT_PAID",
+        "sku": "G1_FREEMIUM",
+        "serviceTier": "SERVICE_TIER_ENTRY",
+        "subscriptionCredits": 50,
+    }
+
+    def test_endpoint_and_key_present(self):
+        self.assertEqual(CREDITS_ENDPOINT, "https://aisandbox-pa.googleapis.com/v1/credits")
+        self.assertTrue(FLOW_BROWSER_API_KEY.startswith("AIzaSy"))
+
+    def test_parses_real_freemium_capture(self):
+        parsed = parse_credits_response(self.REAL_RESPONSE)
+        self.assertEqual(parsed["credits"], 50)
+        self.assertEqual(parsed["subscription_credits"], 50)
+        self.assertEqual(parsed["tier"], "PAYGATE_TIER_NOT_PAID")
+        self.assertEqual(parsed["sku"], "G1_FREEMIUM")
+        self.assertFalse(parsed["is_paid"])
+
+    def test_paid_tier_heuristic(self):
+        paid = dict(self.REAL_RESPONSE, userPaygateTier="PAYGATE_TIER_PAID")
+        self.assertTrue(parse_credits_response(paid)["is_paid"])
+
+    def test_malformed_response_returns_none(self):
+        self.assertIsNone(parse_credits_response({}))
+        self.assertIsNone(parse_credits_response(None))
+        self.assertIsNone(parse_credits_response({"error": "nope"}))
 
 
 if __name__ == "__main__":

@@ -894,6 +894,40 @@ def video_media_redirect_url(media_id: str) -> str:
     from urllib.parse import quote
     return f"{VIDEO_MEDIA_REDIRECT_BASE}?name={quote(media_id, safe='')}"
 
+
+# Google Flow's own provider-credit balance endpoint. Confirmed from a live
+# capture (2026-06-17): GET with ``Authorization: Bearer <session bearer>``,
+# response shape:
+#   {"credits": 50, "userPaygateTier": "PAYGATE_TIER_NOT_PAID",
+#    "sku": "G1_FREEMIUM", "serviceTier": "SERVICE_TIER_ENTRY",
+#    "subscriptionCredits": 50}
+CREDITS_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1/credits"
+# Public web-client key embedded in Flow's frontend JS bundle — restricted by
+# HTTP referrer (labs.google), the same pattern as a Firebase web config key,
+# not a per-user secret. Re-verify if Google rotates their frontend build.
+FLOW_BROWSER_API_KEY = "REDACTED_CREDENTIAL"
+
+
+def parse_credits_response(data: dict | None) -> dict | None:
+    """Parse Flow's ``/v1/credits`` response into a small summary dict.
+
+    Returns ``None`` for malformed/missing data so callers can treat it as
+    "balance unknown" rather than crash. ``is_paid`` is a heuristic (absence
+    of "NOT_PAID" in the tier string) since the exact paid-tier constant
+    hasn't been observed from a live paid account yet.
+    """
+    if not isinstance(data, dict) or "credits" not in data:
+        return None
+    tier = data.get("userPaygateTier")
+    return {
+        "credits": data.get("credits"),
+        "subscription_credits": data.get("subscriptionCredits"),
+        "tier": tier,
+        "sku": data.get("sku"),
+        "service_tier": data.get("serviceTier"),
+        "is_paid": "NOT_PAID" not in str(tier or ""),
+    }
+
 # Polling interval and timeout (seconds).
 VIDEO_POLL_INTERVAL = 5.0
 VIDEO_POLL_TIMEOUT  = 300
