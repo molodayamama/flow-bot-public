@@ -29,6 +29,7 @@ HTTP-клиент делает запросы с этими свежими да�
 import asyncio
 import base64
 import html
+import itertools
 import json
 import logging
 import os
@@ -3048,11 +3049,9 @@ def main_menu_kb(show_repeat: bool = False, credits: int | None = None) -> types
         [_menu_button("ideas", "m:ideas")],
         [_menu_button("myphoto", "m:myphoto")],
         [B(text=balance_label, callback_data="m:balance")],
-        [_menu_button("gallery", "m:gallery"), _menu_button("history", "m:history"), _menu_button("invite", "m:invite")],
-        [_menu_button("support", "m:support"), _menu_button("help", "m:help")],
+        [_menu_button("profile", "m:profile"), _menu_button("invite", "m:invite")],
     ]
-    if show_repeat:
-        rows.insert(0, [_menu_button("repeat_last", "m:repeat")])
+    # show_repeat parameter kept for backward compatibility but ignored
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -3557,27 +3556,22 @@ def _video_can_extend(ref: VideoRef | None) -> bool:
 
 
 def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
-    """Клавиатура под результатом видео: Продлить · Изменить · Повторить."""
+    """Клавиатура под результатом видео: Продлить · Изменить (раздельными строками)."""
     B = types.InlineKeyboardButton
     ref = video_registry.get(vtoken)
 
-    action_row: list[types.InlineKeyboardButton] = []
-    if _video_can_extend(ref):
-        next_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
-        action_row.append(B(text=f"➕ Продлить · {next_price} кр", callback_data=f"v:extend:{vtoken}"))
-    if _video_can_edit(ref):
-        edit_price = action_price("video_prompt_edit")
-        action_row.append(B(text=f"✏️ Изменить · {edit_price} кр", callback_data=f"v:edit:{vtoken}"))
-    action_row.append(B(text="🔁 Повторить", callback_data="v:repeat"))
+    can_extend = _video_can_extend(ref)
+    can_edit = _video_can_edit(ref)
 
     rows: list[list[types.InlineKeyboardButton]] = []
-    if action_row:
-        rows.append(action_row)
-    # Download в отдельной строке чтобы не загромождать основные кнопки
-    dl_row = [B(text=L("vid_dl"), callback_data=f"v:dl:{vtoken}")]
-    if ref and ref.mode == "extend" and ref.media_id:
-        dl_row.append(B(text=L("vid_dl_seg"), callback_data=f"v:dl_seg:{vtoken}"))
-    rows.append(dl_row)
+    if can_extend:
+        next_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
+        rows.append([B(text=f"➕ Продлить · {next_price} кр", callback_data=f"v:extend:{vtoken}")])
+    if can_edit:
+        edit_price = action_price("video_prompt_edit")
+        rows.append([B(text=f"✏️ Изменить · {edit_price} кр", callback_data=f"v:edit:{vtoken}")])
+    if not rows:
+        rows.append([_menu_button("menu", "m:menu")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -5028,6 +5022,25 @@ async def _do_generate_and_send(
         except Exception:
             pass
 
+    # Фоновая анимация статусных фраз: меняется каждые 2.5 сек пока идёт генерация.
+    _img_phrases = flow_copy.MESSAGES.get("img_status_phrases") or []
+    _img_anim_stop = asyncio.Event()
+
+    async def _img_animate():
+        await asyncio.sleep(2.5)
+        for phrase in itertools.cycle(_img_phrases):
+            if _img_anim_stop.is_set():
+                return
+            try:
+                await status_msg.edit_text(f"{phrase}\n📝 {prompt[:80]}")
+            except Exception:
+                pass
+            await asyncio.sleep(2.5)
+            if _img_anim_stop.is_set():
+                return
+
+    _img_anim_task = asyncio.create_task(_img_animate()) if _img_phrases else None
+
     # Генерация с тихим фейловером: попытка 0 — основной аккаунт, попытка 1 — другой.
     # 400 (prompt_rejected) = проблема юзера, не аккаунта — фейловер и кулдаун не нужны.
     # asyncio.wait_for(timeout=70) на каждую попытку: не ждём 120с зависший аккаунт —
@@ -5039,109 +5052,114 @@ async def _do_generate_and_send(
     result: dict = {}
     _uname = _username(message)
 
-    for attempt in range(2):
-        acc_id = _account_for_image(user_id, exclude=tried if tried else None)
-        if acc_id is None:
-            await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
-            return False
-        tried.add(acc_id)
-        project_id = await ensure_user_project(user_id, account_id=acc_id)
+    try:
+        for attempt in range(2):
+            acc_id = _account_for_image(user_id, exclude=tried if tried else None)
+            if acc_id is None:
+                await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
+                return False
+            tried.add(acc_id)
+            project_id = await ensure_user_project(user_id, account_id=acc_id)
 
-        def _log_failover(from_acc: str, reason: str) -> None:
-            metrics.log_event(
-                "gen_failover", user_id=user_id, username=_uname,
-                payload={"from_account": from_acc, "reason": reason[:120]},
-            )
-
-        try:
-            result = await asyncio.wait_for(
-                _client_for_acc(acc_id).generate_images(
-                    prompt,
-                    aspect_ratio=aspect_ratio,
-                    num_images=num_images,
-                    progress_cb=update_status,
-                    project_id=project_id,
-                    image_model=image_model,
-                ),
-                timeout=_GEN_ATTEMPT_TIMEOUT,
-            )
-        except asyncio.TimeoutError:
-            log.warning("Generation timed out after %ds (account %s, attempt %d)",
-                        _GEN_ATTEMPT_TIMEOUT, acc_id, attempt)
-            if account_pool.mark_failure(acc_id):
-                _fire_owner_alert(
-                    f"⚠️ <b>Аккаунт кулдаун</b>\n"
-                    f"Аккаунт: <code>{acc_id}</code>\n"
-                    f"Причина: timeout ({_GEN_ATTEMPT_TIMEOUT}s, image)"
+            def _log_failover(from_acc: str, reason: str) -> None:
+                metrics.log_event(
+                    "gen_failover", user_id=user_id, username=_uname,
+                    payload={"from_account": from_acc, "reason": reason[:120]},
                 )
-            if attempt == 0:
-                _log_failover(acc_id, "timeout")
-                continue
-            await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
-            return False
-        except Exception:
-            log.exception("Generation failed (account %s, attempt %d)", acc_id, attempt)
-            if account_pool.mark_failure(acc_id):
-                _fire_owner_alert(
-                    f"⚠️ <b>Аккаунт кулдаун</b>\n"
-                    f"Аккаунт: <code>{acc_id}</code>\n"
-                    f"Причина: exception (image)"
-                )
-            if attempt == 0:
-                _log_failover(acc_id, "exception")
-                continue
-            await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
-            return False
 
-        if "error" in result:
-            if result.get("error_type") == "prompt_rejected":
-                # 400 — проблема запроса, не аккаунта: не трогаем health, не фейловеримся
+            try:
+                result = await asyncio.wait_for(
+                    _client_for_acc(acc_id).generate_images(
+                        prompt,
+                        aspect_ratio=aspect_ratio,
+                        num_images=num_images,
+                        progress_cb=update_status,
+                        project_id=project_id,
+                        image_model=image_model,
+                    ),
+                    timeout=_GEN_ATTEMPT_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                log.warning("Generation timed out after %ds (account %s, attempt %d)",
+                            _GEN_ATTEMPT_TIMEOUT, acc_id, attempt)
+                if account_pool.mark_failure(acc_id):
+                    _fire_owner_alert(
+                        f"⚠️ <b>Аккаунт кулдаун</b>\n"
+                        f"Аккаунт: <code>{acc_id}</code>\n"
+                        f"Причина: timeout ({_GEN_ATTEMPT_TIMEOUT}s, image)"
+                    )
+                if attempt == 0:
+                    _log_failover(acc_id, "timeout")
+                    continue
+                await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
+                return False
+            except Exception:
+                log.exception("Generation failed (account %s, attempt %d)", acc_id, attempt)
+                if account_pool.mark_failure(acc_id):
+                    _fire_owner_alert(
+                        f"⚠️ <b>Аккаунт кулдаун</b>\n"
+                        f"Аккаунт: <code>{acc_id}</code>\n"
+                        f"Причина: exception (image)"
+                    )
+                if attempt == 0:
+                    _log_failover(acc_id, "exception")
+                    continue
+                await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
+                return False
+
+            if "error" in result:
+                if result.get("error_type") == "prompt_rejected":
+                    # 400 — проблема запроса, не аккаунта: не трогаем health, не фейловеримся
+                    await status_msg.edit_text(
+                        f"❌ {html.escape(str(result['error'])[:300])}",
+                        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                            [_menu_button("menu", "m:menu")],
+                        ]),
+                    )
+                    return False
+                # Ошибка аккаунта — помечаем и пробуем другой (один раз)
+                _mark_image_account_failure(acc_id, result)
+                if attempt == 0:
+                    reason = str(result.get("error", ""))[:80]
+                    log.info("Тихий фейловер после ошибки аккаунта %s: %s", acc_id, reason)
+                    _log_failover(acc_id, reason)
+                    continue
+                # Оба аккаунта не справились
                 await status_msg.edit_text(
                     f"❌ {html.escape(str(result['error'])[:300])}",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                        [_menu_button("menu", "m:menu")],
-                    ]),
+                    reply_markup=_img_retry_kb(),
                 )
                 return False
-            # Ошибка аккаунта — помечаем и пробуем другой (один раз)
-            _mark_image_account_failure(acc_id, result)
-            if attempt == 0:
-                reason = str(result.get("error", ""))[:80]
-                log.info("Тихий фейловер после ошибки аккаунта %s: %s", acc_id, reason)
-                _log_failover(acc_id, reason)
-                continue
-            # Оба аккаунта не справились
+
+            break  # успех
+        else:
+            await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
+            return False
+
+        pairs = result_pairs(result)
+
+        if not pairs:
+            log.warning(f"Пустой ответ: {str(result)[:500]}")
             await status_msg.edit_text(
-                f"❌ {html.escape(str(result['error'])[:300])}",
+                flow_copy.msg("nothing_returned"),
                 reply_markup=_img_retry_kb(),
             )
             return False
 
-        break  # успех
-    else:
-        await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
-        return False
-
-    pairs = result_pairs(result)
-
-    if not pairs:
-        log.warning(f"Пустой ответ: {str(result)[:500]}")
-        await status_msg.edit_text(
-            flow_copy.msg("nothing_returned"),
-            reply_markup=_img_retry_kb(),
+        account_pool.mark_success(acc_id)
+        await update_status(flow_copy.msg("sending"))
+        await _send_result_pairs(
+            message, pairs, user_id=user_id, project_id=project_id,
+            prompt=prompt, aspect_ratio=aspect_ratio, emoji="🎨", account_id=acc_id,
         )
-        return False
-
-    account_pool.mark_success(acc_id)
-    await update_status(flow_copy.msg("sending"))
-    await _send_result_pairs(
-        message, pairs, user_id=user_id, project_id=project_id,
-        prompt=prompt, aspect_ratio=aspect_ratio, emoji="🎨", account_id=acc_id,
-    )
-    await status_msg.delete()
-    streak_note = _streak_note(user_id)
-    await _after_result(message, user_id, streak_note=streak_note)
-    return True
+        await status_msg.delete()
+        streak_note = _streak_note(user_id)
+        await _after_result(message, user_id, streak_note=streak_note)
+        return True
+    finally:
+        _img_anim_stop.set()
+        if _img_anim_task:
+            _img_anim_task.cancel()
 
 
 def _streak_note(user_id: int) -> str | None:
@@ -6004,6 +6022,21 @@ async def _show_support_menu(message: types.Message, *, user_id: int, edit: bool
         await message.answer(flow_copy.msg("support_menu"), reply_markup=kb)
 
 
+async def _show_profile_screen(message: types.Message, *, user_id: int, edit: bool) -> None:
+    """Экран «Мой профиль»: ссылки на галерею, историю запросов и поддержку."""
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [_menu_button("gallery", "m:gallery")],
+        [_menu_button("history", "m:history")],
+        [_menu_button("support", "m:support")],
+        [_menu_button("menu", "m:menu")],
+    ])
+    text = "👤 Мой профиль\n\nТвои работы и история запросов — всё здесь."
+    if edit:
+        await message.edit_text(text, reply_markup=kb)
+    else:
+        await message.answer(text, reply_markup=kb)
+
+
 async def _show_my_tickets(message: types.Message, *, user_id: int, edit: bool) -> None:
     tickets = metrics.get_user_tickets(user_id)
     back_kb = types.InlineKeyboardMarkup(inline_keyboard=[
@@ -6112,6 +6145,9 @@ async def on_menu_action(callback: types.CallbackQuery):
         pending_edits.pop(user_id, None)
         _ws(user_id)["await"] = None
         await show_main_menu(msg, user_id=user_id, edit=True)
+    elif data == "m:profile":
+        await callback.answer()
+        await _show_profile_screen(msg, user_id=user_id, edit=True)
     elif data == "m:gallery":
         await callback.answer()
         await _show_gallery(msg, user_id=user_id)
