@@ -39,6 +39,7 @@ import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from urllib.parse import unquote, urlencode, urlparse
 
 import aiohttp
@@ -613,6 +614,11 @@ class SessionKeeper:
                     lambda: tab.get_by_role("link", name=re.compile(r"new flow", re.I)),
                     lambda: tab.get_by_text(re.compile(r"^\s*new flow\s*$", re.I)),
                     lambda: tab.get_by_role("button", name=re.compile(r"new project|create", re.I)),
+                    # Аккаунты с уже существующим проектом часто авто-резюмят его —
+                    # тогда "New flow" нет в виде текстовой кнопки списка проектов,
+                    # а есть иконка "+"/aria-label рядом с панелью инструментов.
+                    lambda: tab.locator('[aria-label*="new" i]'),
+                    lambda: tab.locator('button:has-text("+")'),
                 ]
                 for getter in candidates:
                     try:
@@ -625,7 +631,21 @@ class SessionKeeper:
                         continue
 
                 if not clicked:
-                    log.warning("⚠️ Кнопка 'New flow' не найдена — новый проект не создан")
+                    log.warning(
+                        "⚠️ Кнопка 'New flow' не найдена (аккаунт %s, url=%s) — новый проект не создан",
+                        self.account_id, tab.url,
+                    )
+                    # Скрин для пост-мортема — следующий сбой сам себя задокументирует,
+                    # без необходимости лезть в живую сессию вручную через VNC.
+                    try:
+                        debug_dir = Path("debug_screens")
+                        debug_dir.mkdir(exist_ok=True)
+                        ts = int(time.time())
+                        await tab.screenshot(
+                            path=str(debug_dir / f"new_flow_missing_{self.account_id}_{ts}.png")
+                        )
+                    except Exception:
+                        pass
                     return None
 
                 # Ждём, пока вкладка перейдёт на новый /project/ и сделает запрос.
@@ -664,7 +684,12 @@ class SessionKeeper:
 
     # Известный sitekey для labs.google (enterprise reCAPTCHA v3)
     RECAPTCHA_SITEKEY = "REDACTED_CREDENTIAL"
-    RECAPTCHA_ACTIONS = ["IMAGE_GENERATION", "PINHOLE", "batchGenerateImages"]
+    # Один action, не перебор: PUBLIC_ERROR_UNUSUAL_ACTIVITY — это флаг на уровне
+    # аккаунта/сессии, не конкретного action. Если первый action получил его,
+    # остальные два тоже получат — перебор только тратит время (доп. capcha +
+    # HTTP round trips) без шанса на успех. IMAGE_GENERATION — самый
+    # семантически точный для картинок.
+    RECAPTCHA_ACTIONS = ["IMAGE_GENERATION"]
     # Видео-эндпоинт проверяет reCAPTCHA-action отдельно от картинок: токен,
     # выданный под action картинок, сервер отклоняет (403). Точный video-action
     # фронта Flow не зафиксирован, поэтому перебираем кандидатов (см.

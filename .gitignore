@@ -20,6 +20,10 @@ google_profile_acc3/
 google_profile_acc4/
 google_profile_acc5/
 google_profile_acc6/
+google_profile_sub*/
+
+# Diagnostic screenshots from create_new_project() failures (account UI state)
+debug_screens/
 
 # Per-user Flow project map (runtime state)
 user_projects.json
