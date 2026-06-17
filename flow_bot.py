@@ -991,7 +991,15 @@ class SessionKeeper:
             async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
                 async with http.get(
                     f"{CREDITS_ENDPOINT}?key={FLOW_BROWSER_API_KEY}",
-                    headers={"authorization": f"Bearer {session['bearer']}"},
+                    headers={
+                        "authorization": f"Bearer {session['bearer']}",
+                        # Ключ FLOW_BROWSER_API_KEY ограничен по HTTP-referer на
+                        # labs.google. Без этих заголовков Google отвечает 403
+                        # «Requests from referer <empty> are blocked». Те же
+                        # значения шлют рабочие generate-запросы.
+                        "Origin": "https://labs.google",
+                        "Referer": "https://labs.google/",
+                    },
                     proxy=proxy,
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
