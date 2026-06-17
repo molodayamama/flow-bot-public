@@ -21,6 +21,7 @@ It holds the testable core of the Google Flow bot:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import hashlib
 import os
@@ -29,6 +30,7 @@ import secrets
 import tempfile
 import time
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1926,12 +1928,20 @@ class UserProjectStore:
 
 @dataclass(frozen=True)
 class FlowAccount:
-    """Один Google-аккаунт пула: id + путь к его Chrome-профилю."""
+    """Один Google-аккаунт пула: id + путь к его Chrome-профилю.
+
+    Опциональные поля ёмкости переопределяют глобальные дефолты пула:
+    ``image_capacity`` — максимум параллельных image-джобов на аккаунт;
+    ``video_capacity`` — максимум параллельных video-джобов на аккаунт.
+    None = использовать дефолт AccountPool.
+    """
 
     id: str
     profile_dir: str
     browser_proxy_url: str | None = None
     api_proxy_url: str | None = None
+    image_capacity: int | None = None
+    video_capacity: int | None = None
 
 
 def parse_flow_accounts(
@@ -1968,6 +1978,8 @@ def parse_flow_accounts(
             continue
         browser_proxy_url: str | None = None
         api_proxy_url: str | None = None
+        image_capacity: int | None = None
+        video_capacity: int | None = None
         for option in option_parts:
             if not option or "=" not in option:
                 continue
@@ -1983,6 +1995,16 @@ def parse_flow_accounts(
                 browser_proxy_url = value
             elif key in {"api_proxy", "api_proxy_url"}:
                 api_proxy_url = value
+            elif key == "image_capacity":
+                try:
+                    image_capacity = max(1, int(value))
+                except ValueError:
+                    pass
+            elif key == "video_capacity":
+                try:
+                    video_capacity = max(0, int(value))
+                except ValueError:
+                    pass
         seen.add(acc_id)
         accounts.append(
             FlowAccount(
@@ -1990,6 +2012,8 @@ def parse_flow_accounts(
                 profile_dir=path,
                 browser_proxy_url=browser_proxy_url,
                 api_proxy_url=api_proxy_url,
+                image_capacity=image_capacity,
+                video_capacity=video_capacity,
             )
         )
     if not accounts:
@@ -2019,6 +2043,8 @@ class AccountPool:
         *,
         max_failures: int = 3,
         cooldown_sec: float = 600.0,
+        default_image_capacity: int = 2,
+        default_video_capacity: int = 1,
         clock=time.monotonic,
     ) -> None:
         if not accounts:
@@ -2028,6 +2054,8 @@ class AccountPool:
         )
         self._max_failures = max(1, int(max_failures))
         self._cooldown_sec = float(cooldown_sec)
+        self._default_image_capacity = max(1, int(default_image_capacity))
+        self._default_video_capacity = max(0, int(default_video_capacity))
         self._clock = clock
         self._path = Path(store_path) if store_path else None
         self._assign: dict[str, str] = {}
@@ -2036,6 +2064,13 @@ class AccountPool:
                    "video_allowed": True}
             for a in accounts
         }
+        # Capacity tracking (runtime-only; resets on restart).
+        # Semaphores are created lazily on first use so unit-tests don't need a
+        # running event loop when constructing AccountPool.
+        self._image_sems: dict[str, asyncio.Semaphore] = {}
+        self._video_sems: dict[str, asyncio.Semaphore] = {}
+        self._active_image: dict[str, int] = {a.id: 0 for a in accounts}
+        self._active_video: dict[str, int] = {a.id: 0 for a in accounts}
         self._load()
 
     # ── состав пула ────────────────────────────────────────────────────
@@ -2132,6 +2167,78 @@ class AccountPool:
     def is_image_only(self, account_id: str) -> bool:
         h = self._health.get(account_id)
         return bool(h and not h.get("video_allowed", True))
+
+    # ── capacity control ───────────────────────────────────────────────
+
+    def _image_cap(self, account_id: str) -> int:
+        acc = self._accounts.get(account_id)
+        cap = acc.image_capacity if (acc and acc.image_capacity is not None) else self._default_image_capacity
+        return max(1, cap)
+
+    def _video_cap(self, account_id: str) -> int:
+        acc = self._accounts.get(account_id)
+        cap = acc.video_capacity if (acc and acc.video_capacity is not None) else self._default_video_capacity
+        return max(0, cap)
+
+    def _image_sem(self, account_id: str) -> asyncio.Semaphore:
+        """Lazy-init semaphore for image slots on this account."""
+        if account_id not in self._image_sems:
+            self._image_sems[account_id] = asyncio.Semaphore(self._image_cap(account_id))
+        return self._image_sems[account_id]
+
+    def _video_sem(self, account_id: str) -> asyncio.Semaphore:
+        """Lazy-init semaphore for video slots on this account."""
+        if account_id not in self._video_sems:
+            cap = self._video_cap(account_id)
+            self._video_sems[account_id] = asyncio.Semaphore(max(1, cap))
+        return self._video_sems[account_id]
+
+    def has_image_capacity(self, account_id: str) -> bool:
+        """Non-blocking check: True if an image slot is available right now."""
+        sem = self._image_sems.get(account_id)
+        if sem is None:
+            return True  # not yet created → semaphore hasn't been exhausted
+        return sem._value > 0  # CPython internal; stable since 3.10
+
+    def has_video_capacity(self, account_id: str) -> bool:
+        """Non-blocking check: True if a video slot is available right now."""
+        sem = self._video_sems.get(account_id)
+        if sem is None:
+            return True
+        return sem._value > 0
+
+    @asynccontextmanager
+    async def image_slot(self, account_id: str):
+        """Acquire an image job slot (blocks if account is at capacity).
+
+        Always releases in ``finally`` — safe across exceptions, timeouts, and
+        failover ``continue``/``return`` paths.
+        """
+        sem = self._image_sem(account_id)
+        async with sem:
+            self._active_image[account_id] = self._active_image.get(account_id, 0) + 1
+            try:
+                yield
+            finally:
+                self._active_image[account_id] = max(
+                    0, self._active_image.get(account_id, 1) - 1
+                )
+
+    @asynccontextmanager
+    async def video_slot(self, account_id: str):
+        """Acquire a video job slot (blocks if account is at capacity).
+
+        Always releases in ``finally``.
+        """
+        sem = self._video_sem(account_id)
+        async with sem:
+            self._active_video[account_id] = self._active_video.get(account_id, 0) + 1
+            try:
+                yield
+            finally:
+                self._active_video[account_id] = max(
+                    0, self._active_video.get(account_id, 1) - 1
+                )
 
     # ── роутинг ────────────────────────────────────────────────────────
 
@@ -2247,6 +2354,10 @@ class AccountPool:
                 "cooldown_left": max(0, int(h["cooldown_until"] - now)),
                 "fails": h["fails"],
                 "users": loads[aid],
+                "active_image_jobs": self._active_image.get(aid, 0),
+                "active_video_jobs": self._active_video.get(aid, 0),
+                "image_capacity": self._image_cap(aid),
+                "video_capacity": self._video_cap(aid),
             })
         return out
 

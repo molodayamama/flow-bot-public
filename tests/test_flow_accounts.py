@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -200,7 +201,8 @@ class BotPoolWiringTests(unittest.TestCase):
     def test_pool_globals_built_from_env(self) -> None:
         self.assertIn('FLOW_ACCOUNTS_RAW = os.getenv("FLOW_ACCOUNTS", "")', self.source)
         self.assertIn("FLOW_ACCOUNTS = parse_flow_accounts(", self.source)
-        self.assertIn("account_pool = AccountPool(FLOW_ACCOUNTS, FLOW_ACCOUNTS_STATE_FILE)", self.source)
+        self.assertIn("account_pool = AccountPool(", self.source)
+        self.assertIn("FLOW_ACCOUNTS, FLOW_ACCOUNTS_STATE_FILE", self.source)
         self.assertIn("keepers: dict[str, SessionKeeper]", self.source)
         self.assertIn("clients: dict[str, FlowHttpClient]", self.source)
         # Алиасы первого аккаунта сохранены для одиночных/диагностических путей.
@@ -283,6 +285,203 @@ class BotPoolWiringTests(unittest.TestCase):
         video_block = self.source[video_start:video_start + 4200]
         self.assertIn("ref_acc_id = _video_reference_account_id(st, vmode)", video_block)
         self.assertIn("video_project_id = (", video_block)
+
+
+class CapacityTests(unittest.IsolatedAsyncioTestCase):
+    """Per-account semaphore capacity enforcement."""
+
+    def _pool(self, n: int = 2, img_cap: int = 2, vid_cap: int = 1) -> AccountPool:
+        accs = [FlowAccount(id=f"a{i}", profile_dir=f"./p{i}") for i in range(1, n + 1)]
+        return AccountPool(
+            accs, None,
+            default_image_capacity=img_cap,
+            default_video_capacity=vid_cap,
+        )
+
+    async def test_image_capacity_reported_correctly(self):
+        pool = self._pool(2, img_cap=3, vid_cap=1)
+        statuses = {s["id"]: s for s in pool.status()}
+        self.assertEqual(statuses["a1"]["image_capacity"], 3)
+        self.assertEqual(statuses["a1"]["video_capacity"], 1)
+        self.assertEqual(statuses["a1"]["active_image_jobs"], 0)
+        self.assertEqual(statuses["a1"]["active_video_jobs"], 0)
+
+    async def test_per_account_image_capacity_override(self):
+        accs = [
+            FlowAccount(id="img", profile_dir="./p1", image_capacity=5),
+            FlowAccount(id="vid", profile_dir="./p2", video_capacity=2),
+        ]
+        pool = AccountPool(accs, None, default_image_capacity=2, default_video_capacity=1)
+        s = {s["id"]: s for s in pool.status()}
+        self.assertEqual(s["img"]["image_capacity"], 5)   # per-account override
+        self.assertEqual(s["vid"]["video_capacity"], 2)   # per-account override
+        self.assertEqual(s["img"]["video_capacity"], 1)   # default
+        self.assertEqual(s["vid"]["image_capacity"], 2)   # default
+
+    async def test_image_slot_active_jobs_count(self):
+        pool = self._pool(1, img_cap=2)
+        acc = pool.account_ids()[0]
+        self.assertEqual(pool.status()[0]["active_image_jobs"], 0)
+        barrier = asyncio.Event()
+        released = asyncio.Event()
+
+        async def hold_slot():
+            async with pool.image_slot(acc):
+                barrier.set()
+                await released.wait()
+
+        task = asyncio.create_task(hold_slot())
+        await barrier.wait()
+        self.assertEqual(pool.status()[0]["active_image_jobs"], 1)
+        released.set()
+        await task
+        self.assertEqual(pool.status()[0]["active_image_jobs"], 0)
+
+    async def test_image_capacity_limits_concurrency(self):
+        """50 coroutines on cap=2 account: only 2 run simultaneously."""
+        pool = self._pool(1, img_cap=2)
+        acc = pool.account_ids()[0]
+        max_concurrent = 0
+        current = 0
+        lock = asyncio.Lock()
+        done_event = asyncio.Event()
+
+        async def one_job():
+            nonlocal max_concurrent, current
+            async with pool.image_slot(acc):
+                async with lock:
+                    current += 1
+                    max_concurrent = max(max_concurrent, current)
+                await asyncio.sleep(0)  # yield to let other coroutines try to enter
+                async with lock:
+                    current -= 1
+
+        await asyncio.gather(*[one_job() for _ in range(50)])
+        self.assertLessEqual(max_concurrent, 2)
+        self.assertEqual(pool.status()[0]["active_image_jobs"], 0)
+
+    async def test_video_capacity_one_at_a_time(self):
+        """video cap=1 means at most 1 video job per account."""
+        pool = self._pool(1, vid_cap=1)
+        acc = pool.account_ids()[0]
+        max_concurrent = 0
+        current = 0
+        lock = asyncio.Lock()
+
+        async def one_vid():
+            nonlocal max_concurrent, current
+            async with pool.video_slot(acc):
+                async with lock:
+                    current += 1
+                    max_concurrent = max(max_concurrent, current)
+                await asyncio.sleep(0)
+                async with lock:
+                    current -= 1
+
+        await asyncio.gather(*[one_vid() for _ in range(10)])
+        self.assertLessEqual(max_concurrent, 1)
+        self.assertEqual(pool.status()[0]["active_video_jobs"], 0)
+
+    async def test_active_jobs_decrements_on_exception(self):
+        """Slot is always released even when the body raises."""
+        pool = self._pool(1, img_cap=2)
+        acc = pool.account_ids()[0]
+
+        async def failing_job():
+            async with pool.image_slot(acc):
+                raise RuntimeError("boom")
+
+        with self.assertRaises(RuntimeError):
+            await failing_job()
+        self.assertEqual(pool.status()[0]["active_image_jobs"], 0)
+
+    async def test_has_image_capacity_reflects_semaphore(self):
+        pool = self._pool(1, img_cap=1)
+        acc = pool.account_ids()[0]
+        self.assertTrue(pool.has_image_capacity(acc))
+        entered = asyncio.Event()
+        hold = asyncio.Event()
+
+        async def occupy():
+            async with pool.image_slot(acc):
+                entered.set()
+                await hold.wait()
+
+        task = asyncio.create_task(occupy())
+        await entered.wait()
+        self.assertFalse(pool.has_image_capacity(acc))
+        hold.set()
+        await task
+        self.assertTrue(pool.has_image_capacity(acc))
+
+    async def test_media_bound_video_uses_source_account(self):
+        """flow_bot.py: extend/edit keeps source_video.account_id; check text assert."""
+        source = PROJECT_ROOT / "flow_bot.py"
+        text = source.read_text(encoding="utf-8")
+        self.assertIn(
+            "source_video.account_id if source_video and source_video.account_id",
+            text,
+        )
+
+    async def test_image_routing_prefers_image_only_accounts(self):
+        """pool.pick_for_image with prefer_image_only → prefers video_allowed=False."""
+        accs = [FlowAccount(id="img_only", profile_dir="./p1"),
+                FlowAccount(id="vid_cap", profile_dir="./p2")]
+        pool = AccountPool(accs, None, default_image_capacity=2, default_video_capacity=1)
+        pool.set_video_allowed("img_only", False)
+        result = pool.pick_for_image(999, prefer_image_only=True)
+        self.assertEqual(result, "img_only")
+
+    async def test_video_routing_only_video_capable_accounts(self):
+        """pool.pick_for_video returns None when all accounts are image-only."""
+        accs = [FlowAccount(id="a1", profile_dir="./p1"),
+                FlowAccount(id="a2", profile_dir="./p2")]
+        pool = AccountPool(accs, None)
+        pool.set_video_allowed("a1", False)
+        pool.set_video_allowed("a2", False)
+        self.assertIsNone(pool.pick_for_video(42))
+
+
+class CapacityBotWiringTests(unittest.TestCase):
+    """Text asserts: capacity wiring in flow_bot.py source."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = (PROJECT_ROOT / "flow_bot.py").read_text(encoding="utf-8")
+
+    def test_acc_capacity_env_vars_present(self):
+        self.assertIn('ACC_IMAGE_CAPACITY', self.source)
+        self.assertIn('ACC_VIDEO_CAPACITY', self.source)
+
+    def test_account_pool_receives_capacity_defaults(self):
+        self.assertIn('default_image_capacity=ACC_IMAGE_CAPACITY', self.source)
+        self.assertIn('default_video_capacity=ACC_VIDEO_CAPACITY', self.source)
+
+    def test_image_generation_wrapped_in_image_slot(self):
+        start = self.source.index("async def _do_generate_and_send")
+        block = self.source[start:start + 8000]
+        self.assertIn("account_pool.image_slot(acc_id)", block)
+        self.assertIn("async with account_pool.image_slot(acc_id):", block)
+
+    def test_video_generation_wrapped_in_video_slot(self):
+        start = self.source.index("async def _do_video_generate_and_send")
+        block = self.source[start:start + 9000]
+        self.assertIn("account_pool.video_slot(acc_id)", block)
+        self.assertIn("async with account_pool.video_slot(acc_id):", block)
+
+    def test_high_load_message_shown_when_capacity_full(self):
+        start = self.source.index("async def _do_generate_and_send")
+        block = self.source[start:start + 8000]
+        self.assertIn('account_pool.has_image_capacity(acc_id)', block)
+        self.assertIn('flow_copy.msg("high_load")', block)
+
+    def test_status_command_shows_pool_capacity(self):
+        start = self.source.index("async def cmd_status")
+        block = self.source[start:start + 2000]
+        self.assertIn("active_image_jobs", block)
+        self.assertIn("active_video_jobs", block)
+        self.assertIn("image_capacity", block)
+        self.assertIn("video_capacity", block)
 
 
 if __name__ == "__main__":

@@ -297,6 +297,11 @@ COOLDOWN_SEC = 10  # минимум между запросами одного �
 # Если кулдаун не вышел, но осталось не больше этого — подождём и выполним,
 # а не отклоняем запрос. Дольше — просим повторить позже.
 MAX_AUTO_WAIT_SEC = 10
+# Максимум параллельных image-джобов на один аккаунт (per-account semaphore).
+# video-capable аккаунты могут получить меньше через ACC_VIDEO_CAPACITY.
+ACC_IMAGE_CAPACITY = max(1, int(os.getenv("ACC_IMAGE_CAPACITY", "2")))
+# Максимум параллельных video-джобов на video-capable аккаунт.
+ACC_VIDEO_CAPACITY = max(1, int(os.getenv("ACC_VIDEO_CAPACITY", "1")))
 TOKEN_TTL_SEC = 50 * 60  # обновлять Bearer каждые 50 минут
 
 logging.basicConfig(
@@ -2545,7 +2550,11 @@ def _make_bot() -> Bot:
 FLOW_ACCOUNTS = parse_flow_accounts(
     FLOW_ACCOUNTS_RAW, default_id=FLOW_ACCOUNT_ID, default_dir=USER_DATA_DIR
 )
-account_pool = AccountPool(FLOW_ACCOUNTS, FLOW_ACCOUNTS_STATE_FILE)
+account_pool = AccountPool(
+    FLOW_ACCOUNTS, FLOW_ACCOUNTS_STATE_FILE,
+    default_image_capacity=ACC_IMAGE_CAPACITY,
+    default_video_capacity=ACC_VIDEO_CAPACITY,
+)
 keepers: dict[str, SessionKeeper] = {
     acc.id: SessionKeeper(
         account_id=acc.id,
@@ -4346,13 +4355,31 @@ async def cmd_status(message: types.Message):
         captcha_parts.append(f"2captcha: {await keeper.get_2captcha_balance()}")
     captcha_line = ", ".join(captcha_parts)
 
+    pool_lines = []
+    for s in account_pool.status():
+        if s["disabled"]:
+            icon = "🔒"
+        elif s["cooldown_left"]:
+            icon = f"❄️{s['cooldown_left']}s"
+        else:
+            icon = "✅"
+        vid_icon = "🎬" if s["video_allowed"] else "🖼"
+        pool_lines.append(
+            f"  {icon}{vid_icon} <code>{s['id']}</code>: "
+            f"img {s['active_image_jobs']}/{s['image_capacity']} "
+            f"vid {s['active_video_jobs']}/{s['video_capacity']} "
+            f"users={s['users']}"
+        )
+    pool_section = "\n".join(pool_lines) or "  (нет аккаунтов)"
+
     await message.answer(
-        f"🔧 *Состояние бота*\n\n"
+        f"🔧 <b>Состояние бота</b>\n\n"
         f"Bearer токен: {bearer} (возраст: {age_min} мин)\n"
         f"Project ID:   {project} ({session['project_id'] or '—'})\n"
         f"Cookies:      {cookies} ({len(session['cookies'])} шт)\n"
-        f"Капча:        {captcha_line}\n",
-        parse_mode="Markdown",
+        f"Капча:        {captcha_line}\n\n"
+        f"<b>Пул аккаунтов:</b>\n{pool_section}\n",
+        parse_mode="HTML",
     )
 
 
@@ -5045,71 +5072,80 @@ async def _do_generate_and_send(
                     payload={"from_account": from_acc, "reason": reason[:120]},
                 )
 
-            try:
-                result = await asyncio.wait_for(
-                    _client_for_acc(acc_id).generate_images(
-                        prompt,
-                        aspect_ratio=aspect_ratio,
-                        num_images=num_images,
-                        progress_cb=update_status,
-                        project_id=project_id,
-                        image_model=image_model,
-                    ),
-                    timeout=_GEN_ATTEMPT_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                log.warning("Generation timed out after %ds (account %s, attempt %d)",
-                            _GEN_ATTEMPT_TIMEOUT, acc_id, attempt)
-                if account_pool.mark_failure(acc_id):
-                    _fire_owner_alert(
-                        f"⚠️ <b>Аккаунт кулдаун</b>\n"
-                        f"Аккаунт: <code>{acc_id}</code>\n"
-                        f"Причина: timeout ({_GEN_ATTEMPT_TIMEOUT}s, image)"
-                    )
-                if attempt == 0:
-                    _log_failover(acc_id, "timeout")
-                    continue
-                await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
-                return False
-            except Exception:
-                log.exception("Generation failed (account %s, attempt %d)", acc_id, attempt)
-                if account_pool.mark_failure(acc_id):
-                    _fire_owner_alert(
-                        f"⚠️ <b>Аккаунт кулдаун</b>\n"
-                        f"Аккаунт: <code>{acc_id}</code>\n"
-                        f"Причина: exception (image)"
-                    )
-                if attempt == 0:
-                    _log_failover(acc_id, "exception")
-                    continue
-                await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
-                return False
+            # Notify user if this account is already at capacity — they'll wait in queue.
+            if not account_pool.has_image_capacity(acc_id):
+                try:
+                    await status_msg.edit_text(flow_copy.msg("high_load"))
+                except Exception:
+                    pass
 
-            if "error" in result:
-                if result.get("error_type") == "prompt_rejected":
-                    # 400 — проблема запроса, не аккаунта: не трогаем health, не фейловеримся
+            async with account_pool.image_slot(acc_id):
+                # Slot acquired — credits already reserved by credit_gate above.
+                try:
+                    result = await asyncio.wait_for(
+                        _client_for_acc(acc_id).generate_images(
+                            prompt,
+                            aspect_ratio=aspect_ratio,
+                            num_images=num_images,
+                            progress_cb=update_status,
+                            project_id=project_id,
+                            image_model=image_model,
+                        ),
+                        timeout=_GEN_ATTEMPT_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    log.warning("Generation timed out after %ds (account %s, attempt %d)",
+                                _GEN_ATTEMPT_TIMEOUT, acc_id, attempt)
+                    if account_pool.mark_failure(acc_id):
+                        _fire_owner_alert(
+                            f"⚠️ <b>Аккаунт кулдаун</b>\n"
+                            f"Аккаунт: <code>{acc_id}</code>\n"
+                            f"Причина: timeout ({_GEN_ATTEMPT_TIMEOUT}s, image)"
+                        )
+                    if attempt == 0:
+                        _log_failover(acc_id, "timeout")
+                        continue  # releases image_slot, then picks next account
+                    await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
+                    return False
+                except Exception:
+                    log.exception("Generation failed (account %s, attempt %d)", acc_id, attempt)
+                    if account_pool.mark_failure(acc_id):
+                        _fire_owner_alert(
+                            f"⚠️ <b>Аккаунт кулдаун</b>\n"
+                            f"Аккаунт: <code>{acc_id}</code>\n"
+                            f"Причина: exception (image)"
+                        )
+                    if attempt == 0:
+                        _log_failover(acc_id, "exception")
+                        continue  # releases image_slot, then picks next account
+                    await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
+                    return False
+
+                if "error" in result:
+                    if result.get("error_type") == "prompt_rejected":
+                        # 400 — проблема запроса, не аккаунта: не трогаем health, не фейловеримся
+                        await status_msg.edit_text(
+                            f"❌ {html.escape(str(result['error'])[:300])}",
+                            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                                [_menu_button("menu", "m:menu")],
+                            ]),
+                        )
+                        return False
+                    # Ошибка аккаунта — помечаем и пробуем другой (один раз)
+                    _mark_image_account_failure(acc_id, result)
+                    if attempt == 0:
+                        reason = str(result.get("error", ""))[:80]
+                        log.info("Тихий фейловер после ошибки аккаунта %s: %s", acc_id, reason)
+                        _log_failover(acc_id, reason)
+                        continue  # releases image_slot, then picks next account
+                    # Оба аккаунта не справились
                     await status_msg.edit_text(
                         f"❌ {html.escape(str(result['error'])[:300])}",
-                        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                            [_menu_button("menu", "m:menu")],
-                        ]),
+                        reply_markup=_img_retry_kb(),
                     )
                     return False
-                # Ошибка аккаунта — помечаем и пробуем другой (один раз)
-                _mark_image_account_failure(acc_id, result)
-                if attempt == 0:
-                    reason = str(result.get("error", ""))[:80]
-                    log.info("Тихий фейловер после ошибки аккаунта %s: %s", acc_id, reason)
-                    _log_failover(acc_id, reason)
-                    continue
-                # Оба аккаунта не справились
-                await status_msg.edit_text(
-                    f"❌ {html.escape(str(result['error'])[:300])}",
-                    reply_markup=_img_retry_kb(),
-                )
-                return False
 
-            break  # успех
+            break  # успех (image_slot released by exiting async with)
         else:
             await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
             return False
@@ -7367,22 +7403,31 @@ async def _do_video_generate_and_send(
         from aiogram.types import BufferedInputFile
 
         for i in range(vcount):
-            result = await _client_for_acc(acc_id).generate_video(
-                prompt,
-                model_key=model_key,
-                aspect=aspect,
-                project_id=video_project_id,
-                reference_sources=st.get("ving_photos") if vmode == "ingredients" else None,
-                start_source=st.get("vfrm_start") if vmode == "frames" else None,
-                end_source=st.get("vfrm_end") if vmode == "frames" else None,
-                operation=video_operation,
-                source_media_id=source_video.media_id if source_video else None,
-                source_workflow_id=source_video.workflow_id if source_video else None,
-                source_scene_id=source_scene_id or (source_video.scene_id if source_video else None),
-                source_duration_s=source_video.duration_s if source_video else None,
-                progress_cb=update_status,
-            )
+            # Notify user if account is at video capacity before queuing.
+            if not account_pool.has_video_capacity(acc_id):
+                try:
+                    await status_msg.edit_text(flow_copy.msg("high_load"))
+                except Exception:
+                    pass
 
+            async with account_pool.video_slot(acc_id):
+                result = await _client_for_acc(acc_id).generate_video(
+                    prompt,
+                    model_key=model_key,
+                    aspect=aspect,
+                    project_id=video_project_id,
+                    reference_sources=st.get("ving_photos") if vmode == "ingredients" else None,
+                    start_source=st.get("vfrm_start") if vmode == "frames" else None,
+                    end_source=st.get("vfrm_end") if vmode == "frames" else None,
+                    operation=video_operation,
+                    source_media_id=source_video.media_id if source_video else None,
+                    source_workflow_id=source_video.workflow_id if source_video else None,
+                    source_scene_id=source_scene_id or (source_video.scene_id if source_video else None),
+                    source_duration_s=source_video.duration_s if source_video else None,
+                    progress_cb=update_status,
+                )
+
+            # Slot released. Handle errors and optional failover.
             if "error" in result:
                 # TEMP (capture-driven): surface why r2v/ingredients gen fails.
                 log.warning(
@@ -7407,21 +7452,23 @@ async def _do_video_generate_and_send(
                             user_id, account_id=acc_id
                         )
                         await update_status("⏳ Отправляю запрос на генерацию видео…")
-                        result = await _client_for_acc(acc_id).generate_video(
-                            prompt,
-                            model_key=model_key,
-                            aspect=aspect,
-                            project_id=video_project_id,
-                            reference_sources=None,
-                            start_source=None,
-                            end_source=None,
-                            operation=video_operation,
-                            source_media_id=None,
-                            source_workflow_id=None,
-                            source_scene_id=None,
-                            source_duration_s=None,
-                            progress_cb=update_status,
-                        )
+                        # Acquire a fresh slot on the failover account.
+                        async with account_pool.video_slot(acc_id):
+                            result = await _client_for_acc(acc_id).generate_video(
+                                prompt,
+                                model_key=model_key,
+                                aspect=aspect,
+                                project_id=video_project_id,
+                                reference_sources=None,
+                                start_source=None,
+                                end_source=None,
+                                operation=video_operation,
+                                source_media_id=None,
+                                source_workflow_id=None,
+                                source_scene_id=None,
+                                source_duration_s=None,
+                                progress_cb=update_status,
+                            )
                         if "error" not in result:
                             # Фейловер успешен — продолжаем нормальный путь.
                             log.info("🎬 video failover succeeded on %s", acc_id)
