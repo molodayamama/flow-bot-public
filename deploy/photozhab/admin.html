@@ -978,6 +978,47 @@ async function api(method, path, body) {
   } catch { return null; }
 }
 
+/* ── Save helper ──────────────────────────────────────
+   Unlike api(), this distinguishes a truly offline bot from a server-side
+   validation/write error, so the UI can show the real reason instead of a
+   misleading «Бот оффлайн». */
+async function apiSave(path, body) {
+  try {
+    const r = await fetch(API_BASE + path, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
+    });
+    let data = null;
+    try { data = await r.json(); } catch {}
+    return { ok: r.ok, status: r.status, data };
+  } catch {
+    return { ok: false, offline: true, status: 0, data: null };
+  }
+}
+
+const _SAVE_ERR_RU = {
+  missing_placeholders: e => `«${e.key}»: нельзя убирать переменные ${(e.placeholders||[]).join(', ')}`,
+  format_syntax:        e => `«${e.key}»: ошибка в фигурных скобках { }`,
+  non_string_default:   e => `«${e.key}»: это поле нельзя редактировать здесь`,
+  unknown_key:          e => `«${e.key}»: неизвестный ключ`,
+  not_integer:          e => `«${e.key}»: нужно целое число`,
+  negative_price:       e => `«${e.key}»: цена не может быть отрицательной`,
+  zero_paid_price:      e => `«${e.key}»: платная услуга не может стоить 0 кр.`,
+  unknown_price_key:    e => `«${e.key}»: неизвестная цена`,
+};
+function describeSaveError(res) {
+  if (res.offline) return 'Бот оффлайн — сохранение недоступно';
+  const errs = res.data && res.data.errors;
+  if (Array.isArray(errs) && errs.length) {
+    const head = errs.slice(0,3).map(e => _SAVE_ERR_RU[e.error] ? _SAVE_ERR_RU[e.error](e) : `${e.key||''}: ${e.error}`).join('; ');
+    return head + (errs.length > 3 ? ` (+ ещё ${errs.length-3})` : '');
+  }
+  if (res.status >= 500) return 'Ошибка сервера при сохранении — проверьте логи бота';
+  return `Не удалось сохранить (код ${res.status})`;
+}
+
 /* ── Status ping ───────────────────────────────────── */
 async function checkStatus() {
   const dot  = document.getElementById('status-dot');
@@ -1193,8 +1234,13 @@ function toggleMsg(h) {
 async function saveMessages() {
   const p={};
   document.querySelectorAll('#messages-list textarea[data-key]').forEach(el=>p[el.dataset.key]=el.value);
-  const r = await api('POST','/config/messages',p);
-  r ? toast('success','Сообщения сохранены') : toast('error','Бот оффлайн — сохранение недоступно');
+  const res = await apiSave('/config/messages',p);
+  if (res.ok) {
+    const w = ((res.data&&res.data.warnings)||[]).length;
+    toast('success','Сообщения сохранены'+(w?` · предупреждений: ${w}`:''));
+  } else {
+    toast('error', describeSaveError(res));
+  }
 }
 
 /* ── Labels ────────────────────────────────────────── */
@@ -1211,8 +1257,13 @@ async function loadLabels() {
 async function saveLabels() {
   const p={};
   document.querySelectorAll('#labels-tbody input[data-key]').forEach(el=>p[el.dataset.key]=el.value);
-  const r = await api('POST','/config/labels',p);
-  r ? toast('success','Кнопки сохранены') : toast('error','Бот оффлайн');
+  const res = await apiSave('/config/labels',p);
+  if (res.ok) {
+    const w = ((res.data&&res.data.warnings)||[]).length;
+    toast('success','Кнопки сохранены'+(w?` · предупреждений: ${w}`:''));
+  } else {
+    toast('error', describeSaveError(res));
+  }
 }
 
 /* ── Prices ────────────────────────────────────────── */
@@ -1250,8 +1301,8 @@ function flatToPriceGroups(flat) {
 async function savePrices() {
   const p={};
   document.querySelectorAll('#prices-content input[data-key]').forEach(el=>p[el.dataset.key]=Number(el.value));
-  const r = await api('POST','/config/prices',p);
-  r ? toast('success','Цены сохранены') : toast('error','Бот оффлайн');
+  const res = await apiSave('/config/prices',p);
+  res.ok ? toast('success','Цены сохранены') : toast('error', describeSaveError(res));
 }
 function rub(cr){ return Math.round(cr*.9)+'₽'; }
 
@@ -1283,9 +1334,10 @@ async function saveSettings() {
   };
   const flags={};
   document.querySelectorAll('#flags-list input[data-flag]').forEach(el=>flags[el.dataset.flag]=el.checked);
-  const r1 = await api('POST','/config/settings',settings);
-  const r2 = await api('POST','/config/flags',flags);
-  (r1||r2) ? toast('success','Настройки сохранены') : toast('error','Бот оффлайн');
+  const r1 = await apiSave('/config/settings',settings);
+  const r2 = await apiSave('/config/flags',flags);
+  if (r1.ok && r2.ok) toast('success','Настройки сохранены');
+  else toast('error', describeSaveError(r1.ok ? r2 : r1));
 }
 
 /* ── Support ───────────────────────────────────────── */

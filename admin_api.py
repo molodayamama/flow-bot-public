@@ -379,7 +379,12 @@ async def handle_messages_post(request: web.Request) -> web.Response:
     if errors:
         _audit(request, "messages.save", old=old, new={"errors": errors}, result="validation_error")
         return _json({"error": "validation failed", "errors": errors, "warnings": warnings}, 400)
-    config_store.set_section("messages", clean)
+    try:
+        config_store.set_section("messages", clean)
+    except Exception:
+        log.warning("messages.save: write failed", exc_info=True)
+        _audit(request, "messages.save", old=old, new=clean, result="write_error")
+        return _json({"error": "write_failed"}, 500)
     _audit(request, "messages.save", old=old, new=clean)
     return _json({"ok": True, "saved": len(clean), "warnings": warnings})
 
@@ -406,7 +411,12 @@ async def handle_labels_post(request: web.Request) -> web.Response:
     if errors:
         _audit(request, "labels.save", old=old, new={"errors": errors}, result="validation_error")
         return _json({"error": "validation failed", "errors": errors, "warnings": warnings}, 400)
-    config_store.set_section("labels", clean)
+    try:
+        config_store.set_section("labels", clean)
+    except Exception:
+        log.warning("labels.save: write failed", exc_info=True)
+        _audit(request, "labels.save", old=old, new=clean, result="write_error")
+        return _json({"error": "write_failed"}, 500)
     _audit(request, "labels.save", old=old, new=clean)
     return _json({"ok": True, "saved": len(clean), "warnings": warnings})
 
@@ -525,7 +535,12 @@ async def handle_prices_post(request: web.Request) -> web.Response:
     if errors:
         _audit(request, "prices.save", old=old, new={"errors": errors}, result="validation_error")
         return _json({"error": "validation failed", "errors": errors}, 400)
-    config_store.set_section("prices", prices)
+    try:
+        config_store.set_section("prices", prices)
+    except Exception:
+        log.warning("prices.save: write failed", exc_info=True)
+        _audit(request, "prices.save", old=old, new=prices, result="write_error")
+        return _json({"error": "write_failed"}, 500)
     _audit(request, "prices.save", old=old, new=prices)
     return _json({"ok": True, "saved": len(prices)})
 
@@ -588,7 +603,12 @@ async def handle_settings_post(request: web.Request) -> web.Response:
     if errors:
         _audit(request, "settings.save", old=old, new={"errors": errors}, result="validation_error")
         return _json({"error": "validation failed", "errors": errors}, 400)
-    config_store.set_section("settings", {k: v for k, v in applied.items()})
+    try:
+        config_store.set_section("settings", {k: v for k, v in applied.items()})
+    except Exception:
+        log.warning("settings.save: write failed", exc_info=True)
+        _audit(request, "settings.save", old=old, new=applied, result="write_error")
+        return _json({"error": "write_failed"}, 500)
     _audit(request, "settings.save", old=old, new=applied)
     return _json({"ok": True, "applied": applied})
 
@@ -667,7 +687,12 @@ async def handle_flags_post(request: web.Request) -> web.Response:
         return _json({"error": "expected JSON object"}, 400)
     old = config_store.get_section("flags")
     flags = {k: bool(v) for k, v in body.items() if k in _FLAG_META}
-    config_store.set_section("flags", flags)
+    try:
+        config_store.set_section("flags", flags)
+    except Exception:
+        log.warning("flags.save: write failed", exc_info=True)
+        _audit(request, "flags.save", old=old, new=flags, result="write_error")
+        return _json({"error": "write_failed"}, 500)
     # Hot-apply UPLOAD_VIDEO_EDIT_ENABLED
     if "upload_video_edit" in flags:
         try:
