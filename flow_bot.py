@@ -996,6 +996,11 @@ class SessionKeeper:
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     if resp.status != 200:
+                        body = (await resp.text())[:200]
+                        log.warning(
+                            "get_g_credits non-200 for %s: status=%s body=%s",
+                            self.account_id, resp.status, body,
+                        )
                         return None
                     data = await resp.json(content_type=None)
         except Exception as e:
@@ -1005,6 +1010,11 @@ class SessionKeeper:
         if parsed:
             self._gcredits_cache = parsed
             self._gcredits_cache_ts = now
+        else:
+            log.warning(
+                "get_g_credits unparseable response for %s: %s",
+                self.account_id, str(data)[:200],
+            )
         return parsed
 
     async def get_capmonster_balance(self) -> str:
