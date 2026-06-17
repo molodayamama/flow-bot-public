@@ -1877,6 +1877,30 @@ def report_admin_stats() -> dict:
                 conn,
                 f"SELECT COALESCE(SUM(bot_credits_charged),0) FROM flow_jobs WHERE {tx_today}",
             ) or 0
+
+            # Today's finished-job split by media type (image vs video) and
+            # outcome, sourced from flow_jobs (the single source of truth for
+            # what actually ran). Video ops are operation_type LIKE 'video%';
+            # everything else (image, edit, upscale, variations, enhance) is
+            # image-side.
+            fj_today = "date(created_at,'localtime') = date('now','localtime')"
+
+            def _job_count(media_sql: str, status_sql: str) -> int:
+                return _scalar(
+                    conn,
+                    f"SELECT COUNT(*) FROM flow_jobs "
+                    f"WHERE {fj_today} AND {media_sql} AND {status_sql}",
+                ) or 0
+
+            _img = "operation_type NOT LIKE 'video%'"
+            _vid = "operation_type LIKE 'video%'"
+            _ok = "status='success'"
+            _bad = "status IN ('fail','error')"
+            image_success = _job_count(_img, _ok)
+            video_success = _job_count(_vid, _ok)
+            image_fail = _job_count(_img, _bad)
+            video_fail = _job_count(_vid, _bad)
+
             revenue_today_rub = _scalar(
                 conn,
                 f"SELECT COALESCE(SUM(amount_rub),0) FROM transactions "
@@ -1893,10 +1917,16 @@ def report_admin_stats() -> dict:
             "credits_sold": int(credits_sold),
             "revenue_today_rub": float(revenue_today_rub),
             "revenue_total_rub": float(revenue_total_rub),
+            "image_success": int(image_success),
+            "video_success": int(video_success),
+            "image_fail": int(image_fail),
+            "video_fail": int(video_fail),
         }
     except Exception:  # noqa: BLE001
         log.warning("report_admin_stats failed", exc_info=True)
-        return {"users": 0, "gens_today": 0, "credits_sold": 0}
+        return {"users": 0, "gens_today": 0, "credits_sold": 0,
+                "image_success": 0, "video_success": 0,
+                "image_fail": 0, "video_fail": 0}
 
 
 def report_recent_events(limit: int = 50) -> list:

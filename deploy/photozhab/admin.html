@@ -451,6 +451,16 @@ tr:hover td{background:var(--pz-surface-2)}
             <div class="stat-value" id="stat-gens">—</div>
             <div class="stat-sub">картинки + видео</div>
           </div>
+          <div class="stat-card lime">
+            <div class="stat-label">Успешные сегодня</div>
+            <div class="stat-value" id="stat-ok" style="font-size:24px">—</div>
+            <div class="stat-sub">🖼 картинки · 🎬 видео</div>
+          </div>
+          <div class="stat-card coral">
+            <div class="stat-label">Неудачные сегодня</div>
+            <div class="stat-value" id="stat-fail" style="font-size:24px">—</div>
+            <div class="stat-sub">🖼 картинки · 🎬 видео</div>
+          </div>
           <div class="stat-card">
             <div class="stat-label">Пользователей</div>
             <div class="stat-value" id="stat-users">—</div>
@@ -1030,6 +1040,15 @@ async function loadOverview() {
   document.getElementById('stat-gens').textContent     = fmt(stats.gens_today);
   document.getElementById('stat-accounts').textContent = accs.filter(a=>!a.disabled).length+'/'+accs.length;
   document.getElementById('stat-credits').textContent  = fmt(stats.credits_sold);
+  // Запросы: успешные / неудачные, раздельно по картинкам и видео
+  document.getElementById('stat-ok').innerHTML =
+    `<span title="Картинки">🖼 ${fmt(stats.image_success)}</span>`
+    + `<span style="color:var(--pz-faint);margin:0 6px">·</span>`
+    + `<span title="Видео">🎬 ${fmt(stats.video_success)}</span>`;
+  document.getElementById('stat-fail').innerHTML =
+    `<span title="Картинки">🖼 ${fmt(stats.image_fail)}</span>`
+    + `<span style="color:var(--pz-faint);margin:0 6px">·</span>`
+    + `<span title="Видео">🎬 ${fmt(stats.video_fail)}</span>`;
   const todayRub = stats.revenue_today_rub ?? null;
   const totalRub = stats.revenue_total_rub ?? null;
   document.getElementById('stat-rev-today').textContent = todayRub != null ? Math.round(todayRub)+'₽' : '—';
@@ -1150,7 +1169,11 @@ async function resetFailures(id) {
 /* ── Messages ──────────────────────────────────────── */
 async function loadMessages() {
   const data = (await api('GET','/config/messages')) || DEMO.messages;
-  document.getElementById('messages-list').innerHTML = Object.entries(data).map(([k,v])=>`
+  // Only string-valued keys are editable here; flow_copy.MESSAGES also holds a
+  // few list values (status-phrase variants) that this textarea editor can't
+  // represent — skip them so the render doesn't throw and stick on «Загрузка…».
+  const entries = Object.entries(data).filter(([,v]) => typeof v === 'string');
+  document.getElementById('messages-list').innerHTML = entries.map(([k,v])=>`
     <div class="msg-item">
       <div class="msg-header" onclick="toggleMsg(this)">
         <span class="msg-key">${esc(k)}</span>
@@ -1427,17 +1450,25 @@ async function setTicketStatus(id, status) {
 /* ── Revenue bar chart ─────────────────────────────── */
 function renderRevenueChart(days) {
   const el = document.getElementById('rev-chart');
-  if (!el || !days || !days.length) return;
-  const maxVal = Math.max(...days.map(d => +(d.rub)||0), 1);
+  if (!el) return;
+  days = (days || []).filter(Boolean);
+  const maxVal = Math.max(...days.map(d => +(d.rub) || 0), 0);
+  // Empty / all-zero period: a row of 2px lime bars reads as a stray green
+  // rectangle. Show a muted placeholder instead.
+  if (!days.length || maxVal <= 0) {
+    el.style.alignItems = 'center';
+    el.innerHTML = `<div style="width:100%;text-align:center;color:var(--pz-faint);font-size:12px">Нет выручки за период</div>`;
+    return;
+  }
+  el.style.alignItems = 'flex-end';
   const H = 72;
+  // Bars only (no per-bar labels — the «По дням» table below lists the dates).
+  // Dropping the vertical labels avoids overflow past the 80px container.
   el.innerHTML = days.map(d => {
     const val = +(d.rub) || 0;
-    const h = Math.max(2, Math.round((val / maxVal) * H));
-    const label = (d.day||'').slice(5);
-    return `<div title="${esc(label+': '+val.toFixed(0)+'₽')}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:default">
-      <div style="width:100%;height:${h}px;background:rgba(200,242,95,.55);border-radius:2px 2px 0 0;min-height:2px"></div>
-      <div style="font-size:9px;color:var(--pz-faint);writing-mode:vertical-rl;transform:rotate(180deg);height:28px;overflow:hidden">${esc(label)}</div>
-    </div>`;
+    const h = val > 0 ? Math.max(3, Math.round((val / maxVal) * H)) : 1;
+    const label = (d.day || '').slice(5);
+    return `<div title="${esc(label + ': ' + val.toFixed(0) + '₽')}" style="flex:1;min-width:0;height:${h}px;background:${val > 0 ? 'rgba(200,242,95,.55)' : 'var(--pz-line)'};border-radius:2px 2px 0 0"></div>`;
   }).join('');
 }
 
