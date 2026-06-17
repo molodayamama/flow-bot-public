@@ -6326,7 +6326,7 @@ async def on_onboarding_action(callback: types.CallbackQuery):
             await show_prompt_picker(msg, user_id=user_id, edit=True)
         elif kind == "vid":
             _vid_clear(user_id)
-            await show_video_family(msg, user_id=user_id, edit=True)
+            await show_video_prompt_input(msg, user_id=user_id, edit=True)
         elif kind == "photo":
             _reset_image_flow(user_id, keep_last=False)
             _ws(user_id)["await"] = "photo"
@@ -6547,7 +6547,7 @@ async def _render_guided_step(message: types.Message, *, user_id: int):
         if answers.get("what") == "video":
             for k in ("gp_step", "gp_answers"):
                 st.pop(k, None)
-            await show_video_family(message, user_id=user_id, edit=True)
+            await show_video_prompt_input(message, user_id=user_id, edit=True)
             return
         prompt = prompts_lib.compose_guided_prompt(answers)
         metrics.log_event("guided_completed", user_id=user_id, source="ideas")
@@ -8642,7 +8642,7 @@ async def handle_plain_text(message: types.Message):
         pending_edits.pop(user_id, None)  # бросаем залипшее фото-правку при переходе в видео
         if vlast:
             st["vlast"] = vlast
-        await show_video_family(message, user_id=user_id, edit=False)
+        await show_video_prompt_input(message, user_id=user_id, edit=False)
         return
 
     # Свободный текстовый ответ в Q&A готового шаблона («Идеи и шаблоны»).
