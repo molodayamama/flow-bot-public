@@ -708,12 +708,16 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("vfmt not in _VID_FMT_TO_ASPECT", block)
         self.assertIn("clamp_num_videos(vcount) == vcount", block)
 
-    def test_omni_video_result_warns_extend_unavailable(self) -> None:
-        self.assertIn("vid_omni_no_extend_hint", flow_copy.MESSAGES)
+    def test_video_result_caption_is_clean_for_sharing(self) -> None:
+        # Подпись под готовым видео держим чистой: цены/действия
+        # (Изменить · Продлить, omni-hint) живут на кнопках под роликом и
+        # не должны попадать в caption — иначе при пересылке видео подпись
+        # выглядит мусорно. Доступность Продлить решает клавиатура
+        # (_video_can_extend в video_result_kb).
         start = self.source.index('caption = flow_copy.msg("vid_result_caption"')
         block = self.source[start:start + 350]
-        self.assertIn('meta.get("family") == "omni-flash"', block)
-        self.assertIn("vid_omni_no_extend_hint", block)
+        self.assertNotIn("vid_result_actions_hint", block)
+        self.assertNotIn("vid_omni_no_extend_hint", block)
 
     def test_video_result_caption_has_referral_link_with_html_parse_mode(self) -> None:
         # Видео-результат должен звать друзей так же, как картинки
@@ -736,7 +740,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # экранирование не требовалось; теперь требуется).
         start = self.source.index('caption = flow_copy.msg("vid_result_caption"')
         line = self.source[start:start + 200]
-        self.assertIn("html.escape(prompt[:60])", line)
+        self.assertIn("html.escape(_short_prompt(prompt, 60))", line)
 
     def test_video_result_edit_and_extend_wiring(self) -> None:
         self.assertIn("def _video_can_edit", self.source)

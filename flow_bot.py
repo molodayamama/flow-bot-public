@@ -2435,14 +2435,9 @@ class FlowHttpClient:
             await asyncio.sleep(VIDEO_POLL_INTERVAL)
             poll_num += 1
 
-            if progress_cb and poll_num % 3 == 0:
-                _phrases = flow_copy.MESSAGES.get("vid_status_phrases") or []
-                if _phrases:
-                    phrase = _phrases[(poll_num // 3 - 1) % len(_phrases)]
-                else:
-                    elapsed = int(poll_num * VIDEO_POLL_INTERVAL)
-                    phrase = f"⏳ Генерация видео… {elapsed}с"
-                await progress_cb(phrase)
+            # Анимация статусных фраз во время ожидания живёт в _video_generate_and_send
+            # (фоновая задача, обновление каждые 2.5 сек) — здесь её больше не дублируем,
+            # чтобы две правки одного сообщения не конфликтовали.
 
             try:
                 async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
@@ -3224,6 +3219,18 @@ def _fmt_rows(fmt: str, prefix: str = "w:fmt") -> list:
     ]
 
 
+def _short_prompt(text: str, limit: int = 80) -> str:
+    """Trim a prompt for captions/status lines, adding an ellipsis if cut.
+
+    Avoids the abrupt «…рыгает мотая головой влево вп» cut — instead the user
+    sees «…влево вп…» so it's clear the description continues.
+    """
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "…"
+
+
 _QUICK_IDEAS: list[str] = [
     "котик в стиле студии Гибли, мягкий свет",
     "киберпанк Москва ночью, неоновые вывески",
@@ -3245,6 +3252,25 @@ _QUICK_IDEAS: list[str] = [
     "фотореализм: капля воды на лепестке розы, макро",
     "медведь-художник рисует пейзаж в берёзовом лесу",
     "будущее: летающие сады над мегаполисом",
+    "лиса-шаман у костра в зимнем лесу, северное сияние",
+    "стимпанк-дирижабль над облаками, тёплый закатный свет",
+    "минималистичный логотип-горы, плоский дизайн, два цвета",
+    "котёнок-астронавт в шлеме, смотрит на Землю, мультяшно",
+    "уличная еда в Токио ночью, неон, отражения в лужах",
+    "девушка-эльф в доспехах из листьев, фэнтези, кинопостер",
+    "тёплый плед, какао и книга у окна, за окном снегопад",
+    "робот поливает цветы на заброшенной станции, мягкий свет",
+    "винтажный мотоцикл на фоне пустыни, золотой час, плёнка",
+    "подводный город с медузами-фонарями, бирюзовая дымка",
+    "пушистый корги в свитере, студийный портрет, боке",
+    "горный замок на рассвете, туман в долине, эпично",
+    "капкейк-галактика со звёздной глазурью, макро-съёмка",
+    "лес из гигантских грибов, светлячки, сказочная атмосфера",
+    "ретро-постер путешествия на Марс, плакат 50-х",
+    "кот в деловом костюме пьёт кофе в офисе, юмор, фотореализм",
+    "балерина из дыма и света на тёмной сцене, длинная выдержка",
+    "домик на дереве с гирляндами в осеннем лесу, уют",
+    "феникс из золотых искр взлетает над вулканом, динамично",
 ]
 
 
@@ -3419,9 +3445,13 @@ def _prompt_picker_text(ideas: list[str]) -> str:
         "Опиши идею текстом или выбери готовый сюжет ниже — "
         "нажми на него, скопируй и отправь 👇\n",
     ]
+    # Идеи внутри одной цитаты (blockquote) — выглядит аккуратнее; каждая
+    # строка остаётся <code>, то есть копируется по клику.
+    quoted = []
     for i, idea in enumerate(ideas[:3]):
         emoji = _IDEA_EMOJIS[i % len(_IDEA_EMOJIS)]
-        lines.append(f"<code>{emoji} {html.escape(idea)}</code>")
+        quoted.append(f"<code>{emoji} {html.escape(idea)}</code>")
+    lines.append("<blockquote>" + "\n".join(quoted) + "</blockquote>")
     return "\n".join(lines)
 
 
@@ -5145,7 +5175,7 @@ async def _do_generate_and_send(
 
     async def update_status(text: str):
         try:
-            await status_msg.edit_text(f"{text}\n📝 {prompt[:80]}")
+            await status_msg.edit_text(f"{text}\n📝 {_short_prompt(prompt, 80)}")
         except Exception:
             pass
 
@@ -5159,7 +5189,7 @@ async def _do_generate_and_send(
             if _img_anim_stop.is_set():
                 return
             try:
-                await status_msg.edit_text(f"{phrase}\n📝 {prompt[:80]}")
+                await status_msg.edit_text(f"{phrase}\n📝 {_short_prompt(prompt, 80)}")
             except Exception:
                 pass
             await asyncio.sleep(2.5)
@@ -5371,7 +5401,7 @@ async def _send_result_pairs(
         ref_text = ""
     for i, (url, img) in enumerate(pairs, 1):
         counter = f" {i}/{total}" if total > 1 else ""
-        caption = f"{emoji}{counter} · {html.escape(prompt[:80])}{ref_text}"
+        caption = f"{emoji}{counter} · {html.escape(_short_prompt(prompt, 80))}{ref_text}"
         await _send_one_image(
             message,
             url=url,
@@ -7479,9 +7509,35 @@ async def _do_video_generate_and_send(
 
     async def update_status(text: str):
         try:
-            await status_msg.edit_text(f"{text}\n📝 {prompt[:80]}")
+            await status_msg.edit_text(f"{text}\n📝 {_short_prompt(prompt, 80)}")
         except Exception:
             pass
+
+    # Фоновая анимация статусных фраз — как у генерации картинок: фразы меняются
+    # каждые 2.5 сек, чтобы ожидание видео тоже было живым (раньше фраза
+    # обновлялась только раз в ~15 сек на каждом 3-м polling-цикле).
+    _vid_phrases = flow_copy.MESSAGES.get("vid_status_phrases") or []
+    _vid_anim_stop = asyncio.Event()
+
+    async def _vid_animate():
+        await asyncio.sleep(2.5)
+        for phrase in itertools.cycle(_vid_phrases):
+            if _vid_anim_stop.is_set():
+                return
+            try:
+                await status_msg.edit_text(f"{phrase}\n📝 {_short_prompt(prompt, 80)}")
+            except Exception:
+                pass
+            await asyncio.sleep(2.5)
+            if _vid_anim_stop.is_set():
+                return
+
+    _vid_anim_task = asyncio.create_task(_vid_animate()) if _vid_phrases else None
+
+    def _stop_vid_anim():
+        _vid_anim_stop.set()
+        if _vid_anim_task:
+            _vid_anim_task.cancel()
 
     def _stash_retry():
         # Снимок состояния, чтобы «Попробовать снова» повторил ТОТ ЖЕ запрос.
@@ -7604,6 +7660,7 @@ async def _do_video_generate_and_send(
                     return
 
             media_id = result["media_id"]
+            _stop_vid_anim()  # генерация готова — гасим анимацию фраз
             await update_status("⬇️ Готовлю видео для отправки…")
             video_bytes = await _client_for_acc(acc_id).fetch_video_bytes(media_id)
 
@@ -7640,11 +7697,10 @@ async def _do_video_generate_and_send(
             vtoken = video_registry.add(vref)
             account_pool.mark_success(acc_id)
 
-            caption = flow_copy.msg("vid_result_caption", i=i + 1, n=vcount, prompt=html.escape(prompt[:60]))
-            if meta.get("family") == "omni-flash":
-                caption = f"{caption}\n\n{flow_copy.msg('vid_omni_no_extend_hint')}"
-            elif _video_can_extend(vref):
-                caption = f"{caption}\n\n{flow_copy.msg('vid_result_actions_hint', edit=action_price('video_prompt_edit'), extend=video_extend_price(VIDEO_EXTEND_MODEL, vref.extend_index + 1))}"
+            # Подпись держим чистой: только описание + реф-ссылка автора.
+            # Цены/действия (Изменить · Продлить) живут на кнопках под роликом —
+            # в подписи они мешали бы, если видео переслать другому человеку.
+            caption = flow_copy.msg("vid_result_caption", i=i + 1, n=vcount, prompt=html.escape(_short_prompt(prompt, 60)))
             # Реферальная ссылка автора — как под картинками (см. _send_result_pairs).
             if BOT_USERNAME:
                 ref_link = _referral_link(user_id)
@@ -7725,6 +7781,7 @@ async def _do_video_generate_and_send(
         except Exception:
             pass
     finally:
+        _stop_vid_anim()
         st.pop("vstep", None)
         _vid_clear(user_id)
 
