@@ -2267,8 +2267,10 @@ class FlowHttpClient:
                 else video_reference_model_key(model_key, aspect)
             )
             log.info(
-                "🎬 r2v req endpoint=%s effective_model_key=%s aspect=%s ref_images=%d frames=%s",
-                endpoint_name, effective_model_key, aspect, len(reference_images),
+                "🎬 r2v req account=%s project=%s endpoint=%s effective_model_key=%s "
+                "aspect=%s ref_media_ids=%s frames=%s",
+                self.keeper.account_id, project_id, endpoint_name, effective_model_key,
+                aspect, [r.get("mediaId") for r in reference_images],
                 bool(start_image or end_image),
             )
 
@@ -8364,6 +8366,13 @@ async def _upload_photo_source_from_message(
         await status_msg.edit_text(flow_copy.msg("upload_failed"))
         return None
 
+    # TEMP (capture-driven): same diagnostic family as the "🎬 r2v req" log —
+    # lets us confirm the upload account/project matches the one later used
+    # for the reference-to-video generate call.
+    log.info(
+        "📤 video ref photo uploaded account=%s project=%s media_id=%s",
+        acc_id, project_id, source.get("mediaId"),
+    )
     source.setdefault("_project_id", project_id)
     source.setdefault("_account_id", acc_id)
     return source
