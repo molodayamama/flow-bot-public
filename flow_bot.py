@@ -3840,6 +3840,15 @@ _VID_STYLES: dict[str, tuple[str, str]] = {
     "retro":  ("Ретро",             ", vintage 80s, film grain, retro cinematography"),
 }
 
+# Соответствие стилей «Подбора по шагам» (guided picker) → стили video wizard.
+# Ключи слева — значения из _GUIDED_STEPS["style"]; справа — ключи _VID_STYLES.
+_GUIDED_TO_VID_STYLE: dict[str, str] = {
+    "anime":     "anime",
+    "3d":        "3d",
+    "realism":   "photo",
+    "cinematic": "cine",
+}
+
 _VID_OMNI_DURATIONS = [4, 6, 8, 10]
 _VID_OMNI_DUR_MODEL = {4: "omni-flash-4s", 6: "omni-flash-6s",
                         8: "omni-flash-8s", 10: "omni-flash-10s"}
@@ -3949,8 +3958,17 @@ def _nwiz_styles_kb() -> types.InlineKeyboardMarkup:
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def show_video_prompt_input(message: types.Message, *, user_id: int, edit: bool):
-    """Экран 1 нового video wizard: просим описание видео."""
+async def show_video_prompt_input(
+    message: types.Message, *, user_id: int, edit: bool,
+    vfmt: str | None = None, vstyle: str | None = None,
+):
+    """Экран 1 нового video wizard: просим описание видео.
+
+    ``vfmt`` / ``vstyle`` позволяют предзадать формат и стиль (например из
+    «Подбора по шагам»). Применяем их ПОСЛЕ _vid_clear, иначе очистка видео-
+    ключей сбросила бы их обратно на дефолт (это и был баг: 9:16 из guided
+    превращался в 16:9 на экране создания).
+    """
     st = wizard_state[user_id]
     _vid_clear(user_id)
     st["vstep"] = "vprompt_input"
@@ -3959,6 +3977,10 @@ async def show_video_prompt_input(message: types.Message, *, user_id: int, edit:
     st.setdefault("vdur", 4)
     st.setdefault("vquality", "lite")
     st.setdefault("vstyle", "")
+    if vfmt:
+        st["vfmt"] = vfmt
+    if vstyle:
+        st["vstyle"] = vstyle
     text = (
         "🎬 <b>Создать видео</b>\n\n"
         "Опишите, что должно происходить в видео. "
@@ -6659,9 +6681,14 @@ async def _render_guided_step(message: types.Message, *, user_id: int):
         answers = st.get("gp_answers", {})
         # Ветка «видео» уводит в видео-визард, остальное — в генерацию картинки.
         if answers.get("what") == "video":
+            # Переносим формат и стиль из guided в видео-визард.
+            gv_fmt = "port" if answers.get("format") in ("story", "avatar") else "land"
+            gv_style = _GUIDED_TO_VID_STYLE.get(answers.get("style", ""), "")
             for k in ("gp_step", "gp_answers"):
                 st.pop(k, None)
-            await show_video_prompt_input(message, user_id=user_id, edit=True)
+            await show_video_prompt_input(
+                message, user_id=user_id, edit=True, vfmt=gv_fmt, vstyle=gv_style
+            )
             return
         prompt = prompts_lib.compose_guided_prompt(answers)
         metrics.log_event("guided_completed", user_id=user_id, source="ideas")

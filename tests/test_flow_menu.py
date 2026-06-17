@@ -761,6 +761,21 @@ class BotMenuWiringTests(unittest.TestCase):
         # Видео-шаблоны фото-основу не используют (upload идёт в видео-визарде).
         self.assertIn("tp_photo для видео не используем", block)
 
+    def test_guided_video_carries_format_and_style(self) -> None:
+        # «Подбор по шагам» → видео: выбранный формат (9:16) и стиль должны
+        # переноситься в видео-визард, а не сбрасываться на дефолт 16:9.
+        # show_video_prompt_input применяет vfmt/vstyle ПОСЛЕ _vid_clear.
+        start = self.source.index("async def show_video_prompt_input")
+        block = self.source[start:start + 900]
+        self.assertIn("vfmt: str | None = None", block)
+        self.assertIn("vstyle: str | None = None", block)
+        clear_at = block.index("_vid_clear(user_id)")
+        apply_at = block.index('st["vfmt"] = vfmt')
+        self.assertLess(clear_at, apply_at)  # применяем после очистки
+        # Guided-ветка передаёт формат и стиль.
+        self.assertIn('gv_fmt = "port" if answers.get("format") in ("story", "avatar") else "land"', self.source)
+        self.assertIn("vfmt=gv_fmt, vstyle=gv_style", self.source)
+
     def test_video_result_edit_and_extend_wiring(self) -> None:
         self.assertIn("def _video_can_edit", self.source)
         self.assertIn("def _video_can_extend", self.source)
