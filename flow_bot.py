@@ -973,6 +973,15 @@ class SessionKeeper:
         now = time.time()
         if not force and self._gcredits_cache is not None and (now - self._gcredits_cache_ts) < GCREDITS_CACHE_SEC:
             return self._gcredits_cache
+        if not self._bearer:
+            # Bearer не прогрет (например, сразу после рестарта бота) — НЕ
+            # форсируем page.reload() ради чисто информационного баланса в
+            # админке. Иначе при первой загрузке /api/admin/accounts после
+            # рестарта все аккаунты одновременно ловят reload() на одной и
+            # той же странице параллельно с реальными джобами пользователей →
+            # ERR_TUNNEL_CONNECTION_FAILED/таймауты в браузере. Подождём, пока
+            # бэйрер прогреет реальная генерация.
+            return None
         try:
             session = await self.get_session()
             if not session["bearer"]:
