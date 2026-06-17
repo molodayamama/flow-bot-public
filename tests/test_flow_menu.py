@@ -715,6 +715,29 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('meta.get("family") == "omni-flash"', block)
         self.assertIn("vid_omni_no_extend_hint", block)
 
+    def test_video_result_caption_has_referral_link_with_html_parse_mode(self) -> None:
+        # Видео-результат должен звать друзей так же, как картинки
+        # (_send_result_pairs) — и parse_mode="HTML" обязателен, иначе
+        # тег <a href> уйдёт пользователю как голый текст.
+        start = self.source.index('caption = flow_copy.msg("vid_result_caption"')
+        block = self.source[start:start + 4000]
+        self.assertIn("_referral_link(user_id)", block)
+        self.assertIn('Создай своё в @', block)
+        answer_video_start = block.index("await message.answer_video(")
+        answer_video_block = block[answer_video_start:answer_video_start + 300]
+        self.assertIn('parse_mode="HTML"', answer_video_block)
+        answer_doc_start = block.index("await message.answer_document(")
+        answer_doc_block = block[answer_doc_start:answer_doc_start + 300]
+        self.assertIn('parse_mode="HTML"', answer_doc_block)
+
+    def test_video_result_caption_escapes_prompt(self) -> None:
+        # prompt идёт в HTML-caption — без escape сломает parse_mode="HTML"
+        # на промптах с <, >, & (раньше caption слали без parse_mode, поэтому
+        # экранирование не требовалось; теперь требуется).
+        start = self.source.index('caption = flow_copy.msg("vid_result_caption"')
+        line = self.source[start:start + 200]
+        self.assertIn("html.escape(prompt[:60])", line)
+
     def test_video_result_edit_and_extend_wiring(self) -> None:
         self.assertIn("def _video_can_edit", self.source)
         self.assertIn("def _video_can_extend", self.source)

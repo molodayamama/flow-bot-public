@@ -7613,11 +7613,18 @@ async def _do_video_generate_and_send(
             vtoken = video_registry.add(vref)
             account_pool.mark_success(acc_id)
 
-            caption = flow_copy.msg("vid_result_caption", i=i + 1, n=vcount, prompt=prompt[:60])
+            caption = flow_copy.msg("vid_result_caption", i=i + 1, n=vcount, prompt=html.escape(prompt[:60]))
             if meta.get("family") == "omni-flash":
                 caption = f"{caption}\n\n{flow_copy.msg('vid_omni_no_extend_hint')}"
             elif _video_can_extend(vref):
                 caption = f"{caption}\n\n{flow_copy.msg('vid_result_actions_hint', edit=action_price('video_prompt_edit'), extend=video_extend_price(VIDEO_EXTEND_MODEL, vref.extend_index + 1))}"
+            # Реферальная ссылка автора — как под картинками (см. _send_result_pairs).
+            if BOT_USERNAME:
+                ref_link = _referral_link(user_id)
+                caption = (
+                    f"{caption}\n\n"
+                    f'<a href="{html.escape(ref_link)}">Создай своё в @{html.escape(BOT_USERNAME)}</a>'
+                )
             delivery_bytes, merged_video = await _video_delivery_bytes(vref, fetched_bytes=video_bytes)
             if not delivery_bytes:
                 await _fail_retry(i)
@@ -7629,6 +7636,7 @@ async def _do_video_generate_and_send(
                     BufferedInputFile(delivery_bytes, filename),
                     caption=caption,
                     reply_markup=video_result_kb(vtoken),
+                    parse_mode="HTML",
                 )
                 sent_count += 1
             except Exception:
@@ -7638,6 +7646,7 @@ async def _do_video_generate_and_send(
                         BufferedInputFile(delivery_bytes, filename),
                         caption=caption,
                         reply_markup=video_result_kb(vtoken),
+                        parse_mode="HTML",
                     )
                     sent_count += 1
                 except Exception:
