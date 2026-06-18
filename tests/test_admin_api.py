@@ -98,6 +98,22 @@ class AdminApiValidationTests(unittest.TestCase):
         self.assertEqual(by_key["vid_status_phrases"], "non_string_default")
         self.assertEqual(warnings, [{"key": "custom", "warning": "hardcoded_price"}])
 
+    def test_overrides_only_keeps_diffs_and_custom_keys(self) -> None:
+        defaults = {"a": "code-A", "b": "code-B", "c": "code-C"}
+        clean = {
+            "a": "code-A",      # unchanged → dropped (falls back to code)
+            "b": "edited-B",    # changed → kept
+            "custom": "extra",  # not in defaults → kept
+        }
+        self.assertEqual(
+            admin_api._overrides_only(defaults, clean),
+            {"b": "edited-B", "custom": "extra"},
+        )
+
+    def test_overrides_only_empty_when_all_match_code(self) -> None:
+        defaults = {"a": "x", "b": "y"}
+        self.assertEqual(admin_api._overrides_only(defaults, {"a": "x", "b": "y"}), {})
+
 
 if __name__ == "__main__":
     unittest.main()

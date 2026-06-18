@@ -359,6 +359,18 @@ def _validate_copy_payload(defaults: dict, body: dict, *, kind: str) -> tuple[di
         clean[key] = value
     return clean, errors, warnings
 
+
+def _overrides_only(defaults: dict, clean: dict) -> dict:
+    """Keep only genuine customizations: keys absent from the code defaults, or
+    whose value differs from code.
+
+    The admin UI posts the *full* copy dict on every save. Persisting all of it
+    froze a snapshot that shadowed later code-side edits (a changed message in
+    ``flow_copy.py`` stayed invisible because the override still held the old
+    text). Storing only real diffs lets unedited keys fall back to code.
+    """
+    return {k: v for k, v in clean.items() if k not in defaults or v != defaults.get(k)}
+
 async def handle_messages_get(request: web.Request) -> web.Response:
     defaults = _message_defaults()
     overrides = config_store.get_section("messages")
@@ -379,6 +391,7 @@ async def handle_messages_post(request: web.Request) -> web.Response:
     if errors:
         _audit(request, "messages.save", old=old, new={"errors": errors}, result="validation_error")
         return _json({"error": "validation failed", "errors": errors, "warnings": warnings}, 400)
+    clean = _overrides_only(defaults, clean)
     try:
         config_store.set_section("messages", clean)
     except Exception:
@@ -411,6 +424,7 @@ async def handle_labels_post(request: web.Request) -> web.Response:
     if errors:
         _audit(request, "labels.save", old=old, new={"errors": errors}, result="validation_error")
         return _json({"error": "validation failed", "errors": errors, "warnings": warnings}, 400)
+    clean = _overrides_only(defaults, clean)
     try:
         config_store.set_section("labels", clean)
     except Exception:
