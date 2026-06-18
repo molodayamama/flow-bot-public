@@ -65,6 +65,7 @@ logs/
 # Flow quota profiler local runs
 flow_profiler_runs/
 tg_e2e_runs/
+lead_scan_runs/
 
 # Python
 __pycache__/

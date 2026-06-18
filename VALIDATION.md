@@ -242,6 +242,24 @@ Google Flow, mutate bot cooldown state, spend quota, trigger captcha/rate-limit
 signals, or create/update `.sessions/` files. Never run them as routine
 validation or CI.
 
+Telegram lead pain scanner:
+
+- Syntax check, assumption:
+  `python -m py_compile tools\lead_pain_scan.py`
+- CLI help smoke, assumption:
+  `python tools\lead_pain_scan.py --help`
+- Manual read-only scan, approval required:
+  `python tools\lead_pain_scan.py --approve-external-action --days 30 --limit-per-term 80 --max-samples-per-chat 10`
+
+Risks:
+
+- Calls Telegram through the existing E2E user session and may update the local
+  `.session` database.
+- Reads public chat messages only; it must not send messages, join chats,
+  export sender ids/usernames, scrape member lists, or create contact lists.
+- Writes generated reports under `lead_scan_runs/`; keep that directory
+  gitignored and do not commit raw scan output unless deliberately sanitized.
+
 Per-user projects, image editing, menu UX, and credits (flow_bot):
 
 - Syntax check, assumption:

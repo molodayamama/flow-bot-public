@@ -172,6 +172,60 @@ Stop conditions:
 - Starts without first generation.
 - First generation without second generation or payment after enough attempts.
 
+## Automated Pain Scan 2026-06-19
+
+Read-only scanner: `tools/lead_pain_scan.py`.
+
+Final strict command used:
+
+```text
+python tools/lead_pain_scan.py --approve-external-action --days 30 --limit-per-term 80 --max-samples-per-chat 10
+```
+
+Final run time: 2026-06-18 21:56 UTC / 2026-06-19 local.
+
+Aggregate result:
+
+- Chats scanned: 10.
+- Keyword-matched public messages: 1,329.
+- Candidate direct-pain messages: 64.
+- Unique candidate pain authors: 25.
+- Supply / competitor messages: 1,214.
+
+Category split:
+
+- `product_card`: 58.
+- `ai_tool`: 7.
+- `short_video`: 6.
+- `product_photo`: 3.
+
+Chat split:
+
+| Chat | Candidate pain msgs | Unique candidate authors | Supply msgs | Read |
+|---|---:|---:|---:|---|
+| `chat_infographics` | 36 | 7 | 341 | Best immediate listening pool; repeated direct requests for card/infographic help. |
+| `wbnahodkychat` | 12 | 4 | 335 | Smaller direct demand, still heavily mixed with designer ads. |
+| `MP_partner` | 9 | 8 | 57 | Broader seller questions; good for helpful replies, less direct than design chats. |
+| `marketplaces_chat` | 4 | 4 | 33 | Lower volume but includes higher-quality seller requests. |
+| `xb_prosmm_chat` | 2 | 1 | 15 | Weak SMM/AI fit; mostly discovery, not first outreach. |
+| `wildberries_service` | 1 | 1 | 18 | Weak direct fit in this window. |
+| `designers_wb_ozon` | 0 | 0 | 295 | Mostly supply/ad inventory; use admin-approved placement, not public replies. |
+| `dizainer_wb` | 0 | 0 | 117 | Mostly supply/ad inventory; use admin-approved placement. |
+| `neyroseti_chat` | 0 | 0 | 3 | No fresh direct pain in the 30-day window. |
+| `sellery_ozon` | 0 | 0 | 0 | No useful volume in this scan. |
+
+Interpretation:
+
+- Treat 25 unique candidate authors as a conservative lead-signal count, not a
+  contact list.
+- Before replying, inspect the message manually. The scanner favors recall for
+  marketplace visual pain, but public chats still contain repeated ads and
+  operational WB/Ozon questions that may not fit Photozhab.
+- Do not auto-DM or mass-export identities. The script counts unique authors in
+  memory only and does not write sender ids, usernames, or contact lists.
+- Raw local reports are written under `lead_scan_runs/` and are intentionally
+  gitignored.
+
 ## Validation Notes
 
 Commands and actions performed:
@@ -180,11 +234,13 @@ Commands and actions performed:
 - Used the existing Telethon E2E session in read-only mode to search public
   Telegram entities, messages, and chat descriptions.
 - Used public web search for current AI marketplace-card and AI-video tools.
+- Ran the read-only Telegram pain scanner across the 10 shortlisted chats.
 
 External actions avoided:
 
 - No Telegram messages sent.
 - No chat joins.
 - No mass DM or user scraping.
+- No raw Telegram sender ids, usernames, or contact lists exported.
 - No VPS deploy.
 - No Google Flow generation, captcha solve, Robokassa, Stars, or paid API use.
