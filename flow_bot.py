@@ -40,7 +40,7 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from urllib.parse import unquote, urlencode, urlparse
+from urllib.parse import quote, unquote, urlencode, urlparse
 
 import aiohttp
 from aiohttp import web
@@ -8127,18 +8127,43 @@ def _robokassa_new_inv_id() -> int:
     return int(time.time() * 1000) * 1000 + random.randint(100, 999)
 
 
+def _robokassa_receipt_json(pack_id: str, out_sum: str, credits: int) -> str:
+    """Состав чека (номенклатура) для Робочеков СМЗ — сырой JSON.
+
+    Одна позиция: купленные кредиты, её ``sum`` равен ``OutSum``. Самозанятый
+    (НПД): без НДС (``tax=none``); ``sno`` не указываем — режим СМЗ держит сам
+    Robokassa. Возвращаем компактный JSON без URL-encode: именно он идёт в
+    подпись. Для ссылки его отдельно прогоняем через ``quote`` (rawurlencode).
+    """
+    receipt = {
+        "items": [
+            {
+                "name": f"Пополнение баланса ФотоЖаб — {credits} кредитов",
+                "quantity": 1,
+                "sum": round(float(out_sum), 2),
+                "payment_method": "full_payment",
+                "payment_object": "service",
+                "tax": "none",
+            }
+        ]
+    }
+    return json.dumps(receipt, ensure_ascii=False, separators=(",", ":"))
+
+
 def _robokassa_payment_url(user_id: int, pack_id: str, inv_id: int) -> str:
     p = credit_pack(pack_id)
     if not p:
         raise ValueError(f"unknown pack: {pack_id!r}")
     out_sum = _robokassa_pack_amount(pack_id)
     shp = {"Shp_pack": pack_id, "Shp_user": int(user_id)}
+    receipt_json = _robokassa_receipt_json(pack_id, out_sum, int(p["credits"]))
     signature = robokassa_payment_signature(
         ROBOKASSA_MERCHANT_LOGIN,
         out_sum,
         inv_id,
         ROBOKASSA_PASSWORD1,
         shp_params=shp,
+        receipt=receipt_json,
         algorithm=ROBOKASSA_HASH_ALGO,
     )
     params = {
@@ -8155,7 +8180,11 @@ def _robokassa_payment_url(user_id: int, pack_id: str, inv_id: int) -> str:
         params["IncCurrLabel"] = ROBOKASSA_INC_CURR_LABEL
     if ROBOKASSA_TEST:
         params["IsTest"] = "1"
-    return ROBOKASSA_PAY_URL + "?" + urlencode(params)
+    # Receipt идёт в подпись сырым JSON, а в ссылку — rawurlencode'нутым
+    # (quote(..., safe="") ≡ PHP rawurlencode). Поэтому не пускаем его через
+    # urlencode (иначе двойное кодирование) — добавляем вручную.
+    query = urlencode(params) + "&Receipt=" + quote(receipt_json, safe="")
+    return ROBOKASSA_PAY_URL + "?" + query
 
 
 async def _start_robokassa_topup(callback: types.CallbackQuery, user_id: int, pack_id: str):

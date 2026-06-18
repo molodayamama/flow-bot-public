@@ -1360,6 +1360,36 @@ class RobokassaWebhookTests(unittest.TestCase):
         fb._maybe_apply_referral_rewards = referral
         return SimpleNamespace(events=events, tx_calls=tx_calls, credits_added=credits_added)
 
+    def test_robokassa_payment_url_carries_fiscal_receipt(self) -> None:
+        import json as _json
+        from urllib.parse import parse_qs, quote, urlsplit
+
+        fb = self._load_bot()
+        self._configure(fb)
+
+        url = fb._robokassa_payment_url(123, "xl", 555)
+        qs = parse_qs(urlsplit(url).query)
+
+        # Номенклатура присутствует — иначе Robokassa жалуется на пустой чек.
+        self.assertIn("Receipt", qs)
+        receipt = _json.loads(qs["Receipt"][0])
+        item = receipt["items"][0]
+        out_sum = fb._robokassa_pack_amount("xl")
+        self.assertEqual(round(item["sum"], 2), round(float(out_sum), 2))
+        self.assertEqual(item["tax"], "none")          # самозанятый: без НДС
+        self.assertNotIn("sno", receipt)               # режим СМЗ держит Robokassa
+        self.assertIn("кредит", item["name"].lower())  # есть название позиции
+
+        # Подпись считается по СЫРОМУ JSON, а в ссылку он идёт rawurlencode'нутым.
+        raw_json = fb._robokassa_receipt_json("xl", out_sum, fb.credit_pack("xl")["credits"])
+        self.assertIn("Receipt=" + quote(raw_json, safe=""), url)
+        expected_sig = flow_core.robokassa_payment_signature(
+            fb.ROBOKASSA_MERCHANT_LOGIN, out_sum, 555, fb.ROBOKASSA_PASSWORD1,
+            shp_params={"Shp_pack": "xl", "Shp_user": 123},
+            receipt=raw_json, algorithm=fb.ROBOKASSA_HASH_ALGO,
+        )
+        self.assertEqual(qs["SignatureValue"][0], expected_sig)
+
     def test_robokassa_webhook_is_idempotent_by_inv_id(self) -> None:
         fb = self._load_bot()
         state = self._configure(fb)
