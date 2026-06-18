@@ -41,6 +41,14 @@ SEARCH_TERMS = (
     "\u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444\u0438\u043a\u0430",
     "\u0444\u043e\u0442\u043e \u0442\u043e\u0432\u0430\u0440\u0430",
     "\u0434\u0438\u0437\u0430\u0439\u043d",
+    "\u0434\u0438\u0437\u0430\u0439\u043d\u0435\u0440",
+    "\u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444\u0438\u043a\u0438",
+    "\u043e\u0444\u043e\u0440\u043c\u0438\u0442\u044c",
+    "\u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u0435",
+    "\u0438\u0441\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c",
+    "\u0444\u0440\u0438\u043b\u0430\u043d\u0441\u0435\u0440",
+    "\u0441\u043f\u0435\u0446\u0438\u0430\u043b\u0438\u0441\u0442",
+    "\u043f\u043e\u0434 \u043a\u043b\u044e\u0447",
     "\u0432\u0438\u0434\u0435\u043e \u0442\u043e\u0432\u0430\u0440\u0430",
     "\u0432\u0438\u0434\u0435\u043e \u0434\u043b\u044f \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0438",
     "\u0440\u0438\u043b\u0441",
@@ -106,6 +114,86 @@ HARD_REQUEST_HINTS = (
     "\u043f\u043e\u043c\u043e\u0433\u0438\u0442\u0435",
 )
 
+# Done-for-you demand: the author wants a person/team to do the work for them,
+# not a tool or a tip. These are the highest-value leads for Photozhab.
+SERVICE_FIT_HINTS = (
+    "\u0438\u0449\u0443 \u0434\u0438\u0437\u0430\u0439\u043d\u0435\u0440",
+    "\u0438\u0449\u0443 \u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444",
+    "\u0438\u0449\u0443 \u0438\u0441\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b",
+    "\u0438\u0449\u0443 \u043f\u043e\u0434\u0440\u044f\u0434\u0447\u0438\u043a",
+    "\u0438\u0449\u0443 \u0441\u043f\u0435\u0446\u0438\u0430\u043b\u0438\u0441\u0442",
+    "\u0438\u0449\u0443 \u0447\u0435\u043b\u043e\u0432\u0435\u043a",
+    "\u0438\u0449\u0443 \u0444\u0440\u0438\u043b\u0430\u043d\u0441\u0435\u0440",
+    "\u0438\u0449\u0443 \u0442\u043e\u0433\u043e \u043a\u0442\u043e",
+    "\u0438\u0449\u0443 \u0442\u043e\u0433\u043e, \u043a\u0442\u043e",
+    "\u043d\u0443\u0436\u0435\u043d \u0434\u0438\u0437\u0430\u0439\u043d\u0435\u0440",
+    "\u043d\u0443\u0436\u0435\u043d \u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444",
+    "\u043d\u0443\u0436\u0435\u043d \u0438\u0441\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b",
+    "\u043d\u0443\u0436\u0435\u043d \u043f\u043e\u0434\u0440\u044f\u0434\u0447\u0438\u043a",
+    "\u043d\u0443\u0436\u0435\u043d \u0441\u043f\u0435\u0446\u0438\u0430\u043b\u0438\u0441\u0442",
+    "\u043d\u0443\u0436\u0435\u043d \u0447\u0435\u043b\u043e\u0432\u0435\u043a",
+    "\u043d\u0443\u0436\u0435\u043d \u0444\u0440\u0438\u043b\u0430\u043d\u0441\u0435\u0440",
+    "\u043d\u0443\u0436\u043d\u0430 \u043f\u043e\u043c\u043e\u0449\u044c \u0441 \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u043d\u0443\u0436\u0435\u043d \u0434\u0438\u0437\u0430\u0439\u043d \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u043d\u0443\u0436\u043d\u0430 \u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444",
+    "\u0438\u0449\u0435\u0442\u0441\u044f \u0434\u0438\u0437\u0430\u0439\u043d\u0435\u0440",
+    "\u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044f \u0434\u0438\u0437\u0430\u0439\u043d\u0435\u0440",
+    "\u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044f \u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444",
+    "\u043f\u043e\u0441\u043e\u0432\u0435\u0442\u0443\u0439\u0442\u0435 \u0434\u0438\u0437\u0430\u0439\u043d\u0435\u0440",
+    "\u043f\u043e\u0441\u043e\u0432\u0435\u0442\u0443\u0439\u0442\u0435 \u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444",
+    "\u043f\u043e\u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0443\u0439\u0442\u0435 \u0434\u0438\u0437\u0430\u0439\u043d\u0435\u0440",
+    "\u043a\u0442\u043e \u0434\u0435\u043b\u0430\u0435\u0442 \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u043a\u0442\u043e \u0434\u0435\u043b\u0430\u0435\u0442 \u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444",
+    "\u043a\u0442\u043e \u043e\u0444\u043e\u0440\u043c\u043b\u044f\u0435\u0442 \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u043a\u0442\u043e \u043c\u043e\u0436\u0435\u0442 \u0441\u0434\u0435\u043b\u0430\u0442\u044c \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u043a\u0442\u043e \u043c\u043e\u0436\u0435\u0442 \u0441\u0434\u0435\u043b\u0430\u0442\u044c \u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444",
+    "\u0434\u0430\u0439\u0442\u0435 \u043a\u043e\u043d\u0442\u0430\u043a\u0442",
+    "\u0441\u043a\u0438\u043d\u044c\u0442\u0435 \u043a\u043e\u043d\u0442\u0430\u043a\u0442",
+    "\u0441\u043a\u0438\u043d\u044c\u0442\u0435 \u043a\u043e\u043d\u0442\u0430\u043a\u0442\u044b",
+    "\u0441\u0434\u0435\u043b\u0430\u0442\u044c \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u0441\u0434\u0435\u043b\u0430\u0442\u044c \u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444",
+    "\u043e\u0444\u043e\u0440\u043c\u0438\u0442\u044c \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u0435 \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u043f\u043e\u0434 \u043a\u043b\u044e\u0447",
+    "\u0434\u0435\u043b\u0435\u0433\u0438\u0440\u043e\u0432\u0430\u0442\u044c",
+    "\u043d\u0430 \u043f\u043e\u0441\u0442\u043e\u044f\u043d\u043a\u0443",
+    "\u0432 \u043a\u043e\u043c\u0430\u043d\u0434\u0443",
+    "\u043d\u0430 \u0430\u0443\u0442\u0441\u043e\u0440\u0441",
+    "\u0441\u0434\u0435\u043b\u0430\u0439\u0442\u0435 \u043c\u043d\u0435",
+    "\u0441\u0434\u0435\u043b\u0430\u0439\u0442\u0435 \u0437\u0430 \u043c\u0435\u043d\u044f",
+    "\u043f\u043e\u043c\u043e\u0433\u0438\u0442\u0435 \u0441 \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u043f\u043e\u043c\u043e\u0433\u0438\u0442\u0435 \u0441 \u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444",
+    "\u0445\u043e\u0447\u0443 \u0437\u0430\u043a\u0430\u0437\u0430\u0442\u044c",
+    "\u0433\u043e\u0442\u043e\u0432 \u043e\u043f\u043b\u0430\u0442\u0438\u0442\u044c",
+    "\u0431\u044e\u0434\u0436\u0435\u0442 \u0435\u0441\u0442\u044c",
+    "\u0437\u0430 \u043e\u043f\u043b\u0430\u0442\u0443",
+    "\u043f\u043b\u0430\u0442\u043d\u043e \u0438\u0449\u0443",
+)
+
+# Author offering work / looking for clients \u2014 exclude even when they say
+# "\u0438\u0449\u0443"/"\u043d\u0443\u0436\u0435\u043d" (e.g. "\u0438\u0449\u0443 \u0437\u0430\u043a\u0430\u0437\u044b", "\u0438\u0449\u0443 \u043a\u043b\u0438\u0435\u043d\u0442\u043e\u0432", "\u0438\u0449\u0443 \u0440\u0430\u0431\u043e\u0442\u0443").
+SELLER_SEEKING_HINTS = (
+    "\u0438\u0449\u0443 \u0437\u0430\u043a\u0430\u0437",
+    "\u0438\u0449\u0443 \u043a\u043b\u0438\u0435\u043d\u0442",
+    "\u0438\u0449\u0443 \u0440\u0430\u0431\u043e\u0442\u0443",
+    "\u0438\u0449\u0443 \u043f\u043e\u0434\u0440\u0430\u0431\u043e\u0442",
+    "\u0438\u0449\u0443 \u043f\u0440\u043e\u0435\u043a\u0442",
+    "\u0432\u043e\u0437\u044c\u043c\u0443 \u0437\u0430\u043a\u0430\u0437",
+    "\u0431\u0435\u0440\u0443 \u0437\u0430\u043a\u0430\u0437",
+    "\u043e\u0442\u043a\u0440\u044b\u0442 \u0434\u043b\u044f \u0437\u0430\u043a\u0430\u0437",
+    "\u043e\u0442\u043a\u0440\u044b\u0442\u0430 \u0434\u043b\u044f \u0437\u0430\u043a\u0430\u0437",
+    "\u0441\u0432\u043e\u0431\u043e\u0434\u0435\u043d \u0434\u043b\u044f \u0437\u0430\u043a\u0430\u0437",
+    "\u0441\u0432\u043e\u0431\u043e\u0434\u043d\u0430 \u0434\u043b\u044f \u0437\u0430\u043a\u0430\u0437",
+    "\u0433\u043e\u0442\u043e\u0432 \u0432\u0437\u044f\u0442\u044c",
+    "\u0433\u043e\u0442\u043e\u0432\u0430 \u0432\u0437\u044f\u0442\u044c",
+    "\u0438\u0449\u0443 \u0432\u0430\u043a\u0430\u043d\u0441\u0438\u044e",
+    "\u0438\u0449\u0443 \u0443\u0434\u0430\u043b\u0435\u043d\u043a",
+    "\u043c\u043e\u0435 \u043f\u043e\u0440\u0442\u0444\u043e\u043b\u0438\u043e",
+    "\u043c\u043e\u0451 \u043f\u043e\u0440\u0442\u0444\u043e\u043b\u0438\u043e",
+    "\u043c\u043e\u0438 \u0440\u0430\u0431\u043e\u0442\u044b",
+    "\u0440\u0435\u0437\u044e\u043c\u0435",
+)
+
 TOPIC_HINTS = (
     "\u043a\u0430\u0440\u0442\u043e\u0447",
     "\u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444",
@@ -167,6 +255,14 @@ SUPPLY_ONLY_HINTS = (
     "\u0434\u043b\u044f \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u044f \u0437\u0430\u043a\u0430\u0437\u0430",
     "\u043f\u043e\u0434 \u0437\u0430\u043a\u0430\u0437",
     "\u0437\u0430\u043a\u0430\u0437\u0430\u0442\u044c",
+    "\u043e\u0431\u0440\u0430\u0449\u0430\u0439\u0442\u0435\u0441\u044c",
+    "\u043a \u0432\u0430\u0448\u0438\u043c \u0443\u0441\u043b\u0443\u0433\u0430\u043c",
+    "\u043f\u0438\u0448\u0438\u0442\u0435 \u0432 \u043b\u0441 \u0437\u0430",
+    "\u0432\u0435\u0431-\u0434\u0438\u0437\u0430\u0439\u043d\u0435\u0440",
+    "\u0432\u0435\u0431\u0434\u0438\u0437\u0430\u0439\u043d\u0435\u0440",
+    "\u0441\u0434\u0435\u043b\u0430\u044e \u0434\u043b\u044f \u0432\u0430\u0441",
+    "\u043f\u043e\u043c\u043e\u0433\u0443 \u0432\u0430\u043c",
+    "\u043f\u043e\u043c\u043e\u0433\u0443 \u0432\u0430\u0448\u0435\u043c\u0443",
     "\u043a\u043e\u043c\u0443 \u043d\u0443\u0436\u043d",
     "\u0432\u044b \u043f\u043e \u0430\u0434\u0440\u0435\u0441\u0443",
     "\u043f\u0440\u043e\u0444\u0435\u0441\u0441\u0438\u043e\u043d\u0430\u043b\u044c\u043d\u043e \u0437\u0430\u043d\u0438\u043c\u0430\u044e\u0441\u044c",
@@ -280,6 +376,7 @@ class LeadCandidate:
     message_link: str | None
     priority: str
     score: int
+    lead_type: str
     pain_context: str
     categories: list[str]
     keyword: str
@@ -321,6 +418,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tg-proxy-url")
     parser.add_argument("--approve-external-action", action="store_true")
     parser.add_argument("--chat", action="append", dest="chats")
+    parser.add_argument(
+        "--chats-file",
+        help="JSON file with a 'chats' list of {username} objects (e.g. discovered_chats.json).",
+    )
+    parser.add_argument("--max-chats", type=int, default=0, help="Cap number of chats scanned (0 = no cap).")
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--limit-per-term", type=int, default=80)
     parser.add_argument("--max-samples-per-chat", type=int, default=8)
@@ -361,7 +463,7 @@ def main(argv: list[str] | None = None) -> int:
             session_file=args.session_file,
             env=env,
         )
-        chats = tuple(args.chats or DEFAULT_CHATS)
+        chats = resolve_chats(args)
         result = asyncio.run(
             scan_chats(
                 config=config,
@@ -407,6 +509,34 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def resolve_chats(args: argparse.Namespace) -> tuple[str, ...]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def add(name: str) -> None:
+        cleaned = (name or "").strip().lstrip("@")
+        key = cleaned.lower()
+        if cleaned and key not in seen:
+            seen.add(key)
+            ordered.append(cleaned)
+
+    for name in args.chats or ():
+        add(name)
+    if args.chats_file:
+        raw = json.loads(Path(args.chats_file).read_text(encoding="utf-8"))
+        entries = raw.get("chats", raw) if isinstance(raw, dict) else raw
+        for entry in entries:
+            if isinstance(entry, str):
+                add(entry)
+            elif isinstance(entry, dict) and entry.get("username"):
+                add(str(entry["username"]))
+    if not ordered:
+        ordered.extend(DEFAULT_CHATS)
+    if args.max_chats and args.max_chats > 0:
+        ordered = ordered[: args.max_chats]
+    return tuple(ordered)
+
+
 async def scan_chats(
     *,
     config: Any,
@@ -441,7 +571,10 @@ async def scan_chats(
 
     serial_rows = [serialize_chat_stats(row) for row in rows]
     leads = [lead for row in serial_rows for lead in row["leads"]]
-    leads.sort(key=lambda lead: (lead["score"], lead["date"], lead["repeat_count"]), reverse=True)
+    leads.sort(
+        key=lambda lead: (_lead_type_rank(lead.get("lead_type", "")), lead["score"], lead["date"], lead["repeat_count"]),
+        reverse=True,
+    )
     serial_rows.sort(
         key=lambda row: (
             row["direct_pain_messages"],
@@ -456,6 +589,8 @@ async def scan_chats(
         "direct_pain_messages": sum(row["direct_pain_messages"] for row in serial_rows),
         "unique_pain_authors": len(global_author_keys),
         "lead_candidates": len(leads),
+        "done_for_you_leads": sum(1 for lead in leads if lead.get("lead_type") == "done_for_you"),
+        "advice_leads": sum(1 for lead in leads if lead.get("lead_type") == "advice"),
         "supply_messages": sum(row["supply_messages"] for row in serial_rows),
         "noise_messages": sum(row["noise_messages"] for row in serial_rows),
     }
@@ -549,6 +684,7 @@ async def scan_one_chat(
                             body=body,
                             keyword=term,
                             categories=classification["categories"],
+                            lead_type=classification["lead_type"],
                         )
                         if len(stats.samples) < max_samples:
                             stats.samples.append(
@@ -590,14 +726,15 @@ def add_lead_candidate(
     body: str,
     keyword: str,
     categories: list[str],
+    lead_type: str,
 ) -> None:
     primary_category = categories[0] if categories else "uncategorized"
     private_author_key: Any = sender_id if isinstance(sender_id, int) else f"msg:{message_id}"
     group_key = (private_author_key, primary_category)
     date_value = date.date().isoformat() if date else ""
     snippet = clean_text(body)
-    context = infer_pain_context(body, categories)
-    score = score_lead(body=body, categories=categories, date=date)
+    context = infer_pain_context(body, categories, lead_type)
+    score = score_lead(body=body, categories=categories, date=date, lead_type=lead_type)
     priority = priority_for_score(score)
     candidate = lead_groups.get(group_key)
     if candidate is None:
@@ -610,6 +747,7 @@ def add_lead_candidate(
             message_link=link,
             priority=priority,
             score=score,
+            lead_type=lead_type,
             pain_context=context,
             categories=categories,
             keyword=keyword,
@@ -621,9 +759,13 @@ def add_lead_candidate(
     candidate.repeat_count += 1
     if link and link not in candidate.evidence_links and len(candidate.evidence_links) < 5:
         candidate.evidence_links.append(link)
-    if score > candidate.score:
+    new_rank = (_lead_type_rank(lead_type), score)
+    cur_rank = (_lead_type_rank(candidate.lead_type), candidate.score)
+    if new_rank > cur_rank:
+        # The newest, strongest message becomes the representative for this author.
         candidate.score = score
         candidate.priority = priority
+        candidate.lead_type = lead_type
         candidate.lead_id = f"{chat}/{message_id}"
         candidate.date = date_value
         candidate.message_id = message_id
@@ -634,8 +776,14 @@ def add_lead_candidate(
         candidate.snippet = snippet
 
 
-def infer_pain_context(text: str, categories: list[str]) -> str:
+def _lead_type_rank(lead_type: str) -> int:
+    return {"done_for_you": 3, "advice": 2, "signal": 1}.get(lead_type, 0)
+
+
+def infer_pain_context(text: str, categories: list[str], lead_type: str = "") -> str:
     lowered = normalize(text)
+    if lead_type == "done_for_you":
+        return "Готов делегировать: ищет исполнителя/команду сделать карточки, инфографику или визуал под ключ для WB/Ozon."
     if "product_card" in categories and any(hint in lowered for hint in (
         "\u0438\u0449\u0443",
         "\u0438\u0449\u0435\u043c",
@@ -657,9 +805,11 @@ def infer_pain_context(text: str, categories: list[str]) -> str:
     return "\u0415\u0441\u0442\u044c \u0441\u0438\u0433\u043d\u0430\u043b \u0431\u043e\u043b\u0438 \u0432 \u043f\u0443\u0431\u043b\u0438\u0447\u043d\u043e\u043c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0438; \u043d\u0443\u0436\u043d\u0430 \u0440\u0443\u0447\u043d\u0430\u044f \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u043f\u0435\u0440\u0435\u0434 \u043e\u0442\u0432\u0435\u0442\u043e\u043c."
 
 
-def score_lead(*, body: str, categories: list[str], date: datetime | None) -> int:
+def score_lead(*, body: str, categories: list[str], date: datetime | None, lead_type: str = "") -> int:
     lowered = normalize(body)
     score = 0
+    if lead_type == "done_for_you":
+        score += 6
     if any(hint in lowered for hint in HARD_REQUEST_HINTS):
         score += 4
     if "product_card" in categories:
@@ -711,13 +861,37 @@ def classify_message(text: str) -> dict[str, Any]:
         category in categories
         for category in ("product_card", "product_photo", "short_video", "photo_animation")
     )
-    # Count real demand conservatively: supply ads often contain rhetorical questions.
-    pain = has_visual_topic and has_topic and not has_supply_only and not has_noise and (
-        has_hard_request or (has_question and has_demand and not has_supply)
+    has_service_fit = (
+        any(hint in lowered for hint in SERVICE_FIT_HINTS)
+        and not any(hint in lowered for hint in SELLER_SEEKING_HINTS)
+        # Reject designer self-ads that open with a rhetorical hook
+        # ("Нужна инфографика? Создаю карточки…", "Я дизайнер, помогу вам").
+        and not any(hint in lowered for hint in SUPPLY_ONLY_HINTS)
     )
+    # Done-for-you requests ("ищу дизайнера", "сделайте карточки под ключ") are
+    # leads on their own. Advice/curiosity is counted more conservatively, since
+    # supply ads often contain rhetorical questions.
+    pain = has_visual_topic and not has_noise and (
+        has_service_fit
+        or (
+            has_topic
+            and not has_supply_only
+            and (has_hard_request or (has_question and has_demand and not has_supply))
+        )
+    )
+    if not pain:
+        lead_type = ""
+    elif has_service_fit:
+        lead_type = "done_for_you"
+    elif has_hard_request:
+        lead_type = "advice"
+    else:
+        lead_type = "signal"
     return {
         "pain": pain,
-        "supply": (has_supply or has_supply_only) and has_topic,
+        "service_fit": has_service_fit,
+        "lead_type": lead_type,
+        "supply": (has_supply or has_supply_only) and has_topic and not has_service_fit,
         "noise": has_noise and not pain,
         "categories": categories or ["uncategorized"],
     }
@@ -757,6 +931,7 @@ def serialize_chat_stats(stats: ChatStats) -> dict[str, Any]:
 def write_leads_csv(path: Path, leads: list[dict[str, Any]]) -> None:
     fields = [
         "lead_id",
+        "lead_type",
         "priority",
         "score",
         "date",
@@ -826,13 +1001,14 @@ def render_markdown(result: dict[str, Any]) -> str:
         lines.append("")
     if result.get("leads"):
         lines.extend(["## Lead Candidates", ""])
-        lines.append("| Lead ID | Priority | Chat | Context | Link |")
-        lines.append("|---|---|---|---|---|")
+        lines.append("| Lead ID | Type | Priority | Chat | Context | Link |")
+        lines.append("|---|---|---|---|---|---|")
         for lead in result["leads"]:
             link = f"[message]({lead['message_link']})" if lead.get("message_link") else "-"
             lines.append(
-                f"| `{escape_md(lead['lead_id'])}` | {escape_md(lead['priority'])} | "
-                f"{escape_md(lead['chat'])} | {escape_md(lead['pain_context'])} | {link} |",
+                f"| `{escape_md(lead['lead_id'])}` | {escape_md(lead.get('lead_type') or 'signal')} | "
+                f"{escape_md(lead['priority'])} | {escape_md(lead['chat'])} | "
+                f"{escape_md(lead['pain_context'])} | {link} |",
             )
     return "\n".join(lines).rstrip() + "\n"
 
@@ -866,14 +1042,22 @@ def render_html_dashboard(result: dict[str, Any]) -> str:
             f"<b>{int(count)}</b>"
             "</div>"
         )
+    lead_type_labels = {
+        "done_for_you": "под ключ",
+        "advice": "совет",
+        "signal": "сигнал",
+    }
     lead_rows = []
     for lead in leads:
         categories_text = ", ".join(lead.get("categories") or [])
         link = lead.get("message_link") or ""
         link_html = f"<a class=\"open-link\" href=\"{html.escape(link)}\">open</a>" if link else "-"
+        lead_type = lead.get("lead_type") or "signal"
+        type_label = lead_type_labels.get(lead_type, lead_type)
         lead_rows.append(
             "<tr>"
             f"<td><code>{html.escape(lead['lead_id'])}</code></td>"
+            f"<td><span class=\"tag {html.escape(lead_type)}\">{html.escape(type_label)}</span></td>"
             f"<td><span class=\"pill {html.escape(lead['priority'])}\">{html.escape(lead['priority'])}</span></td>"
             f"<td>{html.escape(lead['date'])}<br><span class=\"muted\">{html.escape(lead['chat'])}</span></td>"
             f"<td>{html.escape(lead['pain_context'])}<br><span class=\"muted\">{html.escape(categories_text)}</span></td>"
@@ -945,6 +1129,10 @@ def render_html_dashboard(result: dict[str, Any]) -> str:
     .pill.high {{ background: #fee2e2; color: #991b1b; }}
     .pill.medium {{ background: #fef3c7; color: #92400e; }}
     .pill.low {{ background: #dbeafe; color: #1d4ed8; }}
+    .tag {{ display: inline-block; padding: 3px 8px; border-radius: 6px; font-size: 12px; font-weight: 700; }}
+    .tag.done_for_you {{ background: #dcfce7; color: #166534; }}
+    .tag.advice {{ background: #ede9fe; color: #5b21b6; }}
+    .tag.signal {{ background: #f1f5f9; color: #475569; }}
     .open-link {{ color: var(--blue); font-weight: 700; text-decoration: none; }}
     @media (max-width: 980px) {{
       header, main {{ padding-left: 18px; padding-right: 18px; }}
@@ -962,8 +1150,8 @@ def render_html_dashboard(result: dict[str, Any]) -> str:
   <main>
     <section class="kpis">
       <div class="kpi"><span>Candidate leads</span><b>{totals['lead_candidates']}</b></div>
-      <div class="kpi"><span>Pain messages</span><b>{totals['direct_pain_messages']}</b></div>
-      <div class="kpi"><span>Unique authors counted in memory</span><b>{totals['unique_pain_authors']}</b></div>
+      <div class="kpi"><span>Done-for-you (хотят делегировать)</span><b>{totals.get('done_for_you_leads', 0)}</b></div>
+      <div class="kpi"><span>Advice / questions</span><b>{totals.get('advice_leads', 0)}</b></div>
       <div class="kpi"><span>Supply / competitors</span><b>{totals['supply_messages']}</b></div>
       <div class="kpi"><span>Chats scanned</span><b>{totals['chats_scanned']}</b></div>
     </section>
@@ -981,7 +1169,7 @@ def render_html_dashboard(result: dict[str, Any]) -> str:
     <section>
       <table>
         <thead>
-          <tr><th>Lead ID</th><th>Priority</th><th>Date / Chat</th><th>Pain context</th><th>Snippet</th><th>Link</th></tr>
+          <tr><th>Lead ID</th><th>Type</th><th>Priority</th><th>Date / Chat</th><th>Pain context</th><th>Snippet</th><th>Link</th></tr>
         </thead>
         <tbody>{''.join(lead_rows)}</tbody>
       </table>
@@ -1007,8 +1195,8 @@ def render_svg_infographic(result: dict[str, Any]) -> str:
     ]
     kpis = [
         ("Candidate leads", totals["lead_candidates"], "#0f766e"),
-        ("Unique authors", totals["unique_pain_authors"], "#2563eb"),
-        ("Pain messages", totals["direct_pain_messages"], "#b45309"),
+        ("Done-for-you", totals.get("done_for_you_leads", 0), "#166534"),
+        ("Advice / questions", totals.get("advice_leads", 0), "#5b21b6"),
         ("Chats scanned", totals["chats_scanned"], "#be123c"),
     ]
     for index, (label, value, color) in enumerate(kpis):

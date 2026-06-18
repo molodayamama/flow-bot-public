@@ -236,6 +236,72 @@ Interpretation:
 - Raw local reports are written under `lead_scan_runs/` and are intentionally
   gitignored.
 
+## Expanded Done-For-You Scan 2026-06-19
+
+The first strict scan (10 chats, 11 leads) was too narrow and over-indexed on
+"give me a tool/bot" curiosity. The seller demand we actually want is
+done-for-you: "ищу/нужен дизайнера, инфографиста, исполнителя; сделать карточки
+под ключ; делегировать". This pass widens sources and re-scores for that intent.
+
+New tooling:
+
+- `tools/lead_chat_discovery.py` - read-only global Telegram search across
+  ~35 seed queries. Collects public seller/marketplace/design *megagroups*
+  (username + member count). Does not join, does not export member identities.
+  Output: `lead_scan_runs/discovered_chats.json` (92 megagroups, 300+ members).
+- `tools/render_dashboard_png.py` - renders the local HTML/SVG to PNG via
+  Playwright Chromium (offline, local file only).
+
+Classifier changes in `tools/lead_pain_scan.py`:
+
+- New `SERVICE_FIT_HINTS` (done-for-you buyer phrases) plus
+  `SELLER_SEEKING_HINTS` to exclude designers/freelancers looking for work.
+- New per-lead `lead_type`: `done_for_you` > `advice` > `signal`, used for
+  ranking, scoring (+6 for done-for-you), CSV/JSON/HTML/SVG, and KPIs.
+- The done-for-you path still rejects supplier self-ads via `SUPPLY_ONLY_HINTS`
+  (e.g. "Нужна инфографика? Создаю карточки…", "Я дизайнер, помогу вам"),
+  which removed ~500 rhetorical-hook false positives in testing.
+- `--chats-file` / `--max-chats` flags to feed the discovered megagroup list.
+
+Command used:
+
+```text
+python tools/lead_pain_scan.py --approve-external-action \
+  --chats-file lead_scan_runs/discovered_chats.json \
+  --days 120 --limit-per-term 50 --max-samples-per-chat 6
+```
+
+Aggregate result:
+
+- Chats scanned: 92.
+- Keyword-matched public messages: 15,472.
+- Candidate direct-pain messages: 1,798.
+- Unique candidate pain authors counted in memory: 364.
+- Grouped safe lead candidates exported: 387.
+  - `done_for_you` (wants to delegate the work): 147.
+  - `advice` (questions / comparison): 239.
+- Supply / competitor messages: 4,121.
+- Priority split: high 288, medium 98, low 1.
+
+Top chats by candidate pain: `Postavshchiki_Vayldberriz_OZON_C`,
+`wildberriestraderchat`, `OZON_postavshchiki_i_menedzhery`,
+`Menedzhery_marketpleysov_Chat`, `postmpchat`, `Postavwiki_na_WildBerries`.
+
+Representative done-for-you lead ids (highest score, manual-review queue):
+
+- `postmpchat/203716` - ищет дизайнера инфографики, нужно разработать обложку
+  карточки конкретного товара.
+- `proffreelancee_chat_pog/257075` - нужен дизайнер инфографики для обложки.
+- `postmpchat/202913` - ищет исполнителя сделать короткое AI-видео по фото.
+- `Postavwiki_na_WildBerries/1771403` - ищет дизайнера карточек для Wildberries.
+- `wildberriestraderchat/3028811` - ищет дизайнера инфографики для WB/Ozon.
+- `mplace_wildberries_ozon_help/2016226` - нужен дизайнер для упаковки новых
+  товаров для WB.
+
+Guardrails are unchanged: this is a manual review queue, not a contact list;
+`lead_id` is a public `chat_username/message_id`; no sender ids, usernames,
+phone numbers, or member lists are exported; outputs stay gitignored.
+
 ## Validation Notes
 
 Commands and actions performed:

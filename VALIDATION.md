@@ -245,14 +245,18 @@ validation or CI.
 Telegram lead pain scanner:
 
 - Syntax check, assumption:
-  `python -m py_compile tools\lead_pain_scan.py`
+  `python -m py_compile tools\lead_pain_scan.py tools\lead_chat_discovery.py tools\render_dashboard_png.py`
 - CLI help smoke, assumption:
   `python tools\lead_pain_scan.py --help`
-- Manual read-only scan, approval required:
+- Manual read-only chat discovery, approval required (no joins, no identity export):
+  `python tools\lead_chat_discovery.py --approve-external-action --min-participants 300`
+- Manual read-only strict scan (legacy narrow shortlist), approval required:
   `python tools\lead_pain_scan.py --approve-external-action --days 30 --limit-per-term 80 --max-samples-per-chat 10`
+- Manual read-only done-for-you scan over discovered megagroups, approval required:
+  `python tools\lead_pain_scan.py --approve-external-action --chats-file lead_scan_runs\discovered_chats.json --days 120 --limit-per-term 50 --max-samples-per-chat 6`
 - Optional local visual check for generated dashboard:
-  open `lead_scan_runs/pain_dashboard.html`, or render it through an already
-  installed browser to `lead_scan_runs/pain_dashboard.png`.
+  open `lead_scan_runs/pain_dashboard.html`, or render the HTML/SVG to PNG with
+  `python tools\render_dashboard_png.py` (Playwright Chromium, offline local file).
 
 Risks:
 
