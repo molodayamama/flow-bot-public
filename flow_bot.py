@@ -308,7 +308,8 @@ ACC_IMAGE_CAPACITY = max(1, int(os.getenv("ACC_IMAGE_CAPACITY", "2")))
 # Максимум параллельных video-джобов на video-capable аккаунт.
 ACC_VIDEO_CAPACITY = max(1, int(os.getenv("ACC_VIDEO_CAPACITY", "1")))
 TOKEN_TTL_SEC = 50 * 60  # обновлять Bearer каждые 50 минут
-GCREDITS_CACHE_SEC = 300  # не дёргать /v1/credits чаще раза в 5 минут на аккаунт
+GCREDITS_CACHE_SEC = max(60, int(os.getenv("GCREDITS_CACHE_SEC", "1800")))
+GCREDITS_SESSION_SNAPSHOT_TIMEOUT_SEC = 1.5
 
 logging.basicConfig(
     level=logging.INFO,
@@ -415,6 +416,7 @@ class SessionKeeper:
         # каждый /admin_accounts, обновляем не чаще GCREDITS_CACHE_SEC.
         self._gcredits_cache: dict | None = None
         self._gcredits_cache_ts = 0.0
+        self._gcredits_lock = asyncio.Lock()
         # Недавно выданные картинки (сырые dict от Google) — чтобы при перехвате
         # реальной правки найти, какое поле imageInputs ссылается на картинку.
         self._recent_sources: deque = deque(maxlen=50)
@@ -963,10 +965,49 @@ class SessionKeeper:
         except Exception as e:
             return f"Ошибка: {e}"
 
+    async def _gcredits_session_snapshot(self) -> dict | None:
+        """Read current auth state without forcing browser navigation."""
+        bearer = self._bearer
+        if not bearer:
+            return None
+        try:
+            await asyncio.wait_for(
+                self._ready.wait(),
+                timeout=GCREDITS_SESSION_SNAPSHOT_TIMEOUT_SEC,
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            return None
+
+        acquired = False
+        try:
+            await asyncio.wait_for(
+                self._lock.acquire(),
+                timeout=GCREDITS_SESSION_SNAPSHOT_TIMEOUT_SEC,
+            )
+            acquired = True
+            if not self._browser_alive():
+                return None
+            try:
+                raw_cookies = await self._context.cookies("https://labs.google")
+            except Exception as e:
+                if not self._is_target_closed_error(e):
+                    log.warning("get_g_credits cookie snapshot failed for %s: %s", self.account_id, e)
+                return None
+            cookies = {c["name"]: c["value"] for c in raw_cookies}
+            return {
+                "bearer": self._bearer or bearer,
+                "cookies": cookies,
+            }
+        except (asyncio.TimeoutError, TimeoutError):
+            return None
+        finally:
+            if acquired:
+                self._lock.release()
+
     async def get_g_credits(self, *, force: bool = False) -> dict | None:
         """Текущий остаток провайдерских G-credits для этого аккаунта.
 
-        Дёргает ``CREDITS_ENDPOINT`` со свежим bearer/cookies из get_session().
+        Дёргает ``CREDITS_ENDPOINT`` с уже имеющимся bearer/cookies.
         Кэшируется на GCREDITS_CACHE_SEC секунд — не бьём Google на каждый
         /admin_accounts. Любая ошибка (нет bearer, сеть, неожиданный формат)
         → None, чтобы админ-команда не падала из-за недоступности баланса.
@@ -974,19 +1015,22 @@ class SessionKeeper:
         now = time.time()
         if not force and self._gcredits_cache is not None and (now - self._gcredits_cache_ts) < GCREDITS_CACHE_SEC:
             return self._gcredits_cache
-        if not self._bearer:
-            # Bearer не прогрет (например, сразу после рестарта бота) — НЕ
-            # форсируем page.reload() ради чисто информационного баланса в
-            # админке. Иначе при первой загрузке /api/admin/accounts после
-            # рестарта все аккаунты одновременно ловят reload() на одной и
-            # той же странице параллельно с реальными джобами пользователей →
-            # ERR_TUNNEL_CONNECTION_FAILED/таймауты в браузере. Подождём, пока
-            # бэйрер прогреет реальная генерация.
-            return None
         try:
-            session = await self.get_session()
+            await asyncio.wait_for(
+                self._gcredits_lock.acquire(),
+                timeout=GCREDITS_SESSION_SNAPSHOT_TIMEOUT_SEC,
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            return self._gcredits_cache
+        try:
+            now = time.time()
+            if not force and self._gcredits_cache is not None and (now - self._gcredits_cache_ts) < GCREDITS_CACHE_SEC:
+                return self._gcredits_cache
+            session = await self._gcredits_session_snapshot()
+            if not session:
+                return self._gcredits_cache
             if not session["bearer"]:
-                return None
+                return self._gcredits_cache
             proxy_raw = self.api_proxy_url if self.api_proxy_url is not None else API_PROXY_URL
             proxy = _effective_proxy_url(proxy_raw) or None
             async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
@@ -1010,21 +1054,23 @@ class SessionKeeper:
                             "get_g_credits non-200 for %s: status=%s body=%s",
                             self.account_id, resp.status, body,
                         )
-                        return None
+                        return self._gcredits_cache
                     data = await resp.json(content_type=None)
         except Exception as e:
             log.warning("get_g_credits failed for %s: %s", self.account_id, e)
-            return None
+            return self._gcredits_cache
+        finally:
+            self._gcredits_lock.release()
         parsed = parse_credits_response(data)
         if parsed:
             self._gcredits_cache = parsed
-            self._gcredits_cache_ts = now
+            self._gcredits_cache_ts = time.time()
         else:
             log.warning(
                 "get_g_credits unparseable response for %s: %s",
                 self.account_id, str(data)[:200],
             )
-        return parsed
+        return parsed or self._gcredits_cache
 
     async def get_capmonster_balance(self) -> str:
         """Возвращает баланс CapMonster в виде строки."""

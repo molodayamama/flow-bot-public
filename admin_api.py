@@ -33,6 +33,7 @@ _pool: "AccountPool | None" = None
 # Optional: account_id -> SessionKeeper, for live G-credits lookup. Injected
 # by register_admin_routes(); None means /api/admin/accounts skips g_credits.
 _keepers: dict | None = None
+GCREDITS_LOOKUP_TIMEOUT_SEC = 3.0
 
 
 # ── helpers ────────────────────────────────────────────────────────────
@@ -176,6 +177,23 @@ async def handle_ops_get(request: web.Request) -> web.Response:
 
 # ── accounts ───────────────────────────────────────────────────────────
 
+async def _get_keeper_gcredits(account_id: str) -> dict | None:
+    if not _keepers or account_id not in _keepers:
+        return None
+    try:
+        result = await asyncio.wait_for(
+            _keepers[account_id].get_g_credits(),
+            timeout=GCREDITS_LOOKUP_TIMEOUT_SEC,
+        )
+        return result if isinstance(result, dict) else None
+    except (asyncio.TimeoutError, TimeoutError):
+        log.warning("admin accounts g_credits lookup timed out for %s", account_id)
+        return None
+    except Exception:
+        log.warning("admin accounts g_credits lookup failed for %s", account_id, exc_info=True)
+        return None
+
+
 async def handle_accounts_get(request: web.Request) -> web.Response:
     if _pool is None:
         return _json({"error": "pool not initialized"}, 503)
@@ -185,14 +203,8 @@ async def handle_accounts_get(request: web.Request) -> web.Response:
     gcredits_map: dict = {}
     if _keepers:
         ids = [acc["id"] for acc in accounts if acc["id"] in _keepers]
-        results = await asyncio.gather(
-            *[_keepers[aid].get_g_credits() for aid in ids],
-            return_exceptions=True,
-        )
-        gcredits_map = {
-            aid: (res if isinstance(res, dict) else None)
-            for aid, res in zip(ids, results)
-        }
+        results = await asyncio.gather(*[_get_keeper_gcredits(aid) for aid in ids])
+        gcredits_map = dict(zip(ids, results))
 
     for acc in accounts:
         s = stats.get(acc["id"], {})

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import unittest
 
 import admin_api
@@ -15,11 +16,14 @@ class _FakePool:
 
 
 class _FakeKeeper:
-    def __init__(self, credits_dict=None, raises=False):
+    def __init__(self, credits_dict=None, raises=False, delay=0.0):
         self._credits = credits_dict
         self._raises = raises
+        self._delay = delay
 
     async def get_g_credits(self):
+        if self._delay:
+            await asyncio.sleep(self._delay)
         if self._raises:
             raise RuntimeError("boom")
         return self._credits
@@ -34,6 +38,7 @@ class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
     def _reset_globals(self):
         admin_api._pool = None
         admin_api._keepers = None
+        admin_api.GCREDITS_LOOKUP_TIMEOUT_SEC = 3.0
 
     async def test_g_credits_attached_when_keepers_present(self):
         pool = _FakePool([
@@ -60,6 +65,19 @@ class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
 
         resp = await admin_api.handle_accounts_get(None)
         body = json.loads(resp.body)
+        self.assertIsNone(body[0]["g_credits"])
+
+    async def test_slow_g_credits_does_not_block_accounts_response(self):
+        pool = _FakePool([
+            {"id": "a1", "disabled": False, "cooldown_left": 0, "fails": 0},
+        ])
+        admin_api._pool = pool
+        admin_api._keepers = {"a1": _FakeKeeper({"credits": 50}, delay=0.05)}
+        admin_api.GCREDITS_LOOKUP_TIMEOUT_SEC = 0.001
+
+        resp = await admin_api.handle_accounts_get(None)
+        body = json.loads(resp.body)
+        self.assertEqual(body[0]["id"], "a1")
         self.assertIsNone(body[0]["g_credits"])
 
 

@@ -513,6 +513,14 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("async with self._lock:", block)
         self.assertIn("await self._close_browser_locked()", block)
 
+    def test_g_credits_lookup_does_not_refresh_bearer(self) -> None:
+        start = self.source.index("async def get_g_credits")
+        end = self.source.index("async def get_capmonster_balance", start)
+        block = self.source[start:end]
+        self.assertIn("session = await self._gcredits_session_snapshot()", block)
+        self.assertNotIn("await self.get_session()", block)
+        self.assertNotIn("await self._refresh_bearer()", block)
+
     def test_main_cleans_long_lived_resources_on_polling_exit(self) -> None:
         start = self.source.index("async def _main_impl():")
         end = self.source.index("async def main():", start)
@@ -1227,6 +1235,7 @@ class LandingStaticContentTests(unittest.TestCase):
     def setUp(self) -> None:
         self.index = (PROJECT_ROOT / "deploy" / "photozhab" / "index.html").read_text(encoding="utf-8")
         self.privacy = (PROJECT_ROOT / "deploy" / "photozhab" / "privacy.html").read_text(encoding="utf-8")
+        self.admin = (PROJECT_ROOT / "deploy" / "photozhab" / "admin.html").read_text(encoding="utf-8")
 
     def test_hero_promises_honest_bot_points(self) -> None:
         for needle in (
@@ -1251,6 +1260,11 @@ class LandingStaticContentTests(unittest.TestCase):
         self.assertIn("152-ФЗ", self.privacy)
         for needle in ("telegram_id", "данные платежа", "Robokassa", "ФИО владельца сервиса"):
             self.assertIn(needle, self.privacy)
+
+    def test_admin_accounts_do_not_fall_back_to_demo_rows(self) -> None:
+        self.assertNotIn("(await api('GET','/accounts')) || DEMO.accounts", self.admin)
+        self.assertIn("Array.isArray(accsRaw) ? accsRaw : null", self.admin)
+        self.assertIn("if (!Array.isArray(accs))", self.admin)
 
 
 class CaptureVideoToolTests(unittest.TestCase):

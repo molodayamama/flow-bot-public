@@ -1074,12 +1074,13 @@ document.getElementById('refresh-btn').addEventListener('click', () => tabLoader
 /* ── Overview ──────────────────────────────────────── */
 async function loadOverview() {
   const stats = (await api('GET','/stats'))    || DEMO.stats;
-  const accs  = (await api('GET','/accounts')) || DEMO.accounts;
+  const accsRaw = await api('GET','/accounts');
+  const accs = Array.isArray(accsRaw) ? accsRaw : null;
   const log   = (await api('GET','/log'))      || DEMO.log;
 
   document.getElementById('stat-users').textContent    = fmt(stats.users);
   document.getElementById('stat-gens').textContent     = fmt(stats.gens_today);
-  document.getElementById('stat-accounts').textContent = accs.filter(a=>!a.disabled).length+'/'+accs.length;
+  document.getElementById('stat-accounts').textContent = accs ? accs.filter(a=>!a.disabled).length+'/'+accs.length : '—';
   document.getElementById('stat-credits').textContent  = fmt(stats.credits_sold);
   // Запросы: успешные / неудачные, раздельно по картинкам и видео
   document.getElementById('stat-ok').innerHTML =
@@ -1095,7 +1096,7 @@ async function loadOverview() {
   document.getElementById('stat-rev-today').textContent = todayRub != null ? Math.round(todayRub)+'₽' : '—';
   document.getElementById('stat-rev-total').textContent = totalRub != null ? Math.round(totalRub)+'₽' : '—';
 
-  document.getElementById('overview-accounts').innerHTML = `
+  document.getElementById('overview-accounts').innerHTML = accs ? `
     <div class="table-wrap">
       <table>
         <thead><tr>
@@ -1130,6 +1131,15 @@ async function loadOverview() {
             <td class="mono" style="text-align:right;font-weight:700">${pct}</td>
           </tr>`;
         }).join('')}</tbody>
+      </table>
+    </div>` : `
+    <div class="table-wrap">
+      <table>
+        <tbody>
+          <tr><td style="color:var(--pz-faint);padding:18px;text-align:center">
+            Аккаунты временно недоступны. Последние реальные данные не подменяются демо-списком.
+          </td></tr>
+        </tbody>
       </table>
     </div>`;
 
@@ -1173,7 +1183,15 @@ function renderLog(log) {
 
 /* ── Accounts ──────────────────────────────────────── */
 async function loadAccounts() {
-  const accs = (await api('GET','/accounts')) || DEMO.accounts;
+  const accs = await api('GET','/accounts');
+  if (!Array.isArray(accs)) {
+    document.getElementById('accounts-tbody').innerHTML = `
+      <tr><td colspan="8" style="color:var(--pz-faint);padding:18px;text-align:center">
+        Аккаунты временно недоступны. Обновите позже.
+      </td></tr>
+    `;
+    return;
+  }
   document.getElementById('accounts-tbody').innerHTML = accs.map(a=>`
     <tr>
       <td>
