@@ -665,6 +665,28 @@ def referral_status(referred_user_id: int) -> str | None:
         return None
 
 
+def referral_is_active(referred_user_id: int, window_days: int) -> bool:
+    """Whether the referral attribution is still inside its reward window.
+
+    Привязка живёт ``window_days`` с момента приглашения (``created_at``). После
+    этого рефереру ничего не начисляется — ни разовый бонус, ни проценты. При
+    ошибке/отсутствии записи возвращаем False (консервативно — не платим).
+    """
+    try:
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT 1 FROM referrals "
+                "WHERE referred_user_id=? "
+                "AND created_at >= datetime('now', ?)",
+                (referred_user_id, f"-{max(0, int(window_days))} days"),
+            ).fetchone()
+            return row is not None
+    except Exception:  # noqa: BLE001
+        log.warning("referral_is_active failed", exc_info=True)
+        return False
+
+
 def get_referral_credits_today(referrer_user_id: int) -> int:
     """Total referral credits granted to ``referrer_user_id`` today (cap check)."""
     try:

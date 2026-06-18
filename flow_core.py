@@ -2627,8 +2627,12 @@ REFERRAL_TIER2_STARS = 200     # >100₽ ≈ medium pack
 REFERRAL_TIER2_BONUS = 30
 REFERRAL_TIER3_STARS = 450     # >500₽ ≈ large pack
 REFERRAL_TIER3_BONUS = 50
-REFERRAL_ONGOING_PCT = 0.10    # fraction of credits_issued (floor), every later top-up
+REFERRAL_ONGOING_PCT = 0.05    # fraction of credits_issued (floor), every later top-up
 REFERRAL_DAILY_CAP_CREDITS = 500  # max referral credits to one referrer per day
+# Привязка реферала действует ограниченное время: спустя столько дней с момента
+# приглашения рефереру больше ничего не начисляется (ни разовый бонус, ни %).
+# Гасит само-рефералку «два аккаунта = вечная скидка» и держит экономику в плюсе.
+REFERRAL_REWARD_WINDOW_DAYS = 90  # ≈ 3 месяца
 
 
 def referral_milestone_bonus(stars_paid: int) -> int:
@@ -2646,6 +2650,11 @@ def referral_milestone_bonus(stars_paid: int) -> int:
 def referral_ongoing_bonus(credits_issued: int) -> int:
     """Ongoing referral reward = floor(REFERRAL_ONGOING_PCT * credits_issued)."""
     return int(max(0, int(credits_issued or 0)) * REFERRAL_ONGOING_PCT)
+
+
+def referral_window_cutoff_arg(window_days: int = REFERRAL_REWARD_WINDOW_DAYS) -> str:
+    """SQLite datetime modifier marking the start of the active referral window."""
+    return f"-{max(0, int(window_days))} days"
 
 
 # ── Channel attribution (рекламные deep-link'и) ───────────────────────

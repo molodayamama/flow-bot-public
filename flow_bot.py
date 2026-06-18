@@ -102,6 +102,7 @@ from flow_core import (
     robokassa_result_signature,
     REFERRAL_PARAM_PREFIX,
     REFERRAL_DAILY_CAP_CREDITS,
+    REFERRAL_REWARD_WINDOW_DAYS,
     REFERRAL_TIER1_BONUS,
     REFERRAL_TIER2_BONUS,
     REFERRAL_TIER3_BONUS,
@@ -2818,6 +2819,11 @@ def _maybe_apply_referral_rewards(
     try:
         referrer_id = metrics.get_referrer_of(referred_user_id)
         if not referrer_id or referrer_id == referred_user_id:
+            return
+        # Привязка реферала действует ограниченное окно (≈3 мес). После него
+        # ни разовый бонус, ни % не начисляются — иначе «два аккаунта» дают
+        # вечную скидку и съедают маржу.
+        if not metrics.referral_is_active(referred_user_id, REFERRAL_REWARD_WINDOW_DAYS):
             return
         status = metrics.referral_status(referred_user_id)
         cap = REFERRAL_DAILY_CAP_CREDITS

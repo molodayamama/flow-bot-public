@@ -74,10 +74,14 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.referral_milestone_bonus(900), 50)  # xl
         self.assertEqual(flow_core.referral_milestone_bonus(0), 0)
 
-    def test_referral_ongoing_is_floored_ten_percent(self) -> None:
-        self.assertEqual(flow_core.referral_ongoing_bonus(290), 29)
-        self.assertEqual(flow_core.referral_ongoing_bonus(1500), 150)
-        self.assertEqual(flow_core.referral_ongoing_bonus(5), 0)  # floor < 1 → 0
+    def test_referral_ongoing_is_floored_five_percent(self) -> None:
+        self.assertEqual(flow_core.REFERRAL_ONGOING_PCT, 0.05)
+        self.assertEqual(flow_core.referral_ongoing_bonus(300), 15)
+        self.assertEqual(flow_core.referral_ongoing_bonus(1500), 75)
+        self.assertEqual(flow_core.referral_ongoing_bonus(15), 0)  # floor < 1 → 0
+
+    def test_referral_reward_window_is_three_months(self) -> None:
+        self.assertEqual(flow_core.REFERRAL_REWARD_WINDOW_DAYS, 90)
 
 
 class RuntimeOverrideTests(unittest.TestCase):

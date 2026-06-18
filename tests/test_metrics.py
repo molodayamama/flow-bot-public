@@ -271,6 +271,22 @@ class ReferralTests(MetricsTestBase):
         self.assertEqual(stats["invited"], 1)
         self.assertEqual(stats["earned"], 0)
 
+    def test_referral_is_active_respects_window(self) -> None:
+        metrics.record_referral_join(referrer_user_id=1, referred_user_id=2)
+        # Fresh join → inside any positive window.
+        self.assertTrue(metrics.referral_is_active(2, 90))
+        # No referral row → not active.
+        self.assertFalse(metrics.referral_is_active(999, 90))
+        # Backdate the join past the window → attribution expired.
+        with metrics._LOCK:
+            metrics._conn().execute(
+                "UPDATE referrals SET created_at=datetime('now','-100 days') "
+                "WHERE referred_user_id=2"
+            )
+            metrics._conn().commit()
+        self.assertFalse(metrics.referral_is_active(2, 90))
+        self.assertTrue(metrics.referral_is_active(2, 200))  # wider window still covers it
+
     def test_ongoing_reward_idempotent_and_capped_lookup(self) -> None:
         # First insert wins; duplicate payment id is ignored (no double reward).
         self.assertTrue(metrics.record_ongoing_reward(1, 2, 29, "charge-A"))
