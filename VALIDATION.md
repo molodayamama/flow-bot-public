@@ -250,6 +250,9 @@ Telegram lead pain scanner:
   `python tools\lead_pain_scan.py --help`
 - Manual read-only scan, approval required:
   `python tools\lead_pain_scan.py --approve-external-action --days 30 --limit-per-term 80 --max-samples-per-chat 10`
+- Optional local visual check for generated dashboard:
+  open `lead_scan_runs/pain_dashboard.html`, or render it through an already
+  installed browser to `lead_scan_runs/pain_dashboard.png`.
 
 Risks:
 
@@ -257,8 +260,9 @@ Risks:
   `.session` database.
 - Reads public chat messages only; it must not send messages, join chats,
   export sender ids/usernames, scrape member lists, or create contact lists.
-- Writes generated reports under `lead_scan_runs/`; keep that directory
-  gitignored and do not commit raw scan output unless deliberately sanitized.
+- Writes generated CSV/JSON/Markdown/HTML/SVG/PNG reports under
+  `lead_scan_runs/`; keep that directory gitignored and do not commit raw scan
+  output unless deliberately sanitized.
 
 Per-user projects, image editing, menu UX, and credits (flow_bot):
 

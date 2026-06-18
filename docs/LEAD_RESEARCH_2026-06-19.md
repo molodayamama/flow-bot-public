@@ -182,47 +182,57 @@ Final strict command used:
 python tools/lead_pain_scan.py --approve-external-action --days 30 --limit-per-term 80 --max-samples-per-chat 10
 ```
 
-Final run time: 2026-06-18 21:56 UTC / 2026-06-19 local.
+Final strict lead export run time: 2026-06-18 22:29 UTC / 2026-06-19 local.
+
+Generated local artifacts:
+
+- `lead_scan_runs/pain_leads.csv` - safe review queue with public-message lead
+  ids, context, priority, snippets, and links.
+- `lead_scan_runs/pain_leads.json` - same queue as structured JSON.
+- `lead_scan_runs/pain_dashboard.html` - interactive-looking local dashboard.
+- `lead_scan_runs/pain_dashboard.png` - browser screenshot of the dashboard.
+- `lead_scan_runs/pain_infographic.svg` - standalone visual summary.
 
 Aggregate result:
 
 - Chats scanned: 10.
-- Keyword-matched public messages: 1,329.
-- Candidate direct-pain messages: 64.
-- Unique candidate pain authors: 25.
+- Keyword-matched public messages: 1,328.
+- Candidate direct-pain messages: 44.
+- Unique candidate pain authors counted in memory: 11.
+- Grouped safe lead candidates exported: 11.
 - Supply / competitor messages: 1,214.
 
 Category split:
 
-- `product_card`: 58.
-- `ai_tool`: 7.
-- `short_video`: 6.
-- `product_photo`: 3.
+- `product_card`: 44.
+- `ai_tool`: 2.
+- `product_photo`: 1.
 
 Chat split:
 
 | Chat | Candidate pain msgs | Unique candidate authors | Supply msgs | Read |
 |---|---:|---:|---:|---|
-| `chat_infographics` | 36 | 7 | 341 | Best immediate listening pool; repeated direct requests for card/infographic help. |
-| `wbnahodkychat` | 12 | 4 | 335 | Smaller direct demand, still heavily mixed with designer ads. |
-| `MP_partner` | 9 | 8 | 57 | Broader seller questions; good for helpful replies, less direct than design chats. |
-| `marketplaces_chat` | 4 | 4 | 33 | Lower volume but includes higher-quality seller requests. |
-| `xb_prosmm_chat` | 2 | 1 | 15 | Weak SMM/AI fit; mostly discovery, not first outreach. |
-| `wildberries_service` | 1 | 1 | 18 | Weak direct fit in this window. |
+| `chat_infographics` | 30 | 5 | 340 | Best immediate listening pool; repeated direct requests for card/infographic help. |
+| `wbnahodkychat` | 9 | 1 | 334 | One repeated high-fit infographic request; good for manual review. |
+| `MP_partner` | 3 | 3 | 57 | Broader seller questions; useful for helpful non-spam replies. |
+| `marketplaces_chat` | 2 | 2 | 35 | Lower volume but includes higher-quality seller requests. |
 | `designers_wb_ozon` | 0 | 0 | 295 | Mostly supply/ad inventory; use admin-approved placement, not public replies. |
 | `dizainer_wb` | 0 | 0 | 117 | Mostly supply/ad inventory; use admin-approved placement. |
+| `wildberries_service` | 0 | 0 | 18 | No strict visual-pain candidates after ad/noise filtering. |
+| `xb_prosmm_chat` | 0 | 0 | 15 | Generic AI/SMM signals were filtered out as non-Photozhab fit. |
 | `neyroseti_chat` | 0 | 0 | 3 | No fresh direct pain in the 30-day window. |
 | `sellery_ozon` | 0 | 0 | 0 | No useful volume in this scan. |
 
 Interpretation:
 
-- Treat 25 unique candidate authors as a conservative lead-signal count, not a
-  contact list.
+- Treat 11 grouped candidates as a manual review queue, not a contact list.
 - Before replying, inspect the message manually. The scanner favors recall for
   marketplace visual pain, but public chats still contain repeated ads and
   operational WB/Ozon questions that may not fit Photozhab.
 - Do not auto-DM or mass-export identities. The script counts unique authors in
   memory only and does not write sender ids, usernames, or contact lists.
+- Exported `lead_id` values are public message ids in the form
+  `chat_username/message_id`, not Telegram user ids.
 - Raw local reports are written under `lead_scan_runs/` and are intentionally
   gitignored.
 
@@ -235,6 +245,10 @@ Commands and actions performed:
   Telegram entities, messages, and chat descriptions.
 - Used public web search for current AI marketplace-card and AI-video tools.
 - Ran the read-only Telegram pain scanner across the 10 shortlisted chats.
+- Generated safe local lead exports and dashboard/infographic files under
+  `lead_scan_runs/`.
+- Rendered `pain_dashboard.html` through local Microsoft Edge via Playwright and
+  saved `pain_dashboard.png` to verify the visual report.
 
 External actions avoided:
 
