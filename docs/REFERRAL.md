@@ -1,6 +1,19 @@
 # REFERRAL.md — Referral Program Design
 
-Last updated: 2026-06-10.
+Last updated: 2026-06-19.
+
+> **Update 2026-06-19 — economics tightened (ground truth, overrides older
+> sections below).** Two changes shipped to curb self-referral abuse (two
+> accounts → permanent discount) and protect margin:
+> - **Ongoing revenue share: 10% → 5%** (`REFERRAL_ONGOING_PCT = 0.05`).
+> - **Attribution now expires after ~3 months.** A referral only earns while the
+>   join is within `REFERRAL_REWARD_WINDOW_DAYS = 90`; after that **neither** the
+>   one-time tier bonus **nor** the ongoing % is paid. Gated by
+>   `metrics.referral_is_active(referred_user_id, window_days)` in
+>   `_maybe_apply_referral_rewards`.
+>
+> The §1/§2 tables below still read "10% forever" — treat them as historical;
+> the live values are 5% and a 90-day window.
 
 ---
 
