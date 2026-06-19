@@ -318,7 +318,9 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("BOT_MODE=seller", seller_env)
         self.assertIn("USER_CREDITS_FILE=user_credits_seller.json", seller_env)
         self.assertIn("ROBOKASSA_WEB_PORT=8082", seller_env)
-        self.assertIn("SBP_PAYMENT_ENABLED=0", seller_env)
+        self.assertIn("ROBOKASSA_SCOPE=seller", seller_env)
+        self.assertIn("ROBOKASSA_SELLER_RESULT_URL=http://127.0.0.1:8082/robokassa/result", seller_env)
+        self.assertIn("SBP_PAYMENT_ENABLED=1", seller_env)
         self.assertIn("user_credits_*.json", gitignore)
 
 

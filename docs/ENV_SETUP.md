@@ -151,7 +151,19 @@ ROBOKASSA_INC_CURR_LABEL=SBP
 ROBOKASSA_PUBLIC_BASE_URL=https://pay.photozhab.ru
 ROBOKASSA_WEB_HOST=127.0.0.1
 ROBOKASSA_WEB_PORT=8081
+ROBOKASSA_SCOPE=consumer
+ROBOKASSA_CONSUMER_RESULT_URL=http://127.0.0.1:8081/robokassa/result
+ROBOKASSA_SELLER_RESULT_URL=http://127.0.0.1:8082/robokassa/result
+ROBOKASSA_CONSUMER_BOT_USERNAME=photozhab_bot
+ROBOKASSA_SELLER_BOT_USERNAME=photozhab_wb_bot
 ```
+
+Seller Card/SBP uses the same merchant credentials, but `BOT_MODE=seller`,
+`ROBOKASSA_WEB_PORT=8082`, and `ROBOKASSA_SCOPE=seller`. New invoices include a
+signed `Shp_bot` value (`consumer` or `seller`). If Robokassa sends the ResultURL
+to the wrong local process, that process forwards the callback to the configured
+localhost result URL for the target scope before credits are issued. Old invoices
+without `Shp_bot` remain consumer-only for retry compatibility.
 
 Robokassa cabinet URLs:
 

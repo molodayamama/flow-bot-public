@@ -1407,9 +1407,14 @@ class RobokassaWebhookTests(unittest.TestCase):
         return SimpleNamespace(query=params, method="GET")
 
     @staticmethod
-    def _signed_result_params(fb, *, inv_id: str = "777", pack: str = "trial", user: str = "123") -> dict[str, str]:
+    def _signed_result_params(
+        fb, *, inv_id: str = "777", pack: str = "trial", user: str = "123",
+        bot_scope: str | None = None,
+    ) -> dict[str, str]:
         out_sum = fb._robokassa_pack_amount(pack)
         shp = {"Shp_pack": pack, "Shp_user": user}
+        if bot_scope is not None:
+            shp["Shp_bot"] = bot_scope
         sig = flow_core.robokassa_result_signature(
             out_sum,
             inv_id,
@@ -1432,6 +1437,9 @@ class RobokassaWebhookTests(unittest.TestCase):
         fb.ROBOKASSA_HASH_ALGO = "sha256"
         fb.STARS_TO_RUB = 1.3
         fb.ROBOKASSA_CARD_DISCOUNT_PCT = 10
+        fb.ROBOKASSA_SCOPE = "consumer"
+        fb.ROBOKASSA_CONSUMER_RESULT_URL = "http://127.0.0.1:8081/robokassa/result"
+        fb.ROBOKASSA_SELLER_RESULT_URL = "http://127.0.0.1:8082/robokassa/result"
 
         events: list[tuple[str, int, str, dict | None]] = []
         tx_calls: list[dict] = []
@@ -1490,9 +1498,10 @@ class RobokassaWebhookTests(unittest.TestCase):
         self.assertIn("Receipt=" + quote(raw_json, safe=""), url)
         expected_sig = flow_core.robokassa_payment_signature(
             fb.ROBOKASSA_MERCHANT_LOGIN, out_sum, 555, fb.ROBOKASSA_PASSWORD1,
-            shp_params={"Shp_pack": "xl", "Shp_user": 123},
+            shp_params={"Shp_bot": "consumer", "Shp_pack": "xl", "Shp_user": 123},
             receipt=raw_json, algorithm=fb.ROBOKASSA_HASH_ALGO,
         )
+        self.assertEqual(qs["Shp_bot"][0], "consumer")
         self.assertEqual(qs["SignatureValue"][0], expected_sig)
 
     def test_robokassa_webhook_is_idempotent_by_inv_id(self) -> None:
@@ -1509,6 +1518,57 @@ class RobokassaWebhookTests(unittest.TestCase):
         self.assertEqual(second.text, "OK9001")
         self.assertEqual(state.credits_added, [(123, 45)])
         self.assertEqual([c["provider_payment_id"] for c in state.tx_calls], ["robokassa:9001", "robokassa:9001"])
+
+    def test_robokassa_scoped_invoice_uses_scoped_payment_id(self) -> None:
+        fb = self._load_bot()
+        state = self._configure(fb)
+        params = self._signed_result_params(
+            fb, inv_id="9011", pack="trial", user="123", bot_scope="consumer",
+        )
+
+        response = asyncio.run(fb.robokassa_result(self._request(params)))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.text, "OK9011")
+        self.assertEqual(state.credits_added, [(123, 45)])
+        self.assertEqual(state.tx_calls[0]["provider_payment_id"], "robokassa:consumer:9011")
+
+    def test_robokassa_seller_callback_forwards_to_seller_process(self) -> None:
+        fb = self._load_bot()
+        state = self._configure(fb)
+        params = self._signed_result_params(
+            fb, inv_id="9012", pack="s_card", user="123", bot_scope="seller",
+        )
+        forwards: list[tuple[str, dict[str, str]]] = []
+
+        async def fake_forward(scope: str, data: dict[str, str]):
+            forwards.append((scope, dict(data)))
+            return fb.web.Response(text="OK9012")
+
+        fb._robokassa_forward_result = fake_forward
+
+        response = asyncio.run(fb.robokassa_result(self._request(params)))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.text, "OK9012")
+        self.assertEqual(forwards, [("seller", params)])
+        self.assertEqual(state.credits_added, [])
+        self.assertEqual(state.tx_calls, [])
+
+    def test_robokassa_seller_process_accepts_seller_scope(self) -> None:
+        fb = self._load_bot()
+        state = self._configure(fb)
+        fb.ROBOKASSA_SCOPE = "seller"
+        params = self._signed_result_params(
+            fb, inv_id="9013", pack="s_card", user="456", bot_scope="seller",
+        )
+
+        response = asyncio.run(fb.robokassa_result(self._request(params)))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.text, "OK9013")
+        self.assertEqual(state.credits_added, [(456, 60)])
+        self.assertEqual(state.tx_calls[0]["provider_payment_id"], "robokassa:seller:9013")
 
     def test_robokassa_webhook_credits_without_success_redirect(self) -> None:
         fb = self._load_bot()

@@ -594,6 +594,36 @@ Service restart logs:
   future should both be zero, and `systemctl is-active geminifree-bot` should
   return `active`.
 
+Robokassa consumer/seller callback routing:
+
+- New Robokassa invoices must include signed `Shp_bot=consumer|seller`.
+  Callback handling verifies the Robokassa signature first, then forwards a
+  callback that landed on the wrong local process to
+  `ROBOKASSA_CONSUMER_RESULT_URL` or `ROBOKASSA_SELLER_RESULT_URL` before any
+  credits are issued.
+- Old invoices without `Shp_bot` remain consumer-only and keep the legacy
+  provider payment id `robokassa:{InvId}` so Robokassa retries cannot double
+  credit previously handled payments.
+- Safe offline validation: `python -m py_compile flow_bot.py
+  tests\test_flow_menu.py tests\test_seller_bot.py`,
+  `python -m unittest discover -s tests -p "test_flow_menu.py"`,
+  `python -m unittest discover -s tests -p "test_seller_bot.py"`, and full
+  `python -m unittest discover -s tests`.
+- Approved VPS smoke: after deploy, send a signed non-money Robokassa callback
+  with `Shp_bot=seller` to the consumer port and an invalid user id. Expected:
+  consumer forwards to seller, seller returns `bad order`, no credits are issued,
+  and logs contain no Traceback/ERROR. Do not run a real Robokassa charge as a
+  smoke test.
+
+Seller Telegram marketplace video:
+
+- Full chat validation requires an authorized user Telegram session because Bot
+  API cannot send messages to the bot as a user. The local Telethon e2e session
+  can be used for this when external actions and Flow quota spend are approved.
+- Approved live check: from the user session, open `@photozhab_wb_bot`, use the
+  marketplace animate path, upload a product photo, and wait for a returned
+  video/document. This spends Flow quota and seller credits.
+
 ## Evidence Template
 
 Use this in Verifier handoff:

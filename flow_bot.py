@@ -237,6 +237,11 @@ try:
     ROBOKASSA_WEB_PORT = int(_env_any("ROBOKASSA_WEB_PORT", default="8081"))
 except ValueError:
     ROBOKASSA_WEB_PORT = 8081
+
+
+def _robokassa_clean_scope(value: str) -> str:
+    value = (value or "").strip().lower()
+    return value if value in ("consumer", "seller") else "consumer"
 # Имя бота для реферальных ссылок (берётся из get_me() на старте; env — фолбэк).
 BOT_USERNAME = os.getenv("BOT_USERNAME", "")
 # Режим бота: "consumer" (как сейчас) или "seller" (@photozhab_wb_bot, меню
@@ -245,6 +250,17 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "")
 # См. docs/SELLER_BOT_PLAN.md.
 BOT_MODE = (os.getenv("BOT_MODE", "consumer") or "consumer").strip().lower()
 IS_SELLER = BOT_MODE == "seller"
+ROBOKASSA_SCOPE = _robokassa_clean_scope(os.getenv("ROBOKASSA_SCOPE") or ("seller" if IS_SELLER else "consumer"))
+ROBOKASSA_CONSUMER_RESULT_URL = _env_any(
+    "ROBOKASSA_CONSUMER_RESULT_URL",
+    default="http://127.0.0.1:8081/robokassa/result",
+)
+ROBOKASSA_SELLER_RESULT_URL = _env_any(
+    "ROBOKASSA_SELLER_RESULT_URL",
+    default="http://127.0.0.1:8082/robokassa/result",
+)
+ROBOKASSA_CONSUMER_BOT_USERNAME = _env_any("ROBOKASSA_CONSUMER_BOT_USERNAME", default="photozhab_bot").lstrip("@")
+ROBOKASSA_SELLER_BOT_USERNAME = _env_any("ROBOKASSA_SELLER_BOT_USERNAME", default="photozhab_wb_bot").lstrip("@")
 PROXY_URL = os.getenv("PROXY_URL", "")          # общий прокси по умолчанию (http/socks5)
 BROWSER_PROXY_URL = os.getenv("BROWSER_PROXY_URL")
 API_PROXY_URL = os.getenv("API_PROXY_URL")
@@ -9438,7 +9454,7 @@ def _robokassa_payment_url(user_id: int, pack_id: str, inv_id: int) -> str:
     if not p:
         raise ValueError(f"unknown pack: {pack_id!r}")
     out_sum = _robokassa_pack_amount(pack_id)
-    shp = {"Shp_pack": pack_id, "Shp_user": int(user_id)}
+    shp = {"Shp_bot": ROBOKASSA_SCOPE, "Shp_pack": pack_id, "Shp_user": int(user_id)}
     receipt_json = _robokassa_receipt_json(pack_id, out_sum, int(p["credits"]))
     signature = robokassa_payment_signature(
         ROBOKASSA_MERCHANT_LOGIN,
@@ -9596,6 +9612,40 @@ def _robokassa_amount_matches(actual: str, expected: str) -> bool:
         return False
 
 
+def _robokassa_target_scope(shp: dict[str, str]) -> str:
+    # Old Robokassa invoices did not carry Shp_bot; keep them on consumer.
+    return _robokassa_clean_scope(shp.get("Shp_bot", "") or "consumer")
+
+
+def _robokassa_result_url_for_scope(scope: str) -> str:
+    return ROBOKASSA_SELLER_RESULT_URL if scope == "seller" else ROBOKASSA_CONSUMER_RESULT_URL
+
+
+def _robokassa_provider_payment_id(inv_id: str, scope: str, *, legacy: bool = False) -> str:
+    return f"robokassa:{inv_id}" if legacy else f"robokassa:{scope}:{inv_id}"
+
+
+async def _robokassa_forward_result(target_scope: str, data: dict[str, str]) -> web.Response:
+    target_url = _robokassa_result_url_for_scope(target_scope)
+    if not target_url:
+        return web.Response(status=503, text="route unavailable")
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(target_url, data=data) as resp:
+                text = await resp.text()
+                return web.Response(status=resp.status, text=text)
+    except Exception:
+        log.exception("robokassa route forward failed target=%s", target_scope)
+        return web.Response(status=503, text="route unavailable")
+
+
+def _robokassa_bot_username_for_scope(scope: str) -> str:
+    if scope == "seller":
+        return ROBOKASSA_SELLER_BOT_USERNAME or "photozhab_wb_bot"
+    return ROBOKASSA_CONSUMER_BOT_USERNAME or "photozhab_bot"
+
+
 async def _notify_robokassa_success(user_id: int, credits: int, balance: int) -> None:
     try:
         await bot.send_message(
@@ -9629,6 +9679,10 @@ async def robokassa_result(request: web.Request) -> web.Response:
         log.warning("robokassa bad signature inv_id=%s", inv_id[:32])
         return web.Response(status=400, text="bad signature")
 
+    target_scope = _robokassa_target_scope(shp)
+    if target_scope != ROBOKASSA_SCOPE:
+        return await _robokassa_forward_result(target_scope, data)
+
     pack_id = shp.get("Shp_pack", "")
     user_raw = shp.get("Shp_user", "")
     p = credit_pack(pack_id)
@@ -9656,7 +9710,9 @@ async def robokassa_result(request: web.Request) -> web.Response:
         return web.Response(status=400, text="bad amount")
 
     user_id = int(user_raw)
-    provider_payment_id = f"robokassa:{inv_id}"
+    provider_payment_id = _robokassa_provider_payment_id(
+        inv_id, target_scope, legacy=("Shp_bot" not in shp)
+    )
     tx_status = metrics.record_transaction_status(
         provider="robokassa",
         provider_payment_id=provider_payment_id,
@@ -9690,7 +9746,32 @@ async def robokassa_result(request: web.Request) -> web.Response:
     return web.Response(text=f"OK{inv_id}")
 
 
+async def _robokassa_status_page(request: web.Request, *, ok: bool) -> web.Response:
+    data = await _robokassa_request_data(request)
+    scope = _robokassa_target_scope(_robokassa_shp_params(data))
+    username = html.escape(_robokassa_bot_username_for_scope(scope))
+    if ok:
+        title = "Оплата прошла"
+        body = "Баланс пополнится автоматически. Можно вернуться в Telegram."
+    else:
+        title = "Оплата не завершена"
+        body = "Деньги не списаны или платёж отменён. Вернись в бот и попробуй ещё раз."
+    return web.Response(
+        text=(
+            "<!doctype html><meta charset='utf-8'>"
+            f"<title>{html.escape(title)}</title>"
+            "<body style='font-family:system-ui;max-width:560px;margin:48px auto;padding:0 20px'>"
+            f"<h1>{html.escape(title)}</h1>"
+            f"<p>{html.escape(body)}</p>"
+            f"<p><a href='https://t.me/{username}'>Открыть бота</a></p>"
+            "</body>"
+        ),
+        content_type="text/html",
+    )
+
+
 async def robokassa_success(request: web.Request) -> web.Response:
+    return await _robokassa_status_page(request, ok=True)
     return web.Response(
         text=(
             "<!doctype html><meta charset='utf-8'>"
@@ -9706,6 +9787,7 @@ async def robokassa_success(request: web.Request) -> web.Response:
 
 
 async def robokassa_fail(request: web.Request) -> web.Response:
+    return await _robokassa_status_page(request, ok=False)
     return web.Response(
         text=(
             "<!doctype html><meta charset='utf-8'>"
