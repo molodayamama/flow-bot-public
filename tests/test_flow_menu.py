@@ -742,6 +742,22 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("_mp_series_request_text", block)
         self.assertIn("return", block)
 
+    def test_marketplace_sku_name_text_saves_before_image_fallback(self) -> None:
+        start = self.source.index("async def handle_plain_text")
+        sku_guard = self.source.index('if awaiting == "mp_sku_name":', start)
+        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        self.assertLess(sku_guard, image_fallback)
+        block = self.source[sku_guard:sku_guard + 450]
+        self.assertIn("_save_pending_sku_item", block)
+        self.assertIn("return", block)
+
+    def test_seller_result_keyboard_is_gated_to_seller_mode(self) -> None:
+        start = self.source.index("async def _send_one_image")
+        block = self.source[start:start + 900]
+        self.assertIn("IS_SELLER", block)
+        self.assertIn("_seller_image_keyboard(token)", block)
+        self.assertIn("_image_keyboard(token)", block)
+
     def test_support_brief_text_runs_before_image_fallback(self) -> None:
         start = self.source.index("async def handle_plain_text")
         support_guard = self.source.index('if st.get("support_await"):', start)
@@ -1313,6 +1329,11 @@ class LandingStaticContentTests(unittest.TestCase):
         self.assertNotIn("(await api('GET','/accounts')) || DEMO.accounts", self.admin)
         self.assertIn("Array.isArray(accsRaw) ? accsRaw : null", self.admin)
         self.assertIn("if (!Array.isArray(accs))", self.admin)
+
+    def test_admin_sellers_shows_sku_project_counts(self) -> None:
+        self.assertIn('id="s-sku"', self.admin)
+        self.assertIn("data.total_sku_projects", self.admin)
+        self.assertIn("s.sku_projects", self.admin)
 
 
 class CaptureVideoToolTests(unittest.TestCase):

@@ -118,6 +118,7 @@ UPSCALE_CALLBACK_PREFIX = "up:"  # legacy alias (now: free original download)
 DOWNLOAD_CALLBACK_PREFIX = "dl:"  # download the original uncompressed file (free)
 UP2X_CALLBACK_PREFIX = "u2:"    # paid AI enhance ×2 (image-to-image, prompt-based)
 REALUP_CALLBACK_PREFIX = "ru:"  # paid TRUE upscale via the service's own endpoint
+SKUADD_CALLBACK_PREFIX = "sku:"  # seller: add image result to an SKU project
 
 ACTION_PREFIXES = {
     "edit": EDIT_CALLBACK_PREFIX,
@@ -128,6 +129,7 @@ ACTION_PREFIXES = {
     "download": DOWNLOAD_CALLBACK_PREFIX,
     "up2x": UP2X_CALLBACK_PREFIX,
     "realup": REALUP_CALLBACK_PREFIX,
+    "skuadd": SKUADD_CALLBACK_PREFIX,
 }
 
 

@@ -561,8 +561,46 @@ class SellerReportTests(MetricsTestBase):
         self.assertEqual(s1["paid_count"], 1)
         self.assertEqual(s1["revenue_stars"], 60)
         self.assertEqual(s1["revenue_rub"], 120.0)
+        self.assertEqual(s1["sku_projects"], 0)
         self.assertEqual(s1["recent_events"][0]["event_name"], "mp_done4you_open")
         self.assertEqual(s1["recent_events"][0]["source"], "seller")
+
+    def test_seller_sku_projects_group_generated_items(self) -> None:
+        self.assertEqual(metrics.save_seller_sku_item(7, "", file_id="file-a"), 0)
+        self.assertGreater(
+            metrics.save_seller_sku_item(
+                7, "  SKU-1   Red Shoes  ", file_id="file-a", token="tok-a",
+                prompt="first", platform="wb",
+            ),
+            0,
+        )
+        self.assertGreater(
+            metrics.save_seller_sku_item(
+                7, "SKU-1 Red Shoes", file_id="file-b", token="tok-b",
+                prompt="second", platform="wb",
+            ),
+            0,
+        )
+        self.assertGreater(
+            metrics.save_seller_sku_item(
+                7, "SKU-2", file_id="file-c", token="tok-c",
+                prompt="third", platform="ozon",
+            ),
+            0,
+        )
+
+        projects = metrics.list_seller_sku_projects(7)
+        self.assertEqual([p["sku"] for p in projects], ["SKU-2", "SKU-1 Red Shoes"])
+        self.assertEqual(projects[1]["items"], 2)
+        self.assertEqual(projects[1]["latest_file_id"], "file-b")
+        self.assertEqual(projects[1]["latest_prompt"], "second")
+        self.assertEqual(metrics.recent_seller_skus(7), ["SKU-2", "SKU-1 Red Shoes"])
+
+        metrics.log_event("mp_platform", user_id=7, username="seller7", source="wb")
+        rep = metrics.report_sellers()
+        seller = rep["sellers"][0]
+        self.assertEqual(seller["sku_projects"], 2)
+        self.assertEqual(rep["total_sku_projects"], 2)
 
     def test_report_sellers_empty(self) -> None:
         rep = metrics.report_sellers()

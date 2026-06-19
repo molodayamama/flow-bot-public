@@ -73,6 +73,7 @@ class SellerMenuTests(unittest.TestCase):
         for job in ("whitebg", "info", "model", "cover", "bg", "animate"):
             self.assertIn(f"mp:job:{job}", cb)
         self.assertIn("mp:series", cb)
+        self.assertIn("mp:projects", cb)
         self.assertIn("mp:done4you", cb)
         self.assertIn("mp:tips", cb)
         self.assertIn("m:mp", cb)  # back to platforms
@@ -144,6 +145,21 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn('if support_kind == "mp_done4you":', source)
         self.assertIn("Заявка под ключ", source)
         self.assertIn('"mp_done4you_submitted"', source)
+
+    def test_sku_projects_menu_and_result_action(self) -> None:
+        source = inspect.getsource(flow_bot.on_marketplace_action)
+        self.assertIn('if data == "mp:projects":', source)
+        self.assertIn("_show_sku_projects", source)
+        action_source = inspect.getsource(flow_bot.on_image_action)
+        self.assertIn('elif action == "skuadd":', action_source)
+        self.assertIn('st["mp_sku_pending"]', action_source)
+        self.assertIn("_mp_sku_choice_kb(user_id)", action_source)
+
+    def test_seller_image_keyboard_adds_sku_button(self) -> None:
+        cb = self._callbacks(flow_bot._seller_image_keyboard("tok123"))
+        self.assertIn("sku:tok123", cb)
+        normal_cb = self._callbacks(flow_bot._image_keyboard("tok123"))
+        self.assertNotIn("sku:tok123", normal_cb)
 
 
 if __name__ == "__main__":

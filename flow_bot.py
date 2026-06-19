@@ -3174,6 +3174,17 @@ def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
     )
 
 
+def _seller_image_keyboard(token: str) -> types.InlineKeyboardMarkup:
+    kb = _image_keyboard(token)
+    kb.inline_keyboard.append([
+        types.InlineKeyboardButton(
+            text="➕ В серию SKU",
+            callback_data=action_callback_data("skuadd", token),
+        )
+    ])
+    return kb
+
+
 # ── меню и визард (кнопочный UX) ──────────────────────────────────────
 
 L = flow_copy.label
@@ -3239,6 +3250,7 @@ def mp_jobs_kb(platform: str) -> types.InlineKeyboardMarkup:
         [B(text="🧩 Серия слайдов", callback_data="mp:series")],
         [B(text="✂️ Убрать / заменить фон", callback_data="mp:job:bg")],
         [B(text="🎬 Оживить фото → видео", callback_data="mp:job:animate")],
+        [B(text="📦 Мои товары (SKU)", callback_data="mp:projects")],
         [B(text="🙌 Сделайте за меня (под ключ)", callback_data="mp:done4you")],
         [B(text="💡 Советы по карточке", callback_data="mp:tips")],
         [B(text="◀️ Площадки", callback_data="m:mp")],
@@ -3346,6 +3358,90 @@ def _mp_series_prompt(platform: str, count: int, seller_note: str | None = None)
     if note:
         prompt += f" Уточнение продавца: {note}"
     return prompt
+
+
+def _mp_sku_projects_text(user_id: int) -> str:
+    projects = metrics.list_seller_sku_projects(user_id, limit=12)
+    if not projects:
+        return (
+            "📦 <b>Мои товары (SKU)</b>\n\n"
+            "Пока здесь пусто. Сгенерируй карточку товара и нажми под результатом "
+            "«➕ В серию SKU», чтобы собрать слайды по артикулу."
+        )
+    lines = ["📦 <b>Мои товары (SKU)</b>"]
+    for item in projects:
+        sku = html.escape(str(item.get("sku") or "SKU"))
+        count = int(item.get("items") or 0)
+        platform = item.get("platform") or ""
+        platform_line = f" · {html.escape(platform)}" if platform else ""
+        updated = (item.get("updated_at") or "")[:16]
+        lines.append(f"• <b>{sku}</b>{platform_line}: {count} слайд(ов), обновлено {updated}")
+    lines.append("\nДобавляй новые результаты кнопкой «➕ В серию SKU» под картинкой.")
+    return "\n".join(lines)
+
+
+async def _show_sku_projects(message: types.Message, *, user_id: int, edit: bool) -> None:
+    text = _mp_sku_projects_text(user_id)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [_menu_button("menu", "m:menu")],
+        [types.InlineKeyboardButton(text="◀️ Маркетплейсы", callback_data="m:mp")],
+    ])
+    if edit:
+        await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+def _mp_sku_choice_kb(user_id: int) -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    choices = metrics.recent_seller_skus(user_id, limit=5)
+    _ws(user_id)["mp_sku_choices"] = choices
+    rows = [
+        [B(text=f"📦 {sku[:48]}", callback_data=f"mp:sku:{idx}")]
+        for idx, sku in enumerate(choices)
+    ]
+    rows.append([B(text="➕ Новый SKU / артикул", callback_data="mp:sku:new")])
+    rows.append([_menu_button("menu", "m:menu")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _pending_sku_payload(user_id: int) -> dict | None:
+    st = _ws(user_id)
+    payload = st.get("mp_sku_pending")
+    return payload if isinstance(payload, dict) else None
+
+
+async def _save_pending_sku_item(message: types.Message, user_id: int, sku: str) -> bool:
+    payload = _pending_sku_payload(user_id)
+    if not payload:
+        _ws(user_id).pop("mp_sku_pending", None)
+        await message.answer("Кнопка устарела. Нажми «➕ В серию SKU» под нужной картинкой ещё раз.")
+        return False
+    row_id = metrics.save_seller_sku_item(
+        user_id,
+        sku,
+        file_id=str(payload.get("file_id") or ""),
+        token=str(payload.get("token") or ""),
+        prompt=str(payload.get("prompt") or ""),
+        platform=str(payload.get("platform") or ""),
+    )
+    if row_id <= 0:
+        await message.answer("Не удалось сохранить SKU. Проверь название и попробуй ещё раз.")
+        return False
+    st = _ws(user_id)
+    st.pop("mp_sku_pending", None)
+    st.pop("mp_sku_choices", None)
+    st["await"] = None
+    metrics.log_event("mp_sku_saved", user_id=user_id, source=str(payload.get("platform") or "seller"))
+    await message.answer(
+        f"📦 Добавлено в SKU <b>{html.escape(sku.strip())}</b>.",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="📦 Мои товары", callback_data="mp:projects")],
+            [_menu_button("menu", "m:menu")],
+        ]),
+        parse_mode="HTML",
+    )
+    return True
 
 
 DEFAULT_COUNT = 1
@@ -4570,7 +4666,7 @@ async def _send_one_image(
             account_id=account_id,
         )
     )
-    keyboard = _image_keyboard(token)
+    keyboard = _seller_image_keyboard(token) if IS_SELLER else _image_keyboard(token)
     try:
         sent = await message.reply_photo(
             photo=url, caption=caption, reply_markup=keyboard, parse_mode="HTML"
@@ -6502,6 +6598,43 @@ async def on_marketplace_action(callback: types.CallbackQuery):
             reply_markup=mp_series_kb(plat),
             parse_mode="HTML",
         )
+        return
+
+    if data == "mp:projects":
+        await callback.answer()
+        metrics.log_event("mp_projects_open", user_id=user_id, source="seller")
+        await _show_sku_projects(msg, user_id=user_id, edit=True)
+        return
+
+    if data == "mp:sku:new":
+        if not _pending_sku_payload(user_id):
+            await callback.answer("Кнопка устарела", show_alert=True)
+            return
+        await callback.answer()
+        _ws(user_id)["await"] = "mp_sku_name"
+        await msg.answer(
+            "📦 Пришли название товара или артикул одним сообщением. "
+            "Например: <code>SKU-104 красные ботинки</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    if data.startswith("mp:sku:"):
+        payload = _pending_sku_payload(user_id)
+        if not payload:
+            await callback.answer("Кнопка устарела", show_alert=True)
+            return
+        try:
+            idx = int(data.rsplit(":", 1)[1])
+        except (TypeError, ValueError):
+            await callback.answer()
+            return
+        choices = _ws(user_id).get("mp_sku_choices") or []
+        if idx < 0 or idx >= len(choices):
+            await callback.answer()
+            return
+        await callback.answer()
+        await _save_pending_sku_item(msg, user_id, str(choices[idx]))
         return
 
     if data.startswith("mp:series:"):
@@ -8875,6 +9008,27 @@ async def on_image_action(callback: types.CallbackQuery):
     elif action == "realup":
         await callback.answer("Увеличиваю разрешение 🔍")
         await _real_upscale_and_send(callback.message, ref)
+    elif action == "skuadd":
+        if not IS_SELLER:
+            await callback.answer()
+            return
+        photos = getattr(callback.message, "photo", None) or []
+        if not photos:
+            await callback.answer("Не нашёл файл картинки", show_alert=True)
+            return
+        st = _ws(user_id)
+        st["mp_sku_pending"] = {
+            "token": token,
+            "file_id": photos[-1].file_id,
+            "prompt": ref.prompt or "",
+            "platform": st.get("mp_platform", ""),
+        }
+        st["await"] = "mp_sku_name"
+        await callback.answer()
+        await callback.message.answer(
+            "📦 В какой SKU добавить этот результат?",
+            reply_markup=_mp_sku_choice_kb(user_id),
+        )
     elif action in ("download", "upscale"):
         await callback.answer("Готовлю файл ⬇️")
         await _send_original_file(callback.message, ref)
@@ -9512,6 +9666,13 @@ async def handle_plain_text(message: types.Message):
             reply_markup=_mp_back_kb(),
             parse_mode="HTML",
         )
+        return
+    if awaiting == "mp_sku_name":
+        sku = text.strip()
+        if len(sku) < 2:
+            await message.answer("📦 Название SKU слишком короткое. Пришли артикул или название товара.")
+            return
+        await _save_pending_sku_item(message, user_id, sku)
         return
 
     # Ждём промпт генерации из визарда.

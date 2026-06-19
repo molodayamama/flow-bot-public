@@ -753,6 +753,11 @@ tr:hover td{background:var(--pz-surface-2)}
             <div class="stat-sub">открывали бриф</div>
           </div>
           <div class="stat-card">
+            <div class="stat-label">SKU</div>
+            <div class="stat-value" id="s-sku">—</div>
+            <div class="stat-sub">товарные проекты</div>
+          </div>
+          <div class="stat-card">
             <div class="stat-label">Выручка</div>
             <div class="stat-value" id="s-revenue">—</div>
             <div class="stat-sub" id="s-paid">оплаты селлеров</div>
@@ -765,6 +770,7 @@ tr:hover td{background:var(--pz-surface-2)}
                 <th>Селлер</th>
                 <th>События</th>
                 <th>Задачи</th>
+                <th>SKU</th>
                 <th>Под ключ</th>
                 <th>Выручка</th>
                 <th>Первый контакт</th>
@@ -773,7 +779,7 @@ tr:hover td{background:var(--pz-surface-2)}
               </tr>
             </thead>
             <tbody id="sellers-tbody">
-              <tr><td colspan="8" style="color:var(--pz-faint);text-align:center;padding:32px">Загрузка…</td></tr>
+              <tr><td colspan="9" style="color:var(--pz-faint);text-align:center;padding:32px">Загрузка…</td></tr>
             </tbody>
           </table>
         </div>
@@ -1771,7 +1777,7 @@ async function loadSellers() {
   const data = await api('GET', '/sellers?limit=200');
   if (!data) {
     document.getElementById('sellers-tbody').innerHTML =
-      `<tr><td colspan="8" style="color:var(--pz-coral);text-align:center;padding:24px">Бот оффлайн</td></tr>`;
+      `<tr><td colspan="9" style="color:var(--pz-coral);text-align:center;padding:24px">Бот оффлайн</td></tr>`;
     return;
   }
 
@@ -1781,6 +1787,7 @@ async function loadSellers() {
   document.getElementById('s-events').textContent = fmt(data.total_events || 0);
   document.getElementById('s-jobs').textContent = fmt(data.total_jobs || 0);
   document.getElementById('s-done4you').textContent = fmt(data.total_done4you || 0);
+  document.getElementById('s-sku').textContent = fmt(data.total_sku_projects || 0);
   const totalRub = Number(data.total_revenue_rub || 0);
   const totalStars = Number(data.total_revenue_stars || 0);
   document.getElementById('s-revenue').textContent = totalRub > 0
@@ -1798,6 +1805,7 @@ async function loadSellers() {
           <td>${user}</td>
           <td class="mono">${fmt(s.events || 0)}</td>
           <td class="mono" style="color:var(--pz-lime);font-weight:700">${fmt(s.jobs || 0)}</td>
+          <td class="mono" style="color:${Number(s.sku_projects || 0)>0?'var(--pz-cyan)':'var(--pz-faint)'}">${fmt(s.sku_projects || 0)}</td>
           <td class="mono" style="color:${Number(s.done4you || 0)>0?'var(--pz-warn)':'var(--pz-faint)'}">${fmt(s.done4you || 0)}</td>
           <td>
             <div class="mono" style="color:${Number(s.revenue_rub || 0)>0 || Number(s.revenue_stars || 0)>0 ? 'var(--pz-lime)' : 'var(--pz-faint)'}">${sellerRevenueText(s)}</div>
@@ -1809,7 +1817,7 @@ async function loadSellers() {
         </tr>
       `;
     }).join('')
-    : `<tr><td colspan="8" style="color:var(--pz-faint);text-align:center;padding:24px">Селлер-событий пока нет</td></tr>`;
+    : `<tr><td colspan="9" style="color:var(--pz-faint);text-align:center;padding:24px">Селлер-событий пока нет</td></tr>`;
 }
 
 /* ── Referrals ─────────────────────────────────────── */

@@ -85,6 +85,10 @@ __all__ = [
     # prompt history
     "save_prompt_history",
     "get_prompt_history",
+    # seller SKU projects
+    "save_seller_sku_item",
+    "list_seller_sku_projects",
+    "recent_seller_skus",
 ]
 
 log = logging.getLogger("flow.metrics")
@@ -230,6 +234,18 @@ CREATE TABLE IF NOT EXISTS user_gallery (
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_gallery_user ON user_gallery(user_id, id);
+
+CREATE TABLE IF NOT EXISTS seller_sku_items (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    sku        TEXT NOT NULL,
+    platform   TEXT,
+    file_id    TEXT NOT NULL,
+    token      TEXT,
+    prompt     TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_seller_sku_user ON seller_sku_items(user_id, sku, id);
 
 CREATE TABLE IF NOT EXISTS support_tickets (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1383,6 +1399,20 @@ def report_sellers(limit: int = 100) -> dict:
                     "revenue_stars": int(r["s"] or 0),
                     "revenue_rub": float(r["rub"] or 0.0),
                 }
+            sku_by_user: dict[int, int] = {
+                int(r["user_id"]): int(r["sku_projects"] or 0)
+                for r in _rows(
+                    conn,
+                    "SELECT user_id, COUNT(DISTINCT sku) AS sku_projects "
+                    "FROM seller_sku_items GROUP BY user_id",
+                )
+            }
+            total_sku_projects = _scalar(
+                conn,
+                "SELECT COUNT(*) FROM ("
+                "SELECT user_id, sku FROM seller_sku_items GROUP BY user_id, sku"
+                ")",
+            ) or 0
             sellers = []
             for r in _rows(
                 conn,
@@ -1424,6 +1454,7 @@ def report_sellers(limit: int = 100) -> dict:
                     "done4you": int(r["done4you"] or 0),
                     "first_seen": r["first_seen"],
                     "last_seen": r["last_seen"],
+                    "sku_projects": sku_by_user.get(uid, 0),
                     "recent_events": recent_events,
                     **rev,
                 })
@@ -1435,6 +1466,7 @@ def report_sellers(limit: int = 100) -> dict:
                 "total_events": total_events,
                 "total_jobs": total_jobs,
                 "total_done4you": total_done4you,
+                "total_sku_projects": int(total_sku_projects),
                 "total_paid_count": total_paid_count,
                 "total_revenue_stars": total_revenue_stars,
                 "total_revenue_rub": total_revenue_rub,
@@ -2416,6 +2448,105 @@ def get_gallery(user_id: int, limit: int = 20) -> list:
             ]
     except Exception:  # noqa: BLE001
         log.warning("get_gallery failed for user_id=%r", user_id, exc_info=True)
+        return []
+
+
+# ── seller SKU projects ───────────────────────────────────────────────
+
+
+def _normalize_sku(sku: str) -> str:
+    """Small user-facing SKU label normalization, not a secret transform."""
+    return " ".join((sku or "").strip().split())[:80]
+
+
+def save_seller_sku_item(
+    user_id: int,
+    sku: str,
+    *,
+    file_id: str,
+    token: str | None = None,
+    prompt: str | None = None,
+    platform: str | None = None,
+) -> int:
+    """Persist one generated result under a seller SKU; returns row id or 0."""
+    sku_norm = _normalize_sku(sku)
+    if not sku_norm or not file_id:
+        return 0
+    try:
+        with _LOCK:
+            conn = _conn()
+            cur = conn.execute(
+                "INSERT INTO seller_sku_items "
+                "(user_id, sku, platform, file_id, token, prompt) VALUES (?,?,?,?,?,?)",
+                (
+                    int(user_id), sku_norm, (platform or "")[:40], file_id,
+                    (token or "")[:80], (prompt or "")[:400],
+                ),
+            )
+            # Keep the most recent 80 generated assets per SKU to bound DB growth.
+            conn.execute(
+                "DELETE FROM seller_sku_items WHERE user_id=? AND sku=? AND id NOT IN "
+                "(SELECT id FROM seller_sku_items WHERE user_id=? AND sku=? ORDER BY id DESC LIMIT 80)",
+                (int(user_id), sku_norm, int(user_id), sku_norm),
+            )
+            conn.commit()
+            return cur.lastrowid or 0
+    except Exception:  # noqa: BLE001
+        log.warning("save_seller_sku_item failed for user_id=%r", user_id, exc_info=True)
+        return 0
+
+
+def list_seller_sku_projects(user_id: int, limit: int = 20) -> list[dict]:
+    """Return grouped seller SKU projects, newest activity first."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            rows = _rows(
+                conn,
+                """
+                SELECT s.sku,
+                       COUNT(*) AS items,
+                       MAX(s.created_at) AS updated_at,
+                       (SELECT file_id FROM seller_sku_items last
+                        WHERE last.user_id=s.user_id AND last.sku=s.sku
+                        ORDER BY last.id DESC LIMIT 1) AS latest_file_id,
+                       (SELECT prompt FROM seller_sku_items last
+                        WHERE last.user_id=s.user_id AND last.sku=s.sku
+                        ORDER BY last.id DESC LIMIT 1) AS latest_prompt,
+                       (SELECT platform FROM seller_sku_items last
+                        WHERE last.user_id=s.user_id AND last.sku=s.sku
+                        ORDER BY last.id DESC LIMIT 1) AS platform
+                FROM seller_sku_items s
+                WHERE s.user_id=?
+                GROUP BY s.sku
+                ORDER BY MAX(s.id) DESC
+                LIMIT ?
+                """,
+                (int(user_id), max(1, int(limit))),
+            )
+            return [
+                {
+                    "sku": r["sku"],
+                    "items": int(r["items"] or 0),
+                    "updated_at": r["updated_at"],
+                    "latest_file_id": r["latest_file_id"],
+                    "latest_prompt": r["latest_prompt"],
+                    "platform": r["platform"],
+                }
+                for r in rows
+            ]
+    except Exception:  # noqa: BLE001
+        log.warning("list_seller_sku_projects failed for user_id=%r", user_id, exc_info=True)
+        return []
+
+
+def recent_seller_skus(user_id: int, limit: int = 5) -> list[str]:
+    """Return recent SKU names for quick inline selection."""
+    try:
+        projects = list_seller_sku_projects(user_id, limit=max(1, int(limit)))
+        return [p["sku"] for p in projects if p.get("sku")]
+    except Exception:  # noqa: BLE001
+        log.warning("recent_seller_skus failed for user_id=%r", user_id, exc_info=True)
         return []
 
 
