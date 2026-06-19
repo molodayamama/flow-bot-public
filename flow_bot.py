@@ -5533,6 +5533,158 @@ _IMG_OP = {
 }
 
 
+# ── Shared generation backend (SELLER_BOT_PLAN.md §A) ────────────────────
+_backend_client_cache: "object | None" = None
+
+
+def _backend_client():
+    """Seller-side client to the consumer's /internal/generate (or None)."""
+    global _backend_client_cache
+    if _backend_client_cache is None:
+        try:
+            import seller_backend
+            _backend_client_cache = seller_backend.BackendClient.from_env()
+        except Exception:
+            log.exception("backend client init failed")
+            _backend_client_cache = None
+    return _backend_client_cache
+
+
+async def _backend_generate_images(req: dict) -> dict:
+    """Consumer-side: run a text→image generation on the pool, return URLs.
+
+    No Telegram coupling — used by the internal endpoint for the seller bot.
+    Mirrors the routing/failover of _do_generate_and_send but returns data.
+    """
+    prompt = str(req.get("prompt") or "").strip()
+    if len(prompt) < 3:
+        return {"error": "empty prompt"}
+    num_images = max(1, min(int(req.get("num_images") or 1), 4))
+    aspect_ratio = str(req.get("aspect_ratio") or "portrait")
+    image_model = str(req.get("image_model") or DEFAULT_IMAGE_MODEL)
+    user_id = int(req.get("user_id") or 0)
+
+    tried: set[str] = set()
+    for attempt in range(2):
+        acc_id = _account_for_image(user_id, exclude=tried if tried else None)
+        if acc_id is None:
+            return {"error": "accounts_unavailable"}
+        tried.add(acc_id)
+        project_id = await ensure_user_project(user_id, account_id=acc_id)
+        try:
+            async with account_pool.image_slot(acc_id):
+                result = await _client_for_acc(acc_id).generate_images(
+                    prompt, aspect_ratio=aspect_ratio, num_images=num_images,
+                    project_id=project_id, image_model=image_model,
+                )
+        except Exception:
+            log.exception("backend gen failed (account %s, attempt %d)", acc_id, attempt)
+            account_pool.mark_failure(acc_id)
+            if attempt == 0:
+                continue
+            return {"error": "generation failed"}
+        if "error" in result:
+            _mark_image_account_failure(acc_id, result)
+            if attempt == 0 and result.get("error_type") != "prompt_rejected":
+                continue
+            return {"error": str(result.get("error"))[:300]}
+        pairs = result_pairs(result)
+        if not pairs:
+            if attempt == 0:
+                continue
+            return {"error": "nothing_returned"}
+        account_pool.mark_success(acc_id)
+        return {
+            "images": [{"url": url, "img": img} for url, img in pairs],
+            "account_id": acc_id,
+            "project_id": project_id,
+        }
+    return {"error": "generation failed"}
+
+
+async def _seller_backend_send(
+    message: types.Message, prompt: str, *, num_images: int,
+    aspect_ratio: str, user_id: int, image_model: str,
+) -> bool:
+    """Seller-side: ask the consumer backend to generate, then send the URLs."""
+    client = _backend_client()
+    if client is None:
+        await message.answer(flow_copy.msg("accounts_unavailable"))
+        return False
+    status_msg = await message.answer(flow_copy.msg("generating"))
+    data = await client.generate(
+        prompt=prompt, num_images=num_images, aspect_ratio=aspect_ratio,
+        image_model=image_model, user_id=user_id,
+    )
+    images = data.get("images") or []
+    if data.get("error") or not images:
+        err = str(data.get("error") or flow_copy.msg("nothing_returned"))[:300]
+        try:
+            await status_msg.edit_text(f"❌ {html.escape(err)}")
+        except Exception:
+            pass
+        return False
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+    sent_any = False
+    for index, im in enumerate(images, 1):
+        url = im.get("url")
+        if not url:
+            continue
+        try:
+            await _send_one_image(
+                message, url=url, img=im.get("img") or {"url": url},
+                index=index, total=len(images), caption="", user_id=user_id,
+                project_id=data.get("project_id"), prompt=prompt,
+                aspect_ratio=aspect_ratio, account_id=data.get("account_id"),
+            )
+            sent_any = True
+        except Exception:
+            log.exception("seller backend send image failed")
+    return sent_any
+
+
+async def _seller_generate_and_send(
+    message: types.Message, prompt: str, *, num_images: int, aspect_ratio: str,
+    user_id: int, action: str = "gen", image_model: str = DEFAULT_IMAGE_MODEL,
+) -> None:
+    """Seller text→image: charge the seller wallet, generate via backend, send."""
+    if _backend_client() is None:
+        await message.answer(flow_copy.msg("accounts_unavailable"))
+        return
+    metrics.log_event(
+        _IMG_REQUEST_EVENT.get(action, "image_requested"), user_id=user_id,
+        username=_username(message), source=action,
+        payload={"count": num_images, "model": image_model, "surface": "seller"},
+    )
+    surcharge = image_model_extra(image_model) * max(1, num_images)
+    started = time.monotonic()
+    ok = False
+    try:
+        async with user_slot(user_id, message):
+            async with credit_gate(user_id, action, message, num_images, surcharge=surcharge) as charge:
+                ok = await _seller_backend_send(
+                    message, prompt, num_images=num_images, aspect_ratio=aspect_ratio,
+                    user_id=user_id, image_model=image_model,
+                )
+                charge.ok = ok
+    except RateLimited:
+        _log_image_job(user_id, action, image_model, started, ok=False, error="rate_limited")
+        return
+    except NotEnoughCredits:
+        metrics.log_event("image_failed", user_id=user_id, source=action,
+                          payload={"reason": "insufficient_credits"})
+        return
+    charged = (action_price(action, num_images) + surcharge) if ok else 0
+    metrics.log_event("image_success" if ok else "image_failed", user_id=user_id, source=action)
+    if ok:
+        metrics.log_event("credits_charged", user_id=user_id, source=action,
+                          payload={"amount": charged, "action": action})
+    _log_image_job(user_id, action, image_model, started, ok=ok, charged=charged)
+
+
 async def _generate_and_send(
     message: types.Message,
     prompt: str,
@@ -5557,6 +5709,15 @@ async def _generate_and_send(
         "prompt": prompt, "num_images": num_images,
         "aspect_ratio": aspect_ratio, "image_model": image_model, "action": action,
     }
+
+    # Селлер-бот не держит свой пул — генерация идёт в основной процесс через
+    # общий backend (SELLER_BOT_PLAN.md §A). Кредиты списываются с seller-кошелька.
+    if IS_SELLER:
+        await _seller_generate_and_send(
+            message, prompt, num_images=num_images, aspect_ratio=aspect_ratio,
+            user_id=user_id, action=action, image_model=image_model,
+        )
+        return
 
     # Весь пул аккаунтов недоступен — отказ ДО credit_gate (ничего не списываем,
     # без цикла «списали-вернули»). Внутри _do_generate_and_send есть та же
@@ -9131,6 +9292,13 @@ async def _start_web_server() -> web.AppRunner:
     import admin_api as _admin_api
     app = web.Application()
     _admin_api.register_admin_routes(app, account_pool, keepers)
+    if not IS_SELLER:
+        # Только consumer (с пулом) отдаёт генерацию для seller-бота (§A).
+        try:
+            import seller_backend
+            seller_backend.register_internal_routes(app, _backend_generate_images)
+        except Exception:
+            log.exception("internal generation endpoint registration failed")
     if _robokassa_configured():
         app.router.add_route("*", "/robokassa/result", robokassa_result)
         app.router.add_get("/robokassa/success", robokassa_success)

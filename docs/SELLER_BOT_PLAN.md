@@ -279,10 +279,27 @@ credit store + `seller_profiles`.
 (consumer) процесса. Так нет конфликта за `google_profile` и двойного расхода
 Flow-квоты.
 
-Сделано (первый шаг): при `BOT_MODE=seller` процесс не греет пул (см.
-`flow_bot.py` startup, ветка `IS_SELLER`) и показывает своё приветствие.
+Сделано:
+- seller не греет свой пул (`flow_bot.py` startup, ветка `IS_SELLER`), своё
+  приветствие.
+- **Транспорт бэкенда** (`seller_backend.py`): consumer поднимает localhost
+  `POST /internal/generate` (секрет `INTERNAL_API_TOKEN`), seller-клиент
+  `BackendClient`. Тесты: `tests/test_seller_backend.py`.
+- **Text→image генерация seller идёт через бэкенд**: `_seller_generate_and_send`
+  списывает кредиты с seller-кошелька и шлёт URL'ы (Flow-URL публичны — Telegram
+  тянет их сам, авторизация на стороне seller не нужна). Эндпоинт регистрируется
+  только на consumer (`_start_web_server`, `if not IS_SELLER`).
 
-Архитектура (что достроить):
+Включение: задать **один и тот же** `INTERNAL_API_TOKEN` в consumer и seller env;
+в seller — `BACKEND_HOST`/`BACKEND_PORT` на consumer-вебпорт (8081).
+
+Осталось достроить:
+- **i2i/edit на загруженном фото** (основной путь маркетплейс-задач Фазы 4) и
+  **видео** — сейчас через бэкенд идёт только text→image; для i2i нужно передавать
+  ссылку на загруженное фото и собирать imageInputs на стороне consumer.
+- Живая проверка на VPS (нужен запущенный seller + токен).
+
+Архитектура (общая):
 
 1. **Вынести генерацию в вызываемый сервис.** Из хендлеров бота извлечь чистые
    функции (image gen / i2i / edit / video), принимающие параметры и
