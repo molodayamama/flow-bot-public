@@ -163,6 +163,17 @@ td{
 tr:last-child td{border-bottom:none}
 tr:hover td{background:var(--pz-surface-2)}
 .mono{font-family:var(--font-mono);font-size:13px}
+.detail-row td{background:rgba(255,255,255,.02)}
+.seller-events{display:grid;gap:8px}
+.seller-event{
+  display:grid;grid-template-columns:128px 160px 1fr;gap:10px;align-items:center;
+  padding:8px 10px;border:1px solid var(--pz-line-faint);border-radius:var(--r-md);
+  background:var(--pz-surface-2);
+}
+.seller-event-meta{font-size:12px;color:var(--pz-faint)}
+@media (max-width:760px){
+  .seller-event{grid-template-columns:1fr;gap:4px}
+}
 
 /* ── Badges ────────────────────────────────────────── */
 .badge{
@@ -401,6 +412,9 @@ tr:hover td{background:var(--pz-surface-2)}
       </button>
       <button class="sb-item" data-tab="users">
         <span class="sb-icon">👤</span> Пользователи
+      </button>
+      <button class="sb-item" data-tab="sellers">
+        <span class="sb-icon">🛒</span> Селлеры
       </button>
       <button class="sb-item" data-tab="referrals">
         <span class="sb-icon">🤝</span> Рефералки
@@ -706,6 +720,66 @@ tr:hover td{background:var(--pz-surface-2)}
           </table>
         </div>
         <div class="pagination" id="users-pagination"></div>
+      </div>
+
+      <!-- ── Tab: Sellers ───────────────────────────── -->
+      <div id="tab-sellers" class="tab-panel">
+        <div class="toolbar">
+          <div>
+            <div class="card-title">Селлеры</div>
+            <div class="card-sub">Пользователи seller-бота: задачи маркетплейса, заявки «под ключ» и платежи</div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="loadSellers()">↻ Обновить</button>
+        </div>
+        <div class="stats-grid" style="margin-bottom:20px">
+          <div class="stat-card lime">
+            <div class="stat-label">Селлеров</div>
+            <div class="stat-value" id="s-total">—</div>
+            <div class="stat-sub">с mp-событиями</div>
+          </div>
+          <div class="stat-card cyan">
+            <div class="stat-label">Событий</div>
+            <div class="stat-value" id="s-events">—</div>
+            <div class="stat-sub">platform / job / done4you</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Задач</div>
+            <div class="stat-value" id="s-jobs">—</div>
+            <div class="stat-sub">карточки и видео</div>
+          </div>
+          <div class="stat-card warn">
+            <div class="stat-label">Под ключ</div>
+            <div class="stat-value" id="s-done4you">—</div>
+            <div class="stat-sub">открывали бриф</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Выручка</div>
+            <div class="stat-value" id="s-revenue">—</div>
+            <div class="stat-sub" id="s-paid">оплаты селлеров</div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Селлер</th>
+                <th>События</th>
+                <th>Задачи</th>
+                <th>Под ключ</th>
+                <th>Выручка</th>
+                <th>Первый контакт</th>
+                <th>Последний контакт</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="sellers-tbody">
+              <tr><td colspan="8" style="color:var(--pz-faint);text-align:center;padding:32px">Загрузка…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="font-size:12px;color:var(--pz-faint)">
+          Баланс seller-кошелька хранится отдельно от metrics.db и в этой сводке не считается.
+        </p>
       </div>
 
       <!-- ── Tab: Referrals ──────────────────────── -->
@@ -1047,6 +1121,7 @@ const tabMeta = {
   prices:    ['Цены',            'Стоимость действий в кредитах'],
   settings:  ['Настройки',       'Флаги фич и глобальные параметры'],
   users:     ['Пользователи',    'База юзеров, балансы и активность'],
+  sellers:   ['Селлеры',         'Маркетплейс-задачи, заявки под ключ и платежи'],
   referrals: ['Рефералки',       'Приглашения, вознаграждения, топ рефереров'],
   analytics: ['Аналитика',       'Сегодня · Выручка · Нагрузка · Каналы · Ошибки'],
 };
@@ -1054,7 +1129,7 @@ const tabLoaders = {
   overview:loadOverview, accounts:loadAccounts, support:loadSupport,
   messages:loadMessages, labels:loadLabels, prices:loadPrices,
   settings:loadSettings, users:()=>loadUsers(1),
-  referrals:loadReferrals, analytics:loadAnalytics,
+  sellers:loadSellers, referrals:loadReferrals, analytics:loadAnalytics,
 };
 let currentTab = 'overview';
 
@@ -1622,6 +1697,119 @@ async function loadUsers(page=1) {
   html += `<button class="pg-btn" ${page>=data.pages?'disabled':''} onclick="loadUsers(${page+1})">След →</button>`;
   html += `<span class="pg-info">${fmt(data.total)} записей</span>`;
   pg.innerHTML = html;
+}
+
+/* ── Sellers ───────────────────────────────────────── */
+let _sellersRows = [];
+
+function sellerEventLabel(name) {
+  return {
+    mp_platform: 'Площадка',
+    mp_job: 'Задача',
+    mp_done4you_open: 'Под ключ',
+  }[name] || name || 'Событие';
+}
+
+function sellerEventBadge(name) {
+  const cls = name === 'mp_done4you_open' ? 'badge-yellow' : name === 'mp_job' ? 'badge-green' : 'badge-muted';
+  return `<span class="badge ${cls}">${esc(sellerEventLabel(name))}</span>`;
+}
+
+function sellerSourceText(source) {
+  return source ? String(source).replace(':', ' · ') : '—';
+}
+
+function sellerRevenueText(s) {
+  const rub = Number(s.revenue_rub || 0);
+  const stars = Number(s.revenue_stars || 0);
+  if (rub > 0) return `${rub.toFixed(0)}₽`;
+  if (stars > 0) return `${fmt(stars)}★`;
+  return '—';
+}
+
+function renderSellerDetail(s) {
+  const events = Array.isArray(s.recent_events) ? s.recent_events : [];
+  const eventHtml = events.length ? events.map(e => `
+    <div class="seller-event">
+      <div>${sellerEventBadge(e.event_name)}</div>
+      <div class="seller-event-meta">${esc(e.created_at || '—')}</div>
+      <div>
+        <span class="mono" style="color:var(--pz-cyan)">${esc(sellerSourceText(e.source))}</span>
+        <span class="seller-event-meta" style="margin-left:8px">#${esc(e.id)}</span>
+      </div>
+    </div>
+  `).join('') : '<div style="color:var(--pz-faint);font-size:13px">Последних seller-событий нет</div>';
+
+  return `
+    <tr class="detail-row" id="seller-detail-${esc(s.user_id)}">
+      <td colspan="8">
+        <div style="display:grid;gap:14px">
+          <div style="display:flex;gap:16px;flex-wrap:wrap;color:var(--pz-muted);font-size:13px">
+            <span>Платежей: <b style="color:var(--pz-ink)">${fmt(s.paid_count || 0)}</b></span>
+            <span>Stars: <b style="color:var(--pz-ink)">${fmt(s.revenue_stars || 0)}</b></span>
+            <span>RUB: <b style="color:var(--pz-ink)">${Number(s.revenue_rub || 0).toFixed(0)}₽</b></span>
+          </div>
+          <div class="seller-events">${eventHtml}</div>
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
+function toggleSellerDetail(userId) {
+  const id = String(userId);
+  const existing = document.getElementById(`seller-detail-${id}`);
+  if (existing) { existing.remove(); return; }
+  document.querySelectorAll('[id^="seller-detail-"]').forEach(el => el.remove());
+  const seller = _sellersRows.find(s => String(s.user_id) === id);
+  const row = document.querySelector(`tr[data-seller-id="${id}"]`);
+  if (!seller || !row) return;
+  row.insertAdjacentHTML('afterend', renderSellerDetail(seller));
+}
+
+async function loadSellers() {
+  const data = await api('GET', '/sellers?limit=200');
+  if (!data) {
+    document.getElementById('sellers-tbody').innerHTML =
+      `<tr><td colspan="8" style="color:var(--pz-coral);text-align:center;padding:24px">Бот оффлайн</td></tr>`;
+    return;
+  }
+
+  const sellers = Array.isArray(data.sellers) ? data.sellers : [];
+  _sellersRows = sellers;
+  document.getElementById('s-total').textContent = fmt(data.total_sellers || 0);
+  document.getElementById('s-events').textContent = fmt(data.total_events || 0);
+  document.getElementById('s-jobs').textContent = fmt(data.total_jobs || 0);
+  document.getElementById('s-done4you').textContent = fmt(data.total_done4you || 0);
+  const totalRub = Number(data.total_revenue_rub || 0);
+  const totalStars = Number(data.total_revenue_stars || 0);
+  document.getElementById('s-revenue').textContent = totalRub > 0
+    ? totalRub.toFixed(0) + '₽'
+    : totalStars > 0 ? fmt(totalStars) + '★' : '—';
+  document.getElementById('s-paid').textContent = `${fmt(data.total_paid_count || 0)} оплат селлеров`;
+
+  document.getElementById('sellers-tbody').innerHTML = sellers.length
+    ? sellers.map(s => {
+      const user = s.username
+        ? `<div><span style="color:var(--pz-muted)">@</span>${esc(s.username)}</div><div class="mono" style="color:var(--pz-faint);margin-top:2px">${esc(s.user_id)}</div>`
+        : `<div class="mono" style="color:var(--pz-cyan)">${esc(s.user_id)}</div>`;
+      return `
+        <tr data-seller-id="${esc(s.user_id)}">
+          <td>${user}</td>
+          <td class="mono">${fmt(s.events || 0)}</td>
+          <td class="mono" style="color:var(--pz-lime);font-weight:700">${fmt(s.jobs || 0)}</td>
+          <td class="mono" style="color:${Number(s.done4you || 0)>0?'var(--pz-warn)':'var(--pz-faint)'}">${fmt(s.done4you || 0)}</td>
+          <td>
+            <div class="mono" style="color:${Number(s.revenue_rub || 0)>0 || Number(s.revenue_stars || 0)>0 ? 'var(--pz-lime)' : 'var(--pz-faint)'}">${sellerRevenueText(s)}</div>
+            <div style="font-size:11px;color:var(--pz-faint);margin-top:2px">${fmt(s.paid_count || 0)} оплат</div>
+          </td>
+          <td style="font-size:12px;color:var(--pz-faint)">${esc(s.first_seen || '—')}</td>
+          <td style="font-size:12px;color:var(--pz-muted)">${esc(s.last_seen || '—')}</td>
+          <td><button class="btn btn-ghost btn-sm" onclick="toggleSellerDetail(${Number(s.user_id)})">Детали</button></td>
+        </tr>
+      `;
+    }).join('')
+    : `<tr><td colspan="8" style="color:var(--pz-faint);text-align:center;padding:24px">Селлер-событий пока нет</td></tr>`;
 }
 
 /* ── Referrals ─────────────────────────────────────── */

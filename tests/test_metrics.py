@@ -516,5 +516,62 @@ class LazyInitTests(unittest.TestCase):
                 os.environ.pop("METRICS_DB", None)
 
 
+class SellerReportTests(MetricsTestBase):
+    def test_report_sellers_aggregates_only_mp_events(self) -> None:
+        metrics.log_event("mp_platform", user_id=1, username="seller1", source="wb")
+        metrics.log_event("mp_job", user_id=1, username="seller1", source="wb:whitebg")
+        metrics.log_event("mp_job", user_id=1, username="seller1", source="wb:info")
+        metrics.log_event("mp_done4you_open", user_id=1, username="seller1", source="seller")
+        metrics.log_event("mp_platform", user_id=2, username="seller2", source="ozon")
+        # A consumer-only user must not appear as a seller.
+        metrics.log_event("image_requested", user_id=3, username="consumer", source="wizard")
+        metrics.record_transaction(
+            provider="stars",
+            provider_payment_id="seller-payment-1",
+            user_id=1,
+            amount_rub=120.0,
+            stars_amount=60,
+            status="paid",
+        )
+        metrics.record_transaction(
+            provider="stars",
+            provider_payment_id="consumer-payment-1",
+            user_id=3,
+            amount_rub=999.0,
+            stars_amount=500,
+            status="paid",
+        )
+
+        rep = metrics.report_sellers()
+        self.assertEqual(rep["total_sellers"], 2)
+        self.assertEqual(rep["total_events"], 5)
+        self.assertEqual(rep["total_jobs"], 2)
+        self.assertEqual(rep["total_done4you"], 1)
+        self.assertEqual(rep["total_paid_count"], 1)
+        self.assertEqual(rep["total_revenue_stars"], 60)
+        self.assertEqual(rep["total_revenue_rub"], 120.0)
+        ids = {s["user_id"] for s in rep["sellers"]}
+        self.assertEqual(ids, {1, 2})
+
+        s1 = next(s for s in rep["sellers"] if s["user_id"] == 1)
+        self.assertEqual(s1["events"], 4)
+        self.assertEqual(s1["jobs"], 2)
+        self.assertEqual(s1["done4you"], 1)
+        self.assertEqual(s1["username"], "seller1")
+        self.assertEqual(s1["paid_count"], 1)
+        self.assertEqual(s1["revenue_stars"], 60)
+        self.assertEqual(s1["revenue_rub"], 120.0)
+        self.assertEqual(s1["recent_events"][0]["event_name"], "mp_done4you_open")
+        self.assertEqual(s1["recent_events"][0]["source"], "seller")
+
+    def test_report_sellers_empty(self) -> None:
+        rep = metrics.report_sellers()
+        self.assertEqual(rep["total_sellers"], 0)
+        self.assertEqual(rep["total_events"], 0)
+        self.assertEqual(rep["total_jobs"], 0)
+        self.assertEqual(rep["total_done4you"], 0)
+        self.assertEqual(rep["sellers"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import asyncio
 import unittest
+from types import SimpleNamespace
 
 import admin_api
 
@@ -82,6 +83,42 @@ class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AdminApiValidationTests(unittest.TestCase):
+    def test_sellers_handler_caps_limit_and_returns_metrics_report(self) -> None:
+        calls = []
+        original = admin_api.metrics.report_sellers
+
+        def fake_report(limit):
+            calls.append(limit)
+            return {"total_sellers": 1, "sellers": [{"user_id": 1}]}
+
+        admin_api.metrics.report_sellers = fake_report
+        self.addCleanup(setattr, admin_api.metrics, "report_sellers", original)
+
+        req = SimpleNamespace(rel_url=SimpleNamespace(query={"limit": "5000"}))
+        resp = asyncio.run(admin_api.handle_sellers_get(req))
+        body = json.loads(resp.body)
+
+        self.assertEqual(calls, [1000])
+        self.assertEqual(body["total_sellers"], 1)
+
+    def test_sellers_handler_uses_default_limit_for_bad_query(self) -> None:
+        calls = []
+        original = admin_api.metrics.report_sellers
+
+        def fake_report(limit):
+            calls.append(limit)
+            return {"total_sellers": 0, "sellers": []}
+
+        admin_api.metrics.report_sellers = fake_report
+        self.addCleanup(setattr, admin_api.metrics, "report_sellers", original)
+
+        req = SimpleNamespace(rel_url=SimpleNamespace(query={"limit": "oops"}))
+        resp = asyncio.run(admin_api.handle_sellers_get(req))
+        body = json.loads(resp.body)
+
+        self.assertEqual(calls, [100])
+        self.assertEqual(body["sellers"], [])
+
     def test_price_validation_rejects_zero_negative_and_unknown_paid_keys(self) -> None:
         prices, errors = admin_api._validate_prices({
             "image_nano": 0,

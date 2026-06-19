@@ -132,6 +132,9 @@ Admin UI/API change:
   `python -m py_compile admin_api.py metrics.py flow_core.py flow_copy.py flow_bot.py`
 - Static admin JavaScript parse check, assumption:
   `node -e "const fs=require('fs'); const html=fs.readFileSync('deploy/photozhab/admin.html','utf8'); const scripts=[...html.matchAll(/<script>([\\s\\S]*?)<\\/script>/g)].map(m=>m[1]); for (const s of scripts) new Function(s); console.log('admin.html scripts parse OK');"`
+- Seller admin panel changes should include targeted metrics/admin handler tests:
+  `python -m unittest discover -s tests -p "test_metrics.py"` and
+  `python -m unittest discover -s tests -p "test_admin_api.py"`.
 - Offline tests, assumption:
   `python -m unittest discover -s tests -p "test_*.py"`
 - Optional local static/offline visual check: serve `deploy/photozhab/` on a

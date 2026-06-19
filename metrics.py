@@ -54,6 +54,7 @@ __all__ = [
     "report_flow",
     "report_accounts",
     "report_refs",
+    "report_sellers",
     "report_channels",
     "report_errors",
     "report_ops_health",
@@ -1336,6 +1337,112 @@ def report_refs() -> dict:
             "total_referrals": 0, "joined": 0, "rewarded": 0,
             "total_reward_credits": 0, "top_referrers": [],
         }
+
+
+def report_sellers(limit: int = 100) -> dict:
+    """Сводка по селлерам (юзерам, нажимавшим меню «Маркетплейсы»).
+
+    Селлер = пользователь, у которого есть события ``mp_*`` (``mp_platform``,
+    ``mp_job``, ``mp_done4you_open``). Для каждого: всего событий, сколько задач
+    (``mp_job``), сколько заявок «под ключ» (``mp_done4you_open``), первый/последний
+    контакт, и платежи (paid). Баланс кредитов живёт в отдельном credit store и
+    здесь не считается. PII-ретеншн событий — как в остальной аналитике.
+    """
+    try:
+        with _LOCK:
+            conn = _conn()
+            limit = max(1, min(int(limit), 1000))
+            total_sellers = _scalar(
+                conn,
+                "SELECT COUNT(DISTINCT user_id) FROM events "
+                "WHERE event_name LIKE 'mp\\_%' ESCAPE '\\' AND user_id IS NOT NULL",
+            ) or 0
+            totals = _rows(
+                conn,
+                "SELECT COUNT(*) AS events, "
+                "SUM(CASE WHEN event_name='mp_job' THEN 1 ELSE 0 END) AS jobs, "
+                "SUM(CASE WHEN event_name='mp_done4you_open' THEN 1 ELSE 0 END) AS done4you "
+                "FROM events WHERE event_name LIKE 'mp\\_%' ESCAPE '\\' "
+                "AND user_id IS NOT NULL",
+            )
+            total_events = int((totals[0]["events"] if totals else 0) or 0)
+            total_jobs = int((totals[0]["jobs"] if totals else 0) or 0)
+            total_done4you = int((totals[0]["done4you"] if totals else 0) or 0)
+            # Платежи (paid) по всем юзерам — мёрджим в питоне, чтобы JOIN не
+            # размножал счётчик событий.
+            rev_by_user: dict[int, dict] = {}
+            for r in _rows(
+                conn,
+                "SELECT user_id, COUNT(*) AS c, "
+                "COALESCE(SUM(stars_amount),0) AS s, COALESCE(SUM(amount_rub),0) AS rub "
+                "FROM transactions WHERE status='paid' AND user_id IS NOT NULL "
+                "GROUP BY user_id",
+            ):
+                rev_by_user[int(r["user_id"])] = {
+                    "paid_count": int(r["c"]),
+                    "revenue_stars": int(r["s"] or 0),
+                    "revenue_rub": float(r["rub"] or 0.0),
+                }
+            sellers = []
+            for r in _rows(
+                conn,
+                "SELECT e.user_id, "
+                "(SELECT e2.username FROM events e2 "
+                " WHERE e2.user_id=e.user_id AND e2.username IS NOT NULL "
+                " ORDER BY e2.id DESC LIMIT 1) AS username, "
+                "COUNT(*) AS events, "
+                "SUM(CASE WHEN event_name='mp_job' THEN 1 ELSE 0 END) AS jobs, "
+                "SUM(CASE WHEN event_name='mp_done4you_open' THEN 1 ELSE 0 END) AS done4you, "
+                "MIN(created_at) AS first_seen, MAX(created_at) AS last_seen "
+                "FROM events e WHERE event_name LIKE 'mp\\_%' ESCAPE '\\' "
+                "AND e.user_id IS NOT NULL "
+                "GROUP BY e.user_id ORDER BY last_seen DESC LIMIT ?",
+                (limit,),
+            ):
+                uid = int(r["user_id"])
+                rev = rev_by_user.get(uid, {"paid_count": 0, "revenue_stars": 0, "revenue_rub": 0.0})
+                recent_events = [
+                    {
+                        "id": int(er["id"]),
+                        "event_name": er["event_name"],
+                        "source": er["source"],
+                        "created_at": er["created_at"],
+                    }
+                    for er in _rows(
+                        conn,
+                        "SELECT id, event_name, source, created_at FROM events "
+                        "WHERE user_id=? AND event_name LIKE 'mp\\_%' ESCAPE '\\' "
+                        "ORDER BY id DESC LIMIT 8",
+                        (uid,),
+                    )
+                ]
+                sellers.append({
+                    "user_id": uid,
+                    "username": r["username"],
+                    "events": int(r["events"]),
+                    "jobs": int(r["jobs"] or 0),
+                    "done4you": int(r["done4you"] or 0),
+                    "first_seen": r["first_seen"],
+                    "last_seen": r["last_seen"],
+                    "recent_events": recent_events,
+                    **rev,
+                })
+            total_paid_count = sum(int(s["paid_count"]) for s in sellers)
+            total_revenue_stars = sum(int(s["revenue_stars"]) for s in sellers)
+            total_revenue_rub = sum(float(s["revenue_rub"]) for s in sellers)
+            return {
+                "total_sellers": int(total_sellers),
+                "total_events": total_events,
+                "total_jobs": total_jobs,
+                "total_done4you": total_done4you,
+                "total_paid_count": total_paid_count,
+                "total_revenue_stars": total_revenue_stars,
+                "total_revenue_rub": total_revenue_rub,
+                "sellers": sellers,
+            }
+    except Exception:  # noqa: BLE001
+        log.warning("report_sellers failed", exc_info=True)
+        return {"total_sellers": 0, "sellers": []}
 
 
 def report_channels() -> dict:
