@@ -171,7 +171,8 @@ import metrics
 import prompts_lib
 
 # ───────────────────────────────────────────
-load_dotenv(".env")
+ENV_FILE = os.getenv("ENV_FILE", ".env") or ".env"
+load_dotenv(ENV_FILE)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "PASTE_YOUR_TOKEN_HERE")
 USER_DATA_DIR = os.getenv("USER_DATA_DIR", "./google_profile")

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 import unittest
 
 import flow_core
 import flow_bot
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SELLER_PACKS = ("s_card", "s_5cards", "s_shop", "s_shopxl")
 
 
@@ -214,6 +216,30 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn('if data.startswith("mp:niche:"):', source)
         self.assertIn("metrics.save_seller_profile(user_id, niche=niche_id)", source)
         self.assertIn('"mp_niche_saved"', source)
+
+    def test_seller_service_templates_are_wired_for_separate_env(self) -> None:
+        root = PROJECT_ROOT
+        flow_source = (root / "flow_bot.py").read_text(encoding="utf-8")
+        deploy_script = (root / "deploy.sh").read_text(encoding="utf-8")
+        seller_unit = (root / "deploy/systemd/geminifree-seller-bot.service").read_text(encoding="utf-8")
+        seller_runner = (root / "deploy/bin/geminifree-seller-bot-run").read_text(encoding="utf-8")
+        seller_env = (root / "deploy/examples/seller.env.example").read_text(encoding="utf-8")
+        gitignore = (root / ".gitignore").read_text(encoding="utf-8")
+
+        self.assertIn('ENV_FILE = os.getenv("ENV_FILE", ".env") or ".env"', flow_source)
+        self.assertIn("load_dotenv(ENV_FILE)", flow_source)
+        self.assertIn("geminifree-seller-bot", deploy_script)
+        self.assertIn("Skipping $unit (unit is not installed)", deploy_script)
+        self.assertIn("Skipping $unit (missing $required_env)", deploy_script)
+        self.assertIn("restart_if_installed geminifree-seller-bot /opt/geminifree/.env.seller", deploy_script)
+        self.assertIn("ENV_FILE=/opt/geminifree/.env.seller", seller_unit)
+        self.assertIn("/usr/local/bin/geminifree-seller-bot-run", seller_unit)
+        self.assertIn("/opt/geminifree/.env.seller", seller_runner)
+        self.assertIn("BOT_MODE=seller", seller_env)
+        self.assertIn("USER_CREDITS_FILE=user_credits_seller.json", seller_env)
+        self.assertIn("ROBOKASSA_WEB_PORT=8082", seller_env)
+        self.assertIn("SBP_PAYMENT_ENABLED=0", seller_env)
+        self.assertIn("user_credits_*.json", gitignore)
 
 
 if __name__ == "__main__":

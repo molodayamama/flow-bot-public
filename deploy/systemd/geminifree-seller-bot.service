@@ -1,0 +1,20 @@
+[Unit]
+Description=GeminiFree Seller Telegram Bot
+After=network-online.target geminifree-bot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bot
+Group=bot
+WorkingDirectory=/opt/geminifree
+Environment=PYTHONUNBUFFERED=1
+Environment=ENV_FILE=/opt/geminifree/.env.seller
+ExecStart=/usr/local/bin/geminifree-seller-bot-run
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

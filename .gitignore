@@ -30,6 +30,7 @@ user_projects.json
 
 # Per-user credits / balances (runtime state)
 user_credits.json
+user_credits_*.json
 
 # Stars payment log (charge ids for refunds — runtime state, sensitive)
 payments.json
