@@ -3178,6 +3178,12 @@ def _seller_image_keyboard(token: str) -> types.InlineKeyboardMarkup:
     kb = _image_keyboard(token)
     kb.inline_keyboard.append([
         types.InlineKeyboardButton(
+            text="⬇️ Скачать для маркетплейса",
+            callback_data=action_callback_data("mpexport", token),
+        )
+    ])
+    kb.inline_keyboard.append([
+        types.InlineKeyboardButton(
             text="➕ В серию SKU",
             callback_data=action_callback_data("skuadd", token),
         )
@@ -4769,6 +4775,7 @@ async def _send_one_image(
             prompt=prompt,
             aspect_ratio=aspect_ratio,
             account_id=account_id,
+            platform=_ws(user_id).get("mp_platform", "") if IS_SELLER else "",
         )
     )
     keyboard = _seller_image_keyboard(token) if IS_SELLER else _image_keyboard(token)
@@ -6425,7 +6432,39 @@ async def _regen_and_send(message: types.Message, ref: ImageRef):
     )
 
 
-async def _send_original_file(message: types.Message, ref: ImageRef):
+def _image_ext_from_bytes(data: bytes, fallback: str = "png") -> str:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "webp"
+    return fallback
+
+
+def _marketplace_export_filename(ref: ImageRef, data: bytes) -> str:
+    platform = (getattr(ref, "platform", "") or "").strip().lower()
+    platform_slug = {
+        "wb": "wildberries",
+        "ozon": "ozon",
+        "ym": "yandex_market",
+    }.get(platform, "marketplace")
+    media_id = ref.source.get("mediaId") if isinstance(ref.source, dict) else None
+    suffix = str(media_id or "image")[-12:]
+    ext = _image_ext_from_bytes(data)
+    return f"photozhab_{platform_slug}_3x4_{suffix}.{ext}"
+
+
+def _marketplace_export_caption(ref: ImageRef) -> str:
+    platform = (getattr(ref, "platform", "") or "").strip().lower()
+    platform_name = _MP_PLAT_NAMES.get(platform, "маркетплейса")
+    return (
+        f"⬇️ Файл для {platform_name}: оригинал без сжатия Telegram. "
+        "Подходит как исходник для загрузки в карточку; точный resize/zip серии будет отдельной функцией."
+    )
+
+
+async def _send_original_file(message: types.Message, ref: ImageRef, *, marketplace_export: bool = False):
     """⬇️ Оригинал: отдать картинку файлом в полном качестве.
 
     На сайте кнопка «upscale» — это клиентское скачивание файла, а не серверный
@@ -6441,12 +6480,18 @@ async def _send_original_file(message: types.Message, ref: ImageRef):
 
     try:
         async with user_slot(user_id, message):
-            await _do_send_original_file(message, ref, url)
+            await _do_send_original_file(message, ref, url, marketplace_export=marketplace_export)
     except RateLimited:
         return
 
 
-async def _do_send_original_file(message: types.Message, ref: ImageRef, url: str):
+async def _do_send_original_file(
+    message: types.Message,
+    ref: ImageRef,
+    url: str,
+    *,
+    marketplace_export: bool = False,
+):
     status_msg = await message.answer("⬇️ Готовлю файл в полном качестве...")
     try:
         async with aiohttp.ClientSession() as s:
@@ -6463,11 +6508,16 @@ async def _do_send_original_file(message: types.Message, ref: ImageRef, url: str
     from aiogram.types import BufferedInputFile
 
     media_id = ref.source.get("mediaId") if isinstance(ref.source, dict) else None
-    filename = f"flow_{media_id or 'image'}.png"
+    if marketplace_export:
+        filename = _marketplace_export_filename(ref, data)
+        caption = _marketplace_export_caption(ref)
+    else:
+        filename = f"flow_{media_id or 'image'}.{_image_ext_from_bytes(data)}"
+        caption = "⬇️ Оригинал в полном качестве (Telegram не сжимает документы)."
     try:
         await message.answer_document(
             BufferedInputFile(data, filename),
-            caption="⬇️ Оригинал в полном качестве (Telegram не сжимает документы).",
+            caption=caption,
         )
         await status_msg.delete()
     except Exception:
@@ -9180,6 +9230,12 @@ async def on_image_action(callback: types.CallbackQuery):
             "📦 В какой SKU добавить этот результат?",
             reply_markup=_mp_sku_choice_kb(user_id),
         )
+    elif action == "mpexport":
+        if not IS_SELLER:
+            await callback.answer()
+            return
+        await callback.answer("Готовлю файл для маркетплейса ⬇️")
+        await _send_original_file(callback.message, ref, marketplace_export=True)
     elif action in ("download", "upscale"):
         await callback.answer("Готовлю файл ⬇️")
         await _send_original_file(callback.message, ref)

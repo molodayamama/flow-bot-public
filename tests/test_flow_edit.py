@@ -304,7 +304,7 @@ class CallbackTokenTests(unittest.TestCase):
 class FeatureHelperTests(unittest.TestCase):
     def test_action_callbacks_round_trip_and_fit_limit(self) -> None:
         token = flow_core.new_token()
-        for action in ("edit", "vary", "regen", "mix", "upscale", "download", "up2x", "realup", "skuadd"):
+        for action in ("edit", "vary", "regen", "mix", "upscale", "download", "up2x", "realup", "skuadd", "mpexport"):
             data = flow_core.action_callback_data(action, token)
             self.assertLessEqual(len(data.encode("utf-8")), 64)
             self.assertEqual(flow_core.parse_action_callback(data), (action, token))

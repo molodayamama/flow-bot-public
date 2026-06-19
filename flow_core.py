@@ -119,6 +119,7 @@ DOWNLOAD_CALLBACK_PREFIX = "dl:"  # download the original uncompressed file (fre
 UP2X_CALLBACK_PREFIX = "u2:"    # paid AI enhance ×2 (image-to-image, prompt-based)
 REALUP_CALLBACK_PREFIX = "ru:"  # paid TRUE upscale via the service's own endpoint
 SKUADD_CALLBACK_PREFIX = "sku:"  # seller: add image result to an SKU project
+MPEXPORT_CALLBACK_PREFIX = "mpe:"  # seller: marketplace-ready original export
 
 ACTION_PREFIXES = {
     "edit": EDIT_CALLBACK_PREFIX,
@@ -130,6 +131,7 @@ ACTION_PREFIXES = {
     "up2x": UP2X_CALLBACK_PREFIX,
     "realup": REALUP_CALLBACK_PREFIX,
     "skuadd": SKUADD_CALLBACK_PREFIX,
+    "mpexport": MPEXPORT_CALLBACK_PREFIX,
 }
 
 
@@ -1839,6 +1841,7 @@ class ImageRef:
     prompt: str = ""
     aspect_ratio: str = "landscape"
     account_id: str | None = None  # аккаунт пула, где живёт project/media
+    platform: str = ""  # seller marketplace slug captured when the result was sent
 
 
 @dataclass(frozen=True)

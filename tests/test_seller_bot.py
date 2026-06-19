@@ -174,11 +174,28 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn('st["mp_sku_pending"]', action_source)
         self.assertIn("_mp_sku_choice_kb(user_id)", action_source)
 
-    def test_seller_image_keyboard_adds_sku_button(self) -> None:
+    def test_seller_image_keyboard_adds_export_and_sku_buttons(self) -> None:
         cb = self._callbacks(flow_bot._seller_image_keyboard("tok123"))
+        self.assertIn("mpe:tok123", cb)
         self.assertIn("sku:tok123", cb)
         normal_cb = self._callbacks(flow_bot._image_keyboard("tok123"))
+        self.assertNotIn("mpe:tok123", normal_cb)
         self.assertNotIn("sku:tok123", normal_cb)
+
+    def test_seller_marketplace_export_action_uses_document_helper(self) -> None:
+        action_source = inspect.getsource(flow_bot.on_image_action)
+        self.assertIn('elif action == "mpexport":', action_source)
+        self.assertIn("marketplace_export=True", action_source)
+        ref = flow_core.ImageRef(
+            user_id=1,
+            project_id="p",
+            source={"mediaId": "mediaabcdef123456"},
+            platform="wb",
+        )
+        filename = flow_bot._marketplace_export_filename(ref, b"\x89PNG\r\n\x1a\nrest")
+        self.assertTrue(filename.startswith("photozhab_wildberries_3x4_"))
+        self.assertTrue(filename.endswith(".png"))
+        self.assertIn("Wildberries", flow_bot._marketplace_export_caption(ref))
 
     def test_brandkit_sets_profile_state(self) -> None:
         source = inspect.getsource(flow_bot.on_marketplace_action)
