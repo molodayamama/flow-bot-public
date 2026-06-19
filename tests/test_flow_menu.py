@@ -29,6 +29,10 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.action_price("myphoto"), 15)
         self.assertEqual(flow_core.action_price("up2x"), 5)      # quick enhance
         self.assertEqual(flow_core.action_price("realup"), 5)    # true HD upscale
+        self.assertEqual(flow_core.action_price("mp_series", 3), 30)
+        self.assertEqual(flow_core.action_price("mp_series", 5), 45)
+        self.assertEqual(flow_core.action_price("mp_series", 8), 70)
+        self.assertEqual(flow_core.action_price("mp_series", 4), 0)
         self.assertEqual(flow_core.action_price("video_prompt_edit"), 150)
         self.assertEqual(flow_core.action_price("dl_raw"), 0)    # free
         self.assertEqual(flow_core.action_price("unknown"), 0)
@@ -111,12 +115,14 @@ class RuntimeOverrideTests(unittest.TestCase):
             "frames_extra": 30,
             "extend_video": 90,
             "edit_video": 160,
+            "seller_series_5": 44,
         })
 
         self.assertEqual(flow_core.price_gen(2), 24)
         self.assertEqual(flow_core.image_model_extra("nbpro"), 7)
         self.assertEqual(flow_core.action_price("edit"), 21)
         self.assertEqual(flow_core.action_price("realup"), 7)
+        self.assertEqual(flow_core.action_price("mp_series", 5), 44)
         self.assertEqual(flow_core.action_price("video_prompt_edit"), 160)
         self.assertEqual(flow_core.video_price("veo-lite", mode="text"), 80)
         self.assertEqual(flow_core.video_price("veo-lite", mode="ingredients"), 100)
@@ -725,6 +731,15 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertLess(mp_photo_guard, image_fallback)
         block = self.source[mp_photo_guard:mp_photo_guard + 350]
         self.assertIn("_mp_photo_request_text", block)
+        self.assertIn("return", block)
+
+    def test_marketplace_series_waiting_text_stays_in_photo_upload_state(self) -> None:
+        start = self.source.index("async def handle_plain_text")
+        mp_series_guard = self.source.index('if awaiting == "mp_series_photo":', start)
+        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        self.assertLess(mp_series_guard, image_fallback)
+        block = self.source[mp_series_guard:mp_series_guard + 520]
+        self.assertIn("_mp_series_request_text", block)
         self.assertIn("return", block)
 
     def test_video_plain_text_ready_is_narrow(self) -> None:

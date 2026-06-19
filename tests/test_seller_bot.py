@@ -72,9 +72,22 @@ class SellerMenuTests(unittest.TestCase):
         cb = self._callbacks(flow_bot.mp_jobs_kb("wb"))
         for job in ("whitebg", "info", "model", "cover", "bg", "animate"):
             self.assertIn(f"mp:job:{job}", cb)
+        self.assertIn("mp:series", cb)
         self.assertIn("mp:done4you", cb)
         self.assertIn("mp:tips", cb)
         self.assertIn("m:mp", cb)  # back to platforms
+
+    def test_series_keyboard_has_bundle_prices(self) -> None:
+        kb = flow_bot.mp_series_kb("wb")
+        cb = self._callbacks(kb)
+        self.assertEqual(
+            [c for c in cb if c.startswith("mp:series:")],
+            ["mp:series:3", "mp:series:5", "mp:series:8"],
+        )
+        text = "\n".join(b.text for row in kb.inline_keyboard for b in row)
+        self.assertIn("30 кр", text)
+        self.assertIn("45 кр", text)
+        self.assertIn("70 кр", text)
 
     def test_job_seeds_cover_image_jobs(self) -> None:
         for job in ("whitebg", "info", "model", "cover", "bg"):
@@ -94,6 +107,29 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("загруженное фото", prompt)
         self.assertIn("Wildberries", prompt)
         self.assertIn("красные ботинки", prompt)
+
+    def test_marketplace_series_waits_for_product_photo(self) -> None:
+        source = inspect.getsource(flow_bot.on_marketplace_action)
+        self.assertIn('if data == "mp:series":', source)
+        self.assertIn('if data.startswith("mp:series:"):', source)
+        self.assertIn('st["await"] = "mp_series_photo"', source)
+        self.assertIn('st["mp_series_count"] = count', source)
+        self.assertIn("_mp_series_request_text(plat, count)", source)
+        self.assertIn('"mp_job"', source)
+
+    def test_marketplace_series_prompt_uses_uploaded_photo(self) -> None:
+        prompt = flow_bot._mp_series_prompt("ozon", 5, "зелёная бутылка")
+        self.assertIn("5", prompt)
+        self.assertIn("Ozon", prompt)
+        self.assertIn("загруженное фото", prompt)
+        self.assertIn("зелёная бутылка", prompt)
+
+    def test_marketplace_series_photo_runs_i2i_bundle_action(self) -> None:
+        source = inspect.getsource(flow_bot.handle_photo)
+        self.assertIn('if st.get("await") == "mp_series_photo":', source)
+        self.assertIn("_mp_series_prompt(plat, count, caption_text)", source)
+        self.assertIn('num_images=count', source)
+        self.assertIn('action="mp_series"', source)
 
 
 if __name__ == "__main__":

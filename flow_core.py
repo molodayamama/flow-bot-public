@@ -2466,6 +2466,7 @@ class AccountPool:
 PRICE_PER_IMAGE = 10        # 1 generated image = 10 credits
 IMAGE_EDIT_PRICE = 15       # edit uploaded/generated photo
 UPSCALE_PRICE = 5          # +0.5x of one image, rounded
+SELLER_SERIES_PRICES = {3: 30, 5: 45, 8: 70}
 STARTER_CREDITS = 30        # one-time grant on first /start (balanced: 3 free images)
 LOW_BALANCE_THRESHOLD = 20  # nudge to top up below this
 
@@ -2481,6 +2482,7 @@ def action_price(action: str, num_images: int = 1) -> int:
     - ``gen``/``regen``: per-image (count chosen in the wizard).
     - ``revary``: image-to-image, ~2 images → priced as 2 images.
     - ``edit``/``myphoto``: photo edit price.
+    - ``mp_series``: seller marketplace slide-series bundle.
     - ``up2x`` / ``realup``: premium add-on, +0.5x of one image.
     - ``dl_raw``: free.
     """
@@ -2490,6 +2492,15 @@ def action_price(action: str, num_images: int = 1) -> int:
         return price_gen(2)
     if action in ("edit", "myphoto"):
         return _price_override("edit_photo", IMAGE_EDIT_PRICE)
+    if action == "mp_series":
+        try:
+            count = int(num_images)
+        except (TypeError, ValueError):
+            return 0
+        price = SELLER_SERIES_PRICES.get(count)
+        if price is None:
+            return 0
+        return _price_override(f"seller_series_{count}", price)
     if action in ("up2x", "realup"):
         return _price_override("upscale", UPSCALE_PRICE)
     if action == "video_prompt_edit":

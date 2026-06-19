@@ -3236,6 +3236,7 @@ def mp_jobs_kb(platform: str) -> types.InlineKeyboardMarkup:
         [B(text="🎨 Инфографика-карточка", callback_data="mp:job:info")],
         [B(text="🧍 Товар на модели / на фоне", callback_data="mp:job:model")],
         [B(text="🖼 Обложка / главный слайд", callback_data="mp:job:cover")],
+        [B(text="🧩 Серия слайдов", callback_data="mp:series")],
         [B(text="✂️ Убрать / заменить фон", callback_data="mp:job:bg")],
         [B(text="🎬 Оживить фото → видео", callback_data="mp:job:animate")],
         [B(text="🙌 Сделайте за меня (под ключ)", callback_data="mp:done4you")],
@@ -3253,6 +3254,20 @@ def _mp_back_kb() -> types.InlineKeyboardMarkup:
     ])
 
 
+def mp_series_kb(platform: str) -> types.InlineKeyboardMarkup:
+    """Выбор размера серии слайдов для одного товара."""
+    B = types.InlineKeyboardButton
+    plat = platform if platform in _MP_PLAT_NAMES else "wb"
+    rows = [
+        [B(text=f"🧩 Мини-серия · 3 слайда · {action_price('mp_series', 3)} кр", callback_data="mp:series:3")],
+        [B(text=f"🧩 Стандарт · 5 слайдов · {action_price('mp_series', 5)} кр", callback_data="mp:series:5")],
+        [B(text=f"🧩 Полная карточка · 8 слайдов · {action_price('mp_series', 8)} кр", callback_data="mp:series:8")],
+        [B(text="◀️ Задачи", callback_data=f"mp:plat:{plat}")],
+        [_menu_button("menu", "m:menu")],
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 # Подсказка-сид к промпту под каждую задачу (формат подставляется отдельно).
 _MP_JOB_SEED = {
     "whitebg": "товар на чистом белом фоне для карточки маркетплейса, студийный свет",
@@ -3268,6 +3283,12 @@ _MP_JOB_LABELS = {
     "model": "товар на модели / на фоне",
     "cover": "обложка / главный слайд",
     "bg": "убрать / заменить фон",
+}
+_MP_SERIES_COUNTS = (3, 5, 8)
+_MP_SERIES_LABELS = {
+    3: "мини-серия",
+    5: "стандартная серия",
+    8: "полная карточка",
 }
 
 
@@ -3295,6 +3316,36 @@ def _mp_photo_request_text(platform: str, job: str) -> str:
         f"<blockquote>{seed}</blockquote>\n"
         "Можно добавить подпись к фото — она станет уточнением к заданию."
     )
+
+
+def _mp_series_request_text(platform: str, count: int) -> str:
+    platform_name = html.escape(_MP_PLAT_NAMES.get(platform, platform))
+    count = count if count in _MP_SERIES_COUNTS else 3
+    label = html.escape(_MP_SERIES_LABELS[count])
+    price = action_price("mp_series", count)
+    return (
+        f"🧩 <b>{platform_name}</b> · {label} · {count} слайда · {price} кр\n\n"
+        "Пришли одно фото товара. Я соберу серию вертикальных слайдов 3:4 "
+        "для карточки маркетплейса на основе этого товара.\n\n"
+        "Можно добавить подпись к фото — например нишу, УТП, цвет бренда или "
+        "что обязательно показать в серии."
+    )
+
+
+def _mp_series_prompt(platform: str, count: int, seller_note: str | None = None) -> str:
+    platform_name = _MP_PLAT_NAMES.get(platform, platform)
+    count = count if count in _MP_SERIES_COUNTS else 3
+    prompt = (
+        f"Создай {count} разных вертикальных слайдов 3:4 для карточки товара на {platform_name}. "
+        "Используй загруженное фото как исходный товар, сохрани товар узнаваемым. "
+        "Каждый результат должен быть отдельным слайдом одной серии: главный слайд, "
+        "выгоды, характеристики, детали применения и доверие/гарантия. "
+        "Единый аккуратный стиль, крупный товар, чистая композиция, место под короткий читаемый текст."
+    )
+    note = (seller_note or "").strip()
+    if note:
+        prompt += f" Уточнение продавца: {note}"
+    return prompt
 
 
 DEFAULT_COUNT = 1
@@ -5258,10 +5309,12 @@ _IMG_REQUEST_EVENT = {
     "revary": "variations_requested",
     "up2x": "upscale_requested",
     "edit": "image_edit_requested", "myphoto": "image_edit_requested",
+    "mp_series": "image_edit_requested",
 }
 _IMG_OP = {
     "gen": "image", "regen": "image", "revary": "variations",
     "up2x": "enhance", "edit": "edit", "myphoto": "edit",
+    "mp_series": "mp_series",
 }
 
 
@@ -6435,6 +6488,49 @@ async def on_marketplace_action(callback: types.CallbackQuery):
         await msg.edit_text(
             f"🛒 <b>{_MP_PLAT_NAMES[plat]}</b> — что сделать с товаром?",
             reply_markup=mp_jobs_kb(plat),
+        )
+        return
+
+    if data == "mp:series":
+        plat = _ws(user_id).get("mp_platform", "wb")
+        if plat not in _MP_PLAT_NAMES:
+            plat = "wb"
+        await callback.answer()
+        metrics.log_event("mp_series_open", user_id=user_id, source=plat)
+        await msg.edit_text(
+            f"🧩 <b>{_MP_PLAT_NAMES[plat]}</b> — выбери размер серии",
+            reply_markup=mp_series_kb(plat),
+            parse_mode="HTML",
+        )
+        return
+
+    if data.startswith("mp:series:"):
+        plat = _ws(user_id).get("mp_platform", "wb")
+        if plat not in _MP_PLAT_NAMES:
+            plat = "wb"
+        try:
+            count = int(data.rsplit(":", 1)[1])
+        except (TypeError, ValueError):
+            await callback.answer()
+            return
+        if count not in _MP_SERIES_COUNTS:
+            await callback.answer()
+            return
+        await callback.answer()
+        _reset_image_flow(user_id)
+        st = _ws(user_id)
+        st["mp_platform"] = plat
+        st["mp_series_count"] = count
+        st["await"] = "mp_series_photo"
+        st["edit_fmt"] = "f34"
+        metrics.log_event(
+            "mp_job", user_id=user_id, source=f"{plat}:series:{count}",
+            payload={"count": count},
+        )
+        await msg.edit_text(
+            _mp_series_request_text(plat, count),
+            reply_markup=_mp_back_kb(),
+            parse_mode="HTML",
         )
         return
 
@@ -9057,6 +9153,47 @@ async def handle_photo(message: types.Message):
             await message.answer(flow_copy.msg("vid_text_only_hint"))
         return
 
+    if st.get("await") == "mp_series_photo":
+        plat = st.get("mp_platform", "wb")
+        count = st.get("mp_series_count", 3)
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            count = 3
+        if count not in _MP_SERIES_COUNTS:
+            count = 3
+        caption_text = (message.caption or "").strip()
+        prompt = _mp_series_prompt(plat, count, caption_text)
+        status_msg = await message.answer(flow_copy.msg("uploading_photo"))
+        ref = await _upload_image_ref_from_photo_message(
+            message,
+            user_id=user_id,
+            status_msg=status_msg,
+            prompt=prompt,
+            aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", "f34")),
+        )
+        if not ref:
+            return
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        metrics.log_event("mp_series_photo_uploaded", user_id=user_id, source=f"{plat}:{count}")
+        ok = await _run_i2i(
+            message,
+            ref,
+            prompt,
+            num_images=count,
+            emoji="🧩",
+            action="mp_series",
+            fail_text=flow_copy.msg("nothing_returned"),
+        )
+        if ok:
+            st["await"] = None
+            st.pop("mp_series_count", None)
+            pending_edits.pop(user_id, None)
+        return
+
     if st.get("await") == "mp_photo":
         plat = st.get("mp_platform", "wb")
         job = st.get("mp_preset", "whitebg")
@@ -9332,6 +9469,20 @@ async def handle_plain_text(message: types.Message):
     if awaiting == "mp_photo":
         await message.answer(
             _mp_photo_request_text(st.get("mp_platform", "wb"), st.get("mp_preset", "whitebg")),
+            reply_markup=_mp_back_kb(),
+            parse_mode="HTML",
+        )
+        return
+    if awaiting == "mp_series_photo":
+        count = st.get("mp_series_count", 3)
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            count = 3
+        if count not in _MP_SERIES_COUNTS:
+            count = 3
+        await message.answer(
+            _mp_series_request_text(st.get("mp_platform", "wb"), count),
             reply_markup=_mp_back_kb(),
             parse_mode="HTML",
         )
