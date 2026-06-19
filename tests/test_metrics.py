@@ -612,6 +612,10 @@ class SellerReportTests(MetricsTestBase):
         profile2 = metrics.get_seller_profile(8)
         self.assertEqual(profile2["brand_kit"], "minimal premium")
         self.assertEqual(profile2["niche"], "shoes")
+        self.assertTrue(metrics.save_seller_profile(8, niche="electronics"))
+        profile3 = metrics.get_seller_profile(8)
+        self.assertEqual(profile3["brand_kit"], "minimal premium")
+        self.assertEqual(profile3["niche"], "electronics")
 
     def test_report_sellers_empty(self) -> None:
         rep = metrics.report_sellers()

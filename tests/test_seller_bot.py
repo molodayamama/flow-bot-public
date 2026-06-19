@@ -74,6 +74,7 @@ class SellerMenuTests(unittest.TestCase):
             self.assertIn(f"mp:job:{job}", cb)
         self.assertIn("mp:series", cb)
         self.assertIn("mp:brandkit", cb)
+        self.assertIn("mp:niche", cb)
         self.assertIn("mp:projects", cb)
         self.assertIn("mp:done4you", cb)
         self.assertIn("mp:tips", cb)
@@ -134,10 +135,19 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("Бренд-кит продавца", series_prompt)
         self.assertIn("минимализм", series_prompt)
 
+    def test_marketplace_prompts_include_niche_when_present(self) -> None:
+        prompt = flow_bot._mp_job_instruction("model", "wb", niche="clothes")
+        self.assertIn("Ниша товара", prompt)
+        self.assertIn("Одежда", prompt)
+        self.assertIn("посадку", prompt)
+        series_prompt = flow_bot._mp_series_prompt("wb", 3, niche="electronics")
+        self.assertIn("Ниша товара", series_prompt)
+        self.assertIn("Электроника", series_prompt)
+
     def test_marketplace_series_photo_runs_i2i_bundle_action(self) -> None:
         source = inspect.getsource(flow_bot.handle_photo)
         self.assertIn('if st.get("await") == "mp_series_photo":', source)
-        self.assertIn("_mp_series_prompt(plat, count, caption_text, brand_kit=_mp_brand_kit(user_id))", source)
+        self.assertIn("niche=_mp_niche(user_id)", source)
         self.assertIn('num_images=count', source)
         self.assertIn('action="mp_series"', source)
 
@@ -175,6 +185,18 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn('if data == "mp:brandkit":', source)
         self.assertIn('st["await"] = "mp_brandkit"', source)
         self.assertIn("_mp_brandkit_text(user_id)", source)
+
+    def test_niche_presets_save_profile(self) -> None:
+        cb = self._callbacks(flow_bot._mp_niche_kb())
+        self.assertEqual(
+            [c for c in cb if c.startswith("mp:niche:")],
+            ["mp:niche:clothes", "mp:niche:beauty", "mp:niche:electronics", "mp:niche:kids", "mp:niche:food"],
+        )
+        source = inspect.getsource(flow_bot.on_marketplace_action)
+        self.assertIn('if data == "mp:niche":', source)
+        self.assertIn('if data.startswith("mp:niche:"):', source)
+        self.assertIn("metrics.save_seller_profile(user_id, niche=niche_id)", source)
+        self.assertIn('"mp_niche_saved"', source)
 
 
 if __name__ == "__main__":

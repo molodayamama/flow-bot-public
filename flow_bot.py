@@ -3251,6 +3251,7 @@ def mp_jobs_kb(platform: str) -> types.InlineKeyboardMarkup:
         [B(text="✂️ Убрать / заменить фон", callback_data="mp:job:bg")],
         [B(text="🎬 Оживить фото → видео", callback_data="mp:job:animate")],
         [B(text="🎨 Бренд-кит", callback_data="mp:brandkit")],
+        [B(text="🏷️ Ниша товара", callback_data="mp:niche")],
         [B(text="📦 Мои товары (SKU)", callback_data="mp:projects")],
         [B(text="🙌 Сделайте за меня (под ключ)", callback_data="mp:done4you")],
         [B(text="💡 Советы по карточке", callback_data="mp:tips")],
@@ -3303,6 +3304,28 @@ _MP_SERIES_LABELS = {
     5: "стандартная серия",
     8: "полная карточка",
 }
+_MP_NICHES = {
+    "clothes": (
+        "Одежда",
+        "показать посадку, фактуру ткани, сезонность и размер; уместны модель, flat lay и детали швов",
+    ),
+    "beauty": (
+        "Косметика",
+        "чистый премиальный свет, текстура продукта, оттенок, состав/эффект и аккуратные макро-детали",
+    ),
+    "electronics": (
+        "Электроника",
+        "выделить экран/разъёмы/комплектацию, сценарий использования, масштаб и ощущение надёжности",
+    ),
+    "kids": (
+        "Детские товары",
+        "мягкие светлые сцены, безопасность, возраст, комплектация и доверие для родителей",
+    ),
+    "food": (
+        "Еда",
+        "аппетитный свет, свежесть, упаковка, состав/вкус и аккуратная сервировка без лишнего шума",
+    ),
+}
 
 
 def _mp_brand_kit(user_id: int) -> str:
@@ -3310,11 +3333,25 @@ def _mp_brand_kit(user_id: int) -> str:
     return str(profile.get("brand_kit") or "").strip()
 
 
+def _mp_niche(user_id: int) -> str:
+    profile = metrics.get_seller_profile(user_id)
+    return str(profile.get("niche") or "").strip()
+
+
+def _mp_niche_guidance(niche: str | None) -> str:
+    item = _MP_NICHES.get((niche or "").strip())
+    if not item:
+        return ""
+    label, guidance = item
+    return f"{label}: {guidance}"
+
+
 def _mp_job_instruction(
     job: str,
     platform: str,
     seller_note: str | None = None,
     brand_kit: str | None = None,
+    niche: str | None = None,
 ) -> str:
     seed = _MP_JOB_SEED.get(job, "сделать продающую карточку товара для маркетплейса")
     platform_name = _MP_PLAT_NAMES.get(platform, platform)
@@ -3322,6 +3359,9 @@ def _mp_job_instruction(
         f"{seed}. Используй загруженное фото как исходный товар, сохрани товар узнаваемым. "
         f"Формат карточки 3:4, площадка: {platform_name}."
     )
+    guidance = _mp_niche_guidance(niche)
+    if guidance:
+        prompt += f" Ниша товара: {guidance}"
     note = (seller_note or "").strip()
     if note:
         prompt += f" Уточнение продавца: {note}"
@@ -3363,6 +3403,7 @@ def _mp_series_prompt(
     count: int,
     seller_note: str | None = None,
     brand_kit: str | None = None,
+    niche: str | None = None,
 ) -> str:
     platform_name = _MP_PLAT_NAMES.get(platform, platform)
     count = count if count in _MP_SERIES_COUNTS else 3
@@ -3373,6 +3414,9 @@ def _mp_series_prompt(
         "выгоды, характеристики, детали применения и доверие/гарантия. "
         "Единый аккуратный стиль, крупный товар, чистая композиция, место под короткий читаемый текст."
     )
+    guidance = _mp_niche_guidance(niche)
+    if guidance:
+        prompt += f" Ниша товара: {guidance}"
     note = (seller_note or "").strip()
     if note:
         prompt += f" Уточнение продавца: {note}"
@@ -3417,6 +3461,28 @@ def _mp_brandkit_text(user_id: int) -> str:
         "Я буду добавлять это в seller-задания и серии."
         f"{current}"
     )
+
+
+def _mp_niche_text(user_id: int) -> str:
+    niche = _mp_niche(user_id)
+    current = _MP_NICHES.get(niche, ("не задана", ""))[0] if niche else "не задана"
+    return (
+        "🏷️ <b>Ниша товара</b>\n\n"
+        "Выбери основную категорию магазина. Я буду добавлять её как подсказку "
+        "к seller-заданиям и сериям, чтобы ракурсы, фон и акценты были ближе к товару.\n\n"
+        f"Текущая ниша: <b>{html.escape(current)}</b>"
+    )
+
+
+def _mp_niche_kb() -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    rows = [
+        [B(text=f"🏷️ {label}", callback_data=f"mp:niche:{niche_id}")]
+        for niche_id, (label, _guidance) in _MP_NICHES.items()
+    ]
+    rows.append([B(text="◀️ Назад", callback_data="m:mp")])
+    rows.append([_menu_button("menu", "m:menu")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _show_sku_projects(message: types.Message, *, user_id: int, edit: bool) -> None:
@@ -6657,6 +6723,40 @@ async def on_marketplace_action(callback: types.CallbackQuery):
         )
         return
 
+    if data == "mp:niche":
+        await callback.answer()
+        metrics.log_event("mp_niche_open", user_id=user_id, source="seller")
+        await msg.edit_text(
+            _mp_niche_text(user_id),
+            reply_markup=_mp_niche_kb(),
+            parse_mode="HTML",
+        )
+        return
+
+    if data.startswith("mp:niche:"):
+        niche_id = data.rsplit(":", 1)[1]
+        if niche_id not in _MP_NICHES:
+            await callback.answer()
+            return
+        label = _MP_NICHES[niche_id][0]
+        ok = metrics.save_seller_profile(user_id, niche=niche_id)
+        metrics.log_event("mp_niche_saved", user_id=user_id, source=niche_id)
+        await callback.answer("Ниша сохранена" if ok else "Не удалось сохранить")
+        if ok:
+            await msg.edit_text(
+                f"🏷️ Ниша сохранена: <b>{html.escape(label)}</b>\n\n"
+                "Теперь seller-карточки и серии будут учитывать эту категорию.",
+                reply_markup=_mp_back_kb(),
+                parse_mode="HTML",
+            )
+        else:
+            await msg.edit_text(
+                "Не удалось сохранить нишу. Попробуй ещё раз позже.",
+                reply_markup=_mp_niche_kb(),
+                parse_mode="HTML",
+            )
+        return
+
     if data == "mp:sku:new":
         if not _pending_sku_payload(user_id):
             await callback.answer("Кнопка устарела", show_alert=True)
@@ -9385,7 +9485,13 @@ async def handle_photo(message: types.Message):
         if count not in _MP_SERIES_COUNTS:
             count = 3
         caption_text = (message.caption or "").strip()
-        prompt = _mp_series_prompt(plat, count, caption_text, brand_kit=_mp_brand_kit(user_id))
+        prompt = _mp_series_prompt(
+            plat,
+            count,
+            caption_text,
+            brand_kit=_mp_brand_kit(user_id),
+            niche=_mp_niche(user_id),
+        )
         status_msg = await message.answer(flow_copy.msg("uploading_photo"))
         ref = await _upload_image_ref_from_photo_message(
             message,
@@ -9420,7 +9526,13 @@ async def handle_photo(message: types.Message):
         plat = st.get("mp_platform", "wb")
         job = st.get("mp_preset", "whitebg")
         caption_text = (message.caption or "").strip()
-        instruction = _mp_job_instruction(job, plat, caption_text, brand_kit=_mp_brand_kit(user_id))
+        instruction = _mp_job_instruction(
+            job,
+            plat,
+            caption_text,
+            brand_kit=_mp_brand_kit(user_id),
+            niche=_mp_niche(user_id),
+        )
         status_msg = await message.answer(flow_copy.msg("uploading_photo"))
         ref = await _upload_image_ref_from_photo_message(
             message,
