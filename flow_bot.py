@@ -46,7 +46,7 @@ import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.exceptions import TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command
 from dotenv import load_dotenv
 from playwright.async_api import BrowserContext, async_playwright
@@ -9656,6 +9656,11 @@ async def _notify_robokassa_success(user_id: int, credits: int, balance: int) ->
         )
     except TelegramForbiddenError:
         metrics.mark_user_blocked(user_id)
+    except TelegramBadRequest as exc:
+        if "chat not found" in str(exc).lower():
+            log.warning("robokassa success notify skipped: chat not found user_id=%s", user_id)
+        else:
+            log.exception("robokassa success notify bad request")
     except Exception:
         log.exception("robokassa success notify failed")
 
