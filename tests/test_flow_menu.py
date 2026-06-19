@@ -227,8 +227,13 @@ class UpscaleCaptureTests(unittest.TestCase):
         rates = [(p["credits"] / p["stars"]) for p in retail]
         # Larger packs give more credits per star (monotonic non-decreasing).
         self.assertEqual(rates, sorted(rates))
-        best = [pid for pid, p in flow_core.STARS_PACKS.items() if p.get("best")]
-        self.assertEqual(len(best), 1)
+        # Exactly one "best" highlight per ladder (consumer and seller shown apart).
+        consumer_best = [p for p in retail if p.get("best")]
+        self.assertEqual(len(consumer_best), 1)
+        seller = [flow_core.STARS_PACKS[pid] for pid in flow_core.public_pack_ids(seller=True)]
+        seller_rates = [(p["credits"] / p["stars"]) for p in seller]
+        self.assertEqual(seller_rates, sorted(seller_rates))
+        self.assertEqual(len([p for p in seller if p.get("best")]), 1)
 
     def test_test_pack_is_admin_only_and_one_star(self) -> None:
         self.assertEqual(flow_core.STARS_PACKS["test"]["stars"], 1)

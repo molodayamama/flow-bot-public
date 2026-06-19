@@ -238,6 +238,12 @@ except ValueError:
     ROBOKASSA_WEB_PORT = 8081
 # Имя бота для реферальных ссылок (берётся из get_me() на старте; env — фолбэк).
 BOT_USERNAME = os.getenv("BOT_USERNAME", "")
+# Режим бота: "consumer" (как сейчас) или "seller" (@photozhab_wb_bot, меню
+# «Маркетплейсы», селлерские пакеты). Один и тот же код, флаг на процесс;
+# у каждого процесса свой TELEGRAM_TOKEN/BOT_USERNAME/USER_CREDITS_FILE.
+# См. docs/SELLER_BOT_PLAN.md.
+BOT_MODE = (os.getenv("BOT_MODE", "consumer") or "consumer").strip().lower()
+IS_SELLER = BOT_MODE == "seller"
 PROXY_URL = os.getenv("PROXY_URL", "")          # общий прокси по умолчанию (http/socks5)
 BROWSER_PROXY_URL = os.getenv("BROWSER_PROXY_URL")
 API_PROXY_URL = os.getenv("API_PROXY_URL")
@@ -3199,8 +3205,62 @@ def main_menu_kb(show_repeat: bool = False, credits: int | None = None) -> types
         [B(text=balance_label, callback_data="m:balance")],
         [_menu_button("profile", "m:profile"), _menu_button("invite", "m:invite")],
     ]
+    if IS_SELLER:
+        # Селлер-бот (@photozhab_wb_bot): маркетплейсы — первым экраном.
+        rows.insert(0, [B(text="🛒 Маркетплейсы (WB/Ozon/ЯМ)", callback_data="m:mp")])
     # show_repeat parameter kept for backward compatibility but ignored
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# ── Маркетплейс-меню селлер-бота (docs/SELLER_BOT_PLAN.md §4) ─────────────
+_MP_PLAT_NAMES = {"wb": "Wildberries", "ozon": "Ozon", "ym": "Яндекс Маркет"}
+
+
+def mp_root_kb() -> types.InlineKeyboardMarkup:
+    """Выбор площадки — задаёт формат/стиль карточки."""
+    B = types.InlineKeyboardButton
+    rows = [
+        [B(text="🟣 Wildberries", callback_data="mp:plat:wb")],
+        [B(text="🔵 Ozon", callback_data="mp:plat:ozon")],
+        [B(text="🟡 Яндекс Маркет", callback_data="mp:plat:ym")],
+        [_menu_button("menu", "m:menu")],
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def mp_jobs_kb(platform: str) -> types.InlineKeyboardMarkup:
+    """Что сделать с товаром (после выбора площадки)."""
+    B = types.InlineKeyboardButton
+    rows = [
+        [B(text="📸 Фото на белом фоне", callback_data="mp:job:whitebg")],
+        [B(text="🎨 Инфографика-карточка", callback_data="mp:job:info")],
+        [B(text="🧍 Товар на модели / на фоне", callback_data="mp:job:model")],
+        [B(text="🖼 Обложка / главный слайд", callback_data="mp:job:cover")],
+        [B(text="✂️ Убрать / заменить фон", callback_data="mp:job:bg")],
+        [B(text="🎬 Оживить фото → видео", callback_data="mp:job:animate")],
+        [B(text="🙌 Сделайте за меня (под ключ)", callback_data="mp:done4you")],
+        [B(text="💡 Советы по карточке", callback_data="mp:tips")],
+        [B(text="◀️ Площадки", callback_data="m:mp")],
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _mp_back_kb() -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [B(text="◀️ Назад", callback_data="m:mp")],
+        [_menu_button("menu", "m:menu")],
+    ])
+
+
+# Подсказка-сид к промпту под каждую задачу (формат подставляется отдельно).
+_MP_JOB_SEED = {
+    "whitebg": "товар на чистом белом фоне для карточки маркетплейса, студийный свет",
+    "info": "инфографика-карточка товара: крупный товар, место под заголовок и буллеты",
+    "model": "товар на модели / в интерьере, реалистичная сцена для карточки",
+    "cover": "обложка/главный слайд карточки товара, цепляющий ракурс",
+    "bg": "заменить фон у фото товара на чистый и продающий",
+}
 
 
 DEFAULT_COUNT = 1
@@ -4341,7 +4401,7 @@ def topup_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
 
 def topup_stars_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
     rows = []
-    for pid in public_pack_ids(include_test=is_admin):
+    for pid in public_pack_ids(include_test=is_admin, seller=IS_SELLER):
         rows.append([types.InlineKeyboardButton(text=_stars_pack_label(pid), callback_data=f"m:pack:{pid}")])
     rows.append([_menu_button("back", "m:topup")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
@@ -4350,7 +4410,7 @@ def topup_stars_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
 def topup_robo_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
     rows = [
         [types.InlineKeyboardButton(text=_robokassa_pack_label(pid), callback_data=f"m:robo:{pid}")]
-        for pid in public_pack_ids(include_test=is_admin)
+        for pid in public_pack_ids(include_test=is_admin, seller=IS_SELLER)
     ]
     rows.append([_menu_button("back", "m:topup")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
@@ -6321,6 +6381,85 @@ async def _show_my_tickets(message: types.Message, *, user_id: int, edit: bool) 
         await message.answer(text, reply_markup=back_kb)
 
 
+@dp.callback_query(F.data.startswith("mp:"))
+async def on_marketplace_action(callback: types.CallbackQuery):
+    """Селлер-меню «Маркетплейсы»: площадка → задача (docs/SELLER_BOT_PLAN.md §4)."""
+    user_id = callback.from_user.id
+    metrics.upsert_user(user_id, username=getattr(callback.from_user, "username", None),
+                        first_name=getattr(callback.from_user, "first_name", None))
+    data = callback.data or ""
+    msg = callback.message
+
+    if data.startswith("mp:plat:"):
+        plat = data.split(":", 2)[2]
+        if plat not in _MP_PLAT_NAMES:
+            await callback.answer()
+            return
+        _ws(user_id)["mp_platform"] = plat
+        await callback.answer()
+        metrics.log_event("mp_platform", user_id=user_id, source=plat)
+        await msg.edit_text(
+            f"🛒 <b>{_MP_PLAT_NAMES[plat]}</b> — что сделать с товаром?",
+            reply_markup=mp_jobs_kb(plat),
+        )
+        return
+
+    if data.startswith("mp:job:"):
+        job = data.split(":", 2)[2]
+        plat = _ws(user_id).get("mp_platform", "wb")
+        if job == "animate":
+            await callback.answer()
+            pending_edits.pop(user_id, None)
+            _vid_clear(user_id)
+            st = _ws(user_id)
+            _clear_image_flow_keys(st)
+            st["vmode"] = "ingredients"
+            st["vmodel"] = VID_REF_DEFAULT_MODEL
+            st["vcount"] = 1
+            st["mp_platform"] = plat
+            await show_video_ingredients(msg, user_id=user_id, edit=True)
+            return
+        await callback.answer()
+        _reset_image_flow(user_id)
+        st = _ws(user_id)
+        st["mp_platform"] = plat
+        st["mp_preset"] = job
+        st["fmt"] = "f34"  # 3:4 — вертикальная карточка маркетплейса
+        seed = _MP_JOB_SEED.get(job)
+        if seed:
+            st["pending_prompt"] = seed
+        metrics.log_event("mp_job", user_id=user_id, source=f"{plat}:{job}")
+        await show_wizard(msg, user_id=user_id, edit=True)
+        return
+
+    if data == "mp:done4you":
+        await callback.answer()
+        metrics.log_event("mp_done4you_open", user_id=user_id, source="seller")
+        await msg.edit_text(
+            "🙌 <b>Сделаем карточки под ключ</b>\n\n"
+            "Опиши задачу прямо здесь одним сообщением: что за товар, площадка, "
+            "сколько слайдов, и пришли фото товара. Подготовим карточки и вернём "
+            "результат. Оплата по тарифу.",
+            reply_markup=_mp_back_kb(),
+        )
+        return
+
+    if data == "mp:tips":
+        await callback.answer()
+        await msg.edit_text(
+            "💡 <b>Что делает карточку продающей</b>\n\n"
+            "• Главное фото: товар крупно, чистый фон, без лишнего.\n"
+            "• 1-й слайд = оффер: заголовок + ключевая выгода.\n"
+            "• Слайды: характеристики, состав/гарантия, до/после.\n"
+            "• Текст крупный и читаемый, важное — не в углах (safe-зоны).\n"
+            "• Единый стиль: один цвет/шрифт во всей серии.",
+            reply_markup=_mp_back_kb(),
+        )
+        return
+
+    await callback.answer()
+
+
 @dp.callback_query(F.data.startswith("m:"))
 async def on_menu_action(callback: types.CallbackQuery):
     """Кнопки главного меню и экранов (генерация/баланс/пополнение/помощь)."""
@@ -6349,6 +6488,14 @@ async def on_menu_action(callback: types.CallbackQuery):
         st["vmodel"] = VID_REF_DEFAULT_MODEL
         st["vcount"] = 1
         await show_video_ingredients(msg, user_id=user_id, edit=True)
+    elif data == "m:mp":
+        await callback.answer()
+        _reset_image_flow(user_id)
+        await msg.edit_text(
+            "🛒 <b>Карточки для маркетплейсов</b>\n\n"
+            "Выбери площадку — подставлю нужный формат и стиль карточки:",
+            reply_markup=mp_root_kb(),
+        )
     elif data == "m:ideas":
         await callback.answer()
         _reset_image_flow(user_id)

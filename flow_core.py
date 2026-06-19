@@ -2510,6 +2510,12 @@ STARS_PACKS = {
     "large":  {"stars": 450, "credits": 700,  "best": True},
     "xl":     {"stars": 900, "credits": 1500, "best": False},
     "test":   {"stars": 1,   "credits": 10,   "best": False, "test": True},
+    # Seller packs (shown only when BOT_MODE=seller). Sized around a card =
+    # ~6 slides (60 кр); see docs/SELLER_BOT_PLAN.md §7.
+    "s_card":   {"stars": 45,  "credits": 60,   "best": False, "seller": True},
+    "s_5cards": {"stars": 205, "credits": 300,  "best": False, "seller": True},
+    "s_shop":   {"stars": 450, "credits": 700,  "best": True,  "seller": True},
+    "s_shopxl": {"stars": 900, "credits": 1500, "best": False, "seller": True},
 }
 
 
@@ -2517,9 +2523,23 @@ def pack(pack_id: str) -> dict | None:
     return STARS_PACKS.get(pack_id)
 
 
-def public_pack_ids(include_test: bool = False) -> list[str]:
-    """Pack ids to show in the top-up menu (admin-only ``test`` pack optional)."""
-    return [pid for pid, p in STARS_PACKS.items() if include_test or not p.get("test")]
+def public_pack_ids(include_test: bool = False, seller: bool = False) -> list[str]:
+    """Pack ids for the top-up menu.
+
+    ``seller`` selects the seller-bot pack set; otherwise the consumer set is
+    returned. The admin-only ``test`` pack is included only with ``include_test``.
+    """
+    out = []
+    for pid, p in STARS_PACKS.items():
+        if p.get("test") and not include_test:
+            continue
+        if p.get("test"):
+            out.append(pid)
+            continue
+        if bool(p.get("seller")) != bool(seller):
+            continue
+        out.append(pid)
+    return out
 
 
 def pack_label(pack_id: str) -> str:
@@ -2598,6 +2618,11 @@ ROBOKASSA_PACK_AMOUNTS_RUB = {
     "medium": "235.00",
     "large": "530.00",
     "xl": "1050.00",
+    # Seller packs (docs/SELLER_BOT_PLAN.md §7).
+    "s_card": "55.00",
+    "s_5cards": "240.00",
+    "s_shop": "520.00",
+    "s_shopxl": "1020.00",
 }
 
 
