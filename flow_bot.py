@@ -3399,6 +3399,45 @@ def _mp_photo_request_text(platform: str, job: str) -> str:
     )
 
 
+def _mp_video_request_text(platform: str) -> str:
+    platform_name = html.escape(_MP_PLAT_NAMES.get(platform, platform))
+    price = video_price(VID_REF_DEFAULT_MODEL, 1, "ingredients")
+    return (
+        f"🎬 <b>{platform_name}</b> · оживить фото товара\n\n"
+        "Пришли одно фото товара. Подпись к фото можно использовать как сценарий: "
+        "например, «медленный поворот, мягкий свет, акцент на фактуре».\n\n"
+        f"По умолчанию: <b>Veo Lite</b>, 9:16, 1 видео · {price} кр."
+    )
+
+
+def _mp_video_prompt(
+    platform: str,
+    seller_note: str | None = None,
+    *,
+    brand_kit: str | None = None,
+    niche: str | None = None,
+) -> str:
+    platform_name = _MP_PLAT_NAMES.get(platform, platform)
+    parts = [
+        "Create a short marketplace product video from the provided product photo.",
+        f"Marketplace: {platform_name}.",
+        "Use the exact product from the photo; preserve its shape, color, material, logo/text, and packaging.",
+        "Make clean premium product-card motion: slow camera push-in, subtle parallax, soft studio light, tidy commercial background.",
+        "No extra hands, no fake labels, no distorted text, no unrelated objects, no aggressive zoom.",
+        "The result should feel ready for a product card or short marketplace listing video.",
+    ]
+    guidance = _mp_niche_guidance(niche)
+    if guidance:
+        parts.append(guidance)
+    note = (seller_note or "").strip()
+    if note:
+        parts.append(f"Seller's video direction: {note}.")
+    brand = (brand_kit or "").strip()
+    if brand:
+        parts.append(f"Brand kit / visual rules: {brand}.")
+    return " ".join(parts)
+
+
 def _mp_series_request_text(platform: str, count: int) -> str:
     platform_name = html.escape(_MP_PLAT_NAMES.get(platform, platform))
     count = count if count in _MP_SERIES_COUNTS else 3
@@ -5694,10 +5733,91 @@ async def _backend_generate_i2i(req: dict) -> dict:
     return {"error": last_error}
 
 
+async def _backend_generate_video_ingredients(req: dict) -> dict:
+    """Consumer-side: photo+prompt -> video for the seller bot, return mp4 bytes.
+
+    Seller has no browser/session pool, so the consumer uploads the seller's
+    product photo to a video-capable account, runs reference-to-video, fetches
+    the resulting mp4 with Flow cookies, and returns base64 bytes over localhost.
+    """
+    prompt = str(req.get("prompt") or "").strip()
+    if len(prompt) < 3:
+        return {"error": "empty prompt"}
+    image_b64 = req.get("image_b64")
+    if not image_b64:
+        return {"error": "missing image"}
+    try:
+        data = base64.b64decode(image_b64)
+    except Exception:
+        return {"error": "bad image"}
+
+    model_id = str(req.get("video_model") or VID_REF_DEFAULT_MODEL)
+    meta = video_model_meta(model_id)
+    if not meta:
+        return {"error": "bad video model"}
+    aspect = str(req.get("aspect_ratio") or "portrait")
+    if aspect not in {"portrait", "landscape"}:
+        aspect = "portrait"
+    user_id = int(req.get("user_id") or 0)
+
+    acc_id = _account_for_video(user_id)
+    if acc_id is None:
+        return {"error": "accounts_unavailable"}
+    project_id = await ensure_user_project(user_id, account_id=acc_id)
+    try:
+        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_video_{user_id}.png")
+    except Exception:
+        log.exception("backend video upload_image failed (account %s)", acc_id)
+        return {"error": "upload failed"}
+    if not source or not source.get("mediaId"):
+        return {"error": "upload failed"}
+    video_project_id = source.pop("_project_id", None) or project_id
+
+    try:
+        async with account_pool.video_slot(acc_id):
+            result = await _client_for_acc(acc_id).generate_video(
+                prompt,
+                model_key=meta["key"],
+                aspect=aspect,
+                project_id=video_project_id,
+                reference_sources=[source],
+                operation="generate",
+            )
+    except Exception:
+        log.exception("backend video generation failed (account %s)", acc_id)
+        _mark_video_account_failure(acc_id)
+        return {"error": "generation failed"}
+    if "error" in result:
+        _mark_video_account_failure(acc_id, result)
+        return {"error": str(result.get("error"))[:300]}
+
+    media_id = result.get("media_id")
+    if not media_id:
+        return {"error": "media_id missing"}
+    video_bytes = await _client_for_acc(acc_id).fetch_video_bytes(media_id)
+    if not video_bytes:
+        return {"error": "download failed"}
+    account_pool.mark_success(acc_id)
+    return {
+        "videos": [{
+            "video_b64": base64.b64encode(video_bytes).decode("ascii"),
+            "media_id": media_id,
+            "model_id": model_id,
+            "aspect_ratio": aspect,
+            "workflow_id": result.get("workflow_id"),
+            "scene_id": result.get("scene_id"),
+        }],
+        "account_id": acc_id,
+        "project_id": result.get("project_id") or video_project_id,
+    }
+
+
 async def _backend_generate(req: dict) -> dict:
     """Internal endpoint dispatcher by ``kind`` (image | i2i)."""
     if req.get("kind") == "i2i":
         return await _backend_generate_i2i(req)
+    if req.get("kind") == "video_ingredients":
+        return await _backend_generate_video_ingredients(req)
     return await _backend_generate_images(req)
 
 
@@ -5806,6 +5926,183 @@ async def _seller_i2i_from_photo(
     return await _seller_generate_and_send(
         message, instruction, num_images=num_images, aspect_ratio=aspect_ratio,
         user_id=user_id, action=action, kind="i2i", image_b64=image_b64,
+    )
+
+
+async def _seller_video_backend_call_and_send(
+    message: types.Message, prompt: str, *, image_b64: str, aspect_ratio: str,
+    user_id: int, video_model: str = VID_REF_DEFAULT_MODEL,
+) -> bool:
+    """Seller-side marketplace video: ask consumer backend, send returned mp4."""
+    client = _backend_client()
+    if client is None:
+        await message.answer(flow_copy.msg("accounts_unavailable"))
+        return False
+    status_msg = await message.answer(flow_copy.msg("vid_working"))
+    data = await client.generate(
+        prompt=prompt,
+        num_images=1,
+        aspect_ratio=aspect_ratio,
+        image_model=DEFAULT_IMAGE_MODEL,
+        video_model=video_model,
+        user_id=user_id,
+        kind="video_ingredients",
+        image_b64=image_b64,
+    )
+    videos = data.get("videos") or []
+    if data.get("error") or not videos:
+        err = str(data.get("error") or flow_copy.msg("vid_gen_failed"))[:300]
+        try:
+            await status_msg.edit_text(f"{flow_copy.msg('vid_gen_failed')}\n{html.escape(err)}")
+        except Exception:
+            pass
+        return False
+
+    from aiogram.types import BufferedInputFile
+
+    sent_any = False
+    for index, item in enumerate(videos, 1):
+        raw = item.get("video_b64")
+        if not raw:
+            continue
+        try:
+            video_bytes = base64.b64decode(raw)
+        except Exception:
+            log.exception("seller backend video base64 decode failed")
+            continue
+        filename = f"marketplace_video_{index}.mp4"
+        caption = flow_copy.msg(
+            "vid_result_caption", i=index, n=len(videos),
+            prompt=html.escape(_short_prompt(prompt, 60)),
+        )
+        try:
+            await message.answer_video(
+                BufferedInputFile(video_bytes, filename),
+                caption=caption,
+                reply_markup=_mp_back_kb(),
+                parse_mode="HTML",
+            )
+            sent_any = True
+        except Exception:
+            log.exception("seller answer_video failed, falling back to document")
+            try:
+                await message.answer_document(
+                    BufferedInputFile(video_bytes, filename),
+                    caption=caption,
+                    reply_markup=_mp_back_kb(),
+                    parse_mode="HTML",
+                )
+                sent_any = True
+            except Exception:
+                log.exception("seller answer_document video fallback failed")
+
+    try:
+        if sent_any:
+            await status_msg.delete()
+        else:
+            await status_msg.edit_text(flow_copy.msg("vid_gen_failed"))
+    except Exception:
+        pass
+    return sent_any
+
+
+async def _seller_video_generate_and_send(
+    message: types.Message, prompt: str, *, image_b64: str, aspect_ratio: str,
+    user_id: int, video_model: str = VID_REF_DEFAULT_MODEL,
+) -> bool:
+    """Charge seller credits, generate marketplace video via consumer backend."""
+    if _backend_client() is None:
+        await message.answer(flow_copy.msg("accounts_unavailable"))
+        return False
+    if not prompt or len(prompt.strip()) < 3:
+        await message.answer(flow_copy.msg("vid_prompt_too_short"))
+        return False
+    price = video_price(video_model, 1, "ingredients")
+    started = time.monotonic()
+    charged = False
+    ok = False
+    try:
+        async with user_slot(user_id, message):
+            have = credit_store.balance(user_id)
+            if have < price:
+                if have == 0:
+                    await message.answer(
+                        flow_copy.msg("zero_balance"),
+                        reply_markup=_zero_balance_kb(),
+                        parse_mode="HTML",
+                    )
+                else:
+                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]
+                    ])
+                    await message.answer(
+                        flow_copy.msg("low_balance", needed=price, have=have),
+                        reply_markup=kb,
+                        parse_mode="HTML",
+                    )
+                return False
+            credit_store.charge(user_id, price)
+            charged = True
+            metrics.log_event(
+                "video_requested", user_id=user_id, username=_username(message),
+                source="mp_animate",
+                payload={"model": video_model, "count": 1, "mode": "ingredients", "surface": "seller"},
+            )
+            ok = await _seller_video_backend_call_and_send(
+                message, prompt, image_b64=image_b64, aspect_ratio=aspect_ratio,
+                user_id=user_id, video_model=video_model,
+            )
+    except RateLimited:
+        return False
+    except Exception:
+        log.exception("seller video backend generation failed")
+        ok = False
+    finally:
+        if charged and not ok:
+            credit_store.refund(user_id, price)
+
+    metrics.log_event("video_success" if ok else "video_failed", user_id=user_id, source="mp_animate")
+    if ok:
+        metrics.log_event(
+            "credits_charged", user_id=user_id, source="mp_animate",
+            payload={"amount": price, "action": "video_mp_animate"},
+        )
+    elif charged:
+        metrics.log_event(
+            "credits_refunded", user_id=user_id, source="mp_animate",
+            payload={"amount": price},
+        )
+    metrics.log_flow_job(
+        user_id=user_id,
+        account_id="consumer-backend",
+        operation_type="video_mp_animate",
+        model=video_model,
+        bot_credits_charged=price if ok else 0,
+        refund_amount=0 if ok else price if charged else 0,
+        duration_ms=_ms_since(started),
+        status="success" if ok else "fail",
+        error_type=None if ok else "backend_failed",
+    )
+    return ok
+
+
+async def _seller_video_from_photo(
+    message: types.Message, prompt: str, *, aspect_ratio: str, user_id: int,
+    video_model: str = VID_REF_DEFAULT_MODEL,
+) -> bool:
+    """Seller marketplace animate job: download product photo, run video backend."""
+    try:
+        photo = message.photo[-1]
+        buf = await bot.download(photo.file_id)
+        data = buf.read() if hasattr(buf, "read") else bytes(buf)
+    except Exception:
+        log.exception("seller video photo download failed")
+        await message.answer(flow_copy.msg("upload_failed"))
+        return False
+    image_b64 = base64.b64encode(data).decode("ascii")
+    return await _seller_video_generate_and_send(
+        message, prompt, image_b64=image_b64, aspect_ratio=aspect_ratio,
+        user_id=user_id, video_model=video_model,
     )
 
 
@@ -7164,13 +7461,31 @@ async def on_marketplace_action(callback: types.CallbackQuery):
         job = data.split(":", 2)[2]
         plat = _ws(user_id).get("mp_platform", "wb")
         if job == "animate":
-            # Видео для seller ещё не заведено в общий бэкенд (§A) — мягкая заглушка.
             await callback.answer()
-            await msg.edit_text(
-                "🎬 Видео для карточек скоро. Пока доступны фото-задачи: "
-                "белый фон, инфографика, на модели, обложка, замена фона.",
-                reply_markup=mp_jobs_kb(plat),
-            )
+            if IS_SELLER:
+                _reset_image_flow(user_id)
+                st = _ws(user_id)
+                st["mp_platform"] = plat
+                st["await"] = "mp_video_photo"
+                st["vmodel"] = VID_REF_DEFAULT_MODEL
+                st["vfmt"] = "port"
+                st["vcount"] = 1
+                metrics.log_event("mp_job", user_id=user_id, source=f"{plat}:animate")
+                await msg.edit_text(
+                    _mp_video_request_text(plat),
+                    reply_markup=_mp_back_kb(),
+                    parse_mode="HTML",
+                )
+            else:
+                pending_edits.pop(user_id, None)
+                _vid_clear(user_id)
+                st = _ws(user_id)
+                _clear_image_flow_keys(st)
+                st["vmode"] = "ingredients"
+                st["vmodel"] = VID_REF_DEFAULT_MODEL
+                st["vcount"] = 1
+                st["mp_platform"] = plat
+                await show_video_ingredients(msg, user_id=user_id, edit=True)
             return
         if job not in _MP_PRODUCT_PHOTO_JOBS:
             await callback.answer()
@@ -9411,7 +9726,14 @@ async def robokassa_health(request: web.Request) -> web.Response:
 
 async def _start_web_server() -> web.AppRunner:
     import admin_api as _admin_api
-    app = web.Application()
+    try:
+        client_max_size = max(
+            1024 * 1024,
+            int(os.getenv("WEB_CLIENT_MAX_SIZE", str(32 * 1024 * 1024))),
+        )
+    except (TypeError, ValueError):
+        client_max_size = 32 * 1024 * 1024
+    app = web.Application(client_max_size=client_max_size)
     _admin_api.register_admin_routes(app, account_pool, keepers)
     if not IS_SELLER:
         # Только consumer (с пулом) отдаёт генерацию для seller-бота (§A).
@@ -9825,6 +10147,25 @@ async def handle_photo(message: types.Message):
             await _video_generate_and_send(message, caption_text, user_id=user_id)
         else:
             await message.answer(flow_copy.msg("vid_text_only_hint"))
+        return
+
+    if st.get("await") == "mp_video_photo":
+        plat = st.get("mp_platform", "wb")
+        caption_text = (message.caption or "").strip()
+        prompt = _mp_video_prompt(
+            plat,
+            caption_text,
+            brand_kit=_mp_brand_kit(user_id),
+            niche=_mp_niche(user_id),
+        )
+        metrics.log_event("mp_video_photo_uploaded", user_id=user_id, source=f"{plat}:animate")
+        ok = await _seller_video_from_photo(
+            message, prompt, aspect_ratio="portrait", user_id=user_id,
+            video_model=st.get("vmodel") or VID_REF_DEFAULT_MODEL,
+        )
+        if ok:
+            st["await"] = None
+            pending_edits.pop(user_id, None)
         return
 
     if st.get("await") == "mp_series_photo":

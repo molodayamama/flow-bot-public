@@ -301,11 +301,18 @@ Flow-квоты.
 - **Интерфейс seller сделан маркетплейс-ориентированным:** главное меню =
   «Карточки для маркетплейсов» + баланс + профиль (без свободной генерации/видео/
   идей/мои фото), своя нижняя клавиатура, свои команды Telegram, своё приветствие.
+- **Marketplace video через backend — сделано:** seller-кнопка «оживить фото»
+  просит фото товара, списывает seller-кредиты по `video_price(..., "ingredients")`,
+  отправляет `kind="video_ingredients"` + base64 фото на consumer backend, consumer
+  грузит фото на video-capable аккаунт, генерирует reference-to-video и возвращает
+  mp4 в `video_b64`. Seller отправляет готовое видео в Telegram и возвращает
+  кредиты при ошибке.
 
 Осталось достроить:
-- **Видео через бэкенд** — сейчас у seller кнопка «оживить» показывает мягкую
-  заглушку «скоро»; нужно завести video-генерацию в `/internal/generate`.
-- Живая проверка на VPS (нужен запущенный seller + общий `INTERNAL_API_TOKEN`).
+- Живая платная проверка marketplace video на VPS (осознанно, с расходом Flow).
+- Если понадобится не только marketplace animate, а весь consumer video wizard
+  внутри seller — отдельно протащить text/frames/edit/extend через backend.
+- Точный resize/zip экспорт и seller SBP/Card callback routing.
 
 Архитектура (общая):
 

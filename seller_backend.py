@@ -43,11 +43,14 @@ def build_request(
     user_id: int,
     kind: str = "image",
     image_b64: str | None = None,
+    video_model: str | None = None,
 ) -> dict[str, Any]:
     """Serialize a generation request (shared by client and tests).
 
     ``kind="i2i"`` carries the user's product photo as base64 in ``image_b64``;
     the consumer uploads it to an account and runs image-to-image.
+    ``kind="video_ingredients"`` uses the same image field and sets
+    ``video_model`` for the consumer-side Flow video run.
     """
     req: dict[str, Any] = {
         "kind": kind,
@@ -59,6 +62,8 @@ def build_request(
     }
     if image_b64 is not None:
         req["image_b64"] = image_b64
+    if video_model is not None:
+        req["video_model"] = str(video_model or "")
     return req
 
 
@@ -102,7 +107,7 @@ def register_internal_routes(
 class BackendClient:
     """Seller-side client for the consumer's internal generation endpoint."""
 
-    def __init__(self, base_url: str, token: str, *, timeout_sec: float = 120.0) -> None:
+    def __init__(self, base_url: str, token: str, *, timeout_sec: float = 420.0) -> None:
         self._base = base_url.rstrip("/")
         self._token = token
         self._timeout = timeout_sec
@@ -114,7 +119,11 @@ class BackendClient:
             return None
         host = os.getenv("BACKEND_HOST", "127.0.0.1")
         port = os.getenv("BACKEND_PORT") or os.getenv("CONSUMER_WEB_PORT") or "8081"
-        return cls(f"http://{host}:{port}", tok)
+        try:
+            timeout_sec = max(30.0, float(os.getenv("BACKEND_TIMEOUT_SEC", "420")))
+        except (TypeError, ValueError):
+            timeout_sec = 420.0
+        return cls(f"http://{host}:{port}", tok, timeout_sec=timeout_sec)
 
     async def generate(self, **kwargs: Any) -> dict[str, Any]:
         payload = build_request(**kwargs)

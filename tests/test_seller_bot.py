@@ -83,6 +83,7 @@ class SellerMenuTests(unittest.TestCase):
             calls: list[str] = []
             orig_i2i = flow_bot._backend_generate_i2i
             orig_img = flow_bot._backend_generate_images
+            orig_vid = flow_bot._backend_generate_video_ingredients
 
             async def fake_i2i(req):  # noqa: ANN001
                 calls.append("i2i")
@@ -92,16 +93,23 @@ class SellerMenuTests(unittest.TestCase):
                 calls.append("image")
                 return {"images": []}
 
+            async def fake_vid(req):  # noqa: ANN001
+                calls.append("video")
+                return {"videos": []}
+
             flow_bot._backend_generate_i2i = fake_i2i
             flow_bot._backend_generate_images = fake_img
+            flow_bot._backend_generate_video_ingredients = fake_vid
             try:
                 await flow_bot._backend_generate({"kind": "i2i"})
+                await flow_bot._backend_generate({"kind": "video_ingredients"})
                 await flow_bot._backend_generate({"kind": "image"})
                 await flow_bot._backend_generate({})
             finally:
                 flow_bot._backend_generate_i2i = orig_i2i
                 flow_bot._backend_generate_images = orig_img
-            self.assertEqual(calls, ["i2i", "image", "image"])
+                flow_bot._backend_generate_video_ingredients = orig_vid
+            self.assertEqual(calls, ["i2i", "video", "image", "image"])
 
         asyncio.run(run())
 
@@ -112,6 +120,28 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("exclude=tried if tried else None", src)
         self.assertIn("upload_image(data", src)
         self.assertIn("allow_browser_fallback=False", src)
+
+    def test_backend_video_ingredients_returns_video_bytes(self) -> None:
+        src = inspect.getsource(flow_bot._backend_generate_video_ingredients)
+        self.assertIn('"video_ingredients"', inspect.getsource(flow_bot._backend_generate))
+        self.assertIn("video_b64", src)
+        self.assertIn("fetch_video_bytes(media_id)", src)
+        self.assertIn("reference_sources=[source]", src)
+        self.assertIn("_account_for_video(user_id)", src)
+
+    def test_web_server_allows_large_internal_media_payloads(self) -> None:
+        src = inspect.getsource(flow_bot._start_web_server)
+        self.assertIn("WEB_CLIENT_MAX_SIZE", src)
+        self.assertIn("client_max_size=client_max_size", src)
+
+    def test_seller_marketplace_animate_is_backend_wired(self) -> None:
+        source = inspect.getsource(flow_bot.on_marketplace_action)
+        self.assertIn('st["await"] = "mp_video_photo"', source)
+        self.assertIn("_mp_video_request_text(plat)", source)
+        self.assertNotIn("Видео для карточек скоро", source)
+        photo_source = inspect.getsource(flow_bot.handle_photo)
+        self.assertIn('st.get("await") == "mp_video_photo"', photo_source)
+        self.assertIn("_seller_video_from_photo(", photo_source)
 
     def test_platform_keyboard(self) -> None:
         cb = self._callbacks(flow_bot.mp_root_kb())

@@ -35,6 +35,15 @@ class TokenAndSchemaTests(unittest.TestCase):
                                image_model="m", user_id=1)
         self.assertNotIn("image_b64", img)
 
+    def test_build_request_video_carries_model_and_image(self) -> None:
+        req = sb.build_request(prompt="short product video", num_images=1,
+                               aspect_ratio="portrait", image_model="m", user_id=2,
+                               kind="video_ingredients", image_b64="QUJD",
+                               video_model="veo-lite")
+        self.assertEqual(req["kind"], "video_ingredients")
+        self.assertEqual(req["image_b64"], "QUJD")
+        self.assertEqual(req["video_model"], "veo-lite")
+
     def test_from_env(self) -> None:
         old = os.environ.get(sb.INTERNAL_TOKEN_ENV)
         try:
