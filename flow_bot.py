@@ -3215,6 +3215,17 @@ def main_menu_kb(show_repeat: bool = False, credits: int | None = None) -> types
         f"💳 {credits} кр · Пополнить" if credits is not None
         else L("balance")
     )
+    if IS_SELLER:
+        # Селлер-бот (@photozhab_wb_bot): маркетплейс-ориентированное меню —
+        # карточки первым экраном, без консьюмерских пунктов (свободная
+        # генерация/видео/идеи/мои фото).
+        rows = [
+            [B(text="🛒 Карточки для маркетплейсов", callback_data="m:mp")],
+            [B(text=balance_label, callback_data="m:balance")],
+            [_menu_button("profile", "m:profile"), _menu_button("invite", "m:invite")],
+        ]
+        return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
     rows = [
         [_menu_button("gen", "m:gen")],
         [_menu_button("vid_gen", "m:vid")],
@@ -3223,9 +3234,6 @@ def main_menu_kb(show_repeat: bool = False, credits: int | None = None) -> types
         [B(text=balance_label, callback_data="m:balance")],
         [_menu_button("profile", "m:profile"), _menu_button("invite", "m:invite")],
     ]
-    if IS_SELLER:
-        # Селлер-бот (@photozhab_wb_bot): маркетплейсы — первым экраном.
-        rows.insert(0, [B(text="🛒 Маркетплейсы (WB/Ozon/ЯМ)", callback_data="m:mp")])
     # show_repeat parameter kept for backward compatibility but ignored
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -3743,6 +3751,13 @@ def edit_settings_kb(fmt: str, imodel: str) -> types.InlineKeyboardMarkup:
 def reply_menu_kb() -> types.ReplyKeyboardMarkup:
     """Постоянная клавиатура внизу чата — всегда под рукой."""
     B = types.KeyboardButton
+    if IS_SELLER:
+        # Селлер-бот: минимальная нижняя клавиатура (меню = карточки, баланс).
+        return types.ReplyKeyboardMarkup(
+            keyboard=[[B(text=L("kb_menu")), B(text=L("kb_balance"))]],
+            resize_keyboard=True,
+            is_persistent=True,
+        )
     return types.ReplyKeyboardMarkup(
         keyboard=[
             [B(text=L("kb_gen")), B(text=L("kb_vid"))],
@@ -5602,9 +5617,93 @@ async def _backend_generate_images(req: dict) -> dict:
     return {"error": "generation failed"}
 
 
-async def _seller_backend_send(
-    message: types.Message, prompt: str, *, num_images: int,
-    aspect_ratio: str, user_id: int, image_model: str,
+async def _backend_generate_i2i(req: dict) -> dict:
+    """Consumer-side: image→image on the user's uploaded photo, return URLs.
+
+    The seller sends the product photo as base64; we upload it to an account and
+    run image-to-image (same core as _do_edit_and_send), then return URLs.
+    """
+    prompt = str(req.get("prompt") or "").strip()
+    if len(prompt) < 3:
+        return {"error": "empty prompt"}
+    image_b64 = req.get("image_b64")
+    if not image_b64:
+        return {"error": "missing image"}
+    try:
+        data = base64.b64decode(image_b64)
+    except Exception:
+        return {"error": "bad image"}
+    num_images = max(1, min(int(req.get("num_images") or 1), 8))
+    aspect_ratio = str(req.get("aspect_ratio") or "portrait")
+    image_model = str(req.get("image_model") or DEFAULT_IMAGE_MODEL)
+    user_id = int(req.get("user_id") or 0)
+
+    tried: set[str] = set()
+    last_error = "generation failed"
+    for attempt in range(2):
+        acc_id = _account_for_image(
+            user_id, prefer_image_only=True, exclude=tried if tried else None,
+        )
+        if acc_id is None:
+            return {"error": "accounts_unavailable" if not tried else last_error}
+        tried.add(acc_id)
+        project_id = await ensure_user_project(user_id, account_id=acc_id)
+        try:
+            source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png")
+        except Exception:
+            log.exception("backend upload_image failed (account %s, attempt %d)", acc_id, attempt)
+            account_pool.mark_failure(acc_id)
+            last_error = "upload failed"
+            continue
+        if not source:
+            last_error = "upload failed"
+            continue
+        upload_project = source.pop("_project_id", None) or project_id
+        inputs = build_image_inputs(source, load_edit_capture(EDIT_CAPTURE_FILE))
+        if not inputs:
+            last_error = "no image inputs"
+            continue
+        try:
+            async with account_pool.image_slot(acc_id):
+                result = await _client_for_acc(acc_id).generate_images(
+                    prompt, aspect_ratio=aspect_ratio, num_images=num_images,
+                    project_id=upload_project, image_inputs=inputs,
+                    allow_browser_fallback=False, image_model=image_model,
+                )
+        except Exception:
+            log.exception("backend i2i failed (account %s, attempt %d)", acc_id, attempt)
+            account_pool.mark_failure(acc_id)
+            last_error = "generation failed"
+            continue
+        if "error" in result:
+            _mark_image_account_failure(acc_id, result)
+            last_error = str(result.get("error"))[:300]
+            if result.get("error_type") == "prompt_rejected":
+                return {"error": last_error}
+            continue
+        pairs = result_pairs(result)
+        if not pairs:
+            last_error = "nothing_returned"
+            continue
+        account_pool.mark_success(acc_id)
+        return {
+            "images": [{"url": url, "img": img} for url, img in pairs],
+            "account_id": acc_id,
+            "project_id": upload_project,
+        }
+    return {"error": last_error}
+
+
+async def _backend_generate(req: dict) -> dict:
+    """Internal endpoint dispatcher by ``kind`` (image | i2i)."""
+    if req.get("kind") == "i2i":
+        return await _backend_generate_i2i(req)
+    return await _backend_generate_images(req)
+
+
+async def _seller_backend_call_and_send(
+    message: types.Message, prompt: str, *, num_images: int, aspect_ratio: str,
+    user_id: int, image_model: str, kind: str = "image", image_b64: str | None = None,
 ) -> bool:
     """Seller-side: ask the consumer backend to generate, then send the URLs."""
     client = _backend_client()
@@ -5614,7 +5713,7 @@ async def _seller_backend_send(
     status_msg = await message.answer(flow_copy.msg("generating"))
     data = await client.generate(
         prompt=prompt, num_images=num_images, aspect_ratio=aspect_ratio,
-        image_model=image_model, user_id=user_id,
+        image_model=image_model, user_id=user_id, kind=kind, image_b64=image_b64,
     )
     images = data.get("images") or []
     if data.get("error") or not images:
@@ -5649,15 +5748,19 @@ async def _seller_backend_send(
 async def _seller_generate_and_send(
     message: types.Message, prompt: str, *, num_images: int, aspect_ratio: str,
     user_id: int, action: str = "gen", image_model: str = DEFAULT_IMAGE_MODEL,
-) -> None:
-    """Seller text→image: charge the seller wallet, generate via backend, send."""
+    kind: str = "image", image_b64: str | None = None,
+) -> bool:
+    """Seller generation: charge the seller wallet, generate via backend, send.
+
+    ``kind="i2i"`` runs image-to-image on ``image_b64`` (the user's photo).
+    """
     if _backend_client() is None:
         await message.answer(flow_copy.msg("accounts_unavailable"))
-        return
+        return False
     metrics.log_event(
         _IMG_REQUEST_EVENT.get(action, "image_requested"), user_id=user_id,
         username=_username(message), source=action,
-        payload={"count": num_images, "model": image_model, "surface": "seller"},
+        payload={"count": num_images, "model": image_model, "surface": "seller", "kind": kind},
     )
     surcharge = image_model_extra(image_model) * max(1, num_images)
     started = time.monotonic()
@@ -5665,24 +5768,45 @@ async def _seller_generate_and_send(
     try:
         async with user_slot(user_id, message):
             async with credit_gate(user_id, action, message, num_images, surcharge=surcharge) as charge:
-                ok = await _seller_backend_send(
+                ok = await _seller_backend_call_and_send(
                     message, prompt, num_images=num_images, aspect_ratio=aspect_ratio,
-                    user_id=user_id, image_model=image_model,
+                    user_id=user_id, image_model=image_model, kind=kind, image_b64=image_b64,
                 )
                 charge.ok = ok
     except RateLimited:
         _log_image_job(user_id, action, image_model, started, ok=False, error="rate_limited")
-        return
+        return False
     except NotEnoughCredits:
         metrics.log_event("image_failed", user_id=user_id, source=action,
                           payload={"reason": "insufficient_credits"})
-        return
+        return False
     charged = (action_price(action, num_images) + surcharge) if ok else 0
     metrics.log_event("image_success" if ok else "image_failed", user_id=user_id, source=action)
     if ok:
         metrics.log_event("credits_charged", user_id=user_id, source=action,
                           payload={"amount": charged, "action": action})
     _log_image_job(user_id, action, image_model, started, ok=ok, charged=charged)
+    return ok
+
+
+async def _seller_i2i_from_photo(
+    message: types.Message, instruction: str, *, num_images: int, aspect_ratio: str,
+    user_id: int, action: str,
+) -> bool:
+    """Seller marketplace photo job: download the product photo, run i2i via backend."""
+    try:
+        photo = message.photo[-1]
+        buf = await bot.download(photo.file_id)
+        data = buf.read() if hasattr(buf, "read") else bytes(buf)
+    except Exception:
+        log.exception("seller photo download failed")
+        await message.answer(flow_copy.msg("upload_failed"))
+        return False
+    image_b64 = base64.b64encode(data).decode("ascii")
+    return await _seller_generate_and_send(
+        message, instruction, num_images=num_images, aspect_ratio=aspect_ratio,
+        user_id=user_id, action=action, kind="i2i", image_b64=image_b64,
+    )
 
 
 async def _generate_and_send(
@@ -7040,16 +7164,13 @@ async def on_marketplace_action(callback: types.CallbackQuery):
         job = data.split(":", 2)[2]
         plat = _ws(user_id).get("mp_platform", "wb")
         if job == "animate":
+            # Видео для seller ещё не заведено в общий бэкенд (§A) — мягкая заглушка.
             await callback.answer()
-            pending_edits.pop(user_id, None)
-            _vid_clear(user_id)
-            st = _ws(user_id)
-            _clear_image_flow_keys(st)
-            st["vmode"] = "ingredients"
-            st["vmodel"] = VID_REF_DEFAULT_MODEL
-            st["vcount"] = 1
-            st["mp_platform"] = plat
-            await show_video_ingredients(msg, user_id=user_id, edit=True)
+            await msg.edit_text(
+                "🎬 Видео для карточек скоро. Пока доступны фото-задачи: "
+                "белый фон, инфографика, на модели, обложка, замена фона.",
+                reply_markup=mp_jobs_kb(plat),
+            )
             return
         if job not in _MP_PRODUCT_PHOTO_JOBS:
             await callback.answer()
@@ -9296,7 +9417,7 @@ async def _start_web_server() -> web.AppRunner:
         # Только consumer (с пулом) отдаёт генерацию для seller-бота (§A).
         try:
             import seller_backend
-            seller_backend.register_internal_routes(app, _backend_generate_images)
+            seller_backend.register_internal_routes(app, _backend_generate)
         except Exception:
             log.exception("internal generation endpoint registration failed")
     if _robokassa_configured():
@@ -9723,6 +9844,18 @@ async def handle_photo(message: types.Message):
             brand_kit=_mp_brand_kit(user_id),
             niche=_mp_niche(user_id),
         )
+        metrics.log_event("mp_series_photo_uploaded", user_id=user_id, source=f"{plat}:{count}")
+        if IS_SELLER:
+            # Seller: i2i через общий бэкенд основного бота (§A).
+            ok = await _seller_i2i_from_photo(
+                message, prompt, num_images=count,
+                aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", "f34")),
+                user_id=user_id, action="mp_series",
+            )
+            if ok:
+                st["await"] = None
+                st.pop("mp_series_count", None)
+            return
         status_msg = await message.answer(flow_copy.msg("uploading_photo"))
         ref = await _upload_image_ref_from_photo_message(
             message,
@@ -9737,7 +9870,6 @@ async def handle_photo(message: types.Message):
             await status_msg.delete()
         except Exception:
             pass
-        metrics.log_event("mp_series_photo_uploaded", user_id=user_id, source=f"{plat}:{count}")
         ok = await _run_i2i(
             message,
             ref,
@@ -9764,6 +9896,17 @@ async def handle_photo(message: types.Message):
             brand_kit=_mp_brand_kit(user_id),
             niche=_mp_niche(user_id),
         )
+        metrics.log_event("mp_photo_uploaded", user_id=user_id, source=f"{plat}:{job}")
+        if IS_SELLER:
+            # Seller: i2i через общий бэкенд основного бота (§A).
+            ok = await _seller_i2i_from_photo(
+                message, instruction, num_images=1,
+                aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", "f34")),
+                user_id=user_id, action="edit",
+            )
+            if ok:
+                st["await"] = None
+            return
         status_msg = await message.answer(flow_copy.msg("uploading_photo"))
         ref = await _upload_image_ref_from_photo_message(
             message,
@@ -9783,7 +9926,6 @@ async def handle_photo(message: types.Message):
         st["await"] = "edit"
         st["edit_fmt"] = "f34"
         st["edit_imodel"] = st.get("edit_imodel", DEFAULT_IMAGE_MODEL)
-        metrics.log_event("mp_photo_uploaded", user_id=user_id, source=f"{plat}:{job}")
         ok = await _edit_and_send(
             message,
             ref,
@@ -10231,17 +10373,24 @@ async def _main_impl():
         log.warning("get_me failed; referral links use the env fallback")
 
     # Нативное меню команд Telegram (синяя кнопка «Меню» у поля ввода).
+    if IS_SELLER:
+        _bot_commands = [
+            types.BotCommand(command="start", description="Запуск и меню"),
+            types.BotCommand(command="menu", description="🛒 Карточки для маркетплейсов"),
+            types.BotCommand(command="balance", description="💳 Баланс и пополнение"),
+            types.BotCommand(command="help", description="Как пользоваться"),
+        ]
+    else:
+        _bot_commands = [
+            types.BotCommand(command="start", description="Запуск и главное меню"),
+            types.BotCommand(command="menu", description="🏠 Главное меню"),
+            types.BotCommand(command="balance", description="💳 Баланс и пополнение"),
+            types.BotCommand(command="ideas", description="Ideas and templates"),
+            types.BotCommand(command="help", description="How to use the bot"),
+            types.BotCommand(command="referral", description="Invite a friend"),
+        ]
     try:
-        await bot.set_my_commands(
-            [
-                types.BotCommand(command="start", description="Запуск и главное меню"),
-                types.BotCommand(command="menu", description="🏠 Главное меню"),
-                types.BotCommand(command="balance", description="💳 Баланс и пополнение"),
-                types.BotCommand(command="ideas", description="Ideas and templates"),
-                types.BotCommand(command="help", description="How to use the bot"),
-                types.BotCommand(command="referral", description="Invite a friend"),
-            ]
-        )
+        await bot.set_my_commands(_bot_commands)
     except Exception:
         log.warning("Не удалось установить меню команд")
 

@@ -25,6 +25,16 @@ class TokenAndSchemaTests(unittest.TestCase):
         self.assertEqual(req["user_id"], 7)
         self.assertEqual(req["aspect_ratio"], "portrait")
 
+    def test_build_request_i2i_carries_image(self) -> None:
+        req = sb.build_request(prompt="карточка", num_images=5, aspect_ratio="portrait",
+                               image_model="nb2", user_id=1, kind="i2i", image_b64="QUJD")
+        self.assertEqual(req["kind"], "i2i")
+        self.assertEqual(req["image_b64"], "QUJD")
+        # text image request omits the image field entirely
+        img = sb.build_request(prompt="x", num_images=1, aspect_ratio="portrait",
+                               image_model="m", user_id=1)
+        self.assertNotIn("image_b64", img)
+
     def test_from_env(self) -> None:
         old = os.environ.get(sb.INTERNAL_TOKEN_ENV)
         try:

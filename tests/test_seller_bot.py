@@ -63,6 +63,56 @@ class SellerMenuTests(unittest.TestCase):
         flow_bot.IS_SELLER = False
         self.assertNotIn("m:mp", self._callbacks(flow_bot.main_menu_kb()))
 
+    def test_seller_main_menu_is_marketplace_first(self) -> None:
+        flow_bot.IS_SELLER = True
+        cb = self._callbacks(flow_bot.main_menu_kb())
+        self.assertEqual(cb[0], "m:mp")               # marketplace first
+        self.assertIn("m:balance", cb)
+        for consumer_only in ("m:gen", "m:vid", "m:ideas", "m:myphoto"):
+            self.assertNotIn(consumer_only, cb)
+        # Consumer menu keeps its own buttons and has no marketplace entry.
+        flow_bot.IS_SELLER = False
+        ccb = self._callbacks(flow_bot.main_menu_kb())
+        self.assertIn("m:gen", ccb)
+        self.assertNotIn("m:mp", ccb)
+
+    def test_backend_dispatch_by_kind(self) -> None:
+        import asyncio
+
+        async def run() -> None:
+            calls: list[str] = []
+            orig_i2i = flow_bot._backend_generate_i2i
+            orig_img = flow_bot._backend_generate_images
+
+            async def fake_i2i(req):  # noqa: ANN001
+                calls.append("i2i")
+                return {"images": []}
+
+            async def fake_img(req):  # noqa: ANN001
+                calls.append("image")
+                return {"images": []}
+
+            flow_bot._backend_generate_i2i = fake_i2i
+            flow_bot._backend_generate_images = fake_img
+            try:
+                await flow_bot._backend_generate({"kind": "i2i"})
+                await flow_bot._backend_generate({"kind": "image"})
+                await flow_bot._backend_generate({})
+            finally:
+                flow_bot._backend_generate_i2i = orig_i2i
+                flow_bot._backend_generate_images = orig_img
+            self.assertEqual(calls, ["i2i", "image", "image"])
+
+        asyncio.run(run())
+
+    def test_backend_i2i_uses_account_failover(self) -> None:
+        src = inspect.getsource(flow_bot._backend_generate_i2i)
+        self.assertIn("for attempt in range(2):", src)
+        self.assertIn("prefer_image_only=True", src)
+        self.assertIn("exclude=tried if tried else None", src)
+        self.assertIn("upload_image(data", src)
+        self.assertIn("allow_browser_fallback=False", src)
+
     def test_platform_keyboard(self) -> None:
         cb = self._callbacks(flow_bot.mp_root_kb())
         self.assertEqual(

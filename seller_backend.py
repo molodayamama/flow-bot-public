@@ -42,9 +42,14 @@ def build_request(
     image_model: str,
     user_id: int,
     kind: str = "image",
+    image_b64: str | None = None,
 ) -> dict[str, Any]:
-    """Serialize a generation request (shared by client and tests)."""
-    return {
+    """Serialize a generation request (shared by client and tests).
+
+    ``kind="i2i"`` carries the user's product photo as base64 in ``image_b64``;
+    the consumer uploads it to an account and runs image-to-image.
+    """
+    req: dict[str, Any] = {
         "kind": kind,
         "prompt": str(prompt or ""),
         "num_images": int(num_images),
@@ -52,6 +57,9 @@ def build_request(
         "image_model": str(image_model or ""),
         "user_id": int(user_id),
     }
+    if image_b64 is not None:
+        req["image_b64"] = image_b64
+    return req
 
 
 def register_internal_routes(
