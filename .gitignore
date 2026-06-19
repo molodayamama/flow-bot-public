@@ -3,6 +3,8 @@
 .env.local
 .env.*.local
 .env_flow
+.env.seller
+.env.consumer
 
 # Local secret config (kept on disk, never committed)
 api_config.json
