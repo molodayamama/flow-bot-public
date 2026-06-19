@@ -302,6 +302,42 @@ Guardrails are unchanged: this is a manual review queue, not a contact list;
 `lead_id` is a public `chat_username/message_id`; no sender ids, usernames,
 phone numbers, or member lists are exported; outputs stay gitignored.
 
+## Second Pass - Tool-Seeking Segment 2026-06-19
+
+Goal: also surface tool-seekers - people who want a bot / neural net / service to
+generate the visual themselves (a direct fit for the Photozhab bot link).
+
+Changes:
+
+- `tools/lead_chat_discovery.py`: added AI / neural-net / SMM seed queries; the
+  discovered list grew to 102 public megagroups.
+- `tools/lead_pain_scan.py`: new `TOOL_SEEKING_HINTS` and a `tool_seeking`
+  `lead_type` (ranked above advice). It requires a genuine asking frame
+  ("какой нейросетью?", "посоветуйте бот", "ищу сервис") and rejects bot ads via
+  `SUPPLY_ONLY_HINTS` plus a call-to-action guard (an `@handle` / `t.me/` / `http`
+  link marks an ad, not a seeker).
+
+Result (102 chats, 120-day window): 737 grouped leads - 292 done_for_you, 441
+advice, and only **3 tool_seeking** (all weak: a news post, an off-topic message,
+and a voice-not-image request).
+
+Key finding: a tool-seeking buyer ("посоветуйте бота для карточек") is almost
+absent in these chats. Instead the chats are saturated with competitor "upload
+photo -> finished card" bot ads (SSA Navigator, OblozhkaAI, ABCardo, etc.). So
+the demand for a card bot is market-validated, but the supply side is crowded and
+tool-seekers do not post requests - they use the advertised bots or hire a
+person. Actionable segments stay done_for_you and advice; see
+`docs/PRODUCT_RECOMMENDATIONS_2026-06-19.md` for how to route the bot through
+those two entries rather than as "yet another bot".
+
+Command used:
+
+```text
+python tools/lead_pain_scan.py --approve-external-action \
+  --chats-file lead_scan_runs/discovered_chats.json \
+  --days 120 --limit-per-term 50 --max-samples-per-chat 6
+```
+
 ## Validation Notes
 
 Commands and actions performed:

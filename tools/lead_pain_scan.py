@@ -194,6 +194,73 @@ SELLER_SEEKING_HINTS = (
     "\u0440\u0435\u0437\u044e\u043c\u0435",
 )
 
+# Tool-seeking demand: the author wants a bot / neural net / service / app to
+# generate the visual themselves (this is who we can hand the Photozhab bot to).
+TOOL_SEEKING_HINTS = (
+    "\u043a\u0430\u043a\u043e\u0439 \u043d\u0435\u0439\u0440\u043e\u0441\u0435\u0442",
+    "\u043a\u0430\u043a\u0430\u044f \u043d\u0435\u0439\u0440\u043e\u0441\u0435\u0442",
+    "\u043a\u0430\u043a\u0443\u044e \u043d\u0435\u0439\u0440\u043e\u0441\u0435\u0442",
+    "\u043a\u0430\u043a\u0438\u043c \u0441\u0435\u0440\u0432\u0438\u0441",
+    "\u043a\u0430\u043a\u043e\u0439 \u0441\u0435\u0440\u0432\u0438\u0441",
+    "\u043a\u0430\u043a\u043e\u0435 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435",
+    "\u043a\u0430\u043a\u0438\u043c \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435\u043c",
+    "\u043a\u0430\u043a\u0443\u044e \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0443",
+    "\u043a\u0430\u043a\u043e\u0439 \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u043e\u0439",
+    "\u0447\u0435\u043c \u0441\u0434\u0435\u043b\u0430\u0442\u044c",
+    "\u0432 \u0447\u0435\u043c \u0441\u0434\u0435\u043b\u0430\u0442\u044c",
+    "\u0432 \u0447\u0451\u043c \u0441\u0434\u0435\u043b\u0430\u0442\u044c",
+    "\u0447\u0435\u0440\u0435\u0437 \u0447\u0442\u043e",
+    "\u0441 \u043f\u043e\u043c\u043e\u0449\u044c\u044e \u0447\u0435\u0433\u043e",
+    "\u043a\u0430\u043a \u0441\u0430\u043c\u043e\u043c\u0443 \u0441\u0434\u0435\u043b\u0430\u0442\u044c",
+    "\u043a\u0430\u043a \u0441\u0430\u043c\u043e\u0439 \u0441\u0434\u0435\u043b\u0430\u0442\u044c",
+    "\u043a\u0430\u043a \u0441\u0430\u043c\u043e\u0441\u0442\u043e\u044f\u0442\u0435\u043b\u044c\u043d\u043e",
+    "\u043f\u043e\u0441\u043e\u0432\u0435\u0442\u0443\u0439\u0442\u0435 \u043d\u0435\u0439\u0440\u043e\u0441\u0435\u0442",
+    "\u043f\u043e\u0441\u043e\u0432\u0435\u0442\u0443\u0439\u0442\u0435 \u0441\u0435\u0440\u0432\u0438\u0441",
+    "\u043f\u043e\u0441\u043e\u0432\u0435\u0442\u0443\u0439\u0442\u0435 \u0431\u043e\u0442",
+    "\u043f\u043e\u0441\u043e\u0432\u0435\u0442\u0443\u0439\u0442\u0435 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435",
+    "\u043f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435 \u043d\u0435\u0439\u0440\u043e\u0441\u0435\u0442",
+    "\u043f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435 \u0441\u0435\u0440\u0432\u0438\u0441",
+    "\u043f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435 \u0431\u043e\u0442",
+    "\u043f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435",
+    "\u0438\u0449\u0443 \u043d\u0435\u0439\u0440\u043e\u0441\u0435\u0442",
+    "\u0438\u0449\u0443 \u0441\u0435\u0440\u0432\u0438\u0441",
+    "\u0438\u0449\u0443 \u0431\u043e\u0442",
+    "\u0438\u0449\u0443 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435",
+    "\u0438\u0449\u0443 \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0443",
+    "\u043d\u0443\u0436\u043d\u0430 \u043d\u0435\u0439\u0440\u043e\u0441\u0435\u0442",
+    "\u043d\u0443\u0436\u0435\u043d \u0441\u0435\u0440\u0432\u0438\u0441",
+    "\u043d\u0443\u0436\u0435\u043d \u0431\u043e\u0442",
+    "\u043d\u0443\u0436\u043d\u043e \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435",
+    "\u043d\u0443\u0436\u043d\u0430 \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0430",
+    "\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440 \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u043d\u0435\u0439\u0440\u043e\u0441\u0435\u0442\u044c \u0434\u043b\u044f \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u043d\u0435\u0439\u0440\u043e\u0441\u0435\u0442\u044c \u0434\u043b\u044f \u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444",
+    "\u043d\u0435\u0439\u0440\u043e\u0441\u0435\u0442\u044c \u0434\u043b\u044f \u0444\u043e\u043d",
+    "\u043d\u0435\u0439\u0440\u043e\u0441\u0435\u0442\u044c \u0434\u043b\u044f \u0444\u043e\u0442\u043e",
+    "\u043d\u0435\u0439\u0440\u043e\u0441\u0435\u0442\u044c \u0447\u0442\u043e\u0431\u044b",
+    "\u043d\u0435\u0439\u0440\u043e\u0441\u0435\u0442\u044c \u043a\u043e\u0442\u043e\u0440\u0430\u044f",
+    "\u043d\u0435\u0439\u0440\u043e\u043d\u043a\u0430 \u0434\u043b\u044f",
+    "\u0431\u043e\u0442 \u0434\u043b\u044f \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0438\u0438",
+    "\u0431\u043e\u0442 \u0434\u043b\u044f \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u0431\u043e\u0442 \u0434\u043b\u044f \u0444\u043e\u0442\u043e",
+    "\u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0434\u043b\u044f \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u0441\u0435\u0440\u0432\u0438\u0441 \u0434\u043b\u044f \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u0441\u0435\u0440\u0432\u0438\u0441 \u0434\u043b\u044f \u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444",
+    "\u0441\u0430\u043c \u0441\u0434\u0435\u043b\u0430\u0442\u044c \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u0441\u0430\u043c\u043e\u043c\u0443 \u0441\u0434\u0435\u043b\u0430\u0442\u044c \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u0441\u0430\u043c\u043e\u0439 \u0441\u0434\u0435\u043b\u0430\u0442\u044c \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u0441\u0434\u0435\u043b\u0430\u0442\u044c \u0441\u0430\u043c\u043e\u043c\u0443",
+    "\u0441\u0434\u0435\u043b\u0430\u0442\u044c \u0441\u0430\u043c\u043e\u0439",
+    "\u0431\u0435\u0437 \u0434\u0438\u0437\u0430\u0439\u043d\u0435\u0440\u0430",
+    "\u0432\u043c\u0435\u0441\u0442\u043e \u0434\u0438\u0437\u0430\u0439\u043d\u0435\u0440\u0430",
+    "\u0437\u0430\u043c\u0435\u043d\u0438\u0442\u044c \u0434\u0438\u0437\u0430\u0439\u043d\u0435\u0440\u0430",
+    "\u0443\u0431\u0440\u0430\u0442\u044c \u0444\u043e\u043d",
+    "\u0443\u0434\u0430\u043b\u0438\u0442\u044c \u0444\u043e\u043d",
+    "\u043f\u043e\u043c\u0435\u043d\u044f\u0442\u044c \u0444\u043e\u043d",
+    "\u0441\u0433\u0435\u043d\u0435\u0440\u0438\u0440\u043e\u0432\u0430\u0442\u044c",
+    "\u0441\u0433\u0435\u043d\u0435\u0440\u0438\u0442\u044c",
+)
+
 TOPIC_HINTS = (
     "\u043a\u0430\u0440\u0442\u043e\u0447",
     "\u0438\u043d\u0444\u043e\u0433\u0440\u0430\u0444",
@@ -263,6 +330,33 @@ SUPPLY_ONLY_HINTS = (
     "\u0441\u0434\u0435\u043b\u0430\u044e \u0434\u043b\u044f \u0432\u0430\u0441",
     "\u043f\u043e\u043c\u043e\u0433\u0443 \u0432\u0430\u043c",
     "\u043f\u043e\u043c\u043e\u0433\u0443 \u0432\u0430\u0448\u0435\u043c\u0443",
+    # Tool/bot self-promotion (a product ad, not a seeker):
+    "\u043f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435",
+    "\u043f\u043e\u043f\u0440\u043e\u0431\u0443\u0439 \u043d\u0430\u0448",
+    "\u043f\u043e\u043f\u0440\u043e\u0431\u0443\u0439 \u0431\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u043e",
+    "\u0437\u0430\u0433\u0440\u0443\u0436\u0430\u0435\u0442\u0435 \u0444\u043e\u0442\u043e",
+    "\u0437\u0430\u0433\u0440\u0443\u0437\u0438 \u0444\u043e\u0442\u043e",
+    "\u043f\u043e\u043b\u0443\u0447\u0430\u0435\u0442\u0435 \u0433\u043e\u0442\u043e\u0432",
+    "\u043f\u043e\u043b\u0443\u0447\u0430\u0435\u0442\u0435 \u043a\u0430\u0440\u0442\u043e\u0447",
+    "\u043f\u043e\u043c\u043e\u0433\u0430\u0435\u0442 \u0441\u0435\u043b\u043b\u0435\u0440",
+    "\u043f\u043e\u043c\u043e\u0433\u0430\u0435\u0442 \u0441\u043e\u0437\u0434\u0430\u0432\u0430\u0442\u044c",
+    "\u0442\u0432\u043e\u0439 \u043a\u0430\u0440\u043c\u0430\u043d\u043d\u044b\u0439",
+    "\u0438\u0438-\u043c\u0430\u0440\u043a\u0435\u0442\u043e\u043b\u043e\u0433",
+    "ai-\u043c\u0430\u0440\u043a\u0435\u0442\u043e\u043b\u043e\u0433",
+    "\u0438\u0438 \u043c\u0430\u0440\u043a\u0435\u0442\u043e\u043b\u043e\u0433",
+    "\u043f\u0435\u0440\u0435\u0439\u0442\u0438 \u0432 \u0431\u043e\u0442",
+    "\u0441\u0441\u044b\u043b\u043a\u0430 \u0432 \u0448\u0430\u043f\u043a\u0435",
+    "\u0441\u0441\u044b\u043b\u043a\u0430 \u0432 \u043e\u043f\u0438\u0441\u0430\u043d\u0438\u0438",
+    "\u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0438\u0440",
+    "\u043e\u0444\u043e\u0440\u043c\u0438\u0442\u044c \u043f\u043e\u0434\u043f\u0438\u0441\u043a",
+    "\u0431\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u043e!",
+    "\u0432\u0430\u0448 \u043b\u0438\u0447\u043d\u044b\u0439 \u0434\u0438\u0437\u0430\u0439\u043d\u0435\u0440",
+    "\u043b\u0438\u0447\u043d\u044b\u0439 \u0434\u0438\u0437\u0430\u0439\u043d\u0435\u0440 \u0434\u043b\u044f",
+    "\u0437\u0430 \u043f\u0430\u0440\u0443 \u043c\u0438\u043d\u0443\u0442",
+    "\u0437\u0430 2 \u043c\u0438\u043d\u0443\u0442\u044b",
+    "\u0437\u0430 5 \u043c\u0438\u043d\u0443\u0442",
+    "\u0441\u043f\u043e\u0441\u043e\u0431 \u0443\u043f\u0430\u043a\u043e\u0432\u0430\u0442\u044c \u0442\u043e\u0432\u0430\u0440",
+    "\u0437\u0430\u043f\u0443\u0441\u0442\u0438",
     "\u043a\u043e\u043c\u0443 \u043d\u0443\u0436\u043d",
     "\u0432\u044b \u043f\u043e \u0430\u0434\u0440\u0435\u0441\u0443",
     "\u043f\u0440\u043e\u0444\u0435\u0441\u0441\u0438\u043e\u043d\u0430\u043b\u044c\u043d\u043e \u0437\u0430\u043d\u0438\u043c\u0430\u044e\u0441\u044c",
@@ -590,6 +684,7 @@ async def scan_chats(
         "unique_pain_authors": len(global_author_keys),
         "lead_candidates": len(leads),
         "done_for_you_leads": sum(1 for lead in leads if lead.get("lead_type") == "done_for_you"),
+        "tool_seeking_leads": sum(1 for lead in leads if lead.get("lead_type") == "tool_seeking"),
         "advice_leads": sum(1 for lead in leads if lead.get("lead_type") == "advice"),
         "supply_messages": sum(row["supply_messages"] for row in serial_rows),
         "noise_messages": sum(row["noise_messages"] for row in serial_rows),
@@ -777,13 +872,15 @@ def add_lead_candidate(
 
 
 def _lead_type_rank(lead_type: str) -> int:
-    return {"done_for_you": 3, "advice": 2, "signal": 1}.get(lead_type, 0)
+    return {"done_for_you": 4, "tool_seeking": 3, "advice": 2, "signal": 1}.get(lead_type, 0)
 
 
 def infer_pain_context(text: str, categories: list[str], lead_type: str = "") -> str:
     lowered = normalize(text)
     if lead_type == "done_for_you":
         return "Готов делегировать: ищет исполнителя/команду сделать карточки, инфографику или визуал под ключ для WB/Ozon."
+    if lead_type == "tool_seeking":
+        return "Ищет инструмент/бот/нейросеть/сервис, чтобы самому сделать карточку, фон, инфографику или видео товара — прямой фит для бота Photozhab."
     if "product_card" in categories and any(hint in lowered for hint in (
         "\u0438\u0449\u0443",
         "\u0438\u0449\u0435\u043c",
@@ -810,6 +907,8 @@ def score_lead(*, body: str, categories: list[str], date: datetime | None, lead_
     score = 0
     if lead_type == "done_for_you":
         score += 6
+    elif lead_type == "tool_seeking":
+        score += 5
     if any(hint in lowered for hint in HARD_REQUEST_HINTS):
         score += 4
     if "product_card" in categories:
@@ -868,20 +967,52 @@ def classify_message(text: str) -> dict[str, Any]:
         # ("Нужна инфографика? Создаю карточки…", "Я дизайнер, помогу вам").
         and not any(hint in lowered for hint in SUPPLY_ONLY_HINTS)
     )
-    # Done-for-you requests ("ищу дизайнера", "сделайте карточки под ключ") are
-    # leads on their own. Advice/curiosity is counted more conservatively, since
-    # supply ads often contain rhetorical questions.
-    pain = has_visual_topic and not has_noise and (
-        has_service_fit
+    # Tool-seeking: wants a bot / neural net / service / app to generate it
+    # themselves. An explicit tool/self-do signal wins over person-seeking, so
+    # "хочу сам сделать карточки, какое приложение?" is tool-seeking, not
+    # done-for-you. Still reject supplier self-ads.
+    # A seeker actually asks ("какой нейросетью?", "посоветуйте бот", "ищу сервис"),
+    # which separates them from bot ads that reuse the same tool nouns.
+    has_seek_frame = has_question or any(
+        marker in lowered
+        for marker in (
+            "посоветуйте", "подскажите", "посоветуете", "ищу", "нужен", "нужна",
+            "нужно", "какой", "какая", "каким", "какое", "какую", "чем ",
+            "как сам", "можно ли", "кто знает", "кто пользуется", "что использ",
+            "что посоветуете", "есть ли", "помогите",
+        )
+    )
+    # A call-to-action handle/link (@bot, t.me/, http) means it is an ad, not a
+    # seeker asking a question.
+    has_promo_link = bool(re.search(r"@[a-z0-9_]{4,}|t\.me/|https?://", lowered))
+    has_tool_seeking = (
+        any(hint in lowered for hint in TOOL_SEEKING_HINTS)
+        and has_seek_frame
+        and not has_promo_link
+        and not any(hint in lowered for hint in SELLER_SEEKING_HINTS)
+        and not has_supply_only
+    )
+    visual_or_ai = has_visual_topic or "ai_tool" in categories
+    tool_lead = has_tool_seeking and visual_or_ai and has_topic
+    person_lead = has_service_fit and has_visual_topic
+    # Done-for-you and tool-seeking are leads on their own. Advice/curiosity is
+    # counted more conservatively, since supply ads often contain rhetorical
+    # questions.
+    pain = not has_noise and (
+        tool_lead
+        or person_lead
         or (
-            has_topic
+            has_visual_topic
+            and has_topic
             and not has_supply_only
             and (has_hard_request or (has_question and has_demand and not has_supply))
         )
     )
     if not pain:
         lead_type = ""
-    elif has_service_fit:
+    elif tool_lead:
+        lead_type = "tool_seeking"
+    elif person_lead:
         lead_type = "done_for_you"
     elif has_hard_request:
         lead_type = "advice"
@@ -890,8 +1021,9 @@ def classify_message(text: str) -> dict[str, Any]:
     return {
         "pain": pain,
         "service_fit": has_service_fit,
+        "tool_seeking": has_tool_seeking,
         "lead_type": lead_type,
-        "supply": (has_supply or has_supply_only) and has_topic and not has_service_fit,
+        "supply": (has_supply or has_supply_only) and has_topic and not has_service_fit and not has_tool_seeking,
         "noise": has_noise and not pain,
         "categories": categories or ["uncategorized"],
     }
@@ -1044,6 +1176,7 @@ def render_html_dashboard(result: dict[str, Any]) -> str:
         )
     lead_type_labels = {
         "done_for_you": "под ключ",
+        "tool_seeking": "ищет бот",
         "advice": "совет",
         "signal": "сигнал",
     }
@@ -1131,6 +1264,7 @@ def render_html_dashboard(result: dict[str, Any]) -> str:
     .pill.low {{ background: #dbeafe; color: #1d4ed8; }}
     .tag {{ display: inline-block; padding: 3px 8px; border-radius: 6px; font-size: 12px; font-weight: 700; }}
     .tag.done_for_you {{ background: #dcfce7; color: #166534; }}
+    .tag.tool_seeking {{ background: #cffafe; color: #155e75; }}
     .tag.advice {{ background: #ede9fe; color: #5b21b6; }}
     .tag.signal {{ background: #f1f5f9; color: #475569; }}
     .open-link {{ color: var(--blue); font-weight: 700; text-decoration: none; }}
@@ -1150,9 +1284,9 @@ def render_html_dashboard(result: dict[str, Any]) -> str:
   <main>
     <section class="kpis">
       <div class="kpi"><span>Candidate leads</span><b>{totals['lead_candidates']}</b></div>
-      <div class="kpi"><span>Done-for-you (хотят делегировать)</span><b>{totals.get('done_for_you_leads', 0)}</b></div>
+      <div class="kpi"><span>Tool-seeking (хотят бот/нейросеть)</span><b>{totals.get('tool_seeking_leads', 0)}</b></div>
+      <div class="kpi"><span>Done-for-you (делегировать)</span><b>{totals.get('done_for_you_leads', 0)}</b></div>
       <div class="kpi"><span>Advice / questions</span><b>{totals.get('advice_leads', 0)}</b></div>
-      <div class="kpi"><span>Supply / competitors</span><b>{totals['supply_messages']}</b></div>
       <div class="kpi"><span>Chats scanned</span><b>{totals['chats_scanned']}</b></div>
     </section>
     <section class="grid">
@@ -1195,9 +1329,9 @@ def render_svg_infographic(result: dict[str, Any]) -> str:
     ]
     kpis = [
         ("Candidate leads", totals["lead_candidates"], "#0f766e"),
+        ("Tool-seeking", totals.get("tool_seeking_leads", 0), "#155e75"),
         ("Done-for-you", totals.get("done_for_you_leads", 0), "#166534"),
         ("Advice / questions", totals.get("advice_leads", 0), "#5b21b6"),
-        ("Chats scanned", totals["chats_scanned"], "#be123c"),
     ]
     for index, (label, value, color) in enumerate(kpis):
         x = 40 + index * 280
