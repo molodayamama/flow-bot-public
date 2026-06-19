@@ -253,7 +253,7 @@ class BotPoolWiringTests(unittest.TestCase):
 
     def test_main_starts_all_keepers_and_disables_failed(self) -> None:
         start = self.source.index("async def _main_impl")
-        block = self.source[start:start + 3200]
+        block = self.source[start:start + 4000]
         # Warmup is parallel (bounded gather) and still disables failed accounts
         # and exits if none started.
         self.assertIn("asyncio.gather(", block)

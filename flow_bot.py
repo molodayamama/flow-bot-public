@@ -4866,6 +4866,12 @@ async def cmd_start(message: types.Message):
     # Постоянная нижняя клавиатура всегда показывается при /start
     await message.answer("👇", reply_markup=reply_menu_kb())
 
+    if IS_SELLER:
+        # Селлер-бот: своё приветствие про маркетплейсы, без консьюмер-онбординга.
+        await message.answer(flow_copy.msg("welcome_seller"), parse_mode="HTML")
+        await show_main_menu(message, user_id=user_id)
+        return
+
     if _referral_welcome_bonus > 0:
         # Пришёл по реф-ссылке → эмоциональный бонус + онбординг
         gens = _referral_welcome_bonus // price_gen(1)
@@ -10075,35 +10081,42 @@ async def _main_impl():
     # запусков, чтобы не выжрать RAM), потом поднимаем бота. Упавший на старте
     # аккаунт отключается в пуле (роутинг его обойдёт); встаём только если не
     # поднялся ни один. Лимит настраивается WARMUP_CONCURRENCY (по умолчанию 3).
-    try:
-        warmup_concurrency = max(1, int(os.getenv("WARMUP_CONCURRENCY", "3")))
-    except (TypeError, ValueError):
-        warmup_concurrency = 3
-    warmup_sem = asyncio.Semaphore(warmup_concurrency)
+    if IS_SELLER:
+        # Seller-бот НЕ поднимает собственный браузерный пул: он использует
+        # аккаунты основного бота через общий генератор-бэкенд (фаза A,
+        # docs/SELLER_BOT_PLAN.md). Так нет конфликта за google_profile и
+        # двойного расхода Flow-квоты. Генерация ходит в основной процесс.
+        log.info("🛒 Seller mode: пропускаю прогрев пула (генерация через основной бот)")
+    else:
+        try:
+            warmup_concurrency = max(1, int(os.getenv("WARMUP_CONCURRENCY", "3")))
+        except (TypeError, ValueError):
+            warmup_concurrency = 3
+        warmup_sem = asyncio.Semaphore(warmup_concurrency)
 
-    async def _warm_account(acc_id: str, kp: "SessionKeeper") -> bool:
-        async with warmup_sem:
-            try:
-                log.info("🌐 Запускаю аккаунт пула: %s", acc_id)
-                await kp.start()
-                return True
-            except Exception:
-                log.exception("❌ Аккаунт %s не стартовал — отключаю в пуле", acc_id)
-                account_pool.set_disabled(acc_id, True)
-                return False
+        async def _warm_account(acc_id: str, kp: "SessionKeeper") -> bool:
+            async with warmup_sem:
+                try:
+                    log.info("🌐 Запускаю аккаунт пула: %s", acc_id)
+                    await kp.start()
+                    return True
+                except Exception:
+                    log.exception("❌ Аккаунт %s не стартовал — отключаю в пуле", acc_id)
+                    account_pool.set_disabled(acc_id, True)
+                    return False
 
-    warm_started = time.time()
-    results = await asyncio.gather(
-        *(_warm_account(acc_id, kp) for acc_id, kp in keepers.items())
-    )
-    log.info(
-        "🌐 Прогрев пула: %d/%d аккаунтов за %.1f c (параллельно, лимит %d)",
-        sum(1 for r in results if r), len(results), time.time() - warm_started,
-        warmup_concurrency,
-    )
-    if not any(results):
-        log.error("❌ Ни один аккаунт пула не запустился — выходим.")
-        return
+        warm_started = time.time()
+        results = await asyncio.gather(
+            *(_warm_account(acc_id, kp) for acc_id, kp in keepers.items())
+        )
+        log.info(
+            "🌐 Прогрев пула: %d/%d аккаунтов за %.1f c (параллельно, лимит %d)",
+            sum(1 for r in results if r), len(results), time.time() - warm_started,
+            warmup_concurrency,
+        )
+        if not any(results):
+            log.error("❌ Ни один аккаунт пула не запустился — выходим.")
+            return
 
     robokassa_runner = None
     try:
