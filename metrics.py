@@ -89,6 +89,8 @@ __all__ = [
     "save_seller_sku_item",
     "list_seller_sku_projects",
     "recent_seller_skus",
+    "save_seller_profile",
+    "get_seller_profile",
 ]
 
 log = logging.getLogger("flow.metrics")
@@ -246,6 +248,15 @@ CREATE TABLE IF NOT EXISTS seller_sku_items (
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_seller_sku_user ON seller_sku_items(user_id, sku, id);
+
+CREATE TABLE IF NOT EXISTS seller_profiles (
+    user_id    INTEGER PRIMARY KEY,
+    brand_kit  TEXT,
+    niche      TEXT,
+    sku_volume TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
 
 CREATE TABLE IF NOT EXISTS support_tickets (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2548,6 +2559,57 @@ def recent_seller_skus(user_id: int, limit: int = 5) -> list[str]:
     except Exception:  # noqa: BLE001
         log.warning("recent_seller_skus failed for user_id=%r", user_id, exc_info=True)
         return []
+
+
+def save_seller_profile(
+    user_id: int,
+    *,
+    brand_kit: str | None = None,
+    niche: str | None = None,
+    sku_volume: str | None = None,
+) -> bool:
+    """Upsert lightweight seller profile fields."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                """
+                INSERT INTO seller_profiles (user_id, brand_kit, niche, sku_volume)
+                VALUES (?,?,?,?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    brand_kit=COALESCE(excluded.brand_kit, seller_profiles.brand_kit),
+                    niche=COALESCE(excluded.niche, seller_profiles.niche),
+                    sku_volume=COALESCE(excluded.sku_volume, seller_profiles.sku_volume),
+                    updated_at=datetime('now')
+                """,
+                (
+                    int(user_id),
+                    (brand_kit or "").strip()[:1000] if brand_kit is not None else None,
+                    (niche or "").strip()[:120] if niche is not None else None,
+                    (sku_volume or "").strip()[:80] if sku_volume is not None else None,
+                ),
+            )
+            conn.commit()
+            return True
+    except Exception:  # noqa: BLE001
+        log.warning("save_seller_profile failed for user_id=%r", user_id, exc_info=True)
+        return False
+
+
+def get_seller_profile(user_id: int) -> dict:
+    """Return seller profile fields, or an empty dict when absent."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT user_id, brand_kit, niche, sku_volume, created_at, updated_at "
+                "FROM seller_profiles WHERE user_id=?",
+                (int(user_id),),
+            ).fetchone()
+            return dict(row) if row else {}
+    except Exception:  # noqa: BLE001
+        log.warning("get_seller_profile failed for user_id=%r", user_id, exc_info=True)
+        return {}
 
 
 # ── support tickets ────────────────────────────────────────────────────

@@ -751,6 +751,16 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("_save_pending_sku_item", block)
         self.assertIn("return", block)
 
+    def test_marketplace_brandkit_text_saves_before_image_fallback(self) -> None:
+        start = self.source.index("async def handle_plain_text")
+        brand_guard = self.source.index('if awaiting == "mp_brandkit":', start)
+        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        self.assertLess(brand_guard, image_fallback)
+        block = self.source[brand_guard:brand_guard + 650]
+        self.assertIn("metrics.save_seller_profile", block)
+        self.assertIn('"mp_brandkit_saved"', block)
+        self.assertIn("return", block)
+
     def test_seller_result_keyboard_is_gated_to_seller_mode(self) -> None:
         start = self.source.index("async def _send_one_image")
         block = self.source[start:start + 900]

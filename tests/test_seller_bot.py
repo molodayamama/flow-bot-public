@@ -73,6 +73,7 @@ class SellerMenuTests(unittest.TestCase):
         for job in ("whitebg", "info", "model", "cover", "bg", "animate"):
             self.assertIn(f"mp:job:{job}", cb)
         self.assertIn("mp:series", cb)
+        self.assertIn("mp:brandkit", cb)
         self.assertIn("mp:projects", cb)
         self.assertIn("mp:done4you", cb)
         self.assertIn("mp:tips", cb)
@@ -125,10 +126,18 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("загруженное фото", prompt)
         self.assertIn("зелёная бутылка", prompt)
 
+    def test_marketplace_prompts_include_brand_kit_when_present(self) -> None:
+        prompt = flow_bot._mp_job_instruction("cover", "wb", brand_kit="чёрный и золото")
+        self.assertIn("Бренд-кит продавца", prompt)
+        self.assertIn("чёрный и золото", prompt)
+        series_prompt = flow_bot._mp_series_prompt("wb", 3, brand_kit="минимализм")
+        self.assertIn("Бренд-кит продавца", series_prompt)
+        self.assertIn("минимализм", series_prompt)
+
     def test_marketplace_series_photo_runs_i2i_bundle_action(self) -> None:
         source = inspect.getsource(flow_bot.handle_photo)
         self.assertIn('if st.get("await") == "mp_series_photo":', source)
-        self.assertIn("_mp_series_prompt(plat, count, caption_text)", source)
+        self.assertIn("_mp_series_prompt(plat, count, caption_text, brand_kit=_mp_brand_kit(user_id))", source)
         self.assertIn('num_images=count', source)
         self.assertIn('action="mp_series"', source)
 
@@ -160,6 +169,12 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("sku:tok123", cb)
         normal_cb = self._callbacks(flow_bot._image_keyboard("tok123"))
         self.assertNotIn("sku:tok123", normal_cb)
+
+    def test_brandkit_sets_profile_state(self) -> None:
+        source = inspect.getsource(flow_bot.on_marketplace_action)
+        self.assertIn('if data == "mp:brandkit":', source)
+        self.assertIn('st["await"] = "mp_brandkit"', source)
+        self.assertIn("_mp_brandkit_text(user_id)", source)
 
 
 if __name__ == "__main__":

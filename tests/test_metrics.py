@@ -602,6 +602,17 @@ class SellerReportTests(MetricsTestBase):
         self.assertEqual(seller["sku_projects"], 2)
         self.assertEqual(rep["total_sku_projects"], 2)
 
+    def test_seller_profile_brand_kit_upsert(self) -> None:
+        self.assertEqual(metrics.get_seller_profile(8), {})
+        self.assertTrue(metrics.save_seller_profile(8, brand_kit="  black gold  ", niche="shoes"))
+        profile = metrics.get_seller_profile(8)
+        self.assertEqual(profile["brand_kit"], "black gold")
+        self.assertEqual(profile["niche"], "shoes")
+        self.assertTrue(metrics.save_seller_profile(8, brand_kit="minimal premium"))
+        profile2 = metrics.get_seller_profile(8)
+        self.assertEqual(profile2["brand_kit"], "minimal premium")
+        self.assertEqual(profile2["niche"], "shoes")
+
     def test_report_sellers_empty(self) -> None:
         rep = metrics.report_sellers()
         self.assertEqual(rep["total_sellers"], 0)

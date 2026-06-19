@@ -3250,6 +3250,7 @@ def mp_jobs_kb(platform: str) -> types.InlineKeyboardMarkup:
         [B(text="🧩 Серия слайдов", callback_data="mp:series")],
         [B(text="✂️ Убрать / заменить фон", callback_data="mp:job:bg")],
         [B(text="🎬 Оживить фото → видео", callback_data="mp:job:animate")],
+        [B(text="🎨 Бренд-кит", callback_data="mp:brandkit")],
         [B(text="📦 Мои товары (SKU)", callback_data="mp:projects")],
         [B(text="🙌 Сделайте за меня (под ключ)", callback_data="mp:done4you")],
         [B(text="💡 Советы по карточке", callback_data="mp:tips")],
@@ -3304,7 +3305,17 @@ _MP_SERIES_LABELS = {
 }
 
 
-def _mp_job_instruction(job: str, platform: str, seller_note: str | None = None) -> str:
+def _mp_brand_kit(user_id: int) -> str:
+    profile = metrics.get_seller_profile(user_id)
+    return str(profile.get("brand_kit") or "").strip()
+
+
+def _mp_job_instruction(
+    job: str,
+    platform: str,
+    seller_note: str | None = None,
+    brand_kit: str | None = None,
+) -> str:
     seed = _MP_JOB_SEED.get(job, "сделать продающую карточку товара для маркетплейса")
     platform_name = _MP_PLAT_NAMES.get(platform, platform)
     prompt = (
@@ -3314,6 +3325,9 @@ def _mp_job_instruction(job: str, platform: str, seller_note: str | None = None)
     note = (seller_note or "").strip()
     if note:
         prompt += f" Уточнение продавца: {note}"
+    brand = (brand_kit or "").strip()
+    if brand:
+        prompt += f" Бренд-кит продавца: {brand}"
     return prompt
 
 
@@ -3344,7 +3358,12 @@ def _mp_series_request_text(platform: str, count: int) -> str:
     )
 
 
-def _mp_series_prompt(platform: str, count: int, seller_note: str | None = None) -> str:
+def _mp_series_prompt(
+    platform: str,
+    count: int,
+    seller_note: str | None = None,
+    brand_kit: str | None = None,
+) -> str:
     platform_name = _MP_PLAT_NAMES.get(platform, platform)
     count = count if count in _MP_SERIES_COUNTS else 3
     prompt = (
@@ -3357,6 +3376,9 @@ def _mp_series_prompt(platform: str, count: int, seller_note: str | None = None)
     note = (seller_note or "").strip()
     if note:
         prompt += f" Уточнение продавца: {note}"
+    brand = (brand_kit or "").strip()
+    if brand:
+        prompt += f" Бренд-кит продавца: {brand}"
     return prompt
 
 
@@ -3378,6 +3400,23 @@ def _mp_sku_projects_text(user_id: int) -> str:
         lines.append(f"• <b>{sku}</b>{platform_line}: {count} слайд(ов), обновлено {updated}")
     lines.append("\nДобавляй новые результаты кнопкой «➕ В серию SKU» под картинкой.")
     return "\n".join(lines)
+
+
+def _mp_brandkit_text(user_id: int) -> str:
+    brand = _mp_brand_kit(user_id)
+    current = (
+        f"\n\nТекущий бренд-кит:\n<blockquote>{html.escape(brand)}</blockquote>"
+        if brand else
+        "\n\nТекущий бренд-кит не задан."
+    )
+    return (
+        "🎨 <b>Бренд-кит</b>\n\n"
+        "Пришли одним сообщением цвета, стиль, тон и правила для карточек. "
+        "Например: «чёрный/золото, премиальный минимализм, крупный товар, "
+        "без кислотных фонов, логотип не рисовать». "
+        "Я буду добавлять это в seller-задания и серии."
+        f"{current}"
+    )
 
 
 async def _show_sku_projects(message: types.Message, *, user_id: int, edit: bool) -> None:
@@ -6606,6 +6645,18 @@ async def on_marketplace_action(callback: types.CallbackQuery):
         await _show_sku_projects(msg, user_id=user_id, edit=True)
         return
 
+    if data == "mp:brandkit":
+        await callback.answer()
+        st = _ws(user_id)
+        st["await"] = "mp_brandkit"
+        metrics.log_event("mp_brandkit_open", user_id=user_id, source="seller")
+        await msg.edit_text(
+            _mp_brandkit_text(user_id),
+            reply_markup=_mp_back_kb(),
+            parse_mode="HTML",
+        )
+        return
+
     if data == "mp:sku:new":
         if not _pending_sku_payload(user_id):
             await callback.answer("Кнопка устарела", show_alert=True)
@@ -9334,7 +9385,7 @@ async def handle_photo(message: types.Message):
         if count not in _MP_SERIES_COUNTS:
             count = 3
         caption_text = (message.caption or "").strip()
-        prompt = _mp_series_prompt(plat, count, caption_text)
+        prompt = _mp_series_prompt(plat, count, caption_text, brand_kit=_mp_brand_kit(user_id))
         status_msg = await message.answer(flow_copy.msg("uploading_photo"))
         ref = await _upload_image_ref_from_photo_message(
             message,
@@ -9369,7 +9420,7 @@ async def handle_photo(message: types.Message):
         plat = st.get("mp_platform", "wb")
         job = st.get("mp_preset", "whitebg")
         caption_text = (message.caption or "").strip()
-        instruction = _mp_job_instruction(job, plat, caption_text)
+        instruction = _mp_job_instruction(job, plat, caption_text, brand_kit=_mp_brand_kit(user_id))
         status_msg = await message.answer(flow_copy.msg("uploading_photo"))
         ref = await _upload_image_ref_from_photo_message(
             message,
@@ -9673,6 +9724,25 @@ async def handle_plain_text(message: types.Message):
             await message.answer("📦 Название SKU слишком короткое. Пришли артикул или название товара.")
             return
         await _save_pending_sku_item(message, user_id, sku)
+        return
+    if awaiting == "mp_brandkit":
+        brand = text.strip()
+        if len(brand) < 5:
+            await message.answer("🎨 Опиши бренд-кит чуть подробнее: цвета, стиль и что важно сохранить.")
+            return
+        ok = metrics.save_seller_profile(user_id, brand_kit=brand)
+        st["await"] = None
+        metrics.log_event("mp_brandkit_saved", user_id=user_id, source="seller")
+        if ok:
+            await message.answer(
+                "🎨 Бренд-кит сохранён. Теперь seller-карточки и серии будут учитывать этот стиль.",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="🛒 Маркетплейсы", callback_data="m:mp")],
+                    [_menu_button("menu", "m:menu")],
+                ]),
+            )
+        else:
+            await message.answer("Не удалось сохранить бренд-кит. Попробуй ещё раз позже.")
         return
 
     # Ждём промпт генерации из визарда.
