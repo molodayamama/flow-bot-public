@@ -131,6 +131,20 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn('num_images=count', source)
         self.assertIn('action="mp_series"', source)
 
+    def test_done4you_sets_support_brief_state(self) -> None:
+        source = inspect.getsource(flow_bot.on_marketplace_action)
+        self.assertIn('if data == "mp:done4you":', source)
+        self.assertIn('st["support_await"] = True', source)
+        self.assertIn('st["support_kind"] = "mp_done4you"', source)
+        self.assertIn('"mp_done4you_open"', source)
+
+    def test_done4you_brief_is_tagged_ticket(self) -> None:
+        source = inspect.getsource(flow_bot.handle_plain_text)
+        self.assertIn('support_kind = st.pop("support_kind", "support")', source)
+        self.assertIn('if support_kind == "mp_done4you":', source)
+        self.assertIn("Заявка под ключ", source)
+        self.assertIn('"mp_done4you_submitted"', source)
+
 
 if __name__ == "__main__":
     unittest.main()

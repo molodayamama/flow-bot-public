@@ -742,6 +742,25 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("_mp_series_request_text", block)
         self.assertIn("return", block)
 
+    def test_support_brief_text_runs_before_image_fallback(self) -> None:
+        start = self.source.index("async def handle_plain_text")
+        support_guard = self.source.index('if st.get("support_await"):', start)
+        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        self.assertLess(support_guard, image_fallback)
+        block = self.source[support_guard:support_guard + 2200]
+        self.assertIn("metrics.create_ticket", block)
+        self.assertIn("ticket_text", block)
+        self.assertIn("return", block)
+
+    def test_support_photo_does_not_upload_to_flow(self) -> None:
+        start = self.source.index("async def handle_photo")
+        support_guard = self.source.index('if st.get("support_await"):', start)
+        first_upload = self.source.index('flow_copy.msg("uploading_photo")', start)
+        self.assertLess(support_guard, first_upload)
+        block = self.source[support_guard:support_guard + 320]
+        self.assertIn("текстовый бриф", block)
+        self.assertIn("return", block)
+
     def test_video_plain_text_ready_is_narrow(self) -> None:
         start = self.source.index("def _video_plain_text_ready")
         end = self.source.index("def video_family_kb", start)

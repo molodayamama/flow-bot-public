@@ -6570,13 +6570,23 @@ async def on_marketplace_action(callback: types.CallbackQuery):
 
     if data == "mp:done4you":
         await callback.answer()
+        plat = _ws(user_id).get("mp_platform", "wb")
+        if plat not in _MP_PLAT_NAMES:
+            plat = "wb"
+        _reset_image_flow(user_id)
+        st = _ws(user_id)
+        st["mp_platform"] = plat
+        st["support_await"] = True
+        st["support_kind"] = "mp_done4you"
         metrics.log_event("mp_done4you_open", user_id=user_id, source="seller")
         await msg.edit_text(
             "🙌 <b>Сделаем карточки под ключ</b>\n\n"
             "Опиши задачу прямо здесь одним сообщением: что за товар, площадка, "
-            "сколько слайдов, и пришли фото товара. Подготовим карточки и вернём "
-            "результат. Оплата по тарифу.",
+            "сколько слайдов, ссылки/артикулы и что важно показать. Я создам "
+            "заявку для оператора, дальше можно будет добавить фото товара. "
+            "Оплата по тарифу.",
             reply_markup=_mp_back_kb(),
+            parse_mode="HTML",
         )
         return
 
@@ -9049,6 +9059,13 @@ async def handle_photo(message: types.Message):
         _album_tasks[mgid] = asyncio.create_task(_flush_album(mgid, user_id))
         return
 
+    if st.get("support_await"):
+        await message.answer(
+            "🙌 Сначала пришли текстовый бриф одним сообщением: товар, площадка, "
+            "сколько слайдов и что важно показать. Фото добавим после заявки."
+        )
+        return
+
     # Ingredients: upload and store Flow sources; generation stays blocked until API capture.
     if vawait == "ving_photo":
         photos: list = st.setdefault("ving_photos", [])
@@ -9402,7 +9419,16 @@ async def handle_plain_text(message: types.Message):
     # ─── Поддержка: пользователь вводит сообщение для нового тикета ───────────
     if st.get("support_await"):
         st.pop("support_await", None)
-        ticket_id = metrics.create_ticket(user_id, username=_username(message), text=text)
+        support_kind = st.pop("support_kind", "support")
+        plat = st.get("mp_platform")
+        ticket_text = text
+        admin_title = "🎫 Тикет"
+        if support_kind == "mp_done4you":
+            platform_name = _MP_PLAT_NAMES.get(plat or "", plat or "не выбрана")
+            ticket_text = f"🙌 Заявка под ключ\nПлощадка: {platform_name}\n\n{text}"
+            admin_title = "🙌 Заявка под ключ"
+            metrics.log_event("mp_done4you_submitted", user_id=user_id, source=plat or "seller")
+        ticket_id = metrics.create_ticket(user_id, username=_username(message), text=ticket_text)
         # Пересылаем администратору
         admin_id = ADMIN_IDS[0] if ADMIN_IDS else None
         if admin_id:
@@ -9412,7 +9438,7 @@ async def handle_plain_text(message: types.Message):
             try:
                 fwd = await message.bot.send_message(
                     admin_id,
-                    f"🎫 Тикет #{ticket_id} от @{_username(message) or user_id}:\n\n{text}",
+                    f"{admin_title} #{ticket_id} от @{_username(message) or user_id}:\n\n{ticket_text}",
                     reply_markup=reply_btn,
                 )
                 metrics.set_ticket_admin_msg(ticket_id, fwd.message_id)
