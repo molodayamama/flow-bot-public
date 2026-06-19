@@ -270,8 +270,8 @@ class BotPoolWiringTests(unittest.TestCase):
 
     def test_image_upload_prefers_image_only_and_video_upload_uses_video_account(self) -> None:
         self.assertIn("def _account_for_image", self.source)
-        photo_start = self.source.index("async def handle_photo")
-        photo_block = self.source[photo_start:photo_start + 6500]
+        photo_start = self.source.index("async def _upload_image_ref_from_photo_message")
+        photo_block = self.source[photo_start:photo_start + 2200]
         self.assertIn("_account_for_image(user_id, prefer_image_only=True)", photo_block)
         self.assertIn("ensure_user_project(user_id, account_id=acc_id)", photo_block)
         self.assertIn("_keeper_for_acc(acc_id).upload_image", photo_block)

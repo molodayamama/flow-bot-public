@@ -3261,6 +3261,40 @@ _MP_JOB_SEED = {
     "cover": "обложка/главный слайд карточки товара, цепляющий ракурс",
     "bg": "заменить фон у фото товара на чистый и продающий",
 }
+_MP_PRODUCT_PHOTO_JOBS = frozenset(_MP_JOB_SEED)
+_MP_JOB_LABELS = {
+    "whitebg": "фото на белом фоне",
+    "info": "инфографика-карточка",
+    "model": "товар на модели / на фоне",
+    "cover": "обложка / главный слайд",
+    "bg": "убрать / заменить фон",
+}
+
+
+def _mp_job_instruction(job: str, platform: str, seller_note: str | None = None) -> str:
+    seed = _MP_JOB_SEED.get(job, "сделать продающую карточку товара для маркетплейса")
+    platform_name = _MP_PLAT_NAMES.get(platform, platform)
+    prompt = (
+        f"{seed}. Используй загруженное фото как исходный товар, сохрани товар узнаваемым. "
+        f"Формат карточки 3:4, площадка: {platform_name}."
+    )
+    note = (seller_note or "").strip()
+    if note:
+        prompt += f" Уточнение продавца: {note}"
+    return prompt
+
+
+def _mp_photo_request_text(platform: str, job: str) -> str:
+    platform_name = html.escape(_MP_PLAT_NAMES.get(platform, platform))
+    job_label = html.escape(_MP_JOB_LABELS.get(job, job))
+    seed = html.escape(_MP_JOB_SEED.get(job, ""))
+    return (
+        f"🛒 <b>{platform_name}</b> · {job_label}\n\n"
+        "Пришли фото товара. Я применю выбранный пресет к реальному товару, "
+        "а не буду рисовать карточку с нуля.\n\n"
+        f"<blockquote>{seed}</blockquote>\n"
+        "Можно добавить подпись к фото — она станет уточнением к заданию."
+    )
 
 
 DEFAULT_COUNT = 1
@@ -6419,17 +6453,23 @@ async def on_marketplace_action(callback: types.CallbackQuery):
             st["mp_platform"] = plat
             await show_video_ingredients(msg, user_id=user_id, edit=True)
             return
+        if job not in _MP_PRODUCT_PHOTO_JOBS:
+            await callback.answer()
+            return
         await callback.answer()
         _reset_image_flow(user_id)
         st = _ws(user_id)
         st["mp_platform"] = plat
         st["mp_preset"] = job
-        st["fmt"] = "f34"  # 3:4 — вертикальная карточка маркетплейса
-        seed = _MP_JOB_SEED.get(job)
-        if seed:
-            st["pending_prompt"] = seed
+        st["await"] = "mp_photo"
+        st["edit_fmt"] = "f34"  # 3:4 — вертикальная карточка маркетплейса
+        st["edit_imodel"] = DEFAULT_IMAGE_MODEL
         metrics.log_event("mp_job", user_id=user_id, source=f"{plat}:{job}")
-        await show_wizard(msg, user_id=user_id, edit=True)
+        await msg.edit_text(
+            _mp_photo_request_text(plat, job),
+            reply_markup=_mp_back_kb(),
+            parse_mode="HTML",
+        )
         return
 
     if data == "mp:done4you":
@@ -8848,6 +8888,50 @@ async def _handle_album_photos(messages: list, *, user_id: int):
         await show_video_ingredients(first, user_id=user_id, edit=False)
 
 
+async def _upload_image_ref_from_photo_message(
+    message: types.Message,
+    *,
+    user_id: int,
+    status_msg: types.Message,
+    prompt: str,
+    aspect_ratio: str,
+) -> ImageRef | None:
+    try:
+        photo = message.photo[-1]
+        buf = await bot.download(photo.file_id)
+        data = buf.read() if hasattr(buf, "read") else bytes(buf)
+    except Exception:
+        log.exception("download user photo failed")
+        await status_msg.edit_text("❌ Не удалось получить ваше фото.")
+        return None
+
+    acc_id = _account_for_image(user_id, prefer_image_only=True)
+    if acc_id is None:
+        await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
+        return None
+    project_id = await ensure_user_project(user_id, account_id=acc_id)
+    try:
+        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png")
+    except Exception:
+        log.exception("upload_image failed")
+        source = None
+
+    if not source or not source.get("mediaId"):
+        await status_msg.edit_text(flow_copy.msg("upload_failed"))
+        return None
+
+    source.setdefault("_tg_file_id", photo.file_id)
+    upload_project = source.pop("_project_id", None) or project_id
+    return ImageRef(
+        user_id=user_id,
+        project_id=upload_project,
+        source=source,
+        prompt=prompt,
+        aspect_ratio=aspect_ratio,
+        account_id=acc_id,
+    )
+
+
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
     """Пользователь прислал фото (+ опц. подпись) — загружаем его в Flow и правим.
@@ -8973,45 +9057,55 @@ async def handle_photo(message: types.Message):
             await message.answer(flow_copy.msg("vid_text_only_hint"))
         return
 
+    if st.get("await") == "mp_photo":
+        plat = st.get("mp_platform", "wb")
+        job = st.get("mp_preset", "whitebg")
+        caption_text = (message.caption or "").strip()
+        instruction = _mp_job_instruction(job, plat, caption_text)
+        status_msg = await message.answer(flow_copy.msg("uploading_photo"))
+        ref = await _upload_image_ref_from_photo_message(
+            message,
+            user_id=user_id,
+            status_msg=status_msg,
+            prompt=instruction,
+            aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", "f34")),
+        )
+        if not ref:
+            return
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        token = image_registry.add(ref)
+        pending_edits[user_id] = token
+        st["await"] = "edit"
+        st["edit_fmt"] = "f34"
+        st["edit_imodel"] = st.get("edit_imodel", DEFAULT_IMAGE_MODEL)
+        metrics.log_event("mp_photo_uploaded", user_id=user_id, source=f"{plat}:{job}")
+        ok = await _edit_and_send(
+            message,
+            ref,
+            instruction,
+            aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", "f34")),
+            image_model=st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
+        )
+        if ok:
+            st["await"] = None
+            pending_edits.pop(user_id, None)
+        return
+
     caption = (message.caption or "").strip()
 
     status_msg = await message.answer(flow_copy.msg("uploading_photo"))
-    try:
-        # Берём максимальное по размеру фото.
-        photo = message.photo[-1]
-        buf = await bot.download(photo.file_id)
-        data = buf.read() if hasattr(buf, "read") else bytes(buf)
-    except Exception:
-        log.exception("download user photo failed")
-        await status_msg.edit_text("❌ Не удалось получить ваше фото.")
-        return
-
-    acc_id = _account_for_image(user_id, prefer_image_only=True)
-    if acc_id is None:
-        await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
-        return
-    project_id = await ensure_user_project(user_id, account_id=acc_id)
-    try:
-        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png")
-    except Exception:
-        log.exception("upload_image failed")
-        source = None
-
-    if not source or not source.get("mediaId"):
-        await status_msg.edit_text(flow_copy.msg("upload_failed"))
-        return
-
-    source.setdefault("_tg_file_id", photo.file_id)
-
-    # Редактируем в ТОМ ЖЕ проекте, куда реально легла загрузка (иначе Google
-    # не найдёт картинку). Если браузер не отдал проект — используем проект юзера.
-    upload_project = source.pop("_project_id", None) or project_id
-
-    ref = ImageRef(
-        user_id=user_id, project_id=upload_project, source=source,
-        prompt=caption or "uploaded image", aspect_ratio="landscape",
-        account_id=acc_id,
+    ref = await _upload_image_ref_from_photo_message(
+        message,
+        user_id=user_id,
+        status_msg=status_msg,
+        prompt=caption or "uploaded image",
+        aspect_ratio="landscape",
     )
+    if not ref:
+        return
     await status_msg.delete()
 
     if caption:
@@ -9234,6 +9328,13 @@ async def handle_plain_text(message: types.Message):
     # Photo-edit entry is waiting for an upload; plain text must not open the image wizard.
     if awaiting == "photo":
         await message.answer(flow_copy.msg("ask_photo"))
+        return
+    if awaiting == "mp_photo":
+        await message.answer(
+            _mp_photo_request_text(st.get("mp_platform", "wb"), st.get("mp_preset", "whitebg")),
+            reply_markup=_mp_back_kb(),
+            parse_mode="HTML",
+        )
         return
 
     # Ждём промпт генерации из визарда.

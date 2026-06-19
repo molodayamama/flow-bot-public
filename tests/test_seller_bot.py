@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import unittest
 
 import flow_core
@@ -79,6 +80,20 @@ class SellerMenuTests(unittest.TestCase):
         for job in ("whitebg", "info", "model", "cover", "bg"):
             self.assertIn(job, flow_bot._MP_JOB_SEED)
             self.assertTrue(flow_bot._MP_JOB_SEED[job])
+
+    def test_marketplace_image_jobs_wait_for_product_photo(self) -> None:
+        source = inspect.getsource(flow_bot.on_marketplace_action)
+        self.assertIn('if job not in _MP_PRODUCT_PHOTO_JOBS:', source)
+        self.assertIn('st["await"] = "mp_photo"', source)
+        self.assertIn('st["edit_fmt"] = "f34"', source)
+        self.assertIn("_mp_photo_request_text(plat, job)", source)
+        self.assertNotIn("await show_wizard(msg", source)
+
+    def test_marketplace_instruction_uses_uploaded_photo(self) -> None:
+        prompt = flow_bot._mp_job_instruction("whitebg", "wb", "красные ботинки")
+        self.assertIn("загруженное фото", prompt)
+        self.assertIn("Wildberries", prompt)
+        self.assertIn("красные ботинки", prompt)
 
 
 if __name__ == "__main__":
