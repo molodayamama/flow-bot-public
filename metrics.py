@@ -3135,11 +3135,18 @@ def get_admin_user_detail(user_id: int) -> dict:
 
 def list_support_tickets(status: str = "open", limit: int = 100) -> list[dict]:
     """Return support tickets enriched with user/payment/generation context."""
-    allowed = {"open", "replied", "closed", "all"}
+    allowed = {"open", "in_work", "done", "replied", "closed", "all", "done4you"}
     status = status if status in allowed else "open"
     limit = max(1, min(int(limit), 200))
-    where = "" if status == "all" else "WHERE st.status=?"
-    params: tuple = (limit,) if status == "all" else (status, limit)
+    if status == "all":
+        where = ""
+        params: tuple = (limit,)
+    elif status == "done4you":
+        where = "WHERE st.message_text LIKE ?"
+        params = ("🙌 Заявка под ключ%", limit)
+    else:
+        where = "WHERE st.status=?"
+        params = (status, limit)
     try:
         with _LOCK:
             conn = _conn()
@@ -3148,6 +3155,8 @@ def list_support_tickets(status: str = "open", limit: int = 100) -> list[dict]:
                 f"""
                 SELECT st.id, st.user_id, st.username, st.status,
                        st.message_text, st.reply_text, st.created_at, st.replied_at,
+                       CASE WHEN st.message_text LIKE '🙌 Заявка под ключ%' THEN 'done4you'
+                            ELSE 'support' END AS kind,
                        COALESCE(c.balance, 0) AS balance,
                        u.first_name, u.last_active, u.is_blocked,
                        (SELECT COUNT(*) FROM transactions t
@@ -3167,9 +3176,11 @@ def list_support_tickets(status: str = "open", limit: int = 100) -> list[dict]:
                 {where}
                 ORDER BY CASE st.status
                            WHEN 'open' THEN 0
-                           WHEN 'replied' THEN 1
-                           WHEN 'closed' THEN 2
-                           ELSE 3
+                           WHEN 'in_work' THEN 1
+                           WHEN 'done' THEN 2
+                           WHEN 'replied' THEN 3
+                           WHEN 'closed' THEN 4
+                           ELSE 5
                          END,
                          st.id DESC
                 LIMIT ?
@@ -3183,6 +3194,7 @@ def list_support_tickets(status: str = "open", limit: int = 100) -> list[dict]:
                 "username": r["username"],
                 "first_name": r["first_name"],
                 "status": r["status"],
+                "kind": r["kind"],
                 "message_text": r["message_text"],
                 "reply_text": r["reply_text"],
                 "created_at": r["created_at"],
@@ -3211,6 +3223,8 @@ def get_support_ticket_detail(ticket_id: int) -> dict | None:
             row = conn.execute(
                 """
                 SELECT id, user_id, username, status, message_text, reply_text,
+                       CASE WHEN message_text LIKE '🙌 Заявка под ключ%' THEN 'done4you'
+                            ELSE 'support' END AS kind,
                        admin_msg_id, created_at, replied_at
                 FROM support_tickets
                 WHERE id=?
@@ -3224,6 +3238,7 @@ def get_support_ticket_detail(ticket_id: int) -> dict | None:
             "user_id": int(row["user_id"]),
             "username": row["username"],
             "status": row["status"],
+            "kind": row["kind"],
             "message_text": row["message_text"],
             "reply_text": row["reply_text"],
             "admin_msg_id": row["admin_msg_id"],
@@ -3238,7 +3253,7 @@ def get_support_ticket_detail(ticket_id: int) -> dict | None:
 
 def set_support_ticket_status(ticket_id: int, status: str) -> bool:
     """Set a support ticket status without sending Telegram messages."""
-    if status not in {"open", "replied", "closed"}:
+    if status not in {"open", "in_work", "done", "replied", "closed"}:
         return False
     try:
         with _LOCK:

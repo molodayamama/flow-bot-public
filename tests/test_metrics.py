@@ -485,6 +485,7 @@ class ReportResilienceTests(MetricsTestBase):
         rows = metrics.list_support_tickets("open")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["id"], ticket_id)
+        self.assertEqual(rows[0]["kind"], "support")
         self.assertEqual(rows[0]["balance"], 100)
         self.assertEqual(rows[0]["payments_count"], 1)
         self.assertEqual(rows[0]["last_error"], "quota")
@@ -497,6 +498,21 @@ class ReportResilienceTests(MetricsTestBase):
 
         self.assertTrue(metrics.set_support_ticket_status(ticket_id, "closed"))
         self.assertEqual(metrics.list_support_tickets("closed")[0]["status"], "closed")
+
+    def test_done4you_support_queue_filter_and_statuses(self) -> None:
+        normal_id = metrics.create_ticket(51, "normal", "regular support")
+        done_id = metrics.create_ticket(52, "seller", "🙌 Заявка под ключ\nПлощадка: Wildberries\n\nNeed cards")
+
+        rows = metrics.list_support_tickets("done4you")
+        self.assertEqual([r["id"] for r in rows], [done_id])
+        self.assertEqual(rows[0]["kind"], "done4you")
+        self.assertNotEqual(rows[0]["id"], normal_id)
+
+        self.assertTrue(metrics.set_support_ticket_status(done_id, "in_work"))
+        self.assertEqual(metrics.list_support_tickets("in_work")[0]["id"], done_id)
+        self.assertTrue(metrics.set_support_ticket_status(done_id, "done"))
+        self.assertEqual(metrics.list_support_tickets("done")[0]["status"], "done")
+        self.assertFalse(metrics.set_support_ticket_status(done_id, "bad_status"))
 
 
 class LazyInitTests(unittest.TestCase):

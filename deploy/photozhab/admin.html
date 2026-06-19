@@ -558,6 +558,9 @@ tr:hover td{background:var(--pz-surface-2)}
         </div>
         <div class="ticket-status-bar" id="support-filter-bar">
           <button class="ticket-filter-btn active" data-sf="open"    onclick="setSupportFilter('open')">Открытые</button>
+          <button class="ticket-filter-btn"         data-sf="done4you" onclick="setSupportFilter('done4you')">Под ключ</button>
+          <button class="ticket-filter-btn"         data-sf="in_work" onclick="setSupportFilter('in_work')">В работе</button>
+          <button class="ticket-filter-btn"         data-sf="done" onclick="setSupportFilter('done')">Готово</button>
           <button class="ticket-filter-btn"         data-sf="replied" onclick="setSupportFilter('replied')">Отвечено</button>
           <button class="ticket-filter-btn"         data-sf="closed"  onclick="setSupportFilter('closed')">Закрытые</button>
           <button class="ticket-filter-btn"         data-sf="all"     onclick="setSupportFilter('all')">Все</button>
@@ -1452,9 +1455,16 @@ function setSupportFilter(f) {
 
 function _ticketStatusBadge(s) {
   if (s === 'open')    return `<span class="badge badge-yellow">открыт</span>`;
+  if (s === 'in_work') return `<span class="badge" style="color:var(--pz-cyan);background:rgba(84,215,214,.1);border:1px solid rgba(84,215,214,.25)">в работе</span>`;
+  if (s === 'done')    return `<span class="badge badge-green">готово</span>`;
   if (s === 'replied') return `<span class="badge" style="color:var(--pz-cyan);background:rgba(84,215,214,.1);border:1px solid rgba(84,215,214,.25)">отвечено</span>`;
   if (s === 'closed')  return `<span class="badge badge-muted">закрыт</span>`;
   return `<span class="badge badge-muted">${esc(s)}</span>`;
+}
+
+function _ticketKindBadge(k) {
+  if (k === 'done4you') return `<span class="badge badge-yellow">под ключ</span>`;
+  return '';
 }
 
 async function loadSupport() {
@@ -1492,7 +1502,7 @@ async function loadSupport() {
               <div class="mono" style="color:var(--pz-cyan)">${t.user_id}</div>
               ${t.username ? `<div style="font-size:11px;color:var(--pz-faint)">@${esc(t.username)}</div>` : ''}
             </td>
-            <td>${_ticketStatusBadge(t.status)}</td>
+            <td>${_ticketStatusBadge(t.status)} ${_ticketKindBadge(t.kind)}</td>
             <td class="mono" style="color:${(t.balance||0)>0?'var(--pz-lime)':'var(--pz-faint)'}">${fmt(t.balance||0)} кр.</td>
             <td>${t.last_error ? `<span class="badge badge-red" style="font-size:10px">${esc(t.last_error)}</span>` : '<span style="color:var(--pz-faint);font-size:12px">—</span>'}</td>
             <td style="font-size:13px;color:var(--pz-muted);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((t.message_text||'').slice(0,120))}</td>
@@ -1522,7 +1532,7 @@ async function showTicket(id) {
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:12px">
       <div>
         <div class="card-title">Тикет #${t.id}</div>
-        <div style="margin-top:4px">${_ticketStatusBadge(t.status)} <span style="font-size:12px;color:var(--pz-faint)">${(t.created_at||'').slice(0,16)}</span></div>
+        <div style="margin-top:4px">${_ticketStatusBadge(t.status)} ${_ticketKindBadge(t.kind)} <span style="font-size:12px;color:var(--pz-faint)">${(t.created_at||'').slice(0,16)}</span></div>
       </div>
     </div>
 
@@ -1534,6 +1544,8 @@ async function showTicket(id) {
 
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 16px">
       <button class="btn btn-ghost btn-sm" onclick="setTicketStatus(${t.id},'open')">Mark open</button>
+      <button class="btn btn-ghost btn-sm" onclick="setTicketStatus(${t.id},'in_work')">В работу</button>
+      <button class="btn btn-ghost btn-sm" onclick="setTicketStatus(${t.id},'done')">Готово</button>
       <button class="btn btn-ghost btn-sm" onclick="setTicketStatus(${t.id},'replied')">Mark replied</button>
       <button class="btn btn-sm" style="background:transparent;color:var(--pz-coral);border:1px solid rgba(255,123,109,.3)" onclick="setTicketStatus(${t.id},'closed')">Закрыть</button>
     </div>

@@ -83,6 +83,58 @@ class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AdminApiValidationTests(unittest.TestCase):
+    def test_support_handler_accepts_done4you_filter(self) -> None:
+        calls = []
+        original = admin_api.metrics.list_support_tickets
+
+        def fake_list(status="open", limit=100):
+            calls.append((status, limit))
+            return [{"id": 9, "kind": "done4you"}]
+
+        admin_api.metrics.list_support_tickets = fake_list
+        self.addCleanup(setattr, admin_api.metrics, "list_support_tickets", original)
+
+        req = SimpleNamespace(rel_url=SimpleNamespace(query={"status": "done4you", "limit": "7"}))
+        resp = asyncio.run(admin_api.handle_support_get(req))
+        body = json.loads(resp.body)
+
+        self.assertEqual(calls, [("done4you", 7)])
+        self.assertEqual(body["status"], "done4you")
+        self.assertEqual(body["tickets"][0]["kind"], "done4you")
+
+    def test_support_status_post_accepts_in_work_and_done(self) -> None:
+        calls = []
+        original_get = admin_api.metrics.get_support_ticket_detail
+        original_set = admin_api.metrics.set_support_ticket_status
+        original_log = admin_api.metrics.log_event
+
+        admin_api.metrics.get_support_ticket_detail = lambda ticket_id: {"ticket": {"id": ticket_id}}
+
+        def fake_set(ticket_id, status):
+            calls.append((ticket_id, status))
+            return True
+
+        admin_api.metrics.set_support_ticket_status = fake_set
+        admin_api.metrics.log_event = lambda *args, **kwargs: None
+        self.addCleanup(setattr, admin_api.metrics, "get_support_ticket_detail", original_get)
+        self.addCleanup(setattr, admin_api.metrics, "set_support_ticket_status", original_set)
+        self.addCleanup(setattr, admin_api.metrics, "log_event", original_log)
+
+        class Req:
+            match_info = {"id": "12"}
+            headers = {}
+            remote = "test"
+
+            async def json(self):
+                return {"status": "in_work"}
+
+        resp = asyncio.run(admin_api.handle_support_status_post(Req()))
+        body = json.loads(resp.body)
+
+        self.assertEqual(calls, [(12, "in_work")])
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["status"], "in_work")
+
     def test_sellers_handler_caps_limit_and_returns_metrics_report(self) -> None:
         calls = []
         original = admin_api.metrics.report_sellers

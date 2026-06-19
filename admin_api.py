@@ -845,7 +845,7 @@ async def handle_support_get(request: web.Request) -> web.Response:
     tickets = metrics.list_support_tickets(status=status, limit=limit)
     return _json({
         "tickets": tickets,
-        "status": status if status in {"open", "replied", "closed", "all"} else "open",
+        "status": status if status in {"open", "in_work", "done", "replied", "closed", "all", "done4you"} else "open",
         "reply_from_admin_available": False,
         "note": "Ответ пользователю из веб-админки не отправляется; текущий reply flow живёт в Telegram.",
     })
@@ -871,7 +871,7 @@ async def handle_support_status_post(request: web.Request) -> web.Response:
     if body is None:
         return _json({"error": "expected JSON object"}, 400)
     status = str(body.get("status", "")).strip()
-    if status not in {"open", "replied", "closed"}:
+    if status not in {"open", "in_work", "done", "replied", "closed"}:
         return _json({"error": "invalid status"}, 400)
     before = metrics.get_support_ticket_detail(ticket_id)
     ok = metrics.set_support_ticket_status(ticket_id, status)

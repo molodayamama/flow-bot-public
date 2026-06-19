@@ -1345,6 +1345,14 @@ class LandingStaticContentTests(unittest.TestCase):
         self.assertIn("data.total_sku_projects", self.admin)
         self.assertIn("s.sku_projects", self.admin)
 
+    def test_admin_support_has_done4you_queue_controls(self) -> None:
+        self.assertIn('data-sf="done4you"', self.admin)
+        self.assertIn('data-sf="in_work"', self.admin)
+        self.assertIn('data-sf="done"', self.admin)
+        self.assertIn("function _ticketKindBadge", self.admin)
+        self.assertIn("setTicketStatus(${t.id},'in_work')", self.admin)
+        self.assertIn("setTicketStatus(${t.id},'done')", self.admin)
+
 
 class CaptureVideoToolTests(unittest.TestCase):
     @classmethod
