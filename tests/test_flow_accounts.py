@@ -253,10 +253,13 @@ class BotPoolWiringTests(unittest.TestCase):
 
     def test_main_starts_all_keepers_and_disables_failed(self) -> None:
         start = self.source.index("async def _main_impl")
-        block = self.source[start:start + 2400]
-        self.assertIn("for acc_id, kp in keepers.items():", block)
+        block = self.source[start:start + 3200]
+        # Warmup is parallel (bounded gather) and still disables failed accounts
+        # and exits if none started.
+        self.assertIn("asyncio.gather(", block)
+        self.assertIn("await kp.start()", block)
         self.assertIn("account_pool.set_disabled(acc_id, True)", block)
-        self.assertIn("if not started_any:", block)
+        self.assertIn("if not any(results):", block)
 
     def test_admin_pool_commands(self) -> None:
         self.assertIn('Command("acc_off")', self.source)

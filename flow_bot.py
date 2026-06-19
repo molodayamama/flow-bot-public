@@ -10071,19 +10071,37 @@ async def _main_impl():
     except Exception:
         log.warning("Не удалось установить меню команд")
 
-    # Сначала запускаем браузеры всех аккаунтов пула, потом бота. Упавший на
-    # старте аккаунт отключается в пуле (роутинг его обойдёт); встаём только
-    # если не поднялся ни один.
-    started_any = False
-    for acc_id, kp in keepers.items():
-        try:
-            log.info("🌐 Запускаю аккаунт пула: %s", acc_id)
-            await kp.start()
-            started_any = True
-        except Exception:
-            log.exception("❌ Аккаунт %s не стартовал — отключаю в пуле", acc_id)
-            account_pool.set_disabled(acc_id, True)
-    if not started_any:
+    # Прогреваем браузеры аккаунтов пула параллельно (с лимитом одновременных
+    # запусков, чтобы не выжрать RAM), потом поднимаем бота. Упавший на старте
+    # аккаунт отключается в пуле (роутинг его обойдёт); встаём только если не
+    # поднялся ни один. Лимит настраивается WARMUP_CONCURRENCY (по умолчанию 3).
+    try:
+        warmup_concurrency = max(1, int(os.getenv("WARMUP_CONCURRENCY", "3")))
+    except (TypeError, ValueError):
+        warmup_concurrency = 3
+    warmup_sem = asyncio.Semaphore(warmup_concurrency)
+
+    async def _warm_account(acc_id: str, kp: "SessionKeeper") -> bool:
+        async with warmup_sem:
+            try:
+                log.info("🌐 Запускаю аккаунт пула: %s", acc_id)
+                await kp.start()
+                return True
+            except Exception:
+                log.exception("❌ Аккаунт %s не стартовал — отключаю в пуле", acc_id)
+                account_pool.set_disabled(acc_id, True)
+                return False
+
+    warm_started = time.time()
+    results = await asyncio.gather(
+        *(_warm_account(acc_id, kp) for acc_id, kp in keepers.items())
+    )
+    log.info(
+        "🌐 Прогрев пула: %d/%d аккаунтов за %.1f c (параллельно, лимит %d)",
+        sum(1 for r in results if r), len(results), time.time() - warm_started,
+        warmup_concurrency,
+    )
+    if not any(results):
         log.error("❌ Ни один аккаунт пула не запустился — выходим.")
         return
 
