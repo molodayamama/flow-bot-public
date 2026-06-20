@@ -5658,7 +5658,8 @@ async def show_main_menu(
 
 async def show_balance(message: types.Message, *, user_id: int, edit: bool = True):
     credits = credit_store.balance(user_id)
-    text = flow_copy.msg("balance_screen", credits=credits, price=price_gen(1))
+    text = flow_copy.msg("balance_screen", credits=credits, price=price_gen(1),
+                         vprice=video_price("omni-flash-4s", 1))
     kb = types.InlineKeyboardMarkup(
         inline_keyboard=[
             [_menu_button("topup", "m:topup")],

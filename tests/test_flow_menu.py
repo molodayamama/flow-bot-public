@@ -367,7 +367,7 @@ class CopyTests(unittest.TestCase):
             self.assertTrue(flow_copy.label(key))
 
     def test_messages_format_with_placeholders(self) -> None:
-        self.assertIn("42", flow_copy.msg("balance_screen", credits=42, price=10))
+        self.assertIn("42", flow_copy.msg("balance_screen", credits=42, price=10, vprice=50))
         low = flow_copy.msg("low_balance", needed=20, have=5)
         self.assertIn("20", low)
         self.assertIn("5", low)
