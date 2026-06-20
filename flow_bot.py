@@ -885,6 +885,46 @@ class SessionKeeper:
             log.warning(f"⚠️ _solve_via_browser_js: {e}")
         return ""
 
+    async def scan_recaptcha_actions(self) -> dict:
+        """Diagnostic: scan loaded Flow scripts for grecaptcha action literals.
+
+        The frontend calls ``grecaptcha.enterprise.execute(key,{action:"..."})``
+        with literal action strings; scanning the bundles reveals every action
+        the app uses (incl. the flowCreationAgent one), so we can stop guessing.
+        Reads already-loaded JS only — no API calls, no captcha, no secrets."""
+        try:
+            await self._ensure_flow_page_loaded()
+        except Exception:
+            pass
+        try:
+            result = await self._page.evaluate(r"""async () => {
+                const urls = new Set();
+                for (const e of performance.getEntriesByType('resource')) {
+                    if (/\.js(\?|$)/.test(e.name)) urls.add(e.name);
+                }
+                for (const s of document.scripts) { if (s.src) urls.add(s.src); }
+                const reExec = /execute\s*\([^)]{0,60}?action\s*:\s*["']([A-Z0-9_]{3,48})["']/g;
+                const reAny  = /action\s*:\s*["']([A-Z0-9_]{4,48})["']/g;
+                const exec = {}, any = {};
+                let scanned = 0;
+                for (const u of urls) {
+                    try {
+                        const r = await fetch(u);
+                        if (!r.ok) continue;
+                        const t = await r.text();
+                        scanned++;
+                        let m;
+                        while ((m = reExec.exec(t)) !== null) exec[m[1]] = (exec[m[1]]||0)+1;
+                        let n;
+                        while ((n = reAny.exec(t)) !== null) any[n[1]] = (any[n[1]]||0)+1;
+                    } catch (e) {}
+                }
+                return {scanned, urls: urls.size, exec_actions: exec, any_actions: any};
+            }""")
+            return {"ok": True, **(result or {})}
+        except Exception as exc:  # noqa: BLE001 - diagnostic, return JSON
+            return {"ok": False, "error": exc.__class__.__name__}
+
     async def public_ips(self) -> dict:
         """Diagnostic: public IP seen by the browser vs by the API HTTP client.
 
