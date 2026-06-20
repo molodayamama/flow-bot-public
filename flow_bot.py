@@ -379,6 +379,22 @@ def _effective_proxy_url(proxy_url: str | None, fallback: str = PROXY_URL) -> st
     return _normalize_proxy_url(proxy_url)
 
 
+def _proxy_host_only(url: str | None) -> str:
+    """host:port прокси без логина/пароля (для диагностики, безопасно отдавать)."""
+    if not url:
+        return "(none)"
+    low = url.strip().lower()
+    if low in ("off", "none", "direct", ""):
+        return low or "(none)"
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url if "://" in url else "http://" + url)
+        host = p.hostname or "?"
+        return f"{p.scheme or 'http'}://{host}:{p.port}" if p.port else f"{p.scheme or 'http'}://{host}"
+    except Exception:
+        return "(set)"
+
+
 def _playwright_proxy_config(proxy_url: str) -> dict | None:
     """Convert PROXY_URL into Playwright's split proxy auth shape."""
     proxy_url = _effective_proxy_url(proxy_url, fallback="")
@@ -846,6 +862,54 @@ class SessionKeeper:
         except Exception as e:
             log.warning(f"⚠️ _solve_via_browser_js: {e}")
         return ""
+
+    async def public_ips(self) -> dict:
+        """Diagnostic: public IP seen by the browser vs by the API HTTP client.
+
+        Reference: reCAPTCHA-токен куётся в браузере, а запрос летит из aiohttp.
+        Если их egress-IP различаются (browser vs api proxy) — это даёт Google
+        повод для 403/«suspicious». Эндпоинт /api/admin/proxy-check это меряет.
+        Креды прокси не возвращаются — только host:port.
+        """
+        out: dict = {
+            "browser_proxy": _proxy_host_only(
+                self.browser_proxy_url if self.browser_proxy_url is not None else BROWSER_PROXY_URL
+            ),
+            "api_proxy": _proxy_host_only(
+                self.api_proxy_url if self.api_proxy_url is not None else API_PROXY_URL
+            ),
+            "browser_ip": None,
+            "api_ip": None,
+        }
+        # Browser egress IP — через одноразовую вкладку в существующем контексте.
+        try:
+            await self._ready.wait()
+            async with self._lock:
+                await self._ensure_browser_locked()
+                page = await self._context.new_page()
+                try:
+                    await page.goto("https://api.ipify.org?format=json",
+                                    timeout=20_000, wait_until="domcontentloaded")
+                    txt = await page.evaluate("() => document.body.innerText")
+                    import json as _j
+                    out["browser_ip"] = (_j.loads(txt) or {}).get("ip")
+                finally:
+                    await page.close()
+        except Exception as exc:
+            out["browser_error"] = exc.__class__.__name__
+        # API egress IP — через тот же прокси, что использует FlowHttpClient.
+        try:
+            proxy_raw = self.api_proxy_url if self.api_proxy_url is not None else API_PROXY_URL
+            proxy = _effective_proxy_url(proxy_raw) or None
+            async with aiohttp.ClientSession() as http:
+                async with http.get("https://api.ipify.org?format=json", proxy=proxy,
+                                    timeout=aiohttp.ClientTimeout(total=20)) as r:
+                    d = await r.json(content_type=None)
+                    out["api_ip"] = d.get("ip")
+        except Exception as exc:
+            out["api_error"] = exc.__class__.__name__
+        out["match"] = bool(out["browser_ip"] and out["browser_ip"] == out["api_ip"])
+        return out
 
     async def _solve_via_2captcha(self, action: str) -> str:
         """Решает reCAPTCHA v3 Enterprise через 2captcha и возвращает токен.

@@ -151,6 +151,30 @@ async def handle_sellers_get(request: web.Request) -> web.Response:
     return _json(metrics.report_sellers(limit))
 
 
+async def handle_proxy_check(request: web.Request) -> web.Response:
+    """Diagnostic: per-account browser-egress IP vs API-egress IP.
+
+    Confirms/refutes the proxy-mismatch theory for reCAPTCHA 403s (token minted
+    in the browser, request sent from aiohttp). Returns only host:port of proxies,
+    never credentials.
+    """
+    if not _keepers:
+        return _json({"error": "keepers not available"}, 503)
+    ids = list(_keepers.keys())
+    results = await asyncio.gather(
+        *[_keepers[a].public_ips() for a in ids], return_exceptions=True
+    )
+    out = []
+    for aid, res in zip(ids, results):
+        if isinstance(res, Exception):
+            out.append({"account": aid, "error": res.__class__.__name__})
+        else:
+            row = {"account": aid}
+            row.update(res)
+            out.append(row)
+    return _json({"accounts": out})
+
+
 # ── ops cockpit ───────────────────────────────────────────────────────
 
 async def handle_ops_get(request: web.Request) -> web.Response:
@@ -1001,6 +1025,7 @@ def register_admin_routes(app: web.Application, pool: "AccountPool", keepers: di
     r.add_get ("/api/admin/users/{id}",                handle_user_detail_get)
     # Sellers (seller-bot segment)
     r.add_get ("/api/admin/sellers",                   handle_sellers_get)
+    r.add_get ("/api/admin/proxy-check",               handle_proxy_check)
     # Support
     r.add_get ("/api/admin/support",                   handle_support_get)
     r.add_get ("/api/admin/support/{id}",              handle_support_detail_get)
@@ -1014,4 +1039,4 @@ def register_admin_routes(app: web.Application, pool: "AccountPool", keepers: di
     r.add_get ("/api/admin/analytics/channels",        handle_analytics_channels)
     r.add_get ("/api/admin/analytics/errors",          handle_analytics_errors)
     r.add_get ("/api/admin/analytics/active",          handle_analytics_active)
-    log.info("Admin API registered on /api/admin/* (%d routes)", 33)
+    log.info("Admin API registered on /api/admin/* (%d routes)", 34)
