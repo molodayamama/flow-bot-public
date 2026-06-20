@@ -934,6 +934,120 @@ class SessionKeeper:
         except Exception as exc:  # noqa: BLE001 - diagnostic, return JSON
             return {"ok": False, "error": exc.__class__.__name__}
 
+    async def capture_agent_flow(
+        self, prompt: str = "улучши промпт: котёнок на лежанке", wait_sec: float = 18.0
+    ) -> dict:
+        """Diagnostic: open the project chat, enable Agent mode, send a prompt,
+        and capture the flowCreationAgent/session network calls (sanitized).
+
+        Runs in a throwaway tab of the live context (shares login) so the main
+        page is undisturbed. No credit spend; reveals the real session lifecycle
+        (e.g. a createSession before streamChat) and the request/response shape."""
+        captured: list[dict] = []
+        responses: list[dict] = []
+
+        def _redact(s) -> str:
+            if not s:
+                return ""
+            s = re.sub(r"(ya29\.|Bearer\s+|session-token|\"token\"\s*:\s*\")[^\s\"']+", r"\1***", str(s))
+            return s[:1800]
+
+        def _is_agent_url(u: str) -> bool:
+            lu = u.lower()
+            return ("flowcreationagent" in lu) or ("creationagent" in lu) or (
+                ":streamchat" in lu) or ("aisandbox-pa" in lu and "agent" in lu) or (
+                "aisandbox-pa" in lu and "session" in lu)
+
+        def _on_req(request) -> None:
+            try:
+                if _is_agent_url(request.url):
+                    body = None
+                    try:
+                        body = request.post_data
+                    except Exception:
+                        body = None
+                    captured.append({
+                        "method": request.method,
+                        "url": request.url.split("?")[0][:200],
+                        "body": _redact(body),
+                    })
+            except Exception:
+                pass
+
+        def _on_resp(response) -> None:
+            try:
+                if _is_agent_url(response.url):
+                    responses.append({"url": response.url.split("?")[0][:200], "status": response.status})
+            except Exception:
+                pass
+
+        await self._ready.wait()
+        async with self._lock:
+            await self._ensure_browser_locked()
+            tab = None
+            clicked_agent = False
+            sent = False
+            try:
+                tab = await self._context.new_page()
+                tab.on("request", _on_req)
+                tab.on("response", _on_resp)
+                pid = self._project_id
+                url = f"https://labs.google/fx/tools/flow/project/{pid}" if pid else FLOW_URL
+                await tab.goto(url, timeout=60_000, wait_until="domcontentloaded")
+                try:
+                    await tab.wait_for_load_state("networkidle", timeout=12_000)
+                except Exception:
+                    pass
+
+                for getter in (
+                    lambda: tab.get_by_role("button", name=re.compile(r"agent", re.I)),
+                    lambda: tab.get_by_text(re.compile(r"^\s*agent\s*$", re.I)),
+                    lambda: tab.locator('[aria-label*="agent" i]'),
+                ):
+                    try:
+                        loc = getter().first
+                        if await loc.count() > 0 and await loc.is_visible(timeout=1_500):
+                            await loc.click(timeout=5_000)
+                            clicked_agent = True
+                            break
+                    except Exception:
+                        continue
+                await asyncio.sleep(2)
+
+                for inp in (
+                    lambda: tab.get_by_role("textbox"),
+                    lambda: tab.locator("textarea"),
+                    lambda: tab.locator('[contenteditable="true"]'),
+                ):
+                    try:
+                        box = inp().first
+                        if await box.count() > 0 and await box.is_visible(timeout=1_500):
+                            await box.click(timeout=3_000)
+                            await box.type(prompt, delay=15)
+                            await tab.keyboard.press("Enter")
+                            sent = True
+                            break
+                    except Exception:
+                        continue
+                await asyncio.sleep(wait_sec)
+            except Exception as exc:  # noqa: BLE001 - diagnostic, return JSON
+                return {
+                    "ok": False, "error": exc.__class__.__name__,
+                    "clicked_agent": clicked_agent, "sent": sent,
+                    "requests": captured, "responses": responses,
+                }
+            finally:
+                try:
+                    if tab:
+                        await tab.close()
+                except Exception:
+                    pass
+        return {
+            "ok": True, "clicked_agent": clicked_agent, "sent": sent,
+            "had_project": bool(self._project_id),
+            "requests": captured, "responses": responses,
+        }
+
     async def public_ips(self) -> dict:
         """Diagnostic: public IP seen by the browser vs by the API HTTP client.
 

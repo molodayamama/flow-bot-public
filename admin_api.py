@@ -421,6 +421,36 @@ async def handle_agent_action_scan_post(request: web.Request) -> web.Response:
     return _json({"account": account_id, "result": result})
 
 
+async def handle_agent_capture_post(request: web.Request) -> web.Response:
+    """Drive the live browser: open project, click Agent, send a prompt, and
+    capture the flowCreationAgent/session network calls (sanitized). confirm=true
+    gated because it briefly uses the account's browser (no credit spend)."""
+    if not _video_clients:
+        return _json({"error": "video clients not available"}, 503)
+    body = await _body(request) or {}
+    if body.get("confirm") is not True:
+        return _json({"error": "confirm=true required"}, 400)
+    account_id = str(body.get("account") or body.get("account_id") or "").strip()
+    account_id = account_id or _pick_video_ab_account()
+    if not account_id or account_id not in _video_clients:
+        return _json({"error": f"account {account_id!r} not found"}, 404)
+    keeper = getattr(_video_clients[account_id], "keeper", None)
+    if keeper is None or not hasattr(keeper, "capture_agent_flow"):
+        return _json({"error": "capture unavailable"}, 503)
+    prompt = str(body.get("prompt") or "улучши промпт: котёнок на лежанке").strip()[:300]
+    try:
+        wait_sec = max(4.0, min(float(body.get("wait_sec", 18.0)), 40.0))
+    except (TypeError, ValueError):
+        wait_sec = 18.0
+    try:
+        result = await keeper.capture_agent_flow(prompt=prompt, wait_sec=wait_sec)
+    except Exception as exc:  # noqa: BLE001 - debug endpoint must return JSON
+        log.warning("agent capture failed for %s: %s", account_id, exc.__class__.__name__)
+        return _json({"error": exc.__class__.__name__}, 500)
+    _audit(request, "agent_capture", new={"account": account_id, "clicked": result.get("clicked_agent")})
+    return _json({"account": account_id, "result": result})
+
+
 # ── ops cockpit ───────────────────────────────────────────────────────
 
 async def handle_ops_get(request: web.Request) -> web.Response:
@@ -1296,6 +1326,7 @@ def register_admin_routes(
     r.add_post("/api/admin/video-ab",                  handle_video_ab_post)
     r.add_post("/api/admin/agent-probe",               handle_agent_probe_post)
     r.add_post("/api/admin/agent-action-scan",         handle_agent_action_scan_post)
+    r.add_post("/api/admin/agent-capture",             handle_agent_capture_post)
     r.add_get ("/api/admin/proxy-check",               handle_proxy_check)
     # Support
     r.add_get ("/api/admin/support",                   handle_support_get)
