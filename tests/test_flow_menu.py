@@ -922,6 +922,29 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("session = await self.keeper.get_session()", block)
         self.assertIn("headers = self._build_headers(session)", block)
 
+    def test_video_403_has_browser_post_fallback_after_direct_retries(self) -> None:
+        start = self.source.index("async def generate_video")
+        block = self.source[start:self.source.index("if gen_status != 200:", start)]
+        self.assertLess(
+            block.index("for _attempt in range(SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS):"),
+            block.index("post_json_via_browser"),
+        )
+        self.assertLess(block.index("if not solved_any:"), block.index("post_json_via_browser"))
+        self.assertIn("browser_payload = _build_submit_payload(browser_captcha)", block)
+        self.assertIn('"browser_fallback": browser_fallback_used', block)
+
+    def test_video_browser_fallback_uses_browser_safe_headers(self) -> None:
+        helper = self.source[
+            self.source.index("def _browser_fetch_headers"):
+            self.source.index("def _playwright_proxy_config")
+        ]
+        self.assertIn('"Authorization"', helper)
+        self.assertIn('"Content-Type"', helper)
+        self.assertNotIn('"User-Agent"', helper)
+        self.assertNotIn('"Origin"', helper)
+        self.assertNotIn('"Referer"', helper)
+        self.assertNotIn('"Sec-Fetch",', helper)
+
     def test_video_401_retries_after_refresh(self) -> None:
         start = self.source.index("async def generate_video")
         end = self.source.index("if not solved_any:", start)

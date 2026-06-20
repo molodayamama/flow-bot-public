@@ -395,6 +395,15 @@ def _proxy_host_only(url: str | None) -> str:
         return "(set)"
 
 
+def _browser_fetch_headers(headers: dict) -> dict:
+    """Headers that browser fetch may safely set from page JS."""
+    out = {"Content-Type": "text/plain;charset=UTF-8", "Accept": "*/*"}
+    for key, value in (headers or {}).items():
+        if str(key).lower() == "authorization" and value:
+            out["Authorization"] = value
+    return out
+
+
 def _playwright_proxy_config(proxy_url: str) -> dict | None:
     """Convert PROXY_URL into Playwright's split proxy auth shape."""
     proxy_url = _effective_proxy_url(proxy_url, fallback="")
@@ -910,6 +919,56 @@ class SessionKeeper:
             out["api_error"] = exc.__class__.__name__
         out["match"] = bool(out["browser_ip"] and out["browser_ip"] == out["api_ip"])
         return out
+
+    async def post_json_via_browser(
+        self,
+        url: str,
+        headers: dict,
+        payload: dict,
+        timeout_ms: int = 60_000,
+    ) -> dict | None:
+        """POST JSON from the live Flow page using Chrome's own network stack."""
+        await self._ready.wait()
+        safe_headers = _browser_fetch_headers(headers)
+        try:
+            async with self._lock:
+                await self._ensure_browser_locked()
+                page_url = getattr(self._page, "url", "") or ""
+                if not page_url.startswith("https://labs.google/"):
+                    nav_url = (
+                        f"https://labs.google/fx/tools/flow/project/{self._project_id}"
+                        if self._project_id
+                        else "https://labs.google/fx/tools/flow"
+                    )
+                    await self._page.goto(nav_url, timeout=30_000, wait_until="domcontentloaded")
+                return await self._page.evaluate(
+                    """async ({url, headers, payload, timeoutMs}) => {
+                        const controller = new AbortController();
+                        const timer = setTimeout(() => controller.abort(), timeoutMs);
+                        try {
+                            const response = await fetch(url, {
+                                method: "POST",
+                                headers,
+                                body: JSON.stringify(payload),
+                                credentials: "include",
+                                mode: "cors",
+                                signal: controller.signal,
+                            });
+                            return {status: response.status, text: await response.text()};
+                        } finally {
+                            clearTimeout(timer);
+                        }
+                    }""",
+                    {
+                        "url": url,
+                        "headers": safe_headers,
+                        "payload": payload,
+                        "timeoutMs": timeout_ms,
+                    },
+                )
+        except Exception as exc:
+            log.warning("🎬 browser video POST failed: %s", exc.__class__.__name__)
+            return None
 
     async def _solve_via_2captcha(self, action: str) -> str:
         """Решает reCAPTCHA v3 Enterprise через 2captcha и возвращает токен.
@@ -2499,6 +2558,47 @@ class FlowHttpClient:
         had_403 = False
         attempts_made = 0
         action = SessionKeeper.VIDEO_RECAPTCHA_ACTION
+        browser_fallback_used = False
+
+        def _build_submit_payload(captcha_token: str) -> dict:
+            batch_id = str(_uuid.uuid4())
+            if is_edit:
+                return build_video_edit_payload(
+                    prompt=prompt,
+                    project_id=project_id,
+                    captcha_token=captcha_token,
+                    aspect=aspect,
+                    session_id=sess_id,
+                    batch_id=batch_id,
+                    source_media_id=source_media_id or "",
+                    source_workflow_id=source_workflow_id or "",
+                    end_frame_index=video_edit_end_frame(source_duration_s),
+                )
+            if is_extend:
+                return build_video_extend_payload(
+                    prompt=prompt,
+                    project_id=project_id,
+                    captcha_token=captcha_token,
+                    aspect=aspect,
+                    model_key=model_key,
+                    session_id=sess_id,
+                    batch_id=batch_id,
+                    source_media_id=source_media_id or "",
+                    scene_id=source_scene_id or "",
+                )
+            return build_video_payload(
+                prompt=prompt,
+                project_id=project_id,
+                captcha_token=captcha_token,
+                aspect=aspect,
+                model_key=model_key,
+                session_id=sess_id,
+                batch_id=batch_id,
+                reference_images=reference_images,
+                start_image=start_image,
+                end_image=end_image,
+            )
+
         for _attempt in range(SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS):
             posted = False
             for _auth_attempt in range(2):
@@ -2507,44 +2607,7 @@ class FlowHttpClient:
                     break
                 solved_any = True
                 posted = True
-                batch_id = str(_uuid.uuid4())
-                if is_edit:
-                    payload = build_video_edit_payload(
-                        prompt=prompt,
-                        project_id=project_id,
-                        captcha_token=captcha_token,
-                        aspect=aspect,
-                        session_id=sess_id,
-                        batch_id=batch_id,
-                        source_media_id=source_media_id or "",
-                        source_workflow_id=source_workflow_id or "",
-                        end_frame_index=video_edit_end_frame(source_duration_s),
-                    )
-                elif is_extend:
-                    payload = build_video_extend_payload(
-                        prompt=prompt,
-                        project_id=project_id,
-                        captcha_token=captcha_token,
-                        aspect=aspect,
-                        model_key=model_key,
-                        session_id=sess_id,
-                        batch_id=batch_id,
-                        source_media_id=source_media_id or "",
-                        scene_id=source_scene_id or "",
-                    )
-                else:
-                    payload = build_video_payload(
-                        prompt=prompt,
-                        project_id=project_id,
-                        captcha_token=captcha_token,
-                        aspect=aspect,
-                        model_key=model_key,
-                        session_id=sess_id,
-                        batch_id=batch_id,
-                        reference_images=reference_images,
-                        start_image=start_image,
-                        end_image=end_image,
-                    )
+                payload = _build_submit_payload(captcha_token)
                 try:
                     async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
                         async with http.post(
@@ -2595,19 +2658,48 @@ class FlowHttpClient:
 
         if not solved_any:
             return {"error": "Не удалось решить капчу для видео"}
+        if gen_status == 403:
+            if progress_cb:
+                await progress_cb("↻ Пробую отправить видео через браузер…")
+            browser_captcha = await self.keeper.solve_captcha(action)
+            if browser_captcha:
+                solved_any = True
+                browser_payload = _build_submit_payload(browser_captcha)
+                browser_resp = await self.keeper.post_json_via_browser(
+                    gen_endpoint,
+                    headers,
+                    browser_payload,
+                    timeout_ms=75_000,
+                )
+                if isinstance(browser_resp, dict):
+                    browser_fallback_used = True
+                    attempts_made += 1
+                    gen_status = int(browser_resp.get("status") or 0)
+                    gen_text = str(browser_resp.get("text") or "")
+                    log.info("🎬 video browser fallback → %s", gen_status)
+
         if gen_status == 401:
             return {
                 "error": "Bearer устарел, попробуйте ещё раз",
                 "account_risk": "video_auth",
+                "attempts": attempts_made,
+                "had_403": had_403,
+                "browser_fallback": browser_fallback_used,
             }
         if gen_status == 429:
-            return {"error": flow_copy.msg("rate_limited")}
+            return {
+                "error": flow_copy.msg("rate_limited"),
+                "attempts": attempts_made,
+                "had_403": had_403,
+                "browser_fallback": browser_fallback_used,
+            }
         if gen_status == 403:
             return {
                 "error": "Сервис отклонил запрос видео (403): низкий score/антифрод reCAPTCHA.",
                 "account_risk": "video_recaptcha_403",
                 "attempts": attempts_made,
                 "had_403": True,
+                "browser_fallback": browser_fallback_used,
             }
         if gen_status != 200:
             # TEMP (capture-driven): log the real API error body (no auth headers).
@@ -2684,6 +2776,7 @@ class FlowHttpClient:
                     "status":     "ok",
                     "attempts":   attempts_made,
                     "had_403":    had_403,
+                    "browser_fallback": browser_fallback_used,
                 }
             if status == VIDEO_STATUS_FAILED:
                 # Причина из тела FAILED-итема: звук не сгенерился / модерация —
@@ -9154,7 +9247,8 @@ async def _do_video_generate_and_send(
             "video_outcome", user_id=user_id, source=acc_id,
             payload={"ok": False, "mode": vmode, "reason": error_type,
                      "attempts": int(_res.get("attempts") or 1),
-                     "had_403": bool(_res.get("had_403"))},
+                     "had_403": bool(_res.get("had_403")),
+                     "browser_fallback": bool(_res.get("browser_fallback"))},
         )
         metrics.log_event("video_failed", user_id=user_id, source=vmode,
                           payload={"model": model_id, "reason": error_type})
@@ -9272,7 +9366,8 @@ async def _do_video_generate_and_send(
                 "video_outcome", user_id=user_id, source=acc_id,
                 payload={"ok": True, "mode": vmode,
                          "attempts": int((result or {}).get("attempts") or 1),
-                         "had_403": bool((result or {}).get("had_403"))},
+                         "had_403": bool((result or {}).get("had_403")),
+                         "browser_fallback": bool((result or {}).get("browser_fallback"))},
             )
             _stop_vid_anim()  # генерация готова — гасим анимацию фраз
             await update_status("⬇️ Готовлю видео для отправки…")
