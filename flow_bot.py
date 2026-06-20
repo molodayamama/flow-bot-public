@@ -4591,6 +4591,32 @@ def edit_settings_kb(fmt: str, imodel: str) -> types.InlineKeyboardMarkup:
     )
 
 
+def edit_confirm_kb() -> types.InlineKeyboardMarkup:
+    """Подтверждение правки фото: применить как есть или улучшить запрос (агент)."""
+    B = types.InlineKeyboardButton
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [B(text=f"✨ Улучшить запрос · {action_price('prompt_improve')} кр", callback_data="ag:eimprove")],
+        [B(text=f"✅ Применить · {action_price('edit')} кр", callback_data="es:apply")],
+        [B(text="✏️ Изменить запрос", callback_data="es:change"),
+         _menu_button("cancel", "es:cancel")],
+    ])
+
+
+async def show_edit_confirm(message: types.Message, *, user_id: int, edit: bool):
+    """Экран подтверждения правки фото с кнопками «Улучшить запрос» / «Применить»."""
+    st = _ws(user_id)
+    instr = (st.get("edit_instruction") or "").strip()
+    text = (
+        "✏️ <b>Правка фото</b>\n\n"
+        f"<blockquote>{html.escape(instr[:300])}</blockquote>\n"
+        "Применить как есть — или улучшить запрос (3 варианта)?"
+    )
+    if edit:
+        await _edit_or_answer(message, text, edit_confirm_kb(), parse_mode="HTML")
+    else:
+        await message.answer(text, reply_markup=edit_confirm_kb(), parse_mode="HTML")
+
+
 def reply_menu_kb() -> types.ReplyKeyboardMarkup:
     """Постоянная клавиатура внизу чата — всегда под рукой."""
     B = types.KeyboardButton
@@ -8870,10 +8896,22 @@ def _agent_improve_instruction(prompt: str) -> str:
     )
 
 
-async def _agent_improve_call(user_id: int, prompt: str) -> dict:
+def _agent_edit_instruction(prompt: str) -> str:
+    """Wrap a photo-edit instruction so the agent returns 3 clearer edit
+    instructions (not generative scene prompts)."""
+    return (
+        "Ты — помощник по правкам фото. Улучши и уточни инструкцию правки ниже и "
+        "предложи 3 варианта (разной детализации/акцента), каждый — законченная "
+        "инструкция, ЧТО изменить на фото. Только текст вариантов, без генерации."
+        "\n\nИсходная правка: " + prompt
+    )
+
+
+async def _agent_improve_call(user_id: int, prompt: str, *, instruction_fn=None) -> dict:
     """Improve a prompt via the Flow agent, trying video-capable accounts until
     one returns content (some accounts' bearers are rejected by the endpoint;
     one account's captcha score is stochastic)."""
+    instruction_fn = instruction_fn or _agent_improve_instruction
     try:
         project_id = await ensure_user_project(user_id, account_id=_account_for(user_id))
         candidates: list[str] = []
@@ -8883,7 +8921,7 @@ async def _agent_improve_call(user_id: int, prompt: str) -> dict:
         for acc in account_pool.account_ids():
             if acc not in candidates and account_pool.is_video_capable(acc):
                 candidates.append(acc)
-        instruction = _agent_improve_instruction(prompt)
+        instruction = instruction_fn(prompt)
         res: dict = {}
         for acc_id in candidates[:5]:
             res = await _client_for_acc(acc_id).improve_prompt(instruction, project_id=project_id)
@@ -8917,9 +8955,9 @@ def _agent_variants_view(variants: list[dict], *, pick_prefix: str, keep_data: s
 async def _agent_improve_flow(
     callback: types.CallbackQuery, *, user_id: int, prompt_key: str,
     source: str, pick_prefix: str, keep_data: str, rerender, edit_fn,
-    empty_prompt_msg: str,
+    empty_prompt_msg: str, instruction_fn=None,
 ) -> None:
-    """Shared "✨ Улучшить промпт" flow for the image and video wizards."""
+    """Shared "✨ Улучшить промпт" flow for the image/video/edit wizards."""
     msg = callback.message
     st = _ws(user_id)
     prompt = (st.get(prompt_key) or "").strip()
@@ -8942,7 +8980,7 @@ async def _agent_improve_flow(
         await msg.edit_text("✨ Подбираю варианты промпта…")
     except Exception:
         pass
-    res = await _agent_improve_call(user_id, prompt)
+    res = await _agent_improve_call(user_id, prompt, instruction_fn=instruction_fn)
     variants = [v for v in (res.get("variants") or []) if v.get("prompt")][:3]
     single = res.get("single")
     if not variants and not single:
@@ -9022,6 +9060,25 @@ async def on_agent_action(callback: types.CallbackQuery):
             callback, user_id=user_id, prompt_key="pending_prompt", source="image",
             pick_prefix="ag:pick:", keep_data="ag:keep", rerender=show_wizard,
             edit_fn=_edit_or_answer, empty_prompt_msg="Сначала опиши картинку",
+        )
+        return
+
+    # ── Edit-my-photo confirm (edit_instruction) ──
+    if data.startswith("ag:epick:"):
+        await _agent_pick(callback, user_id=user_id, idx_str=data.split(":")[2],
+                          prompt_key="edit_instruction", rerender=show_edit_confirm)
+        return
+    if data == "ag:ekeep":
+        st.pop("ag_variants", None)
+        await callback.answer()
+        await show_edit_confirm(msg, user_id=user_id, edit=True)
+        return
+    if data == "ag:eimprove":
+        await _agent_improve_flow(
+            callback, user_id=user_id, prompt_key="edit_instruction", source="edit",
+            pick_prefix="ag:epick:", keep_data="ag:ekeep", rerender=show_edit_confirm,
+            edit_fn=_edit_or_answer, empty_prompt_msg="Сначала напиши, что изменить",
+            instruction_fn=_agent_edit_instruction,
         )
         return
 
@@ -9213,11 +9270,46 @@ async def on_edit_settings(callback: types.CallbackQuery):
     if data == "es:cancel":
         st["await"] = None
         pending_edits.pop(user_id, None)
+        st.pop("edit_instruction", None)
+        st.pop("ag_variants", None)
         await callback.answer("Отменено")
         try:
             await callback.message.delete()
         except Exception:
             pass
+        return
+
+    if data == "es:change":
+        # Вернуться к вводу запроса правки.
+        st["await"] = "edit"
+        st.pop("ag_variants", None)
+        await callback.answer()
+        await callback.message.answer(
+            flow_copy.msg("ask_edit_prompt"),
+            reply_markup=edit_settings_kb(
+                st.get("edit_fmt", DEFAULT_FMT), st.get("edit_imodel", DEFAULT_IMAGE_MODEL)
+            ),
+        )
+        return
+
+    if data == "es:apply":
+        instr = (st.get("edit_instruction") or "").strip()
+        token = pending_edits.get(user_id)
+        ref = image_registry.get(token) if token else None
+        if not instr or ref is None or ref.user_id != user_id:
+            await callback.answer(flow_copy.msg("expired"), show_alert=True)
+            return
+        await callback.answer()
+        ok = await _edit_and_send(
+            callback.message, ref, instr,
+            aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", _aspect_to_fmt(ref.aspect_ratio))),
+            image_model=st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
+        )
+        if ok:
+            st["await"] = None
+            st.pop("edit_instruction", None)
+            st.pop("ag_variants", None)
+            pending_edits.pop(user_id, None)
         return
 
     changed = False
@@ -9821,6 +9913,76 @@ def _video_reference_project_id(st: dict, vmode: str) -> str | None:
     return next(iter(projects)) if len(projects) == 1 else None
 
 
+async def _reupload_reference_source(
+    src: dict, *, user_id: int, acc_id: str, project_id: str | None
+) -> dict | None:
+    """Re-upload a reference photo to another account from its stored Telegram
+    file id. Returns the new source dict (with _account_id/_project_id) or None."""
+    tg_file_id = src.get("_tg_file_id") if isinstance(src, dict) else None
+    if not tg_file_id:
+        return None
+    try:
+        buf = await bot.download(tg_file_id)
+        data = buf.read() if hasattr(buf, "read") else bytes(buf)
+        new_src = await _keeper_for_acc(acc_id).upload_image(
+            data, filename=f"tg_{user_id}.png", project_id=project_id
+        )
+    except Exception:
+        log.exception("re-upload reference photo failed")
+        return None
+    if not new_src or not new_src.get("mediaId"):
+        return None
+    new_src.setdefault("_tg_file_id", tg_file_id)
+    new_src.setdefault("_project_id", project_id)
+    new_src.setdefault("_account_id", acc_id)
+    return new_src
+
+
+async def _ensure_reference_on_healthy_account(
+    st: dict, vmode: str, *, user_id: int, model_id: str, min_credits: int
+) -> str | None:
+    """Pick a healthy account that holds the reference photo(s), re-uploading
+    them transparently if the bound account isn't ready. Seamless: the user is
+    never told that an account was unavailable. Returns None only if the whole
+    pool is unusable for video."""
+    sources = _video_reference_sources(st, vmode)
+    if not sources:
+        return _account_for_video(user_id, model_id=model_id, min_credits=min_credits)
+
+    bound = _video_reference_account_id(st, vmode)
+    if bound and not _video_account_health_reason(bound, model_id, min_credits):
+        return bound  # bound account is healthy — use the existing upload
+
+    target = _account_for_video(user_id, model_id=model_id, min_credits=min_credits)
+    if target is None:
+        # Whole pool unusable. Fall back to the bound account if it at least
+        # has usable media there (better to try than to refuse).
+        return bound
+    if target == bound:
+        return target
+
+    project_id = await ensure_user_project(user_id, account_id=target)
+    reuploaded: list[dict] = []
+    for src in sources:
+        new_src = await _reupload_reference_source(
+            src, user_id=user_id, acc_id=target, project_id=project_id
+        )
+        if not new_src:
+            # Can't move this photo (no file id / upload failed). Keep the bound
+            # account if any — generation may still work there.
+            return bound or target
+        reuploaded.append(new_src)
+
+    if vmode == "ingredients":
+        st["ving_photos"] = reuploaded
+    elif vmode == "frames":
+        st["vfrm_start"] = reuploaded[0]
+        if len(reuploaded) > 1:
+            st["vfrm_end"] = reuploaded[1]
+    log.info("🔁 video reference re-uploaded to healthy account %s (was %s)", target, bound)
+    return target
+
+
 async def _video_generate_and_send(
     message: types.Message,
     prompt: str,
@@ -9899,35 +10061,22 @@ async def _do_video_generate_and_send(
     # аккаунту → генерим строго на нём, без молчаливого фолбэка на другой
     # аккаунт (там медиа нет → 404). Если этот аккаунт стал недоступен (disabled)
     # — честно просим прислать фото заново, не списывая кредиты.
-    ref_acc_id = _video_reference_account_id(st, vmode)
     has_reference = bool(_video_reference_sources(st, vmode))
     if source_video and source_video.account_id:
+        # Extend/edit of an existing generated video: media lives only on that
+        # account, can't be moved. (Rare; the source video was just created.)
         acc_id = source_video.account_id
     elif has_reference:
-        acc_id = ref_acc_id
-        if acc_id is None:
-            await message.answer(flow_copy.msg("vid_ref_account_unavailable"))
-            return
+        # Photo-video (ingredients/frames): transparently (re)place the photo on
+        # a healthy account so the user never sees an "account unavailable" error.
+        acc_id = await _ensure_reference_on_healthy_account(
+            st, vmode, user_id=user_id, model_id=model_id, min_credits=single_price
+        )
     else:
         acc_id = _account_for_video(user_id, model_id=model_id, min_credits=single_price)
     if acc_id is None:
         # Нет доступных video-capable аккаунтов — отказ ДО списания кредитов.
         await message.answer(flow_copy.msg("accounts_unavailable"))
-        return
-    bound_health_reason = None
-    if source_video or has_reference:
-        bound_health_reason = _video_account_health_reason(acc_id, model_id, single_price)
-    if bound_health_reason:
-        await message.answer(
-            "Этот исходник привязан к Google-аккаунту, который сейчас не готов для видео. "
-            "Попробуйте позже или загрузите файл заново."
-        )
-        metrics.log_event(
-            "video_bound_account_blocked",
-            user_id=user_id,
-            source=acc_id,
-            payload={"model": model_id, "mode": vmode, "reason": bound_health_reason},
-        )
         return
     video_project_id = (
         source_video.project_id if source_video
@@ -11085,6 +11234,7 @@ async def _upload_photo_source_from_message(
     )
     source.setdefault("_project_id", project_id)
     source.setdefault("_account_id", acc_id)
+    source.setdefault("_tg_file_id", photo.file_id)  # для бесшовного ре-аплоада
     return source
 
 
@@ -11763,26 +11913,32 @@ async def handle_plain_text(message: types.Message):
         token = pending_edits.get(user_id)
         ref = image_registry.get(token) if token else None
         if ref is not None and ref.user_id == user_id:
-            ok = False
             if awaiting == "revary":
                 ok = await _run_i2i(
                     message, ref, text, num_images=2, emoji="🎲",
                     fail_text=flow_copy.msg("nothing_returned"),
                 )
-            else:
-                ok = await _edit_and_send(
-                    message, ref, text,
-                    aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", _aspect_to_fmt(ref.aspect_ratio))),
-                    image_model=st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
-                )
-            if ok:
-                st["await"] = None
-                pending_edits.pop(user_id, None)
+                if ok:
+                    st["await"] = None
+                    pending_edits.pop(user_id, None)
+                return
+            # Edit: show a confirm screen so the user can улучшить запрос (agent)
+            # or apply it as-is — instead of generating immediately.
+            st["edit_instruction"] = text
+            st["await"] = "edit_confirm"
+            await show_edit_confirm(message, user_id=user_id, edit=False)
             return
         st["await"] = None
         pending_edits.pop(user_id, None)
         await message.answer(flow_copy.msg("expired"))
         await show_main_menu(message, user_id=user_id)
+        return
+
+    # На экране подтверждения правки новый текст = новый запрос правки.
+    if awaiting == "edit_confirm":
+        st["edit_instruction"] = text
+        st.pop("ag_variants", None)
+        await show_edit_confirm(message, user_id=user_id, edit=False)
         return
 
     # ВАЖНО: раньше тут был «старый путь», который редактировал pending_edits-фото

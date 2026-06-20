@@ -332,7 +332,9 @@ class BotPoolWiringTests(unittest.TestCase):
 
         video_start = self.source.index("async def _do_video_generate_and_send")
         video_block = self.source[video_start:video_start + 5200]
-        self.assertIn("ref_acc_id = _video_reference_account_id(st, vmode)", video_block)
+        # Photo-video re-places the reference on a healthy account seamlessly
+        # (no user-facing "account unavailable" error).
+        self.assertIn("_ensure_reference_on_healthy_account(", video_block)
         self.assertIn("video_project_id = (", video_block)
 
 

@@ -1795,6 +1795,10 @@ class BotImportSmokeTests(unittest.TestCase):
         img_datas = [b.callback_data for row in fb.wizard_kb(1, "land", show_improve=True).inline_keyboard for b in row]
         self.assertIn("ag:improve", img_datas)
         self.assertNotIn("ag:improve", [b.callback_data for row in fb.wizard_kb(1, "land").inline_keyboard for b in row])
+        # Edit-my-photo confirm screen exposes agent improve + apply.
+        ec = [b.callback_data for row in fb.edit_confirm_kb().inline_keyboard for b in row]
+        self.assertIn("ag:eimprove", ec)
+        self.assertIn("es:apply", ec)
         fb.wizard_state[424242]["vengine"] = "veo"
         datas_veo = [b.callback_data for row in fb._nwiz_kb(424242).inline_keyboard for b in row]
         self.assertIn("v:neng:veo", datas_veo)
