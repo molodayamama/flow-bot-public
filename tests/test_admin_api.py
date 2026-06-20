@@ -66,6 +66,7 @@ class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
         admin_api._pool = None
         admin_api._keepers = None
         admin_api._video_clients = None
+        admin_api._startup_state = None
         admin_api.GCREDITS_LOOKUP_TIMEOUT_SEC = 3.0
 
     async def test_g_credits_attached_when_keepers_present(self):
@@ -108,17 +109,36 @@ class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body[0]["id"], "a1")
         self.assertIsNone(body[0]["g_credits"])
 
+    async def test_accounts_include_startup_warming_status(self):
+        pool = _FakePool([
+            {"id": "a1", "disabled": False, "cooldown_left": 0, "fails": 0},
+        ])
+        admin_api._pool = pool
+        admin_api._startup_state = {
+            "phase": "warming",
+            "accounts": {"a1": {"status": "running", "ready": False}},
+        }
+
+        resp = await admin_api.handle_accounts_get(None)
+        body = json.loads(resp.body)
+
+        self.assertEqual(body[0]["health"], "warming")
+        self.assertEqual(body[0]["warmup_status"], "running")
+        self.assertEqual(body[0]["startup"]["ready"], False)
+
 
 class VideoAbEndpointTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.addCleanup(self._reset_globals)
         self._orig_log_event = admin_api.metrics.log_event
-        admin_api.metrics.log_event = lambda *args, **kwargs: None
+        self.logged_events = []
+        admin_api.metrics.log_event = lambda *args, **kwargs: self.logged_events.append((args, kwargs))
 
     def _reset_globals(self):
         admin_api._pool = None
         admin_api._keepers = None
         admin_api._video_clients = None
+        admin_api._startup_state = None
         admin_api.metrics.log_event = self._orig_log_event
 
     async def test_video_ab_requires_explicit_spend_confirmation(self):
@@ -157,6 +177,7 @@ class VideoAbEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.calls[0]["model_key"], "veo-lite")
         self.assertEqual(client.calls[0]["aspect"], "portrait")
         self.assertEqual(client.calls[0]["order"], "browser_first")
+        self.assertTrue(any(args and args[0] == "video_ab" for args, _ in self.logged_events))
 
     async def test_video_ab_unknown_account_is_404(self):
         admin_api._video_clients = {"a1": _FakeVideoClient()}
@@ -172,6 +193,16 @@ class VideoAbEndpointTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AdminApiValidationTests(unittest.TestCase):
+    def test_ping_includes_startup_snapshot(self) -> None:
+        admin_api._startup_state = {"phase": "warming", "polling": False}
+        self.addCleanup(setattr, admin_api, "_startup_state", None)
+
+        resp = asyncio.run(admin_api.handle_ping(None))
+        body = json.loads(resp.body)
+
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["startup"]["phase"], "warming")
+
     def test_support_handler_accepts_done4you_filter(self) -> None:
         calls = []
         original = admin_api.metrics.list_support_tickets

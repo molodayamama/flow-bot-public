@@ -34,6 +34,7 @@ _pool: "AccountPool | None" = None
 # by register_admin_routes(); None means /api/admin/accounts skips g_credits.
 _keepers: dict | None = None
 _video_clients: dict | None = None
+_startup_state: dict | None = None
 GCREDITS_LOOKUP_TIMEOUT_SEC = 3.0
 
 
@@ -89,6 +90,26 @@ def _audit(request: web.Request, action: str, *, old: object = None, new: object
         log.warning("admin audit failed for %s", action, exc_info=True)
 
 
+def _startup_snapshot() -> dict | None:
+    if not isinstance(_startup_state, dict):
+        return None
+    try:
+        return json.loads(json.dumps(_startup_state, ensure_ascii=False, default=str))
+    except Exception:
+        return dict(_startup_state)
+
+
+def _startup_for_account(account_id: str) -> dict | None:
+    snap = _startup_snapshot()
+    if not isinstance(snap, dict):
+        return None
+    accounts = snap.get("accounts")
+    if isinstance(accounts, dict):
+        item = accounts.get(account_id)
+        return dict(item) if isinstance(item, dict) else None
+    return None
+
+
 def _format_placeholders(text: str) -> set[str]:
     placeholders: set[str] = set()
     for _, field, _, _ in string.Formatter().parse(text):
@@ -124,7 +145,11 @@ _PRICE_TEXT_RE = re.compile(r"(^|[^\w])\d+\s*(?:кр|кредит(?:ов|а)?)([
 # ── ping ───────────────────────────────────────────────────────────────
 
 async def handle_ping(request: web.Request) -> web.Response:
-    return _json({"ok": True, "ts": time.time()})
+    out = {"ok": True, "ts": time.time()}
+    startup = _startup_snapshot()
+    if startup is not None:
+        out["startup"] = startup
+    return _json(out)
 
 
 # ── stats ──────────────────────────────────────────────────────────────
@@ -178,6 +203,10 @@ async def handle_proxy_check(request: web.Request) -> web.Response:
             row = {"account": aid}
             row.update(res)
             out.append(row)
+        try:
+            metrics.log_event("proxy_check", source=aid, payload=out[-1])
+        except Exception:
+            log.warning("proxy_check metrics log failed for %s", aid, exc_info=True)
     return _json({"accounts": out})
 
 
@@ -195,6 +224,27 @@ def _pick_video_ab_account() -> str | None:
             ):
                 return aid
     return next(iter(_video_clients), None)
+
+
+def _video_model_labels(model: str) -> tuple[str, str]:
+    try:
+        from flow_core import VIDEO_MODELS
+        mid = (model or "").lower().strip()
+        meta = VIDEO_MODELS.get(mid)
+        if meta:
+            return str(meta.get("key") or model), str(meta.get("family") or "unknown")
+        for item in VIDEO_MODELS.values():
+            if item.get("key") == model:
+                return str(item.get("key") or model), str(item.get("family") or "unknown")
+    except Exception:
+        pass
+    key = str(model or "unknown")
+    low = key.lower()
+    if "veo" in low:
+        return key, "veo"
+    if "abra" in low or "omni" in low:
+        return key, "omni-flash"
+    return key, "unknown"
 
 
 async def handle_video_ab_post(request: web.Request) -> web.Response:
@@ -241,6 +291,23 @@ async def handle_video_ab_post(request: web.Request) -> web.Response:
         for arm in result.get("arms", [])
         if isinstance(arm, dict)
     }
+    effective_model_key, model_family = _video_model_labels(model_key)
+    metrics.log_event(
+        "video_ab",
+        source=account_id,
+        payload={
+            "account": account_id,
+            "model": model_key,
+            "model_key": effective_model_key,
+            "model_family": model_family,
+            "mode": "text",
+            "endpoint": "video:batchAsyncGenerateVideoText",
+            "aspect": aspect,
+            "order": order,
+            "arms": result.get("arms", []),
+            "statuses": statuses,
+        },
+    )
     _audit(
         request,
         "video_ab",
@@ -314,7 +381,14 @@ async def handle_accounts_get(request: web.Request) -> web.Response:
 
     gcredits_map: dict = {}
     if _keepers:
-        ids = [acc["id"] for acc in accounts if acc["id"] in _keepers]
+        ids = []
+        for acc in accounts:
+            aid = str(acc["id"])
+            startup = _startup_for_account(aid)
+            if startup and startup.get("status") in {"pending", "running"}:
+                continue
+            if aid in _keepers:
+                ids.append(aid)
         results = await asyncio.gather(*[_get_keeper_gcredits(aid) for aid in ids])
         gcredits_map = dict(zip(ids, results))
 
@@ -326,8 +400,14 @@ async def handle_accounts_get(request: web.Request) -> web.Response:
         acc["last_activity"] = s.get("last_activity")
         acc["last_error"] = s.get("last_error")
         acc["g_credits"] = gcredits_map.get(acc["id"])
+        startup = _startup_for_account(str(acc["id"]))
+        if startup is not None:
+            acc["startup"] = startup
+            acc["warmup_status"] = startup.get("status")
         if acc.get("disabled"):
             acc["health"] = "disabled"
+        elif startup and startup.get("status") in {"pending", "running"}:
+            acc["health"] = "warming"
         elif int(acc.get("cooldown_left") or 0) > 0:
             acc["health"] = "cooldown"
         elif int(acc.get("fails") or 0) > 0 or int(acc.get("jobs_fail") or 0) > 0:
@@ -1075,16 +1155,18 @@ def register_admin_routes(
     pool: "AccountPool",
     keepers: dict | None = None,
     video_clients: dict | None = None,
+    startup_state: dict | None = None,
 ) -> None:
     """Register all /api/admin/* routes into an existing aiohttp Application.
 
     ``keepers`` (account_id -> SessionKeeper) is optional and used by live
     account diagnostics. ``video_clients`` enables costly admin-only video A/B.
     """
-    global _pool, _keepers, _video_clients
+    global _pool, _keepers, _video_clients, _startup_state
     _pool = pool
     _keepers = keepers
     _video_clients = video_clients
+    _startup_state = startup_state
     r = app.router
     r.add_get ("/api/admin/ping",                      handle_ping)
     r.add_get ("/api/admin/ops",                       handle_ops_get)

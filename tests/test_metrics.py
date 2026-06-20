@@ -449,6 +449,21 @@ class ReportResilienceTests(MetricsTestBase):
         self.assertEqual(events[0]["chip"], "💳 topup")
         self.assertIn("+100кр", events[0]["text"])
 
+    def test_recent_events_includes_video_ab_events(self) -> None:
+        metrics.log_event(
+            "video_ab",
+            source="sub1",
+            payload={
+                "account": "sub1",
+                "model": "omni-flash-4s",
+                "statuses": {"direct_http": 403, "browser_fetch": 200},
+            },
+        )
+
+        events = metrics.report_recent_events(10)
+        self.assertEqual(events[0]["chip"], "🎬 video_ab")
+        self.assertIn("sub1", events[0]["text"])
+
     def test_report_ops_health_summarizes_recent_jobs_and_tickets(self) -> None:
         metrics.log_flow_job(
             user_id=10, account_id="acc1", operation_type="image_generate",
@@ -645,26 +660,73 @@ class SellerReportTests(MetricsTestBase):
 class VideoHealthReportTests(MetricsTestBase):
     def test_report_video_health_aggregates(self) -> None:
         metrics.log_event("video_outcome", user_id=1, source="sub1",
-                          payload={"ok": False, "attempts": 4, "had_403": True})
+                          payload={"ok": False, "attempts": 4, "had_403": True,
+                                   "model_key": "abra_t2v_4s", "model_family": "omni-flash",
+                                   "endpoint": "text", "mode": "text", "transport": "direct_http",
+                                   "unusual_403": True})
         metrics.log_event("video_outcome", user_id=1, source="sub1",
-                          payload={"ok": True, "attempts": 3, "had_403": True})
+                          payload={"ok": True, "attempts": 3, "had_403": True,
+                                   "model_key": "abra_t2v_4s", "model_family": "omni-flash",
+                                   "endpoint": "text", "mode": "text", "transport": "direct_http"})
         metrics.log_event("video_outcome", user_id=2, source="sub2",
-                          payload={"ok": True, "attempts": 1, "had_403": False})
+                          payload={"ok": True, "attempts": 1, "had_403": False,
+                                   "model_key": "veo_3_1_t2v_lite", "model_family": "veo",
+                                   "endpoint": "text", "mode": "text", "transport": "direct_http"})
 
         rows = {r["account"]: r for r in metrics.report_video_health((24,))["windows"]["24h"]}
         s1 = rows["sub1"]
+        self.assertEqual(s1["model_key"], "abra_t2v_4s")
+        self.assertEqual(s1["model_family"], "omni-flash")
+        self.assertEqual(s1["endpoint"], "text")
+        self.assertEqual(s1["transport"], "direct_http")
         self.assertEqual(s1["video_attempts"], 2)
         self.assertEqual(s1["video_403"], 2)
+        self.assertEqual(s1["403_public_error_unusual_activity"], 1)
         self.assertEqual(s1["video_success"], 1)
         self.assertEqual(s1["video_success_after_retry"], 1)
         self.assertEqual(s1["video_final_fail"], 1)
         self.assertEqual(s1["avg_attempts_before_200"], 3.0)
         self.assertEqual(s1["success_rate"], 0.5)
+        self.assertEqual(s1["success_rate_24h"], 0.5)
 
         s2 = rows["sub2"]
         self.assertEqual(s2["video_success"], 1)
         self.assertEqual(s2["video_success_after_retry"], 0)
         self.assertEqual(s2["success_rate"], 1.0)
+
+    def test_report_video_health_includes_video_ab_arms(self) -> None:
+        metrics.log_event(
+            "video_ab",
+            source="sub2",
+            payload={
+                "account": "sub2",
+                "model_key": "veo_3_1_t2v_lite",
+                "model_family": "veo",
+                "mode": "text",
+                "endpoint": "video:batchAsyncGenerateVideoText",
+                "arms": [
+                    {"transport": "direct_http", "status": 403, "ok": False,
+                     "body_preview": "PUBLIC_ERROR_UNUSUAL_ACTIVITY"},
+                    {"transport": "browser_fetch", "status": 200, "ok": True},
+                ],
+            },
+        )
+
+        rows = metrics.report_video_health((24,))["windows"]["24h"]
+        by_transport = {r["transport"]: r for r in rows}
+        self.assertEqual(by_transport["direct_http"]["video_403"], 1)
+        self.assertEqual(by_transport["direct_http"]["403_public_error_unusual_activity"], 1)
+        self.assertEqual(by_transport["browser_fetch"]["video_success"], 1)
+        self.assertEqual(by_transport["browser_fetch"]["avg_attempts_before_200"], 2.0)
+
+    def test_video_account_scores_demote_proxy_failure_and_prefer_success(self) -> None:
+        metrics.log_event("proxy_check", source="bad", payload={"account": "bad", "match": False})
+        metrics.log_event("video_outcome", source="good",
+                          payload={"ok": True, "attempts": 1, "model_family": "veo"})
+
+        scores = metrics.report_video_account_scores(model_family="veo")
+        self.assertTrue(scores["bad"]["proxy_failed"])
+        self.assertGreater(scores["good"]["score"], scores["bad"]["score"])
 
     def test_report_video_health_empty(self) -> None:
         rep = metrics.report_video_health((1, 24))

@@ -2106,6 +2106,8 @@ class AccountPool:
                    "video_allowed": True}
             for a in accounts
         }
+        self._runtime_ready: dict[str, bool] = {a.id: True for a in accounts}
+        self._runtime_status: dict[str, str] = {a.id: "ready" for a in accounts}
         # Capacity tracking (runtime-only; resets on restart).
         # Semaphores are created lazily on first use so unit-tests don't need a
         # running event loop when constructing AccountPool.
@@ -2131,6 +2133,8 @@ class AccountPool:
     def is_available(self, account_id: str) -> bool:
         h = self._health.get(account_id)
         if h is None:
+            return False
+        if not self._runtime_ready.get(account_id, True):
             return False
         if h["disabled"]:
             return False
@@ -2199,6 +2203,14 @@ class AccountPool:
         self._save()
         return True
 
+    def set_runtime_ready(self, account_id: str, ready: bool, status: str | None = None) -> bool:
+        """Set non-persistent startup/runtime readiness for routing."""
+        if account_id not in self._accounts:
+            return False
+        self._runtime_ready[account_id] = bool(ready)
+        self._runtime_status[account_id] = status or ("ready" if ready else "warming")
+        return True
+
     def is_video_capable(self, account_id: str) -> bool:
         """True если аккаунт доступен (не в кулдауне/disabled), может видео и имеет
         ненулевую video_capacity (capacity=0 = image-only)."""
@@ -2220,6 +2232,8 @@ class AccountPool:
         """
         h = self._health.get(account_id)
         if h is None or h.get("disabled"):
+            return False
+        if not self._runtime_ready.get(account_id, True):
             return False
         if self._video_cap(account_id) <= 0:
             return False
@@ -2380,25 +2394,52 @@ class AccountPool:
         self._save()
         return best
 
-    def pick_for_video(self, user_id: int | str) -> str | None:
-        """Аккаунт для видео-джобы — только среди video_capable.
+    def pick_for_video(
+        self,
+        user_id: int | str,
+        *,
+        model_family: str | None = None,
+        health_scores: dict | None = None,
+    ) -> str | None:
+        """Pick the healthiest video-capable account for a fresh video job.
 
-        Не изменяет sticky-привязку юзера (та остаётся для картинок).
-        Если sticky-аккаунт юзера может видео — используем его (consistency).
-        Иначе — наименее загруженный video-capable аккаунт без записи в assign.
+        Sticky assignment is only a tie-breaker; hard proxy-check failures are
+        excluded from fresh video routing.
         """
         key = str(user_id)
         sticky = self._assign.get(key)
-        if sticky and self.is_video_capable(sticky):
-            return sticky
-        candidates = [aid for aid in self._accounts if self.is_video_capable(aid)]
+        health_scores = health_scores or {}
+        candidates = [
+            aid for aid in self._accounts
+            if self.is_video_capable(aid)
+            and not bool((health_scores.get(aid) or {}).get("proxy_failed"))
+        ]
         if not candidates:
             return None
         loads: dict[str, int] = {aid: 0 for aid in self._accounts}
         for assigned in self._assign.values():
             if assigned in loads:
                 loads[assigned] += 1
-        return min(candidates, key=lambda aid: loads[aid])
+
+        def _rank(aid: str) -> tuple:
+            hs = health_scores.get(aid) or {}
+            try:
+                score = float(hs.get("score", 50.0))
+            except (TypeError, ValueError):
+                score = 50.0
+            family_penalty = 0
+            if model_family and hs.get("model_family") and hs.get("model_family") != model_family:
+                family_penalty = 1
+            return (
+                family_penalty,
+                -score,
+                self._active_video.get(aid, 0),
+                0 if aid == sticky else 1,
+                loads[aid],
+                aid,
+            )
+
+        return min(candidates, key=_rank)
 
     def status(self) -> list[dict]:
         """Срез состояния пула для админ-отчёта (без секретов)."""
@@ -2412,7 +2453,10 @@ class AccountPool:
             h = self._health[aid]
             out.append({
                 "id": aid,
+                "profile_dir": self._accounts[aid].profile_dir,
                 "disabled": h["disabled"],
+                "runtime_ready": self._runtime_ready.get(aid, True),
+                "runtime_status": self._runtime_status.get(aid, "ready"),
                 "video_allowed": h.get("video_allowed", True),
                 "cooldown_left": max(0, int(h["cooldown_until"] - now)),
                 "fails": h["fails"],

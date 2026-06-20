@@ -139,6 +139,49 @@ class AccountPoolTests(unittest.TestCase):
         self.assertEqual(pool.pick_for_video(7), a3)
         self.assertFalse(pool.set_video_allowed("missing", False))
 
+    def test_video_picker_prefers_health_score_over_sticky(self) -> None:
+        pool = self._pool(2)
+        a1, a2 = pool.account_ids()
+        self.assertEqual(pool.pick_for(7), a1)  # sticky for image work
+
+        picked = pool.pick_for_video(
+            7,
+            model_family="veo",
+            health_scores={
+                a1: {"score": 10, "model_family": "veo"},
+                a2: {"score": 90, "model_family": "veo"},
+            },
+        )
+
+        self.assertEqual(picked, a2)
+        self.assertEqual(pool.assigned_to(7), a1)
+
+    def test_video_picker_excludes_proxy_failed_accounts(self) -> None:
+        pool = self._pool(2)
+        a1, a2 = pool.account_ids()
+
+        picked = pool.pick_for_video(
+            42,
+            model_family="veo",
+            health_scores={
+                a1: {"score": 100, "model_family": "veo", "proxy_failed": True},
+                a2: {"score": 10, "model_family": "veo"},
+            },
+        )
+
+        self.assertEqual(picked, a2)
+
+    def test_runtime_ready_blocks_warming_accounts(self) -> None:
+        pool = self._pool(2)
+        a1, a2 = pool.account_ids()
+        self.assertTrue(pool.set_runtime_ready(a1, False, "warming"))
+        self.assertFalse(pool.is_available(a1))
+        self.assertFalse(pool.is_video_capable(a1))
+        self.assertEqual(pool.pick_for_video(42), a2)
+        status = {s["id"]: s for s in pool.status()}
+        self.assertEqual(status[a1]["runtime_status"], "warming")
+        self.assertFalse(status[a1]["runtime_ready"])
+
     def test_image_picker_prefers_image_only_accounts(self) -> None:
         pool = self._pool(3)
         a1, a2, a3 = pool.account_ids()
@@ -241,7 +284,7 @@ class BotPoolWiringTests(unittest.TestCase):
         self.assertIn("account_pool.mark_success(acc_id)", block)
         # Video: правки/extend остаются на аккаунте исходного ролика.
         vstart = self.source.index("async def _do_video_generate_and_send")
-        vblock = self.source[vstart:vstart + 8000]
+        vblock = self.source[vstart:vstart + 13000]
         self.assertIn("if source_video and source_video.account_id:", vblock)
         self.assertIn('flow_copy.msg("accounts_unavailable")', vblock)
         self.assertIn("_client_for_acc(acc_id).generate_video(", vblock)
@@ -253,13 +296,16 @@ class BotPoolWiringTests(unittest.TestCase):
 
     def test_main_starts_all_keepers_and_disables_failed(self) -> None:
         start = self.source.index("async def _main_impl")
-        block = self.source[start:start + 4000]
-        # Warmup is parallel (bounded gather) and still disables failed accounts
-        # and exits if none started.
-        self.assertIn("asyncio.gather(", block)
+        block = self.source[start:start + 7000]
+        self.assertLess(block.index("await _start_robokassa_web_server()"),
+                        block.index("await kp.start()"))
+        self.assertLess(block.index("await ready_event.wait()"),
+                        block.index("await dp.start_polling(bot)"))
+        self.assertIn("MIN_READY_ACCOUNTS", block)
         self.assertIn("await kp.start()", block)
+        self.assertIn("account_pool.set_runtime_ready(acc_id, False, \"warming\")", block)
         self.assertIn("account_pool.set_disabled(acc_id, True)", block)
-        self.assertIn("if not any(results):", block)
+        self.assertIn("if ready_count < min_ready:", block)
 
     def test_admin_pool_commands(self) -> None:
         self.assertIn('Command("acc_off")', self.source)

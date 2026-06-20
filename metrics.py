@@ -58,6 +58,8 @@ __all__ = [
     "report_channels",
     "report_errors",
     "report_ops_health",
+    "report_video_health",
+    "report_video_account_scores",
     # credits store
     "credits_balance",
     "credits_charge",
@@ -1488,69 +1490,358 @@ def report_sellers(limit: int = 100) -> dict:
         return {"total_sellers": 0, "sellers": []}
 
 
-def report_video_health(hours_list: tuple[int, ...] = (1, 24)) -> dict:
-    """Per-account video health from ``video_outcome`` events over each window.
+def _payload_dict(raw: str | None) -> dict:
+    try:
+        loaded = json.loads(raw) if raw else {}
+        return loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        return {}
 
-    Each ``video_outcome`` event payload has ``ok``/``attempts``/``had_403``;
-    ``source`` is the account id. Returns, per window, per account:
-    video_attempts, video_403, video_success, video_success_after_retry,
-    video_final_fail, avg_attempts_before_200, success_rate.
-    """
-    import json as _j
+
+def _video_family_guess(model_key: str | None, fallback: str = "unknown") -> str:
+    key = (model_key or "").lower()
+    if "veo" in key:
+        return "veo"
+    if "abra" in key or "omni" in key:
+        return "omni-flash"
+    return fallback
+
+
+def _video_unusual_403(payload: dict, text: str | None = None) -> bool:
+    if payload.get("unusual_403") or payload.get("public_error_unusual_activity_403"):
+        return True
+    haystack = " ".join(
+        str(v or "") for v in (
+            text,
+            payload.get("body_preview"),
+            payload.get("error"),
+            payload.get("reason"),
+        )
+    )
+    return "PUBLIC_ERROR_UNUSUAL_ACTIVITY" in haystack or "unusual activity" in haystack.lower()
+
+
+def _video_event_samples(row: sqlite3.Row) -> list[dict]:
+    payload = _payload_dict(row["payload_json"])
+    event_name = row["event_name"]
+    account = str(payload.get("account") or row["source"] or "?")
+    created_at = str(row["created_at"] or "")
+    if event_name == "video_ab":
+        arms = payload.get("arms")
+        if not isinstance(arms, list):
+            result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+            arms = result.get("arms") if isinstance(result.get("arms"), list) else []
+        model_key = str(payload.get("model_key") or payload.get("model") or "unknown")
+        family = str(payload.get("model_family") or _video_family_guess(model_key))
+        endpoint = str(payload.get("endpoint") or payload.get("endpoint_name") or "video:batchAsyncGenerateVideoText")
+        mode = str(payload.get("mode") or "text")
+        out = []
+        for idx, arm in enumerate(arms):
+            if not isinstance(arm, dict):
+                continue
+            status = arm.get("status")
+            try:
+                status_int = int(status) if status is not None else None
+            except (TypeError, ValueError):
+                status_int = None
+            ok = bool(arm.get("ok")) or status_int == 200
+            had_403 = status_int == 403 or bool(arm.get("had_403"))
+            attempts = max(1, idx + 1)
+            out.append({
+                "account": account,
+                "model_key": model_key,
+                "model_family": family,
+                "endpoint": endpoint,
+                "mode": mode,
+                "transport": str(arm.get("transport") or "unknown"),
+                "ok": ok,
+                "attempts": attempts,
+                "had_403": had_403,
+                "unusual_403": had_403 and _video_unusual_403(payload, str(arm.get("body_preview") or "")),
+                "success_after_retry": ok and attempts > 1,
+                "created_at": created_at,
+            })
+        return out
+
+    model_key = str(payload.get("model_key") or payload.get("model") or "unknown")
+    family = str(payload.get("model_family") or _video_family_guess(model_key))
+    transport = str(payload.get("transport") or ("browser_fetch" if payload.get("browser_fallback") else "direct_http"))
+    try:
+        attempts = max(1, int(payload.get("attempts") or 1))
+    except (TypeError, ValueError):
+        attempts = 1
+    had_403 = bool(payload.get("had_403"))
+    unusual_403 = _video_unusual_403(payload)
+    return [{
+        "account": account,
+        "model_key": model_key,
+        "model_family": family,
+        "endpoint": str(payload.get("endpoint") or payload.get("endpoint_name") or payload.get("mode") or "unknown"),
+        "mode": str(payload.get("mode") or "unknown"),
+        "transport": transport,
+        "ok": bool(payload.get("ok")),
+        "attempts": attempts,
+        "had_403": had_403 or unusual_403,
+        "unusual_403": unusual_403,
+        "success_after_retry": bool(payload.get("success_after_retry")) or (bool(payload.get("ok")) and attempts > 1),
+        "created_at": created_at,
+    }]
+
+
+def _video_health_rows(conn: sqlite3.Connection, hours: int) -> list[dict]:
+    rows = _rows(
+        conn,
+        "SELECT event_name, source, payload_json, created_at FROM events "
+        "WHERE event_name IN ('video_outcome', 'video_ab') "
+        "AND created_at >= datetime('now', ?)",
+        (f"-{int(hours)} hours",),
+    )
+    buckets: dict[tuple[str, str, str, str, str, str], dict] = {}
+    for row in rows:
+        for sample in _video_event_samples(row):
+            key = (
+                sample["account"],
+                sample["model_key"],
+                sample["model_family"],
+                sample["endpoint"],
+                sample["mode"],
+                sample["transport"],
+            )
+            d = buckets.setdefault(key, {
+                "account": sample["account"],
+                "model_key": sample["model_key"],
+                "model_family": sample["model_family"],
+                "endpoint": sample["endpoint"],
+                "mode": sample["mode"],
+                "transport": sample["transport"],
+                "attempts": 0,
+                "attempts_total": 0,
+                "403": 0,
+                "403_public_error_unusual_activity": 0,
+                "success": 0,
+                "success_after_retry": 0,
+                "final_fail": 0,
+                "_attempts_sum_ok": 0,
+                "last_success_at": None,
+                "last_403_at": None,
+            })
+            d["attempts"] += 1
+            d["attempts_total"] += int(sample.get("attempts") or 1)
+            if sample.get("had_403"):
+                d["403"] += 1
+                d["last_403_at"] = max(d["last_403_at"] or "", sample["created_at"]) or None
+            if sample.get("unusual_403"):
+                d["403_public_error_unusual_activity"] += 1
+            if sample.get("ok"):
+                d["success"] += 1
+                d["_attempts_sum_ok"] += int(sample.get("attempts") or 1)
+                d["last_success_at"] = max(d["last_success_at"] or "", sample["created_at"]) or None
+                if sample.get("success_after_retry"):
+                    d["success_after_retry"] += 1
+            else:
+                d["final_fail"] += 1
+
+    out = []
+    for key, d in sorted(buckets.items()):
+        total = int(d["attempts"])
+        succ = int(d["success"])
+        total_403 = int(d["403"])
+        unusual = int(d["403_public_error_unusual_activity"])
+        row = {
+            "account": d["account"],
+            "model_key": d["model_key"],
+            "model_family": d["model_family"],
+            "endpoint": d["endpoint"],
+            "mode": d["mode"],
+            "transport": d["transport"],
+            "attempts": total,
+            "attempts_total": int(d["attempts_total"]),
+            "403": total_403,
+            "403_public_error_unusual_activity": unusual,
+            "unusual_403": unusual,
+            "success": succ,
+            "success_after_retry": int(d["success_after_retry"]),
+            "final_fail": int(d["final_fail"]),
+            "avg_attempts_before_200": round(d["_attempts_sum_ok"] / succ, 2) if succ else None,
+            "last_success_at": d["last_success_at"],
+            "last_403_at": d["last_403_at"],
+            "success_rate": round(succ / total, 3) if total else None,
+            "403_rate": round(total_403 / total, 3) if total else None,
+            "unusual_403_rate": round(unusual / total, 3) if total else None,
+            # Back-compat aliases used by existing admin/test code.
+            "video_attempts": total,
+            "video_403": total_403,
+            "video_success": succ,
+            "video_success_after_retry": int(d["success_after_retry"]),
+            "video_final_fail": int(d["final_fail"]),
+        }
+        out.append(row)
+    return out
+
+
+def report_video_health(hours_list: tuple[int, ...] = (1, 24)) -> dict:
+    """Per-account/model/endpoint/transport video health from video events."""
     out: dict = {"windows": {}}
     try:
         with _LOCK:
             conn = _conn()
+            key_rates: dict[str, dict[tuple, float | None]] = {}
             for hours in hours_list:
-                rows = _rows(
-                    conn,
-                    "SELECT source, payload_json FROM events "
-                    "WHERE event_name='video_outcome' "
-                    "AND created_at >= datetime('now', ?)",
-                    (f"-{int(hours)} hours",),
+                suffix = f"{int(hours)}h"
+                rows = _video_health_rows(conn, int(hours))
+                out["windows"][suffix] = rows
+                key_rates[suffix] = {
+                    (
+                        r["account"], r["model_key"], r["model_family"],
+                        r["endpoint"], r["mode"], r["transport"],
+                    ): r.get("success_rate")
+                    for r in rows
+                }
+        for rows in out["windows"].values():
+            for r in rows:
+                key = (
+                    r["account"], r["model_key"], r["model_family"],
+                    r["endpoint"], r["mode"], r["transport"],
                 )
-                acc: dict = {}
-                for r in rows:
-                    a = r["source"] or "?"
-                    try:
-                        p = _j.loads(r["payload_json"]) if r["payload_json"] else {}
-                    except Exception:
-                        p = {}
-                    d = acc.setdefault(a, {
-                        "video_attempts": 0, "video_403": 0, "video_success": 0,
-                        "video_success_after_retry": 0, "video_final_fail": 0,
-                        "_attempts_sum_ok": 0,
-                    })
-                    d["video_attempts"] += 1
-                    if p.get("had_403"):
-                        d["video_403"] += 1
-                    if p.get("ok"):
-                        d["video_success"] += 1
-                        att = int(p.get("attempts") or 1)
-                        d["_attempts_sum_ok"] += att
-                        if att > 1:
-                            d["video_success_after_retry"] += 1
-                    else:
-                        d["video_final_fail"] += 1
-                per = []
-                for a, d in sorted(acc.items()):
-                    total = d["video_attempts"]
-                    succ = d["video_success"]
-                    per.append({
-                        "account": a,
-                        "video_attempts": total,
-                        "video_403": d["video_403"],
-                        "video_success": succ,
-                        "video_success_after_retry": d["video_success_after_retry"],
-                        "video_final_fail": d["video_final_fail"],
-                        "avg_attempts_before_200": round(d["_attempts_sum_ok"] / succ, 2) if succ else None,
-                        "success_rate": round(succ / total, 3) if total else None,
-                    })
-                out["windows"][f"{hours}h"] = per
+                r["success_rate_1h"] = key_rates.get("1h", {}).get(key)
+                r["success_rate_24h"] = key_rates.get("24h", {}).get(key)
+        out["rows"] = out["windows"].get("24h", next(iter(out["windows"].values()), []))
         return out
     except Exception:  # noqa: BLE001
         log.warning("report_video_health failed", exc_info=True)
         return {"windows": {}}
+
+
+def _proxy_check_failed(payload: dict) -> bool:
+    if payload.get("error") or payload.get("browser_error") or payload.get("api_error"):
+        return True
+    if payload.get("match") is False:
+        return True
+    return False
+
+
+def _latest_proxy_checks(conn: sqlite3.Connection) -> dict[str, dict]:
+    rows = _rows(
+        conn,
+        "SELECT source, payload_json, created_at FROM events "
+        "WHERE event_name='proxy_check' ORDER BY id DESC LIMIT 500",
+    )
+    latest: dict[str, dict] = {}
+    for r in rows:
+        payload = _payload_dict(r["payload_json"])
+        account = str(payload.get("account") or r["source"] or "")
+        if not account or account in latest:
+            continue
+        latest[account] = {
+            "proxy_failed": _proxy_check_failed(payload),
+            "proxy_checked_at": str(r["created_at"] or ""),
+        }
+    return latest
+
+
+def _collapse_video_rows(rows: list[dict], model_family: str | None) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for r in rows:
+        if model_family and r.get("model_family") != model_family:
+            continue
+        account = str(r.get("account") or "")
+        if not account:
+            continue
+        d = out.setdefault(account, {
+            "attempts": 0, "success": 0, "403": 0, "unusual_403": 0, "attempts_ok_sum": 0,
+            "last_success_at": None, "last_403_at": None,
+        })
+        attempts = int(r.get("attempts") or 0)
+        success = int(r.get("success") or r.get("video_success") or 0)
+        d["attempts"] += attempts
+        d["success"] += success
+        d["403"] += int(r.get("403") or r.get("video_403") or 0)
+        d["unusual_403"] += int(r.get("unusual_403") or r.get("403_public_error_unusual_activity") or 0)
+        avg = r.get("avg_attempts_before_200")
+        if success and isinstance(avg, (int, float)):
+            d["attempts_ok_sum"] += float(avg) * success
+        if r.get("last_success_at"):
+            d["last_success_at"] = max(d["last_success_at"] or "", str(r["last_success_at"])) or None
+        if r.get("last_403_at"):
+            d["last_403_at"] = max(d["last_403_at"] or "", str(r["last_403_at"])) or None
+    return out
+
+
+def report_video_account_scores(
+    *,
+    model_family: str | None = None,
+    credit_hints: dict | None = None,
+    min_credits: int = 0,
+) -> dict:
+    """Health score used by video routing; never performs network I/O."""
+    try:
+        health = report_video_health((1, 24))
+        rows_1h = _collapse_video_rows(health.get("windows", {}).get("1h", []), model_family)
+        rows_24h = _collapse_video_rows(health.get("windows", {}).get("24h", []), model_family)
+        with _LOCK:
+            proxy = _latest_proxy_checks(_conn())
+        accounts = set(rows_1h) | set(rows_24h) | set(proxy) | set((credit_hints or {}).keys())
+        scores = {}
+        for account in sorted(accounts):
+            h1 = rows_1h.get(account, {})
+            h24 = rows_24h.get(account, {})
+            attempts24 = int(h24.get("attempts") or 0)
+            success24 = int(h24.get("success") or 0)
+            total403_24 = int(h24.get("403") or 0)
+            unusual24 = int(h24.get("unusual_403") or 0)
+            success_rate = (success24 / attempts24) if attempts24 else None
+            total_403_rate = (total403_24 / attempts24) if attempts24 else 0.0
+            avg_attempts = (
+                round(float(h24.get("attempts_ok_sum") or 0) / success24, 2)
+                if success24 else None
+            )
+            recent_unusual = int(h1.get("unusual_403") or 0) > 0
+            proxy_failed = bool((proxy.get(account) or {}).get("proxy_failed"))
+            score = 50.0
+            if success_rate is not None:
+                score += 35.0 * success_rate
+                score -= 25.0 * total_403_rate
+            if recent_unusual:
+                score -= 35.0
+            if h24.get("last_success_at"):
+                score += 10.0
+            if isinstance(avg_attempts, (int, float)) and avg_attempts > 1:
+                score -= min(20.0, (float(avg_attempts) - 1.0) * 4.0)
+            if proxy_failed:
+                score -= 100.0
+            credits = None
+            is_paid = False
+            hint = (credit_hints or {}).get(account)
+            if isinstance(hint, dict):
+                is_paid = bool(hint.get("is_paid"))
+                try:
+                    credits = int(float(hint.get("credits")))
+                except (TypeError, ValueError):
+                    credits = None
+            if is_paid and (not min_credits or (credits is not None and credits >= int(min_credits))):
+                score += 12.0
+            elif min_credits and credits is not None and credits < int(min_credits):
+                score -= 8.0
+            scores[account] = {
+                "account": account,
+                "model_family": model_family,
+                "score": round(score, 2),
+                "success_rate_24h": round(success_rate, 3) if success_rate is not None else None,
+                "403_rate_24h": round(total_403_rate, 3) if attempts24 else None,
+                "avg_attempts_before_200": avg_attempts,
+                "recent_unusual_403": recent_unusual,
+                "proxy_failed": proxy_failed,
+                "proxy_checked_at": (proxy.get(account) or {}).get("proxy_checked_at"),
+                "last_success_at": h24.get("last_success_at"),
+                "last_403_at": h24.get("last_403_at"),
+                "paid_enough_credits": bool(
+                    is_paid and (not min_credits or (credits is not None and credits >= int(min_credits)))
+                ),
+            }
+        return scores
+    except Exception:  # noqa: BLE001
+        log.warning("report_video_account_scores failed", exc_info=True)
+        return {}
 
 
 def report_channels() -> dict:
@@ -2213,7 +2504,8 @@ def report_recent_events(limit: int = 50) -> list:
                 SELECT event_name, user_id, username, source, payload_json, created_at
                 FROM events
                 WHERE event_name IN (
-                    'gen_failover', 'user_started', 'account_cooldown', 'payment_success'
+                    'gen_failover', 'user_started', 'account_cooldown', 'payment_success',
+                    'video_ab'
                 )
                 ORDER BY id DESC LIMIT ?
                 """,
@@ -2322,6 +2614,20 @@ def report_recent_events(limit: int = 50) -> list:
                     "time": time_str, "text": text,
                     "chip": "💳 topup", "color": "lime",
                     "account": "—", "_sort_ts": ts,
+                })
+
+            elif ev == "video_ab":
+                acc = fr["source"] or payload.get("account", "?")
+                model = payload.get("model") or payload.get("model_key") or "?"
+                statuses = payload.get("statuses") if isinstance(payload.get("statuses"), dict) else {}
+                status_bits = ", ".join(f"{k}:{v}" for k, v in statuses.items())[:60]
+                text = f"🎬 video A/B  {acc}  [{model}]"
+                if status_bits:
+                    text += f"  {status_bits}"
+                result.append({
+                    "time": time_str, "text": text,
+                    "chip": "🎬 video_ab", "color": "cyan",
+                    "account": acc, "_sort_ts": ts,
                 })
 
         # Сортируем по времени (новейшие первыми), обрезаем до limit

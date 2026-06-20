@@ -139,6 +139,13 @@ Admin UI/API change:
   `python -m unittest discover -s tests -p "test_admin_api.py"`.
 - Offline tests, assumption:
   `python -m unittest discover -s tests -p "test_*.py"`
+- Startup/video routing health changes should also include targeted routing and
+  static wiring tests, assumption:
+  `python -m unittest discover -s tests -p "test_flow_accounts.py"` and
+  `python -m unittest discover -s tests -p "test_flow_menu.py"`.
+- In a dirty worktree, run whitespace checks scoped to intended files rather
+  than treating unrelated local edits as part of the patch:
+  `git diff --check -- <intended files>`.
 - Optional local static/offline visual check: serve `deploy/photozhab/` on a
   temporary localhost port and open `/admin.html`; with no admin API present,
   the page must show explicit API unavailable state and no fake production

@@ -115,6 +115,7 @@ from flow_core import (
     VIDEO_MODELS,
     VIDEO_UI_ASPECTS,
     video_model_meta,
+    video_model_key,
     video_price,
     video_extend_price,
     clamp_num_videos,
@@ -349,6 +350,10 @@ MAX_AUTO_WAIT_SEC = 10
 ACC_IMAGE_CAPACITY = max(1, int(os.getenv("ACC_IMAGE_CAPACITY", "2")))
 # Максимум параллельных video-джобов на video-capable аккаунт.
 ACC_VIDEO_CAPACITY = max(1, int(os.getenv("ACC_VIDEO_CAPACITY", "1")))
+try:
+    MIN_READY_ACCOUNTS = max(1, int(os.getenv("MIN_READY_ACCOUNTS", "1")))
+except (TypeError, ValueError):
+    MIN_READY_ACCOUNTS = 1
 TOKEN_TTL_SEC = 50 * 60  # обновлять Bearer каждые 50 минут
 GCREDITS_CACHE_SEC = max(60, int(os.getenv("GCREDITS_CACHE_SEC", "1800")))
 GCREDITS_SESSION_SNAPSHOT_TIMEOUT_SEC = 1.5
@@ -2657,15 +2662,33 @@ class FlowHttpClient:
         else:
             gen_endpoint = VIDEO_GEN_ENDPOINT
             endpoint_name = "Text"
+        if is_frames:
+            effective_model_key = video_frames_model_key(model_key)
+        elif is_reference:
+            effective_model_key = video_reference_model_key(model_key, aspect)
+        elif is_edit:
+            effective_model_key = "abra_edit"
+        else:
+            effective_model_key = video_model_key(model_key)
+        model_family = str((video_model_meta(model_key) or {}).get("family") or "unknown")
+
+        def _submit_meta(data: dict) -> dict:
+            data.update({
+                "model_key": effective_model_key,
+                "model_family": model_family,
+                "endpoint": endpoint_name.lower(),
+                "mode": endpoint_name.lower(),
+                "transport": "browser_fetch" if browser_fallback_used else "direct_http",
+                "attempts": attempts_made,
+                "had_403": had_403,
+                "unusual_403": unusual_403,
+                "browser_fallback": browser_fallback_used,
+            })
+            return data
 
         # TEMP (capture-driven): trace r2v/frames request shape to diagnose the
         # "ingredients video never generates" bug. No secrets — endpoint/model/aspect only.
         if is_reference or is_frames:
-            effective_model_key = (
-                video_frames_model_key(model_key)
-                if is_frames
-                else video_reference_model_key(model_key, aspect)
-            )
             log.info(
                 "🎬 r2v req account=%s project=%s endpoint=%s effective_model_key=%s "
                 "aspect=%s ref_media_ids=%s frames=%s",
@@ -2688,6 +2711,7 @@ class FlowHttpClient:
         refreshed_after_403 = False
         refreshed_after_401 = False
         had_403 = False
+        unusual_403 = False
         attempts_made = 0
         action = SessionKeeper.VIDEO_RECAPTCHA_ACTION
         browser_fallback_used = False
@@ -2770,6 +2794,8 @@ class FlowHttpClient:
 
             if gen_status == 403:
                 had_403 = True
+                if "PUBLIC_ERROR_UNUSUAL_ACTIVITY" in gen_text or "unusual activity" in gen_text.lower():
+                    unusual_403 = True
                 log.warning(
                     "🎬 video → 403 (попытка %d/%d, score/антифрод), свежий токен",
                     _attempt + 1, SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS,
@@ -2789,68 +2815,41 @@ class FlowHttpClient:
             break
 
         if not solved_any:
-            return {"error": "Не удалось решить капчу для видео"}
-        if gen_status == 403:
-            if progress_cb:
-                await progress_cb("↻ Пробую отправить видео через браузер…")
-            browser_captcha = await self.keeper.solve_captcha(action)
-            if browser_captcha:
-                solved_any = True
-                browser_payload = _build_submit_payload(browser_captcha)
-                browser_resp = await self.keeper.post_json_via_browser(
-                    gen_endpoint,
-                    headers,
-                    browser_payload,
-                    timeout_ms=75_000,
-                )
-                if isinstance(browser_resp, dict):
-                    browser_fallback_used = True
-                    attempts_made += 1
-                    gen_status = int(browser_resp.get("status") or 0)
-                    gen_text = str(browser_resp.get("text") or "")
-                    log.info("🎬 video browser fallback → %s", gen_status)
-
+            return _submit_meta({"error": "Не удалось решить капчу для видео"})
         if gen_status == 401:
-            return {
+            return _submit_meta({
                 "error": "Bearer устарел, попробуйте ещё раз",
                 "account_risk": "video_auth",
-                "attempts": attempts_made,
-                "had_403": had_403,
-                "browser_fallback": browser_fallback_used,
-            }
+            })
         if gen_status == 429:
-            return {
+            return _submit_meta({
                 "error": flow_copy.msg("rate_limited"),
-                "attempts": attempts_made,
-                "had_403": had_403,
-                "browser_fallback": browser_fallback_used,
-            }
+            })
         if gen_status == 403:
-            return {
+            return _submit_meta({
                 "error": "Сервис отклонил запрос видео (403): низкий score/антифрод reCAPTCHA.",
                 "account_risk": "video_recaptcha_403",
-                "attempts": attempts_made,
                 "had_403": True,
-                "browser_fallback": browser_fallback_used,
-            }
+                "unusual_403": unusual_403,
+            })
         if gen_status != 200:
             # TEMP (capture-driven): log the real API error body (no auth headers).
             log.warning("🎬 video %s non-200 status=%s body=%s",
                         endpoint_name, gen_status, gen_text[:300])
-            return {"error": flow_copy.msg("service_error", status=gen_status)}
+            return _submit_meta({"error": flow_copy.msg("service_error", status=gen_status)})
 
         try:
             import json as _json
             gen_data = _json.loads(gen_text)
         except Exception:
-            return {"error": "Не удалось разобрать ответ генерации видео"}
+            return _submit_meta({"error": "Не удалось разобрать ответ генерации видео"})
 
         media_info = parse_video_gen_response(gen_data)
         if not media_info:
             # TEMP (capture-driven): 200 OK but no media id — log a snippet of the body.
             log.warning("🎬 video %s 200 but no media_id; body=%s",
                         endpoint_name, gen_text[:300])
-            return {"error": "media_id не найден в ответе"}
+            return _submit_meta({"error": "media_id не найден в ответе"})
 
         media_id   = media_info["media_id"]
         project_id = media_info["project_id"]
@@ -2899,17 +2898,13 @@ class FlowHttpClient:
                     item_scene_id = poll_item.get("sceneId")
                     if isinstance(item_scene_id, str) and item_scene_id:
                         scene_id = item_scene_id
-                return {
+                return _submit_meta({
                     "media_id":   media_id,
                     "project_id": project_id,
-                    "model_key":  model_key,
                     "workflow_id": workflow_id,
                     "scene_id":    scene_id,
                     "status":     "ok",
-                    "attempts":   attempts_made,
-                    "had_403":    had_403,
-                    "browser_fallback": browser_fallback_used,
-                }
+                })
             if status == VIDEO_STATUS_FAILED:
                 # Причина из тела FAILED-итема: звук не сгенерился / модерация —
                 # это контент-фейлы (не вина аккаунта), их показываем юзеру.
@@ -2920,12 +2915,12 @@ class FlowHttpClient:
                 except Exception:
                     pass
                 if reason == "audio_filtered":
-                    return {"error": "audio filter", "failure": "audio_filtered"}
+                    return _submit_meta({"error": "audio filter", "failure": "audio_filtered"})
                 if reason == "danger_filter":
-                    return {"error": "danger filter", "failure": "danger_filter"}
-                return {"error": "Генерация видео завершилась с ошибкой на стороне Google"}
+                    return _submit_meta({"error": "danger filter", "failure": "danger_filter"})
+                return _submit_meta({"error": "Генерация видео завершилась с ошибкой на стороне Google"})
 
-        return {"error": f"Таймаут ({VIDEO_POLL_TIMEOUT}с): видео не готово"}
+        return _submit_meta({"error": f"Таймаут ({VIDEO_POLL_TIMEOUT}с): видео не готово"})
 
     async def wait_video_ready(
         self,
@@ -3103,6 +3098,36 @@ DEFAULT_ACCOUNT_ID = FLOW_ACCOUNTS[0].id
 keeper = keepers[DEFAULT_ACCOUNT_ID]
 client = clients[DEFAULT_ACCOUNT_ID]
 
+startup_state: dict = {
+    "phase": "init",
+    "polling": False,
+    "ready_accounts": 0,
+    "total_accounts": len(keepers),
+    "min_ready": 0 if IS_SELLER else min(MIN_READY_ACCOUNTS, len(keepers)),
+    "accounts": {
+        acc_id: {"status": "pending", "ready": False, "updated_at": None}
+        for acc_id in keepers
+    },
+}
+
+
+def _startup_set_phase(phase: str, **extra) -> None:
+    startup_state["phase"] = phase
+    startup_state["updated_at"] = time.time()
+    for key, value in extra.items():
+        startup_state[key] = value
+
+
+def _startup_set_account(acc_id: str, status: str, *, ready: bool = False, error: str | None = None) -> None:
+    item = startup_state.setdefault("accounts", {}).setdefault(acc_id, {})
+    item.update({"status": status, "ready": bool(ready), "updated_at": time.time()})
+    if error:
+        item["error"] = error
+    elif "error" in item:
+        item.pop("error", None)
+    ready_count = sum(1 for a in startup_state.get("accounts", {}).values() if a.get("ready"))
+    startup_state["ready_accounts"] = ready_count
+
 
 def _account_for(user_id: int) -> str | None:
     """Аккаунт пула для джобы юзера (sticky), None — весь пул недоступен."""
@@ -3120,9 +3145,48 @@ def _account_for_image(
     )
 
 
-def _account_for_video(user_id: int) -> str | None:
+def _cached_gcredits_hints() -> dict:
+    hints = {}
+    for acc_id, kp in keepers.items():
+        cached = getattr(kp, "_gcredits_cache", None)
+        if isinstance(cached, dict):
+            hints[acc_id] = dict(cached)
+    return hints
+
+
+def _video_family_for_model(model_id: str) -> str:
+    meta = video_model_meta(model_id)
+    return str((meta or {}).get("family") or "unknown")
+
+
+def _video_scores_for_model(model_id: str, min_credits: int = 0) -> dict:
+    return metrics.report_video_account_scores(
+        model_family=_video_family_for_model(model_id),
+        credit_hints=_cached_gcredits_hints(),
+        min_credits=int(min_credits or 0),
+    )
+
+
+def _video_account_health_reason(account_id: str | None, model_id: str, min_credits: int = 0) -> str | None:
+    if not account_id:
+        return "missing_account"
+    if not account_pool.is_reference_usable(account_id):
+        return "account_unavailable"
+    score = (_video_scores_for_model(model_id, min_credits).get(account_id) or {})
+    if score.get("proxy_failed"):
+        return "proxy_check_failed"
+    if score.get("recent_unusual_403"):
+        return "recent_public_error_unusual_activity"
+    return None
+
+
+def _account_for_video(user_id: int, *, model_id: str = "omni-flash-4s", min_credits: int = 0) -> str | None:
     """Аккаунт для видео-джобы — только среди video_capable, None — нет доступных."""
-    return account_pool.pick_for_video(user_id)
+    return account_pool.pick_for_video(
+        user_id,
+        model_family=_video_family_for_model(model_id),
+        health_scores=_video_scores_for_model(model_id, min_credits),
+    )
 
 
 def _keeper_for_acc(account_id: str | None) -> SessionKeeper:
@@ -9263,7 +9327,7 @@ async def _do_video_generate_and_send(
             await message.answer(flow_copy.msg("vid_frm_need_both"))
             return
 
-    model_key = meta["key"]
+    model_key = model_id
     single_price = unit_price_override if unit_price_override is not None else video_price(model_id, 1, vmode)
     total_price = single_price * vcount
 
@@ -9283,10 +9347,25 @@ async def _do_video_generate_and_send(
             await message.answer(flow_copy.msg("vid_ref_account_unavailable"))
             return
     else:
-        acc_id = _account_for_video(user_id)
+        acc_id = _account_for_video(user_id, model_id=model_id, min_credits=single_price)
     if acc_id is None:
         # Нет доступных video-capable аккаунтов — отказ ДО списания кредитов.
         await message.answer(flow_copy.msg("accounts_unavailable"))
+        return
+    bound_health_reason = None
+    if source_video or has_reference:
+        bound_health_reason = _video_account_health_reason(acc_id, model_id, single_price)
+    if bound_health_reason:
+        await message.answer(
+            "Этот исходник привязан к Google-аккаунту, который сейчас не готов для видео. "
+            "Попробуйте позже или загрузите файл заново."
+        )
+        metrics.log_event(
+            "video_bound_account_blocked",
+            user_id=user_id,
+            source=acc_id,
+            payload={"model": model_id, "mode": vmode, "reason": bound_health_reason},
+        )
         return
     video_project_id = (
         source_video.project_id if source_video
@@ -9378,8 +9457,15 @@ async def _do_video_generate_and_send(
         metrics.log_event(
             "video_outcome", user_id=user_id, source=acc_id,
             payload={"ok": False, "mode": vmode, "reason": error_type,
+                     "model": model_id,
+                     "model_key": _res.get("model_key") or model_key,
+                     "model_family": _res.get("model_family") or meta.get("family"),
+                     "endpoint": _res.get("endpoint") or vmode,
+                     "transport": _res.get("transport") or "direct_http",
                      "attempts": int(_res.get("attempts") or 1),
                      "had_403": bool(_res.get("had_403")),
+                     "unusual_403": bool(_res.get("unusual_403")),
+                     "success_after_retry": False,
                      "browser_fallback": bool(_res.get("browser_fallback"))},
         )
         metrics.log_event("video_failed", user_id=user_id, source=vmode,
@@ -9456,7 +9542,7 @@ async def _do_video_generate_and_send(
                     and video_operation == "generate"
                     and not source_video
                 ):
-                    failover_acc = _account_for_video(user_id)
+                    failover_acc = _account_for_video(user_id, model_id=model_id, min_credits=single_price)
                     if failover_acc and failover_acc != acc_id:
                         log.info("🔄 video failover: %s → %s", acc_id, failover_acc)
                         acc_id = failover_acc
@@ -9497,8 +9583,15 @@ async def _do_video_generate_and_send(
             metrics.log_event(
                 "video_outcome", user_id=user_id, source=acc_id,
                 payload={"ok": True, "mode": vmode,
+                         "model": model_id,
+                         "model_key": (result or {}).get("model_key") or model_key,
+                         "model_family": (result or {}).get("model_family") or meta.get("family"),
+                         "endpoint": (result or {}).get("endpoint") or vmode,
+                         "transport": (result or {}).get("transport") or "direct_http",
                          "attempts": int((result or {}).get("attempts") or 1),
                          "had_403": bool((result or {}).get("had_403")),
+                         "unusual_403": bool((result or {}).get("unusual_403")),
+                         "success_after_retry": int((result or {}).get("attempts") or 1) > 1,
                          "browser_fallback": bool((result or {}).get("browser_fallback"))},
             )
             _stop_vid_anim()  # генерация готова — гасим анимацию фраз
@@ -10254,7 +10347,7 @@ async def _start_web_server() -> web.AppRunner:
     except (TypeError, ValueError):
         client_max_size = 32 * 1024 * 1024
     app = web.Application(client_max_size=client_max_size)
-    _admin_api.register_admin_routes(app, account_pool, keepers, clients)
+    _admin_api.register_admin_routes(app, account_pool, keepers, clients, startup_state=startup_state)
     if not IS_SELLER:
         # Только consumer (с пулом) отдаёт генерацию для seller-бота (§A).
         try:
@@ -11224,90 +11317,130 @@ async def _main_impl():
         log.error("❌ Укажите TELEGRAM_TOKEN в .env или прямо в коде!")
         return
 
-    # Узнаём собственный @username — нужен для реферальных deep-link.
-    global BOT_USERNAME
-    try:
-        me = await bot.get_me()
-        if me.username:
-            BOT_USERNAME = me.username
-    except Exception:
-        log.warning("get_me failed; referral links use the env fallback")
-
-    # Нативное меню команд Telegram (синяя кнопка «Меню» у поля ввода).
-    if IS_SELLER:
-        _bot_commands = [
-            types.BotCommand(command="start", description="Запуск и меню"),
-            types.BotCommand(command="menu", description="🛒 Карточки для маркетплейсов"),
-            types.BotCommand(command="balance", description="💳 Баланс и пополнение"),
-            types.BotCommand(command="help", description="Как пользоваться"),
-        ]
-    else:
-        _bot_commands = [
-            types.BotCommand(command="start", description="Запуск и главное меню"),
-            types.BotCommand(command="menu", description="🏠 Главное меню"),
-            types.BotCommand(command="balance", description="💳 Баланс и пополнение"),
-            types.BotCommand(command="ideas", description="Ideas and templates"),
-            types.BotCommand(command="help", description="How to use the bot"),
-            types.BotCommand(command="referral", description="Invite a friend"),
-        ]
-    try:
-        await bot.set_my_commands(_bot_commands)
-    except Exception:
-        log.warning("Не удалось установить меню команд")
-
-    # Прогреваем браузеры аккаунтов пула параллельно (с лимитом одновременных
-    # запусков, чтобы не выжрать RAM), потом поднимаем бота. Упавший на старте
-    # аккаунт отключается в пуле (роутинг его обойдёт); встаём только если не
-    # поднялся ни один. Лимит настраивается WARMUP_CONCURRENCY (по умолчанию 3).
-    if IS_SELLER:
-        # Seller-бот НЕ поднимает собственный браузерный пул: он использует
-        # аккаунты основного бота через общий генератор-бэкенд (фаза A,
-        # docs/SELLER_BOT_PLAN.md). Так нет конфликта за google_profile и
-        # двойного расхода Flow-квоты. Генерация ходит в основной процесс.
-        log.info("🛒 Seller mode: пропускаю прогрев пула (генерация через основной бот)")
-    else:
-        try:
-            warmup_concurrency = max(1, int(os.getenv("WARMUP_CONCURRENCY", "3")))
-        except (TypeError, ValueError):
-            warmup_concurrency = 3
-        warmup_sem = asyncio.Semaphore(warmup_concurrency)
-
-        async def _warm_account(acc_id: str, kp: "SessionKeeper") -> bool:
-            async with warmup_sem:
-                try:
-                    log.info("🌐 Запускаю аккаунт пула: %s", acc_id)
-                    await kp.start()
-                    return True
-                except Exception:
-                    log.exception("❌ Аккаунт %s не стартовал — отключаю в пуле", acc_id)
-                    account_pool.set_disabled(acc_id, True)
-                    return False
-
-        warm_started = time.time()
-        results = await asyncio.gather(
-            *(_warm_account(acc_id, kp) for acc_id, kp in keepers.items())
-        )
-        log.info(
-            "🌐 Прогрев пула: %d/%d аккаунтов за %.1f c (параллельно, лимит %d)",
-            sum(1 for r in results if r), len(results), time.time() - warm_started,
-            warmup_concurrency,
-        )
-        if not any(results):
-            log.error("❌ Ни один аккаунт пула не запустился — выходим.")
-            return
-
     robokassa_runner = None
+    warmup_tasks: list[asyncio.Task] = []
     try:
-        robokassa_runner = await _start_robokassa_web_server()
-    except Exception:
-        log.exception("Robokassa callback server failed to start")
+        _startup_set_phase("web_starting")
+        try:
+            robokassa_runner = await _start_robokassa_web_server()
+            _startup_set_phase("web_ready")
+        except Exception as exc:
+            _startup_set_phase("web_failed", error=exc.__class__.__name__)
+            log.exception("Robokassa callback server failed to start")
 
-    log.info("🤖 Бот запущен!")
-    asyncio.create_task(_daily_digest_loop())
-    try:
+        # Узнаём собственный @username — нужен для реферальных deep-link.
+        global BOT_USERNAME
+        try:
+            me = await bot.get_me()
+            if me.username:
+                BOT_USERNAME = me.username
+        except Exception:
+            log.warning("get_me failed; referral links use the env fallback")
+
+        # Нативное меню команд Telegram (синяя кнопка «Меню» у поля ввода).
+        if IS_SELLER:
+            _bot_commands = [
+                types.BotCommand(command="start", description="Запуск и меню"),
+                types.BotCommand(command="menu", description="🛒 Карточки для маркетплейсов"),
+                types.BotCommand(command="balance", description="💳 Баланс и пополнение"),
+                types.BotCommand(command="help", description="Как пользоваться"),
+            ]
+        else:
+            _bot_commands = [
+                types.BotCommand(command="start", description="Запуск и главное меню"),
+                types.BotCommand(command="menu", description="🏠 Главное меню"),
+                types.BotCommand(command="balance", description="💳 Баланс и пополнение"),
+                types.BotCommand(command="ideas", description="Ideas and templates"),
+                types.BotCommand(command="help", description="How to use the bot"),
+                types.BotCommand(command="referral", description="Invite a friend"),
+            ]
+        try:
+            await bot.set_my_commands(_bot_commands)
+        except Exception:
+            log.warning("Не удалось установить меню команд")
+
+        if IS_SELLER:
+            log.info("🛒 Seller mode: пропускаю прогрев пула (генерация через основной бот)")
+            startup_state["min_ready"] = 0
+            for acc_id in keepers:
+                account_pool.set_runtime_ready(acc_id, True, "skipped")
+                _startup_set_account(acc_id, "skipped", ready=True)
+            _startup_set_phase("ready", ready_accounts=len(keepers))
+        else:
+            try:
+                warmup_concurrency = max(1, int(os.getenv("WARMUP_CONCURRENCY", "3")))
+            except (TypeError, ValueError):
+                warmup_concurrency = 3
+            warmup_sem = asyncio.Semaphore(warmup_concurrency)
+            total_accounts = len(keepers)
+            min_ready = min(max(1, MIN_READY_ACCOUNTS), total_accounts)
+            startup_state["min_ready"] = min_ready
+            startup_state["total_accounts"] = total_accounts
+            ready_event = asyncio.Event()
+            warm_started = time.time()
+            ready_count = 0
+            completed_count = 0
+
+            for acc_id in keepers:
+                account_pool.set_runtime_ready(acc_id, False, "warming")
+                _startup_set_account(acc_id, "pending", ready=False)
+            _startup_set_phase("warming")
+
+            async def _warm_account(acc_id: str, kp: "SessionKeeper") -> bool:
+                nonlocal ready_count, completed_count
+                ok = False
+                async with warmup_sem:
+                    try:
+                        account_pool.set_runtime_ready(acc_id, False, "warming")
+                        _startup_set_account(acc_id, "running", ready=False)
+                        log.info("🌐 Запускаю аккаунт пула: %s", acc_id)
+                        await kp.start()
+                        ok = True
+                        ready_count += 1
+                        account_pool.set_runtime_ready(acc_id, True, "ready")
+                        _startup_set_account(acc_id, "ready", ready=True)
+                    except Exception as exc:
+                        log.exception("❌ Аккаунт %s не стартовал — отключаю в пуле", acc_id)
+                        account_pool.set_runtime_ready(acc_id, False, "failed")
+                        account_pool.set_disabled(acc_id, True)
+                        _startup_set_account(acc_id, "failed", ready=False, error=exc.__class__.__name__)
+                    finally:
+                        completed_count += 1
+                        if ready_count >= min_ready or completed_count >= total_accounts:
+                            ready_event.set()
+                return ok
+
+            warmup_tasks = [
+                asyncio.create_task(_warm_account(acc_id, kp))
+                for acc_id, kp in keepers.items()
+            ]
+            await ready_event.wait()
+            if ready_count < min_ready:
+                await asyncio.gather(*warmup_tasks, return_exceptions=True)
+                _startup_set_phase("blocked", ready_accounts=ready_count)
+                log.error("❌ Прогрев пула не достиг threshold %d/%d — выходим.", ready_count, min_ready)
+                return
+            _startup_set_phase("ready_threshold_met", ready_accounts=ready_count)
+            log.info(
+                "🌐 Прогрев threshold: %d/%d аккаунтов за %.1f c (минимум %d, лимит %d)",
+                ready_count, total_accounts, time.time() - warm_started,
+                min_ready, warmup_concurrency,
+            )
+
+        log.info("🤖 Бот запущен!")
+        asyncio.create_task(_daily_digest_loop())
+        startup_state["polling"] = True
+        _startup_set_phase("polling")
         await dp.start_polling(bot)
     finally:
+        startup_state["polling"] = False
+        _startup_set_phase("stopping")
         log.info("Shutting down bot resources...")
+        for task in warmup_tasks:
+            if not task.done():
+                task.cancel()
+        if warmup_tasks:
+            await asyncio.gather(*warmup_tasks, return_exceptions=True)
         if robokassa_runner is not None:
             try:
                 await robokassa_runner.cleanup()

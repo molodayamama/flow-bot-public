@@ -544,6 +544,28 @@ tr:hover td{background:var(--pz-surface-2)}
             </tbody>
           </table>
         </div>
+        <div class="toolbar" style="margin-top:18px">
+          <div>
+            <div class="card-title">Video routing health</div>
+            <div class="card-sub">Фактическая пригодность аккаунтов по семействам video-моделей</div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table id="video-health-table">
+            <thead>
+              <tr>
+                <th>account</th>
+                <th>model_family</th>
+                <th>success_rate</th>
+                <th>403_rate</th>
+                <th>avg_attempts</th>
+              </tr>
+            </thead>
+            <tbody id="video-health-tbody">
+              <tr><td colspan="5" style="color:var(--pz-faint);text-align:center;padding:18px">Загрузка…</td></tr>
+            </tbody>
+          </table>
+        </div>
         <p style="font-size:12px;color:var(--pz-faint)">Изменения применяются мгновенно — рестарт бота не нужен.</p>
       </div>
 
@@ -1266,6 +1288,40 @@ function renderLog(log) {
 }
 
 /* ── Accounts ──────────────────────────────────────── */
+function pctCell(v) {
+  return v == null ? '—' : (Number(v) * 100).toFixed(1) + '%';
+}
+
+function accountStatusBadge(a) {
+  if (a.health === 'warming' || ['pending','running'].includes(a.warmup_status)) {
+    return '<span class="badge badge-yellow">warming</span>';
+  }
+  if (a.disabled) return '<span class="badge badge-red">выключен</span>';
+  if ((a.cooldown_left||0) > 0) return `<span class="badge badge-yellow">кулдаун ${a.cooldown_left}с</span>`;
+  return '<span class="badge badge-green">активен</span>';
+}
+
+async function loadVideoHealth() {
+  const data = await api('GET','/video-health');
+  const rows = (data && data.windows && Array.isArray(data.windows['24h']))
+    ? data.windows['24h']
+    : [];
+  const tbody = document.getElementById('video-health-tbody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--pz-faint);padding:18px;text-align:center">Нет video health событий за 24 часа</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r=>`
+    <tr>
+      <td class="mono" style="color:var(--pz-cyan)">${esc(r.account)}</td>
+      <td>${esc(r.model_family || 'unknown')}</td>
+      <td class="mono">${pctCell(r.success_rate_24h ?? r.success_rate)}</td>
+      <td class="mono">${pctCell(r['403_rate'])}</td>
+      <td class="mono">${r.avg_attempts_before_200 ?? '—'}</td>
+    </tr>
+  `).join('');
+}
+
 async function loadAccounts() {
   const accs = await api('GET','/accounts');
   if (!Array.isArray(accs)) {
@@ -1274,6 +1330,7 @@ async function loadAccounts() {
         Аккаунты временно недоступны. Обновите позже.
       </td></tr>
     `;
+    await loadVideoHealth();
     return;
   }
   document.getElementById('accounts-tbody').innerHTML = accs.map(a=>`
@@ -1282,7 +1339,7 @@ async function loadAccounts() {
         <div class="mono" style="color:var(--pz-cyan)">${esc(a.id)}</div>
         <div style="font-size:11px;color:var(--pz-faint);margin-top:2px">${esc(a.profile_dir)}</div>
       </td>
-      <td>${a.disabled ? '<span class="badge badge-red">выключен</span>' : (a.cooldown_left||0)>0 ? `<span class="badge badge-yellow">кулдаун ${a.cooldown_left}с</span>` : '<span class="badge badge-green">активен</span>'}</td>
+      <td>${accountStatusBadge(a)}</td>
       <td class="mono">
         ${a.jobs_total??0}
         ${(a.jobs_total??0)>0?`<div style="font-size:10px;font-weight:400;color:var(--pz-faint);margin-top:1px"><span style="color:var(--pz-green)">✓${a.jobs_success??0}</span>&thinsp;<span style="color:var(--pz-coral)">✗${a.jobs_fail??0}</span></div>`:''}
@@ -1294,6 +1351,7 @@ async function loadAccounts() {
       <td><button class="btn btn-ghost btn-sm" onclick="resetFailures('${esc(a.id)}')">Сбросить ошибки</button></td>
     </tr>
   `).join('');
+  await loadVideoHealth();
 }
 
 async function toggleVideo(id, allowed) {

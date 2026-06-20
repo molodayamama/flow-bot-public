@@ -538,7 +538,11 @@ class BotMenuWiringTests(unittest.TestCase):
         block = self.source[start:end]
         self.assertIn("robokassa_runner = None", block)
         self.assertIn("robokassa_runner = await _start_robokassa_web_server()", block)
-        self.assertIn("try:\n        await dp.start_polling(bot)\n    finally:", block)
+        self.assertIn("await ready_event.wait()", block)
+        self.assertLess(block.index("await ready_event.wait()"), block.index("await dp.start_polling(bot)"))
+        self.assertIn("finally:", block)
+        self.assertIn("startup_state[\"polling\"] = False", block)
+        self.assertIn("await asyncio.gather(*warmup_tasks, return_exceptions=True)", block)
         self.assertIn("await robokassa_runner.cleanup()", block)
         self.assertIn("for acc_id, kp in keepers.items():", block)
         self.assertIn("await kp.close()", block)
@@ -922,15 +926,11 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("session = await self.keeper.get_session()", block)
         self.assertIn("headers = self._build_headers(session)", block)
 
-    def test_video_403_has_browser_post_fallback_after_direct_retries(self) -> None:
+    def test_video_403_does_not_auto_browser_fallback_in_production(self) -> None:
         start = self.source.index("async def generate_video")
         block = self.source[start:self.source.index("if gen_status != 200:", start)]
-        self.assertLess(
-            block.index("for _attempt in range(SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS):"),
-            block.index("post_json_via_browser"),
-        )
-        self.assertLess(block.index("if not solved_any:"), block.index("post_json_via_browser"))
-        self.assertIn("browser_payload = _build_submit_payload(browser_captcha)", block)
+        self.assertIn("for _attempt in range(SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS):", block)
+        self.assertNotIn("post_json_via_browser", block)
         self.assertIn('"browser_fallback": browser_fallback_used', block)
 
     def test_video_browser_fallback_uses_browser_safe_headers(self) -> None:
