@@ -19,11 +19,35 @@ Do not reintroduce older "generation blocked" assumptions for Ingredients or
 Frames: both modes are implemented. Live/paid checks still require operator
 approval.
 
+## Create-Video Wizard (current, 2026-06-20)
+
+The live create-video flow is prompt-first and engine-agnostic:
+
+1. `m:vid` → "опишите видео" screen (`show_video_prompt_input`); the user may
+   attach a photo here to animate it.
+2. The user sends text (and/or a photo) → settings panel
+   (`show_new_video_wizard` / `_nwiz_kb`).
+3. The settings panel has a single engine toggle, jargon hidden:
+   - **⚡ Быстро** = Omni Flash (`v:neng:omni`), with a duration row 4/6/8/10s
+     (`v:ndur:*`); cheaper.
+   - **💎 Качество** = Veo (`v:neng:veo`), fixed length; pricier.
+   Plus format (`v:nfmt:*`), styles (`v:nstyle:*`), and Create (`v:ngo`).
+4. Engine is decoupled from the photo: BOTH engines work with or without a
+   photo. Default is ⚡ Быстро (Omni). `_nwiz_model` resolves the friendly model
+   id from `vengine` (+`vdur` for Omni / `vquality=lite` for Veo); the r2v key is
+   then `abra_r2v_{dur}s` (Omni) or `veo_3_1_r2v_{tier}` (Veo) via
+   `flow_core.video_reference_model_key`.
+5. Generate, poll, download, send results.
+
+Video **Extend** stays Veo-only: `_video_can_extend` gates on the friendly
+`VideoRef.model_id` starting with `veo-`, so Omni-animated results never show
+"Продлить" (Omni has no extension key).
+
 ## Current Modes
 
-### Text To Video
+### Text To Video (legacy picker notes — superseded by the wizard above)
 
-Flow:
+Older flow, kept for endpoint reference:
 
 1. Family picker: Omni Flash or Veo.
 2. Model picker: duration/tier.

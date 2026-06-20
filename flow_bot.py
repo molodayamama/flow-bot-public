@@ -4776,9 +4776,19 @@ _VID_VEO_QUAL_MODEL = {"lite": "veo-lite", "fast": "veo-fast", "quality": "veo-q
 _VID_VEO_QUAL_NAMES = {"lite": "Lite", "fast": "Fast", "quality": "Quality"}
 
 
+def _nwiz_engine(st: dict) -> str:
+    """Движок видео: ``omni`` (⚡ Быстро) или ``veo`` (💎 Качество).
+
+    Раньше движок жёстко зависел от наличия фото (фото → Veo, текст → Omni).
+    Теперь оба движка работают и с фото, и без — выбор делает сам пользователь
+    одной кнопкой, а дефолт — «Быстро» (Omni: дешевле и проще)."""
+    eng = (st.get("vengine") or "").lower()
+    return eng if eng in ("omni", "veo") else "omni"
+
+
 def _nwiz_model(st: dict) -> str:
-    """Модель для нового wizard на основе текущего состояния."""
-    if st.get("vphoto"):
+    """Модель для нового wizard на основе выбранного движка (не от наличия фото)."""
+    if _nwiz_engine(st) == "veo":
         return _VID_VEO_QUAL_MODEL.get(st.get("vquality", "lite"), "veo-lite")
     return _VID_OMNI_DUR_MODEL.get(st.get("vdur", 4), "omni-flash-4s")
 
@@ -4806,12 +4816,11 @@ def _nwiz_text(user_id: int) -> str:
     if has_photo:
         lines.append("📎 <b>Фото (1 шт.) добавлено</b>")
     lines.append("")
-    if has_photo:
-        quality = st.get("vquality", "lite")
-        q_name = _VID_VEO_QUAL_NAMES.get(quality, "Lite")
-        details = f"Формат: {_VID_FMT_NAMES.get(vfmt, vfmt)} · Veo {q_name}"
+    fmt_name = _VID_FMT_NAMES.get(vfmt, vfmt)
+    if _nwiz_engine(st) == "veo":
+        details = f"💎 Качество · Формат: {fmt_name}"
     else:
-        details = f"Формат: {_VID_FMT_NAMES.get(vfmt, vfmt)} · Длительность: {dur}с"
+        details = f"⚡ Быстро · {dur}с · Формат: {fmt_name}"
     if style_key:
         details += f" · Стиль: {style_name}"
     lines.append(details)
@@ -4829,7 +4838,14 @@ def _nwiz_kb(user_id: int) -> types.InlineKeyboardMarkup:
     style_label = _VID_STYLES.get(style_key, ("Никакой", ""))[0]
     price = _nwiz_price(st)
 
+    engine = _nwiz_engine(st)
     rows: list[list] = []
+
+    # Движок — ⚡ Быстро (Omni) / 💎 Качество (Veo). Жаргон omni/veo скрыт.
+    rows.append([
+        _sel_btn("⚡ Быстро", engine == "omni", "v:neng:omni"),
+        _sel_btn("💎 Качество", engine == "veo", "v:neng:veo"),
+    ])
 
     # Формат тоггл — 🖥 горизонталь / 📱 вертикаль
     next_fmt = "port" if vfmt == "land" else "land"
@@ -4837,15 +4853,8 @@ def _nwiz_kb(user_id: int) -> types.InlineKeyboardMarkup:
     fmt_emoji = "📱" if vfmt == "port" else "🖥"
     rows.append([B(text=f"{fmt_emoji} {fmt_name}", callback_data=f"v:nfmt:{next_fmt}")])
 
-    if has_photo:
-        # Veo: качество тоггл
-        quality = st.get("vquality", "lite")
-        q_idx = _VID_VEO_QUALITY_CYCLE.index(quality) if quality in _VID_VEO_QUALITY_CYCLE else 0
-        next_q = _VID_VEO_QUALITY_CYCLE[(q_idx + 1) % len(_VID_VEO_QUALITY_CYCLE)]
-        q_name = _VID_VEO_QUAL_NAMES.get(quality, "Lite")
-        rows.append([B(text=f"🎥 Качество: {q_name}", callback_data=f"v:nqual:{next_q}")])
-    else:
-        # Omni: длительности
+    # Длительность — только для «Быстро» (Omni). «Качество» (Veo) — фикс. длина.
+    if engine == "omni":
         rows.append([_sel_btn(f"{d}с", dur == d, f"v:ndur:{d}") for d in _VID_OMNI_DURATIONS])
 
     # Стили
@@ -8852,6 +8861,15 @@ async def on_video_action(callback: types.CallbackQuery):
             fmt = data.split(":", 2)[2]
             if fmt in ("land", "port"):
                 st["vfmt"] = fmt
+            await callback.answer()
+            await show_new_video_wizard(msg, user_id=user_id, edit=True)
+            return
+
+        # Движок — ⚡ Быстро (Omni) / 💎 Качество (Veo)
+        if data.startswith("v:neng:"):
+            eng = data.split(":", 2)[2]
+            if eng in ("omni", "veo"):
+                st["vengine"] = eng
             await callback.answer()
             await show_new_video_wizard(msg, user_id=user_id, edit=True)
             return

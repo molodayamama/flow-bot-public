@@ -96,10 +96,11 @@ The video grid is intentionally between two bad extremes:
 
 With blended net revenue near 0.65 RUB per bot credit, the current grid keeps
 images cheap, makes Veo Lite accessible, and leaves Veo Quality as a premium
-anchor. Current reference-to-video is Veo-only, so photo animation starts at
-75 credits (Veo Lite + reference surcharge) and fits the small pack. Do not
-advertise Omni Flash reference videos until an Omni reference-to-video key is
-captured and enabled.
+anchor. Reference-to-video now supports both engines via the ⚡ Быстро (Omni) /
+💎 Качество (Veo) toggle on the create-video screen, so photo animation starts at
+65 credits (Omni `abra_r2v_*`) with Veo Lite reference at 75; both fit the small
+pack. The Omni reference-to-video key is captured and enabled. Video Extend
+remains Veo-only (Omni results do not offer "Продлить").
 
 ## Packs
 

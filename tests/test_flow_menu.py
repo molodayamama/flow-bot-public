@@ -1750,6 +1750,48 @@ class BotImportSmokeTests(unittest.TestCase):
             self.assertEqual(fb._parse_ids("111, 222; 333 ,bad"), {111, 222, 333})
             self.assertEqual(fb._parse_ids(""), set())
 
+    def test_video_engine_toggle_decouples_model_from_photo(self) -> None:
+        import os
+
+        try:
+            import aiogram  # noqa: F401
+        except Exception:
+            self.skipTest("aiogram not installed")
+        os.environ.setdefault("TELEGRAM_TOKEN", "123:test")
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["USER_CREDITS_FILE"] = str(Path(tmp) / "credits.json")
+            import importlib
+            fb = importlib.import_module("flow_bot")
+            importlib.reload(fb)
+            self._assert_engine_toggle(fb)
+
+    def _assert_engine_toggle(self, fb) -> None:
+        # Default engine is ⚡ Быстро (Omni), even with a photo attached — the
+        # old "photo => Veo" coupling is gone.
+        self.assertEqual(fb._nwiz_engine({}), "omni")
+        st_photo = {"vphoto": {"media_id": "m"}, "vdur": 4}
+        self.assertEqual(fb._nwiz_model(st_photo), "omni-flash-4s")
+        # Choosing 💎 Качество switches to Veo, with or without a photo.
+        self.assertEqual(fb._nwiz_model({"vphoto": {"media_id": "m"}, "vengine": "veo"}), "veo-lite")
+        self.assertEqual(fb._nwiz_model({"vengine": "veo"}), "veo-lite")
+        # Omni duration still drives the Omni model.
+        self.assertEqual(fb._nwiz_model({"vengine": "omni", "vdur": 6}), "omni-flash-6s")
+        # An Omni-animated (r2v) result is NOT extendable; only Veo is.
+        VR = fb.VideoRef
+        omni_r2v = VR(user_id=1, project_id="p", media_id="m", workflow_id="w",
+                      model_id="omni-flash-6s", mode="ingredients")
+        self.assertFalse(fb._video_can_extend(omni_r2v))
+        # Keyboard exposes the engine toggle; duration row only for Быстро.
+        fb.wizard_state[424242].update({"vprompt": "hi", "vfmt": "land", "vdur": 4})
+        datas = [b.callback_data for row in fb._nwiz_kb(424242).inline_keyboard for b in row]
+        self.assertIn("v:neng:omni", datas)
+        self.assertIn("v:neng:veo", datas)
+        self.assertIn("v:ndur:4", datas)
+        fb.wizard_state[424242]["vengine"] = "veo"
+        datas_veo = [b.callback_data for row in fb._nwiz_kb(424242).inline_keyboard for b in row]
+        self.assertIn("v:neng:veo", datas_veo)
+        self.assertNotIn("v:ndur:4", datas_veo)
+
 
 if __name__ == "__main__":
     unittest.main()
