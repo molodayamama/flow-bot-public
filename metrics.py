@@ -1796,17 +1796,31 @@ def report_video_account_scores(
                 if success24 else None
             )
             recent_unusual = int(h1.get("unusual_403") or 0) > 0
+            recent_403 = int(h1.get("403") or 0) > 0
             proxy_failed = bool((proxy.get(account) or {}).get("proxy_failed"))
+            # "Clean" = succeeds on (near) first try. A retry-heavy account that
+            # only gets a 200 after several captcha retries is fragile and wastes
+            # provider attempts, so it must not outrank a clean idle account.
+            clean = (not isinstance(avg_attempts, (int, float))) or avg_attempts <= 1.5
             score = 50.0
             if success_rate is not None:
-                score += 35.0 * success_rate
-                score -= 25.0 * total_403_rate
+                # Reward success weighted by efficiency: an account needing
+                # avg N attempts earns ~1/N of the success bonus.
+                efficiency = 1.0
+                if isinstance(avg_attempts, (int, float)) and avg_attempts > 1:
+                    efficiency = 1.0 / float(avg_attempts)
+                score += 35.0 * success_rate * efficiency
+                score -= 40.0 * total_403_rate
             if recent_unusual:
-                score -= 35.0
-            if h24.get("last_success_at"):
+                score -= 45.0
+            elif recent_403:
+                score -= 20.0
+            # Stale-success bonus only for clean accounts, so a flaky account
+            # cannot ride one lucky retry-success above a clean idle one.
+            if h24.get("last_success_at") and clean:
                 score += 10.0
             if isinstance(avg_attempts, (int, float)) and avg_attempts > 1:
-                score -= min(20.0, (float(avg_attempts) - 1.0) * 4.0)
+                score -= min(30.0, (float(avg_attempts) - 1.0) * 8.0)
             if proxy_failed:
                 score -= 100.0
             credits = None

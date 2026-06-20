@@ -728,6 +728,25 @@ class VideoHealthReportTests(MetricsTestBase):
         self.assertTrue(scores["bad"]["proxy_failed"])
         self.assertGreater(scores["good"]["score"], scores["bad"]["score"])
 
+    def test_video_account_scores_demote_retry_heavy_below_idle(self) -> None:
+        # flaky: a reputation-troubled account that 403s a lot and only succeeds
+        # after several captcha retries (high avg_attempts, success-after-retry).
+        metrics.log_event("video_outcome", source="flaky",
+                          payload={"ok": False, "had_403": True, "model_family": "omni-flash"})
+        metrics.log_event("video_outcome", source="flaky",
+                          payload={"ok": True, "attempts": 3, "model_family": "omni-flash"})
+        # fresh: clean account with a healthy proxy check and no recent video data.
+        metrics.log_event("proxy_check", source="fresh", payload={"account": "fresh", "match": True})
+
+        scores = metrics.report_video_account_scores(model_family="omni-flash")
+        self.assertIn("fresh", scores)
+        self.assertIn("flaky", scores)
+        # A clean idle account must outrank a retry-heavy/403-prone one.
+        self.assertGreater(scores["fresh"]["score"], scores["flaky"]["score"])
+        self.assertGreaterEqual(scores["fresh"]["score"], 50.0)
+        self.assertLess(scores["flaky"]["score"], 50.0)
+        self.assertEqual(scores["flaky"]["avg_attempts_before_200"], 3.0)
+
     def test_report_video_health_empty(self) -> None:
         rep = metrics.report_video_health((1, 24))
         self.assertEqual(rep["windows"]["1h"], [])
