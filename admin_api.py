@@ -33,6 +33,7 @@ _pool: "AccountPool | None" = None
 # Optional: account_id -> SessionKeeper, for live G-credits lookup. Injected
 # by register_admin_routes(); None means /api/admin/accounts skips g_credits.
 _keepers: dict | None = None
+_video_clients: dict | None = None
 GCREDITS_LOOKUP_TIMEOUT_SEC = 3.0
 
 
@@ -178,6 +179,79 @@ async def handle_proxy_check(request: web.Request) -> web.Response:
             row.update(res)
             out.append(row)
     return _json({"accounts": out})
+
+
+def _pick_video_ab_account() -> str | None:
+    if not _video_clients:
+        return None
+    if _pool is not None:
+        for acc in _pool.status():
+            aid = acc.get("id")
+            if (
+                aid in _video_clients
+                and not acc.get("disabled")
+                and bool(acc.get("video_allowed", True))
+                and int(acc.get("cooldown_left") or 0) <= 0
+            ):
+                return aid
+    return next(iter(_video_clients), None)
+
+
+async def handle_video_ab_post(request: web.Request) -> web.Response:
+    """Costly diagnostic: compare direct HTTP vs browser fetch video submit."""
+    if not _video_clients:
+        return _json({"error": "video clients not available"}, 503)
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    if body.get("confirm_spend") is not True:
+        return _json({"error": "confirm_spend=true required"}, 400)
+
+    account_id = str(body.get("account") or body.get("account_id") or "").strip()
+    account_id = account_id or _pick_video_ab_account()
+    if not account_id or account_id not in _video_clients:
+        return _json({"error": f"account {account_id!r} not found"}, 404)
+
+    prompt = str(body.get("prompt") or "simple cinematic shot of a calm sunrise over a lake").strip()
+    prompt = prompt[:500] if prompt else "simple cinematic shot of a calm sunrise over a lake"
+    model_key = str(body.get("model_key") or body.get("model") or "omni-flash-4s").strip()
+    aspect = str(body.get("aspect") or "landscape").strip().lower()
+    order = str(body.get("order") or "direct_first").strip().lower()
+    try:
+        pause_sec = max(0.0, min(float(body.get("pause_sec", 4.0)), 30.0))
+    except (TypeError, ValueError):
+        pause_sec = 4.0
+
+    client = _video_clients[account_id]
+    try:
+        result = await client.video_transport_ab_test(
+            prompt=prompt,
+            model_key=model_key,
+            aspect=aspect,
+            order=order,
+            pause_sec=pause_sec,
+        )
+    except Exception as exc:  # noqa: BLE001 - debug endpoint must return JSON
+        log.warning("video A/B failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
+        _audit(request, "video_ab", new={"account": account_id, "model": model_key}, result="error")
+        return _json({"error": exc.__class__.__name__}, 500)
+
+    statuses = {
+        arm.get("transport"): arm.get("status")
+        for arm in result.get("arms", [])
+        if isinstance(arm, dict)
+    }
+    _audit(
+        request,
+        "video_ab",
+        new={"account": account_id, "model": model_key, "aspect": aspect, "statuses": statuses},
+    )
+    return _json({
+        "account": account_id,
+        "model_key": model_key,
+        "aspect": aspect,
+        "result": result,
+    })
 
 
 # ── ops cockpit ───────────────────────────────────────────────────────
@@ -996,15 +1070,21 @@ async def handle_analytics_active(request: web.Request) -> web.Response:
 
 # ── registration ───────────────────────────────────────────────────────
 
-def register_admin_routes(app: web.Application, pool: "AccountPool", keepers: dict | None = None) -> None:
+def register_admin_routes(
+    app: web.Application,
+    pool: "AccountPool",
+    keepers: dict | None = None,
+    video_clients: dict | None = None,
+) -> None:
     """Register all /api/admin/* routes into an existing aiohttp Application.
 
-    ``keepers`` (account_id -> SessionKeeper) is optional and only used by
-    /api/admin/accounts to attach a live G-credits balance per account.
+    ``keepers`` (account_id -> SessionKeeper) is optional and used by live
+    account diagnostics. ``video_clients`` enables costly admin-only video A/B.
     """
-    global _pool, _keepers
+    global _pool, _keepers, _video_clients
     _pool = pool
     _keepers = keepers
+    _video_clients = video_clients
     r = app.router
     r.add_get ("/api/admin/ping",                      handle_ping)
     r.add_get ("/api/admin/ops",                       handle_ops_get)
@@ -1031,6 +1111,7 @@ def register_admin_routes(app: web.Application, pool: "AccountPool", keepers: di
     # Sellers (seller-bot segment)
     r.add_get ("/api/admin/sellers",                   handle_sellers_get)
     r.add_get ("/api/admin/video-health",              handle_video_health)
+    r.add_post("/api/admin/video-ab",                  handle_video_ab_post)
     r.add_get ("/api/admin/proxy-check",               handle_proxy_check)
     # Support
     r.add_get ("/api/admin/support",                   handle_support_get)
@@ -1045,4 +1126,4 @@ def register_admin_routes(app: web.Application, pool: "AccountPool", keepers: di
     r.add_get ("/api/admin/analytics/channels",        handle_analytics_channels)
     r.add_get ("/api/admin/analytics/errors",          handle_analytics_errors)
     r.add_get ("/api/admin/analytics/active",          handle_analytics_active)
-    log.info("Admin API registered on /api/admin/* (%d routes)", 35)
+    log.info("Admin API registered on /api/admin/* (%d routes)", 36)

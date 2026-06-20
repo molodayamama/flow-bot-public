@@ -62,6 +62,8 @@ Requires explicit approval.
 - `python telegram_bot_tester.py --mode telegram-smoke --approve-external-action`
 - `python telegram_bot_tester.py --mode telegram-generation --prompt "simple safe landscape test" --approve-external-action`
 - `python telegram_bot_tester.py --mode telegram-ramp --prompt "simple safe landscape test" --max-steps 3 --delay-sec 90 --approve-external-action`
+- Admin video transport A/B diagnostic, approval required and spends quota/captcha:
+  `curl -sS -X POST http://127.0.0.1:<admin-port>/api/admin/video-ab -H "Content-Type: application/json" -d '{"confirm_spend":true,"account":"<account_id>","model":"omni-flash-4s","aspect":"landscape","prompt":"simple cinematic shot of a calm sunrise over a lake","pause_sec":4}'`
 
 Risks:
 

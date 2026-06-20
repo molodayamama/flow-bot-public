@@ -30,6 +30,32 @@ class _FakeKeeper:
         return self._credits
 
 
+class _FakeVideoClient:
+    def __init__(self, result=None):
+        self.calls = []
+        self._result = result or {
+            "arms": [
+                {"transport": "direct_http", "status": 403, "ok": False},
+                {"transport": "browser_fetch", "status": 200, "ok": True},
+            ]
+        }
+
+    async def video_transport_ab_test(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._result
+
+
+class _JsonReq:
+    headers = {}
+    remote = "test"
+
+    def __init__(self, body):
+        self._body = body
+
+    async def json(self):
+        return self._body
+
+
 class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
     """handle_accounts_get() attaches a live g_credits field per account."""
 
@@ -39,6 +65,7 @@ class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
     def _reset_globals(self):
         admin_api._pool = None
         admin_api._keepers = None
+        admin_api._video_clients = None
         admin_api.GCREDITS_LOOKUP_TIMEOUT_SEC = 3.0
 
     async def test_g_credits_attached_when_keepers_present(self):
@@ -80,6 +107,68 @@ class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
         body = json.loads(resp.body)
         self.assertEqual(body[0]["id"], "a1")
         self.assertIsNone(body[0]["g_credits"])
+
+
+class VideoAbEndpointTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.addCleanup(self._reset_globals)
+        self._orig_log_event = admin_api.metrics.log_event
+        admin_api.metrics.log_event = lambda *args, **kwargs: None
+
+    def _reset_globals(self):
+        admin_api._pool = None
+        admin_api._keepers = None
+        admin_api._video_clients = None
+        admin_api.metrics.log_event = self._orig_log_event
+
+    async def test_video_ab_requires_explicit_spend_confirmation(self):
+        client = _FakeVideoClient()
+        admin_api._video_clients = {"a1": client}
+
+        resp = await admin_api.handle_video_ab_post(_JsonReq({"account": "a1"}))
+        body = json.loads(resp.body)
+
+        self.assertEqual(resp.status, 400)
+        self.assertIn("confirm_spend", body["error"])
+        self.assertEqual(client.calls, [])
+
+    async def test_video_ab_selects_available_account_and_calls_client(self):
+        client = _FakeVideoClient()
+        admin_api._pool = _FakePool([
+            {"id": "a0", "disabled": True, "video_allowed": True, "cooldown_left": 0},
+            {"id": "a1", "disabled": False, "video_allowed": True, "cooldown_left": 0},
+        ])
+        admin_api._video_clients = {"a1": client}
+
+        resp = await admin_api.handle_video_ab_post(_JsonReq({
+            "confirm_spend": True,
+            "prompt": "short safe prompt",
+            "model": "veo-lite",
+            "aspect": "portrait",
+            "order": "browser_first",
+            "pause_sec": 0,
+        }))
+        body = json.loads(resp.body)
+
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(body["account"], "a1")
+        self.assertEqual(body["model_key"], "veo-lite")
+        self.assertEqual(client.calls[0]["prompt"], "short safe prompt")
+        self.assertEqual(client.calls[0]["model_key"], "veo-lite")
+        self.assertEqual(client.calls[0]["aspect"], "portrait")
+        self.assertEqual(client.calls[0]["order"], "browser_first")
+
+    async def test_video_ab_unknown_account_is_404(self):
+        admin_api._video_clients = {"a1": _FakeVideoClient()}
+
+        resp = await admin_api.handle_video_ab_post(_JsonReq({
+            "confirm_spend": True,
+            "account": "missing",
+        }))
+        body = json.loads(resp.body)
+
+        self.assertEqual(resp.status, 404)
+        self.assertIn("missing", body["error"])
 
 
 class AdminApiValidationTests(unittest.TestCase):
@@ -170,6 +259,12 @@ class AdminApiValidationTests(unittest.TestCase):
 
         self.assertEqual(calls, [100])
         self.assertEqual(body["sellers"], [])
+
+    def test_video_ab_route_is_post_only(self) -> None:
+        from pathlib import Path
+        source = Path(admin_api.__file__).read_text(encoding="utf-8")
+        self.assertIn('r.add_post("/api/admin/video-ab"', source)
+        self.assertNotIn('r.add_get ("/api/admin/video-ab"', source)
 
     def test_price_validation_rejects_zero_negative_and_unknown_paid_keys(self) -> None:
         prices, errors = admin_api._validate_prices({

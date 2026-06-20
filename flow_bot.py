@@ -2046,6 +2046,138 @@ class FlowHttpClient:
 
         return headers
 
+    @staticmethod
+    def _video_ab_preview(text: str, limit: int = 240) -> str:
+        if not text:
+            return ""
+        cleaned = re.sub(r"[\r\n\t]+", " ", str(text))
+        cleaned = re.sub(r"(ya29\.|Bearer\s+|session-token)[^\s\"']+", r"\1***", cleaned)
+        return cleaned[:limit]
+
+    async def video_transport_ab_test(
+        self,
+        *,
+        prompt: str,
+        model_key: str = "omni-flash-4s",
+        aspect: str = "landscape",
+        order: str = "direct_first",
+        pause_sec: float = 4.0,
+        project_id: str | None = None,
+    ) -> dict:
+        """Costly admin diagnostic: compare direct HTTP and browser fetch video submit.
+
+        This intentionally submits real text-to-video jobs. It does not poll or
+        download outputs; the diagnostic target is initial submit acceptance
+        (not final generation quality).
+        """
+        import uuid as _uuid
+        import json as _json
+
+        session = await self.keeper.get_session()
+        if not session["bearer"]:
+            return {"error": "missing_bearer", "arms": []}
+        project_id = project_id or session.get("project_id")
+        if not project_id:
+            return {"error": "missing_project_id", "arms": []}
+
+        headers = self._build_headers(session)
+        proxy = self._api_proxy()
+        action = SessionKeeper.VIDEO_RECAPTCHA_ACTION
+        sess_id = f";{int(time.time() * 1000)}"
+        transports = ["direct_http", "browser_fetch"]
+        if order == "browser_first":
+            transports.reverse()
+
+        arms: list[dict] = []
+        for idx, transport in enumerate(transports):
+            if idx and pause_sec > 0:
+                await asyncio.sleep(pause_sec)
+            arm_started = time.time()
+            captcha_token = await self.keeper.solve_captcha(action)
+            if not captcha_token:
+                arms.append({
+                    "transport": transport,
+                    "ok": False,
+                    "status": None,
+                    "error": "captcha_unavailable",
+                    "duration_ms": int((time.time() - arm_started) * 1000),
+                })
+                continue
+
+            payload = build_video_payload(
+                prompt=prompt,
+                project_id=project_id,
+                captcha_token=captcha_token,
+                aspect=aspect,
+                model_key=model_key,
+                session_id=sess_id,
+                batch_id=str(_uuid.uuid4()),
+            )
+            status: int | None = None
+            text = ""
+            error = ""
+            try:
+                if transport == "direct_http":
+                    async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
+                        async with http.post(
+                            VIDEO_GEN_ENDPOINT,
+                            headers=headers,
+                            json=payload,
+                            proxy=proxy,
+                            timeout=aiohttp.ClientTimeout(total=75),
+                        ) as resp:
+                            status = resp.status
+                            text = await resp.text()
+                else:
+                    resp = await self.keeper.post_json_via_browser(
+                        VIDEO_GEN_ENDPOINT,
+                        headers,
+                        payload,
+                        timeout_ms=75_000,
+                    )
+                    if isinstance(resp, dict):
+                        status = int(resp.get("status") or 0)
+                        text = str(resp.get("text") or "")
+                    else:
+                        error = "browser_post_failed"
+            except Exception as exc:  # noqa: BLE001 - diagnostic result, no secrets
+                error = exc.__class__.__name__
+
+            parsed = {}
+            if status == 200 and text:
+                try:
+                    info = parse_video_gen_response(_json.loads(text)) or {}
+                    parsed = {
+                        "accepted": bool(info),
+                        "media_id_prefix": str(info.get("media_id") or "")[:8],
+                        "project_id_present": bool(info.get("project_id")),
+                    }
+                except Exception:
+                    parsed = {"accepted": False, "parse_error": True}
+
+            arms.append({
+                "transport": transport,
+                "ok": status == 200 and not error,
+                "status": status,
+                "error": error or None,
+                "duration_ms": int((time.time() - arm_started) * 1000),
+                "response": parsed,
+                "body_preview": "" if status == 200 else self._video_ab_preview(text),
+            })
+
+        return {
+            "account": self.keeper.account_id,
+            "model_key": model_key,
+            "aspect": aspect,
+            "order": transports,
+            "prompt_chars": len(prompt or ""),
+            "arms": arms,
+            "summary": {
+                arm["transport"]: {"status": arm.get("status"), "ok": arm.get("ok")}
+                for arm in arms
+            },
+        }
+
     async def generate_images(
         self,
         prompt: str,
@@ -10122,7 +10254,7 @@ async def _start_web_server() -> web.AppRunner:
     except (TypeError, ValueError):
         client_max_size = 32 * 1024 * 1024
     app = web.Application(client_max_size=client_max_size)
-    _admin_api.register_admin_routes(app, account_pool, keepers)
+    _admin_api.register_admin_routes(app, account_pool, keepers, clients)
     if not IS_SELLER:
         # Только consumer (с пулом) отдаёт генерацию для seller-бота (§A).
         try:

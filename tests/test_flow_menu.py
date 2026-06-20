@@ -945,6 +945,18 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertNotIn('"Referer"', helper)
         self.assertNotIn('"Sec-Fetch",', helper)
 
+    def test_video_ab_compares_submit_transports_without_polling(self) -> None:
+        start = self.source.index("async def video_transport_ab_test")
+        end = self.source.index("async def generate_images", start)
+        block = self.source[start:end]
+        self.assertIn('"direct_http"', block)
+        self.assertIn('"browser_fetch"', block)
+        self.assertIn("aiohttp.ClientSession", block)
+        self.assertIn("post_json_via_browser", block)
+        self.assertIn("VIDEO_GEN_ENDPOINT", block)
+        self.assertNotIn("VIDEO_POLL_ENDPOINT", block)
+        self.assertNotIn("fetch_video_bytes", block)
+
     def test_video_401_retries_after_refresh(self) -> None:
         start = self.source.index("async def generate_video")
         end = self.source.index("if not solved_any:", start)
