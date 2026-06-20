@@ -4065,7 +4065,6 @@ def mp_jobs_kb(platform: str) -> types.InlineKeyboardMarkup:
         [B(text="🎨 Бренд-кит", callback_data="mp:brandkit")],
         [B(text="🏷️ Ниша товара", callback_data="mp:niche")],
         [B(text="📦 Мои товары (SKU)", callback_data="mp:projects")],
-        [B(text="🙌 Сделайте за меня (под ключ)", callback_data="mp:done4you")],
         [B(text="💡 Советы по карточке", callback_data="mp:tips")],
         [_menu_button("menu", "m:menu")],
     ]

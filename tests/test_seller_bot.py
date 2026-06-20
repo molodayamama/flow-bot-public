@@ -158,7 +158,7 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("mp:brandkit", cb)
         self.assertIn("mp:niche", cb)
         self.assertIn("mp:projects", cb)
-        self.assertIn("mp:done4you", cb)
+        self.assertNotIn("mp:done4you", cb)  # «Сделайте за меня (под ключ)» убрана
         self.assertIn("mp:tips", cb)
         # Platform is now chosen at the settings step, not upfront, so the jobs
         # screen is the marketplace entry and goes back to the main menu.
