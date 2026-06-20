@@ -716,20 +716,16 @@ class SessionKeeper:
     # HTTP round trips) без шанса на успех. IMAGE_GENERATION — самый
     # семантически точный для картинок.
     RECAPTCHA_ACTIONS = ["IMAGE_GENERATION"]
-    # Видео-эндпоинт проверяет reCAPTCHA-action отдельно от картинок: токен,
-    # выданный под action картинок, сервер отклоняет (403). Точный video-action
-    # фронта Flow не зафиксирован, поэтому перебираем кандидатов (см.
-    # generate_video) — первый, который сервер примет, и есть рабочий.
-    # Current live result: VIDEO_GENERATION is verified. Later values are only
-    # defensive fallbacks if Google changes validation.
-    VIDEO_RECAPTCHA_ACTIONS = [
-        # Live smoke 2026-06-08: accepted by video:batchAsyncGenerateVideoText.
-        "VIDEO_GENERATION",
-        "PINHOLE",
-        "batchAsyncGenerateVideoText",
-        "GENERATE_VIDEO",
-        "IMAGE_GENERATION",
-    ]
+    # Видео-эндпоинт использует reCAPTCHA-action "VIDEO_GENERATION" — подтверждено
+    # захватом фронта Flow 2026-06-20 (grecaptcha.enterprise.execute({action:
+    # 'VIDEO_GENERATION'})). Это ТОТ ЖЕ action, что у бота, поэтому 403 — это НЕ
+    # неверный action, а низкий score/антифрод reCAPTCHA (видео-порог строже
+    # картиночного). Перебор разных action'ов раньше только усиливал флаг
+    # аккаунта, поэтому используем единственный верный action и ретраим его со
+    # свежим токеном (score вероятностный — следующая попытка может пройти).
+    VIDEO_RECAPTCHA_ACTION = "VIDEO_GENERATION"
+    VIDEO_GEN_MAX_ATTEMPTS = 3
+    VIDEO_GEN_403_BACKOFF_SEC = 2.0
 
     async def _extract_sitekey(self) -> str:
         """Вытаскивает reCAPTCHA sitekey из DOM. Если не нашёл — берём известный."""
@@ -775,7 +771,33 @@ class SessionKeeper:
         аккаунта, что быстрее любого платного решателя.
         """
         await self.ensure_browser()
+        await self._ensure_flow_page_loaded()
         return await self._solve_via_browser_js(action)
+
+    async def _ensure_flow_page_loaded(self) -> None:
+        """Ждём готовности grecaptcha на странице перед решением капчи.
+
+        Если вкладка пустая/битая (видели чёрный экран у sub5), grecaptcha
+        исполняется без контекста → токен почти нулевого score → 403. Здесь мы
+        НЕ навигируем self._page (это ломает живую сессию/поле ввода — есть
+        регрессионный тест), а только ждём появления grecaptcha.enterprise; если
+        так и не появился — solve вернёт '' и сработает фейловер аккаунта.
+        Активное восстановление битой вкладки — задача health-логики кипера.
+        """
+        try:
+            url = self._page.url or ""
+            if "labs.google" not in url:
+                log.warning("⚠️ Капча: вкладка не на Flow (%s) — возможен низкий score",
+                            url[:60] or "blank")
+            for _ in range(16):  # до ~8с на подгрузку grecaptcha
+                ready = await self._page.evaluate(
+                    "() => typeof grecaptcha !== 'undefined' && !!(grecaptcha.enterprise)"
+                )
+                if ready:
+                    return
+                await asyncio.sleep(0.5)
+        except Exception as exc:
+            log.warning("⚠️ _ensure_flow_page_loaded: %s", exc)
 
     async def _solve_via_browser_js(self, action: str) -> str:
         """Вызывает grecaptcha.enterprise.execute() прямо в живом Chrome."""
@@ -2368,11 +2390,11 @@ class FlowHttpClient:
                 bool(start_image or end_image),
             )
 
-        # ── Шаг 1: капча + отправка с авто-перебором video-action ───────
-        # Видео-эндпоинт отклоняет (403) reCAPTCHA-токен, выданный под action
-        # картинок. Точный video-action не зафиксирован, поэтому перебираем
-        # кандидатов: на каждый — свежий токен и свежий batchId; первый
-        # не-403 ответ принимаем. Рабочий action логируется (зафиксировать).
+        # ── Шаг 1: капча + отправка (единственный верный action + ретраи) ──
+        # action = VIDEO_GENERATION (подтверждён захватом). 403 = низкий score /
+        # антифрод, поэтому при 403 ретраим тот же action со свежим токеном и
+        # коротким бэкоффом; перебор неверных action'ов убран (он лишь усиливал
+        # флаг аккаунта). Каждая попытка — свежий токен и свежий batchId.
         if progress_cb:
             await progress_cb("⏳ Отправляю запрос на генерацию видео…")
 
@@ -2381,7 +2403,8 @@ class FlowHttpClient:
         solved_any = False
         refreshed_after_403 = False
         refreshed_after_401 = False
-        for action in SessionKeeper.VIDEO_RECAPTCHA_ACTIONS:
+        action = SessionKeeper.VIDEO_RECAPTCHA_ACTION
+        for _attempt in range(SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS):
             posted = False
             for _auth_attempt in range(2):
                 captcha_token = await self.keeper.solve_captcha(action)
@@ -2455,12 +2478,16 @@ class FlowHttpClient:
                 continue
 
             if gen_status == 403:
-                log.warning(f"🎬 video → 403 (action={action}), пробую следующий action")
+                log.warning(
+                    "🎬 video → 403 (попытка %d/%d, score/антифрод), свежий токен",
+                    _attempt + 1, SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS,
+                )
                 if not refreshed_after_403:
                     refreshed_after_403 = True
                     await self.keeper._refresh_bearer()
                     session = await self.keeper.get_session()
                     headers = self._build_headers(session)
+                await asyncio.sleep(SessionKeeper.VIDEO_GEN_403_BACKOFF_SEC)
                 continue
             log.info(f"🎬 video {endpoint_name} → {gen_status} (action={action})")
             break
@@ -2476,8 +2503,8 @@ class FlowHttpClient:
             return {"error": flow_copy.msg("rate_limited")}
         if gen_status == 403:
             return {
-                "error": "Сервис отклонил запрос видео (403) на всех action.",
-                "account_risk": "video_all_actions_403",
+                "error": "Сервис отклонил запрос видео (403): низкий score/антифрод reCAPTCHA.",
+                "account_risk": "video_recaptcha_403",
             }
         if gen_status != 200:
             # TEMP (capture-driven): log the real API error body (no auth headers).
@@ -6568,7 +6595,7 @@ def _mark_video_account_failure(account_id: str | None, result: dict | None = No
     if not account_id:
         return
     risk = (result or {}).get("account_risk")
-    if risk in {"video_auth", "video_all_actions_403"}:
+    if risk in {"video_auth", "video_recaptcha_403"}:
         if account_pool.mark_cooldown(account_id):
             log.warning("Video account %s cooled down after provider account-risk signal", account_id)
             metrics.log_event(
@@ -9025,7 +9052,7 @@ async def _do_video_generate_and_send(
                 # Ingredients/frames используют account-bound media — фейловер там невозможен.
                 _failover_risk = (result or {}).get("account_risk")
                 if (
-                    _failover_risk in {"video_auth", "video_all_actions_403"}
+                    _failover_risk in {"video_auth", "video_recaptcha_403"}
                     and vmode == "text"
                     and video_operation == "generate"
                     and not source_video

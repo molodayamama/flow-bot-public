@@ -940,13 +940,13 @@ class BotMenuWiringTests(unittest.TestCase):
         end = self.source.index("if gen_status != 200:", start)
         block = self.source[start:end]
         self.assertIn('"account_risk": "video_auth"', block)
-        self.assertIn('"account_risk": "video_all_actions_403"', block)
+        self.assertIn('"account_risk": "video_recaptcha_403"', block)
 
         helper = self.source[
             self.source.index("def _mark_video_account_failure"):
             self.source.index("async def _download_ref_image_bytes")
         ]
-        self.assertIn('{"video_auth", "video_all_actions_403"}', helper)
+        self.assertIn('{"video_auth", "video_recaptcha_403"}', helper)
         self.assertIn("account_pool.mark_cooldown(account_id)", helper)
         self.assertIn("account_pool.mark_failure(account_id)", helper)
 
