@@ -903,23 +903,28 @@ class SessionKeeper:
                     if (/\.js(\?|$)/.test(e.name)) urls.add(e.name);
                 }
                 for (const s of document.scripts) { if (s.src) urls.add(s.src); }
-                const reExec = /execute\s*\([^)]{0,60}?action\s*:\s*["']([A-Z0-9_]{3,48})["']/g;
-                const reAny  = /action\s*:\s*["']([A-Z0-9_]{4,48})["']/g;
-                const exec = {}, any = {};
-                let scanned = 0;
+                // Collect every UPPER_SNAKE string literal; the reCAPTCHA actions
+                // (e.g. VIDEO_GENERATION) may be defined as named constants, not
+                // inline at the execute() call.
+                const reLit = /["']([A-Z][A-Z0-9_]{4,48})["']/g;
+                const KW = /(GENERATION|AGENT|CHAT|REWRITE|PROMPT|CREATION|FLOW|ENHANCE|SUGGEST|IMPROVE)/;
+                const interesting = {};
+                let scanned = 0, failed = 0, sawVideoGen = false;
                 for (const u of urls) {
                     try {
                         const r = await fetch(u);
-                        if (!r.ok) continue;
+                        if (!r.ok) { failed++; continue; }
                         const t = await r.text();
                         scanned++;
+                        if (t.indexOf('VIDEO_GENERATION') !== -1) sawVideoGen = true;
                         let m;
-                        while ((m = reExec.exec(t)) !== null) exec[m[1]] = (exec[m[1]]||0)+1;
-                        let n;
-                        while ((n = reAny.exec(t)) !== null) any[n[1]] = (any[n[1]]||0)+1;
-                    } catch (e) {}
+                        while ((m = reLit.exec(t)) !== null) {
+                            const s = m[1];
+                            if (KW.test(s)) interesting[s] = (interesting[s]||0)+1;
+                        }
+                    } catch (e) { failed++; }
                 }
-                return {scanned, urls: urls.size, exec_actions: exec, any_actions: any};
+                return {scanned, failed, urls: urls.size, saw_video_generation: sawVideoGen, actions: interesting};
             }""")
             return {"ok": True, **(result or {})}
         except Exception as exc:  # noqa: BLE001 - diagnostic, return JSON
