@@ -1504,12 +1504,19 @@ class SessionKeeper:
                 log.error(f"❌ generate_via_browser: {e}")
                 return {"error": flow_copy.msg("gen_failed")}
 
-    async def _upload_image_api_locked(self, data: bytes, filename: str) -> dict | None:
-        project_id = self._project_id
-        if not (self._bearer and project_id):
+    async def _upload_image_api_locked(
+        self, data: bytes, filename: str, project_id: str | None = None,
+    ) -> dict | None:
+        # Предпочитаем явный project_id (его уже выдал ensure_user_project), и
+        # только как фолбэк — сессионный self._project_id. Иначе при пустом
+        # self._project_id аплоад молча возвращал None → ломал видео/i2i.
+        project_id = project_id or self._project_id
+        if not self._bearer:
             await self._refresh_bearer()
-            project_id = self._project_id
+        project_id = project_id or self._project_id
         if not (self._bearer and project_id):
+            log.warning("⚠️ upload_image API: нет bearer/project_id (bearer=%s project=%s)",
+                        bool(self._bearer), bool(project_id))
             return None
         proxy_raw = self.api_proxy_url if self.api_proxy_url is not None else API_PROXY_URL
         proxy = _effective_proxy_url(proxy_raw) or None
@@ -1534,7 +1541,7 @@ class SessionKeeper:
                 raw_cookies = await self._context.cookies("https://labs.google")
 
             cookies = {c["name"]: c["value"] for c in raw_cookies}
-            project_id = self._project_id or project_id
+            project_id = project_id or self._project_id
             if not (self._bearer and project_id):
                 return None
             session = {
@@ -1595,8 +1602,10 @@ class SessionKeeper:
         )
         return None
 
-    async def upload_image(self, data: bytes, filename: str = "upload.png") -> dict | None:
-        """Загрузить присланное фото в Flow через файловый input браузера.
+    async def upload_image(
+        self, data: bytes, filename: str = "upload.png", project_id: str | None = None,
+    ) -> dict | None:
+        """Загрузить присланное фото в Flow (API uploadImage; project_id явный).
 
         Возвращает «источник» картинки (dict с ``mediaId``/``fifeUrl``), который
         можно редактировать как сгенерированный, или ``None`` при неудаче.
@@ -1640,7 +1649,7 @@ class SessionKeeper:
                     captured.update(src)
 
             try:
-                api_source = await self._upload_image_api_locked(data, filename)
+                api_source = await self._upload_image_api_locked(data, filename, project_id)
                 if api_source and api_source.get("mediaId"):
                     return api_source
 
@@ -5757,7 +5766,7 @@ async def _backend_generate_i2i(req: dict) -> dict:
         tried.add(acc_id)
         project_id = await ensure_user_project(user_id, account_id=acc_id)
         try:
-            source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png")
+            source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png", project_id=project_id)
         except Exception:
             log.exception("backend upload_image failed (account %s, attempt %d)", acc_id, attempt)
             account_pool.mark_failure(acc_id)
@@ -5834,7 +5843,7 @@ async def _backend_generate_video_ingredients(req: dict) -> dict:
         return {"error": "accounts_unavailable"}
     project_id = await ensure_user_project(user_id, account_id=acc_id)
     try:
-        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_video_{user_id}.png")
+        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_video_{user_id}.png", project_id=project_id)
     except Exception:
         log.exception("backend video upload_image failed (account %s)", acc_id)
         return {"error": "upload failed"}
@@ -7940,7 +7949,7 @@ async def _template_photo_received(message: types.Message, *, user_id: int) -> N
         return
     project_id = await ensure_user_project(user_id, account_id=acc_id)
     try:
-        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png")
+        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png", project_id=project_id)
     except Exception:
         log.exception("template upload_image failed")
         source = None
@@ -10056,7 +10065,7 @@ async def _upload_photo_source_from_message(
         return None
     project_id = await ensure_user_project(user_id, account_id=acc_id)
     try:
-        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png")
+        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png", project_id=project_id)
     except Exception:
         log.exception("upload_image failed")
         source = None
@@ -10160,7 +10169,7 @@ async def _upload_image_ref_from_photo_message(
         return None
     project_id = await ensure_user_project(user_id, account_id=acc_id)
     try:
-        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png")
+        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png", project_id=project_id)
     except Exception:
         log.exception("upload_image failed")
         source = None
