@@ -946,9 +946,12 @@ class BotMenuWiringTests(unittest.TestCase):
             self.source.index("def _mark_video_account_failure"):
             self.source.index("async def _download_ref_image_bytes")
         ]
-        self.assertIn('{"video_auth", "video_recaptcha_403"}', helper)
+        # video_auth — кулдаун сразу; video_recaptcha_403 (стохастичный) —
+        # через счётчик fail (кулдаун только после серии).
+        self.assertIn('risk == "video_auth"', helper)
         self.assertIn("account_pool.mark_cooldown(account_id)", helper)
         self.assertIn("account_pool.mark_failure(account_id)", helper)
+        self.assertIn('risk == "video_recaptcha_403"', helper)
 
         video = self.source[
             self.source.index("async def _do_video_generate_and_send"):

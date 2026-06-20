@@ -759,8 +759,8 @@ class SessionKeeper:
     # аккаунта, поэтому используем единственный верный action и ретраим его со
     # свежим токеном (score вероятностный — следующая попытка может пройти).
     VIDEO_RECAPTCHA_ACTION = "VIDEO_GENERATION"
-    VIDEO_GEN_MAX_ATTEMPTS = 3
-    VIDEO_GEN_403_BACKOFF_SEC = 2.0
+    VIDEO_GEN_MAX_ATTEMPTS = 4          # video score стохастичен — даём больше шансов свежему токену
+    VIDEO_GEN_403_BACKOFF_SEC = 3.0     # база нарастающего бэкоффа (+jitter) между ретраями
 
     async def _extract_sitekey(self) -> str:
         """Вытаскивает reCAPTCHA sitekey из DOM. Если не нашёл — берём известный."""
@@ -2580,7 +2580,10 @@ class FlowHttpClient:
                     await self.keeper._refresh_bearer()
                     session = await self.keeper.get_session()
                     headers = self._build_headers(session)
-                await asyncio.sleep(SessionKeeper.VIDEO_GEN_403_BACKOFF_SEC)
+                # Нарастающий бэкофф + jitter: не «долбим» сразу, снижаем
+                # агрессивность между свежими токенами (video score стохастичен).
+                backoff = SessionKeeper.VIDEO_GEN_403_BACKOFF_SEC * (_attempt + 1) + random.uniform(1.0, 4.0)
+                await asyncio.sleep(backoff)
                 continue
             log.info(f"🎬 video {endpoint_name} → {gen_status} (action={action})")
             break
@@ -6694,7 +6697,8 @@ def _mark_video_account_failure(account_id: str | None, result: dict | None = No
     if not account_id:
         return
     risk = (result or {}).get("account_risk")
-    if risk in {"video_auth", "video_recaptcha_403"}:
+    if risk == "video_auth":
+        # Auth/bearer — кулдаун сразу (запросы всё равно не пройдут до фикса).
         if account_pool.mark_cooldown(account_id):
             log.warning("Video account %s cooled down after provider account-risk signal", account_id)
             metrics.log_event(
@@ -6707,6 +6711,11 @@ def _mark_video_account_failure(account_id: str | None, result: dict | None = No
                 f"Причина: {risk} (video)"
             )
         return
+    # video_recaptcha_403 (стохастичный score) и прочие ошибки — НЕ остужаем
+    # аккаунт после одной серии 403: считаем как fail, кулдаун лишь после
+    # нескольких подряд (mark_failure порог). Так не выжигаем годный аккаунт.
+    if risk == "video_recaptcha_403":
+        metrics.log_event("video_recaptcha_403", payload={"account": account_id})
     if account_pool.mark_failure(account_id):
         _fire_owner_alert(
             f"⚠️ <b>Аккаунт кулдаун</b>\n"
