@@ -358,6 +358,10 @@ async def handle_agent_probe_post(request: web.Request) -> web.Response:
         pause_sec = 3.0
 
     debug = body.get("debug") is True
+    try:
+        turn_number = int(body.get("turn_number", 1))
+    except (TypeError, ValueError):
+        turn_number = 1
     client = _video_clients[account_id]
     results: list[dict] = []
     found: str | None = None
@@ -365,7 +369,7 @@ async def handle_agent_probe_post(request: web.Request) -> web.Response:
         if idx and pause_sec > 0:
             await asyncio.sleep(pause_sec)
         try:
-            res = await client.improve_prompt(prompt, action=action, debug=debug)
+            res = await client.improve_prompt(prompt, action=action, debug=debug, turn_number=turn_number)
         except Exception as exc:  # noqa: BLE001 - debug endpoint must return JSON
             log.warning("agent probe failed for %s/%s: %s", account_id, action, exc.__class__.__name__)
             results.append({"action": action, "error": exc.__class__.__name__})
