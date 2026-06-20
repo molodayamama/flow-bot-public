@@ -8923,15 +8923,21 @@ async def on_agent_action(callback: types.CallbackQuery):
             # health-routed account first, then other usable accounts (some
             # accounts' bearers are rejected by the agent endpoint specifically).
             candidates: list[str] = []
-            primary = _account_for_video(user_id) or _account_for(user_id)
+            primary = _account_for_video(user_id)
             if primary:
                 candidates.append(primary)
             for acc in account_pool.account_ids():
-                if acc not in candidates and account_pool.is_reference_usable(acc):
+                if acc not in candidates and account_pool.is_video_capable(acc):
                     candidates.append(acc)
-            for acc_id in candidates[:4]:
+            instruction = _agent_improve_instruction(prompt)
+            for acc_id in candidates[:5]:
                 res = await _client_for_acc(acc_id).improve_prompt(
-                    _agent_improve_instruction(prompt), project_id=project_id
+                    instruction, project_id=project_id
+                )
+                log.info(
+                    "✨ improve try acc=%s status=%s err=%s variants=%d",
+                    acc_id, (res or {}).get("status"), (res or {}).get("error"),
+                    len((res or {}).get("variants") or []),
                 )
                 if (res or {}).get("variants") or (res or {}).get("single"):
                     break
