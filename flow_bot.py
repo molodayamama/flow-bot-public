@@ -2354,6 +2354,36 @@ class FlowHttpClient:
             },
         }
 
+    async def create_agent_session(self) -> str | None:
+        """Create a fresh flowCreationAgent session for this account's project.
+
+        ``POST /flowCreationAgent/sessions?projectId=<raw>`` with an empty body
+        returns ``sessionInfo.agentSessionId``. A fresh session per request keeps
+        users' agent conversations isolated (no shared/global session state)."""
+        session = await self.keeper.get_session()
+        if not session["bearer"]:
+            return None
+        proj_raw = str(session.get("project_id") or "")
+        if not proj_raw:
+            return None
+        headers = dict(self._build_headers(session))
+        headers["Content-Type"] = "application/json"
+        headers["Accept"] = "*/*"
+        url = f"{self.API_BASE}/flowCreationAgent/sessions?projectId={proj_raw}"
+        try:
+            async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
+                async with http.post(
+                    url, headers=headers, data=b"{}", proxy=self._api_proxy(),
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json(content_type=None)
+            sid = ((data or {}).get("sessionInfo") or {}).get("agentSessionId")
+            return str(sid) if sid else None
+        except Exception:  # noqa: BLE001 - best effort, caller handles None
+            return None
+
     async def improve_prompt(
         self,
         text: str,
@@ -2373,14 +2403,19 @@ class FlowHttpClient:
         message) — never bearer/cookie/token values. The reСАPTCHA ``action`` is
         a parameter so the admin discovery probe can try candidates.
         """
-        import uuid as _uuid
-
         session = await self.keeper.get_session()
         if not session["bearer"]:
             return {"error": "missing_bearer"}
         project_id = project_id or session.get("project_id")
         if not project_id:
             return {"error": "missing_project_id"}
+
+        # streamChat requires a real session id (a random UUID gets an empty
+        # errorEvent). Create a fresh session per request unless one is supplied.
+        if not agent_session_id:
+            agent_session_id = await self.create_agent_session()
+        if not agent_session_id:
+            return {"error": "session_create_failed"}
 
         action = action or SessionKeeper.AGENT_RECAPTCHA_ACTION
         captcha_token = await self.keeper.solve_captcha(action)
@@ -2394,7 +2429,6 @@ class FlowHttpClient:
         proj = str(project_id)
         if not proj.startswith("projects/"):
             proj = f"projects/{proj}"
-        agent_session_id = agent_session_id or str(_uuid.uuid4())
         body = {
             "agentSessionId": agent_session_id,
             "agentClientContext": {
