@@ -54,6 +54,43 @@ load_dotenv(PROJECT_ROOT / ".env")
 FLOW_URL = "https://labs.google/fx/tools/flow"
 API_HOST = "aisandbox-pa.googleapis.com"
 USER_DATA_DIR = os.getenv("USER_DATA_DIR", "./google_profile")
+
+# Hook grecaptcha.enterprise.execute to record the EXACT action string the Flow
+# frontend uses. The reCAPTCHA action is baked into the token (not the request
+# body), so it can't be read from the POST — wrapping execute() is the only way
+# to learn the action the video endpoint expects (the 403 cause). Installed via
+# add_init_script so it runs before page scripts; grecaptcha may load late, so we
+# poll until it appears.
+GRECAPTCHA_HOOK_JS = r"""
+(() => {
+  window.__grecaptcha_actions = window.__grecaptcha_actions || [];
+  const record = (o) => { try { window.__grecaptcha_actions.push(o); } catch (e) {} };
+  const wrap = (ns) => {
+    if (!ns || ns.__actionWrapped || typeof ns.execute !== 'function') return;
+    const orig = ns.execute;
+    ns.execute = function (a, b) {
+      try {
+        let action = null, sitekey = null;
+        if (a && typeof a === 'object') { action = a.action; sitekey = a.sitekey; }
+        else { sitekey = a; if (b && typeof b === 'object') action = b.action; }
+        record({ action: action || null, sitekey: sitekey || null,
+                 ts: Date.now(), url: location.href });
+      } catch (e) {}
+      return orig.apply(this, arguments);
+    };
+    ns.__actionWrapped = true;
+  };
+  const iv = setInterval(() => {
+    try {
+      if (window.grecaptcha) {
+        wrap(window.grecaptcha);
+        if (window.grecaptcha.enterprise) wrap(window.grecaptcha.enterprise);
+      }
+    } catch (e) {}
+  }, 250);
+  setTimeout(() => clearInterval(iv), 600000);
+})();
+"""
 if not Path(USER_DATA_DIR).is_absolute():
     USER_DATA_DIR = str(PROJECT_ROOT / USER_DATA_DIR)
 
@@ -330,6 +367,8 @@ async def run(
                 "--disable-dev-shm-usage",
             ],
         )
+        # Record the reCAPTCHA action(s) the Flow frontend uses for video.
+        await context.add_init_script(GRECAPTCHA_HOOK_JS)
 
         async def handle_route(route):
             nonlocal seq
@@ -550,6 +589,12 @@ async def run(
                 else:
                     print("No API POSTs seen. Did you click Generate?", flush=True)
         finally:
+            try:
+                acts = await page.evaluate("() => window.__grecaptcha_actions || []")
+                if acts:
+                    captured["grecaptcha_actions"] = acts
+            except Exception:
+                pass
             await context.close()
 
     if not traffic and not generation_request:
@@ -582,6 +627,9 @@ async def run(
             "body": parse_request_body(generation_request.get("body", "")),
         }
 
+    if captured.get("grecaptcha_actions"):
+        out["grecaptcha_actions"] = captured["grecaptcha_actions"]
+
     if captured.get("video_src_from_page"):
         out["video_src_from_page"] = captured["video_src_from_page"]
 
@@ -595,6 +643,11 @@ async def run(
     print(f"API calls captured: {len(traffic)}", flush=True)
     if out["generation_request"]:
         print(f"Generation-like request: {out['generation_request']['url']}", flush=True)
+    if out.get("grecaptcha_actions"):
+        seen_actions = list(dict.fromkeys(
+            a.get("action") for a in out["grecaptcha_actions"] if a.get("action")
+        ))
+        print(f"reCAPTCHA actions observed: {seen_actions or '(none)'}", flush=True)
     return 0
 
 
