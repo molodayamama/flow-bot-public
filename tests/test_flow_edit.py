@@ -419,10 +419,11 @@ class MediaIdExtractionTests(unittest.TestCase):
         self.assertEqual(IMAGE_UPLOAD_ENDPOINT, "https://aisandbox-pa.googleapis.com/v1/flow/uploadImage")
         self.assertEqual(payload["clientContext"], {"projectId": "proj-1", "tool": "PINHOLE"})
         self.assertEqual(payload["imageBytes"], "abc123")
-        self.assertTrue(payload["isUserUploaded"])
-        self.assertFalse(payload["isHidden"])
-        self.assertEqual(payload["mimeType"], "image/png")
-        self.assertEqual(payload["fileName"], "image.png")
+        # Live capture 2026-06-20: ONLY clientContext + imageBytes. The old extra
+        # fields are no longer sent (they made the upload fail).
+        self.assertEqual(set(payload.keys()), {"clientContext", "imageBytes"})
+        for stale in ("isUserUploaded", "isHidden", "mimeType", "fileName"):
+            self.assertNotIn(stale, payload)
         self.assertNotIn("recaptchaContext", json.dumps(payload))
 
     def test_parse_upload_image_response_preserves_project_and_workflow(self) -> None:

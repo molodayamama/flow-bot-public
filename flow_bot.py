@@ -1577,9 +1577,10 @@ class SessionKeeper:
         if status != 200:
             body = loads_xssi(text)
             log.warning(
-                "⚠️ upload_image API status=%s schema=%s",
+                "⚠️ upload_image API status=%s schema=%s body=%s",
                 status,
                 describe_schema(body) if body is not None else "non-json",
+                (text or "")[:300],
             )
             return None
         body = loads_xssi(text)

@@ -325,9 +325,12 @@ def build_upload_image_payload(
 ) -> dict:
     """Construct the verified ``flow/uploadImage`` request body.
 
-    The web app sends the image as a base64 string in ``imageBytes`` and marks it
-    as a visible user upload. No recaptcha token is present in the captured
-    request shape.
+    Verified shape (live capture 2026-06-20): ONLY ``clientContext`` (projectId +
+    tool=PINHOLE) and ``imageBytes`` (base64). The server infers mime from the
+    bytes. Earlier extra fields (``isUserUploaded``/``isHidden``/``mimeType``/
+    ``fileName``) are no longer sent by the frontend and made the request fail —
+    keeping the payload minimal matches the working contract. ``mime_type`` /
+    ``file_name`` are accepted for signature stability but intentionally unused.
     """
     return {
         "clientContext": {
@@ -335,10 +338,6 @@ def build_upload_image_payload(
             "tool": "PINHOLE",
         },
         "imageBytes": image_bytes,
-        "isUserUploaded": True,
-        "isHidden": False,
-        "mimeType": mime_type,
-        "fileName": file_name,
     }
 
 
