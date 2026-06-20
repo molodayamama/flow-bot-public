@@ -10210,22 +10210,31 @@ async def _do_video_generate_and_send(
                 except Exception:
                     pass
 
-            async with account_pool.video_slot(acc_id):
-                result = await _client_for_acc(acc_id).generate_video(
-                    prompt,
-                    model_key=model_key,
-                    aspect=aspect,
-                    project_id=video_project_id,
-                    reference_sources=st.get("ving_photos") if vmode == "ingredients" else None,
-                    start_source=st.get("vfrm_start") if vmode == "frames" else None,
-                    end_source=st.get("vfrm_end") if vmode == "frames" else None,
-                    operation=video_operation,
-                    source_media_id=source_video.media_id if source_video else None,
-                    source_workflow_id=source_video.workflow_id if source_video else None,
-                    source_scene_id=source_scene_id or (source_video.scene_id if source_video else None),
-                    source_duration_s=source_video.duration_s if source_video else None,
-                    progress_cb=update_status,
-                )
+            # danger_filter is stochastic on the provider side (the same prompt
+            # often passes on a second try), so retry once on the SAME account
+            # before surfacing it to the user.
+            result = {}
+            for _danger_attempt in range(2):
+                async with account_pool.video_slot(acc_id):
+                    result = await _client_for_acc(acc_id).generate_video(
+                        prompt,
+                        model_key=model_key,
+                        aspect=aspect,
+                        project_id=video_project_id,
+                        reference_sources=st.get("ving_photos") if vmode == "ingredients" else None,
+                        start_source=st.get("vfrm_start") if vmode == "frames" else None,
+                        end_source=st.get("vfrm_end") if vmode == "frames" else None,
+                        operation=video_operation,
+                        source_media_id=source_video.media_id if source_video else None,
+                        source_workflow_id=source_video.workflow_id if source_video else None,
+                        source_scene_id=source_scene_id or (source_video.scene_id if source_video else None),
+                        source_duration_s=source_video.duration_s if source_video else None,
+                        progress_cb=update_status,
+                    )
+                if (result or {}).get("failure") != "danger_filter" or _danger_attempt == 1:
+                    break
+                log.info("🎬 danger_filter — ретрай 1 раз на том же аккаунте %s", acc_id)
+                await update_status(flow_copy.msg("working"))
 
             # Slot released. Handle errors and optional failover.
             if "error" in result:
@@ -12147,6 +12156,8 @@ async def _main_impl():
 
         log.info("🤖 Бот запущен!")
         asyncio.create_task(_daily_digest_loop())
+        if not IS_SELLER:
+            asyncio.create_task(_video_pool_health_loop())
         startup_state["polling"] = True
         _startup_set_phase("polling")
         await dp.start_polling(bot)
@@ -12210,6 +12221,50 @@ async def _daily_digest_loop() -> None:
             log.warning("_daily_digest_loop iteration failed", exc_info=True)
         # Спим 6 часов до следующей проверки
         await asyncio.sleep(_DIGEST_INTERVAL_H * 3600)
+
+
+_VIDEO_POOL_CHECK_INTERVAL_S = 300   # как часто проверяем здоровье видео-пула
+_VIDEO_POOL_MIN_SCORE = 10           # ниже — аккаунт считаем «нездоровым»
+_pool_degraded_alerted = False       # шлём алерт один раз на переход состояния
+
+
+async def _video_pool_health_loop() -> None:
+    """Фоновый монитор: алерт владельцу, когда не осталось ни одного здорового
+    video-аккаунта — РАНЬШЕ, чем юзеры начнут ловить отказы. Алерт шлём один раз
+    на переход (degraded ↔ recovered), чтобы не спамить."""
+    global _pool_degraded_alerted
+    await asyncio.sleep(120)  # дать прогреву устаканиться
+    while True:
+        try:
+            scores = _video_scores_for_model("omni-flash-4s")
+            usable = [a for a in account_pool.account_ids() if account_pool.is_video_capable(a)]
+            # «Нездоров» = есть скор и он ниже порога; без данных = нейтрально (ок).
+            healthy = [
+                a for a in usable
+                if not (a in scores and (scores[a].get("score") or 0) < _VIDEO_POOL_MIN_SCORE)
+            ]
+            if not healthy:
+                if not _pool_degraded_alerted:
+                    _pool_degraded_alerted = True
+                    detail = ", ".join(
+                        f"{a}:{round((scores.get(a, {}).get('score') or 0), 1)}" for a in usable
+                    ) or "нет video-capable аккаунтов"
+                    await _send_owner_alert(
+                        "⚠️ <b>Видео-пул деградировал</b>\n"
+                        f"Здоровых video-аккаунтов: 0 из {len(usable)} доступных.\n"
+                        f"Score: {detail}\n"
+                        "Видео-запросы юзеров начнут падать — проверь аккаунты/прокси."
+                    )
+                    metrics.log_event("video_pool_degraded", source="monitor",
+                                      payload={"usable": len(usable)})
+            elif _pool_degraded_alerted:
+                _pool_degraded_alerted = False
+                await _send_owner_alert(
+                    f"✅ Видео-пул восстановлен: здоровых аккаунтов {len(healthy)}."
+                )
+        except Exception:
+            log.warning("_video_pool_health_loop iteration failed", exc_info=True)
+        await asyncio.sleep(_VIDEO_POOL_CHECK_INTERVAL_S)
 
 
 async def main():
