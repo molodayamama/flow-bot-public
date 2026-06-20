@@ -242,7 +242,7 @@ class BotPoolWiringTests(unittest.TestCase):
         # Video: правки/extend остаются на аккаунте исходного ролика.
         vstart = self.source.index("async def _do_video_generate_and_send")
         vblock = self.source[vstart:vstart + 8000]
-        self.assertIn("source_video.account_id if source_video and source_video.account_id", vblock)
+        self.assertIn("if source_video and source_video.account_id:", vblock)
         self.assertIn('flow_copy.msg("accounts_unavailable")', vblock)
         self.assertIn("_client_for_acc(acc_id).generate_video(", vblock)
 
@@ -285,7 +285,7 @@ class BotPoolWiringTests(unittest.TestCase):
         self.assertIn('source.setdefault("_account_id", acc_id)', helper_block)
 
         video_start = self.source.index("async def _do_video_generate_and_send")
-        video_block = self.source[video_start:video_start + 4200]
+        video_block = self.source[video_start:video_start + 5200]
         self.assertIn("ref_acc_id = _video_reference_account_id(st, vmode)", video_block)
         self.assertIn("video_project_id = (", video_block)
 
@@ -422,9 +422,10 @@ class CapacityTests(unittest.IsolatedAsyncioTestCase):
         source = PROJECT_ROOT / "flow_bot.py"
         text = source.read_text(encoding="utf-8")
         self.assertIn(
-            "source_video.account_id if source_video and source_video.account_id",
+            "if source_video and source_video.account_id:",
             text,
         )
+        self.assertIn("acc_id = source_video.account_id", text)
 
     async def test_image_routing_prefers_image_only_accounts(self):
         """pool.pick_for_image with prefer_image_only → prefers video_allowed=False."""

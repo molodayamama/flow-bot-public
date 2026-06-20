@@ -2207,6 +2207,20 @@ class AccountPool:
         h = self._health.get(account_id)
         return bool(h and h.get("video_allowed", True))
 
+    def is_reference_usable(self, account_id: str) -> bool:
+        """True если на аккаунте можно запускать reference-видео (r2v/frames).
+
+        Reference-медиа (загруженное фото) привязано к конкретному аккаунту, и
+        generate ОБЯЗАН идти туда же — иначе сервис вернёт 404 "entity not found".
+        Поэтому, в отличие от :meth:`is_video_capable`, кулдаун здесь игнорируется
+        (медиа всё равно живёт только тут); блокируем лишь hard-disabled и
+        image-only аккаунты.
+        """
+        h = self._health.get(account_id)
+        if h is None or h.get("disabled"):
+            return False
+        return bool(h.get("video_allowed", True))
+
     def is_image_only(self, account_id: str) -> bool:
         h = self._health.get(account_id)
         return bool(h and not h.get("video_allowed", True))

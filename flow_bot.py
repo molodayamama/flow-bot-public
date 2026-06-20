@@ -8837,7 +8837,10 @@ def _video_reference_account_id(st: dict, vmode: str) -> str | None:
     }
     if len(accounts) == 1:
         aid = next(iter(accounts))
-        if account_pool.is_video_capable(aid):
+        # Reference-медиа привязано к этому аккаунту → генерим там же даже если
+        # он в кулдауне (иначе другой аккаунт = гарантированный 404). Только
+        # hard-disabled / image-only отбраковываем.
+        if account_pool.is_reference_usable(aid):
             return aid
     return None
 
@@ -8924,9 +8927,21 @@ async def _do_video_generate_and_send(
 
     # Аккаунт пула: правки/продления держим на аккаунте исходного ролика
     # (media живёт только там), свежие генерации — на video-capable аккаунте.
+    # Для reference-видео (ingredients/frames) загруженное фото привязано к
+    # аккаунту → генерим строго на нём, без молчаливого фолбэка на другой
+    # аккаунт (там медиа нет → 404). Если этот аккаунт стал недоступен (disabled)
+    # — честно просим прислать фото заново, не списывая кредиты.
     ref_acc_id = _video_reference_account_id(st, vmode)
-    acc_id = (source_video.account_id if source_video and source_video.account_id
-              else ref_acc_id or _account_for_video(user_id))
+    has_reference = bool(_video_reference_sources(st, vmode))
+    if source_video and source_video.account_id:
+        acc_id = source_video.account_id
+    elif has_reference:
+        acc_id = ref_acc_id
+        if acc_id is None:
+            await message.answer(flow_copy.msg("vid_ref_account_unavailable"))
+            return
+    else:
+        acc_id = _account_for_video(user_id)
     if acc_id is None:
         # Нет доступных video-capable аккаунтов — отказ ДО списания кредитов.
         await message.answer(flow_copy.msg("accounts_unavailable"))
