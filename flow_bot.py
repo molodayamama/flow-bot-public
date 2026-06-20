@@ -2354,16 +2354,18 @@ class FlowHttpClient:
             },
         }
 
-    async def create_agent_session(self) -> str | None:
-        """Create a fresh flowCreationAgent session for this account's project.
+    async def create_agent_session(self, project_id: str | None = None) -> str | None:
+        """Create a fresh flowCreationAgent session for the given project.
 
         ``POST /flowCreationAgent/sessions?projectId=<raw>`` with an empty body
         returns ``sessionInfo.agentSessionId``. A fresh session per request keeps
-        users' agent conversations isolated (no shared/global session state)."""
+        users' agent conversations isolated (no shared/global session state).
+        ``project_id`` must be the user's per-user project (the account-level
+        session project is often empty when PER_USER_PROJECTS is on)."""
         session = await self.keeper.get_session()
         if not session["bearer"]:
             return None
-        proj_raw = str(session.get("project_id") or "")
+        proj_raw = str(project_id or session.get("project_id") or "")
         if not proj_raw:
             return None
         headers = dict(self._build_headers(session))
@@ -2413,7 +2415,7 @@ class FlowHttpClient:
         # streamChat requires a real session id (a random UUID gets an empty
         # errorEvent). Create a fresh session per request unless one is supplied.
         if not agent_session_id:
-            agent_session_id = await self.create_agent_session()
+            agent_session_id = await self.create_agent_session(project_id=project_id)
         if not agent_session_id:
             return {"error": "session_create_failed"}
 
@@ -8908,7 +8910,11 @@ async def on_agent_action(callback: types.CallbackQuery):
         except Exception:
             pass
         try:
-            res = await _client_for(user_id).improve_prompt(_agent_improve_instruction(prompt))
+            acc_id = _account_for(user_id)
+            project_id = await ensure_user_project(user_id, account_id=acc_id)
+            res = await _client_for_acc(acc_id).improve_prompt(
+                _agent_improve_instruction(prompt), project_id=project_id
+            )
         except Exception:  # noqa: BLE001
             res = {"error": "exception"}
         variants = [v for v in ((res or {}).get("variants") or []) if v.get("prompt")][:3]
