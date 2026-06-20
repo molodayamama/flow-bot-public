@@ -2999,3 +2999,140 @@ class PaymentStore:
                 pass
             raise
 
+
+# ── Flow creation-agent (prompt improver) response parsing ───────────────────
+#
+# Offline, pure-Python parsing of the `flowCreationAgent:streamChat?alt=sse`
+# response (Feature 2 spike — no network here). The stream is a sequence of
+# `data: {...}` SSE lines; each carries an `agentMessage` with optional
+# `thinkingEvent` (ignored) and incremental `response.text` chunks that
+# concatenate into a JSON "A2UI" array. A final non-partial message repeats the
+# full text. The A2UI array holds `surfaceUpdate.components`, where either a
+# `MultipleChoice` (3 prompt variants) or a `Text` (one improved prompt) lives.
+
+
+def _agent_sse_objects(raw: str):
+    """Yield parsed JSON objects from each ``data:`` line of an SSE stream."""
+    for line in (raw or "").splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        body = line[len("data:"):].strip()
+        if not body or body == "[DONE]":
+            continue
+        try:
+            yield json.loads(body)
+        except (ValueError, TypeError):
+            continue
+
+
+def extract_agent_text(raw: str) -> str:
+    """Return the agent's full ``response.text``.
+
+    Prefers the final non-partial message (it repeats the complete document);
+    falls back to concatenating the partial chunks."""
+    partials: list[str] = []
+    final_full: str | None = None
+    for obj in _agent_sse_objects(raw):
+        if not isinstance(obj, dict):
+            continue
+        am = obj.get("agentMessage")
+        if not isinstance(am, dict):
+            continue
+        resp = am.get("response")
+        text = resp.get("text") if isinstance(resp, dict) else None
+        if not isinstance(text, str):
+            continue
+        if obj.get("partial"):
+            partials.append(text)
+        else:
+            final_full = text
+    return final_full if final_full is not None else "".join(partials)
+
+
+def parse_agent_a2ui(text: str) -> list:
+    """Parse the A2UI JSON array out of the (possibly fenced) agent text."""
+    if not text:
+        return []
+    start = text.find("[")
+    end = text.rfind("]")
+    if start == -1 or end == -1 or end < start:
+        return []
+    try:
+        data = json.loads(text[start:end + 1])
+    except (ValueError, TypeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _a2ui_components(a2ui: list) -> list:
+    comps: list = []
+    for block in a2ui:
+        if isinstance(block, dict) and isinstance(block.get("surfaceUpdate"), dict):
+            c = block["surfaceUpdate"].get("components")
+            if isinstance(c, list):
+                comps.extend(c)
+    return comps
+
+
+def _split_variant_label(label: str) -> tuple[str, str]:
+    """``"**Title**\nPrompt text"`` -> ``("Title", "Prompt text")``."""
+    label = (label or "").strip()
+    if not label:
+        return "", ""
+    head, _, body = label.partition("\n")
+    title = head.strip().strip("*").strip()
+    body = body.strip()
+    if not body:
+        # No newline: the whole label is the prompt, no separate title.
+        return "", title
+    return title, body
+
+
+def _extract_single_prompt(message: str) -> str | None:
+    """Pull one improved prompt from a single-suggestion ``Text`` component.
+
+    The agent wraps it in a markdown blockquote, often bolded (``> **...**``).
+    Returns the longest such blockquote line, stripped of markup."""
+    if not message:
+        return None
+    best: str | None = None
+    for line in message.splitlines():
+        s = line.strip()
+        if s.startswith(">"):
+            s = s.lstrip(">").strip().strip("*").strip()
+            if s and (best is None or len(s) > len(best)):
+                best = s
+    return best
+
+
+def parse_agent_response(raw: str) -> dict:
+    """Parse a flowCreationAgent SSE stream into prompt suggestions.
+
+    Returns ``{"variants": [{"title","prompt","value"}...], "single": str|None,
+    "message": str}``. ``variants`` is the 3-option case; ``single`` is the
+    one-improved-prompt case; ``message`` is the agent's surrounding text."""
+    comps = _a2ui_components(parse_agent_a2ui(extract_agent_text(raw)))
+    variants: list[dict] = []
+    messages: list[str] = []
+    for comp in comps:
+        c = comp.get("component") if isinstance(comp, dict) else None
+        if not isinstance(c, dict):
+            continue
+        mc = c.get("MultipleChoice")
+        txt = c.get("Text")
+        if isinstance(mc, dict):
+            for opt in mc.get("options") or []:
+                if not isinstance(opt, dict):
+                    continue
+                label = ((opt.get("label") or {}).get("literalString")) or ""
+                title, prompt = _split_variant_label(label)
+                if prompt:
+                    variants.append({"title": title, "prompt": prompt, "value": opt.get("value")})
+        elif isinstance(txt, dict):
+            literal = ((txt.get("text") or {}).get("literalString")) or ""
+            if literal.strip():
+                messages.append(literal.strip())
+    message = "\n\n".join(messages).strip()
+    single = None if variants else _extract_single_prompt(message)
+    return {"variants": variants, "single": single, "message": message}
