@@ -4545,6 +4545,7 @@ def wizard_kb(
     imodel: str = DEFAULT_IMAGE_MODEL,
     *,
     show_boost: bool = False,
+    show_improve: bool = False,
 ) -> types.InlineKeyboardMarkup:
     """Шаг 2: настройки генерации (количество + формат + модель-тогл + «Сгенерировать»)."""
     B = types.InlineKeyboardButton
@@ -4560,7 +4561,13 @@ def wizard_kb(
         [_imodel_toggle_btn(imodel, "w:imodel")],
         [B(text=go_label, callback_data="w:go")],
     ]
-    if show_boost:
+    # AI-агент: улучшить промпт (3 варианта). Заменяет старый бесплатный boost.
+    if show_improve:
+        rows.append([B(
+            text=f"✨ Улучшить промпт · {action_price('prompt_improve')} кр",
+            callback_data="ag:improve",
+        )])
+    elif show_boost:
         rows.append([B(text=L("boost_prompt"), callback_data="w:boost_prompt")])
     rows.append([
         B(text=L("change_prompt"), callback_data="w:change_prompt"),
@@ -4663,7 +4670,7 @@ async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
     st.setdefault("fmt", DEFAULT_FMT)
     st.setdefault("imodel", DEFAULT_IMAGE_MODEL)
     st["step"] = "wizard"
-    kb = wizard_kb(st["count"], st["fmt"], st["imodel"], show_boost=bool(GEMINI_API_KEY))
+    kb = wizard_kb(st["count"], st["fmt"], st["imodel"], show_improve=True)
     text = _wizard_text(user_id)
     if edit:
         await _edit_or_answer(message, text, kb, parse_mode="HTML")
@@ -8863,6 +8870,116 @@ def _agent_improve_instruction(prompt: str) -> str:
     )
 
 
+async def _agent_improve_call(user_id: int, prompt: str) -> dict:
+    """Improve a prompt via the Flow agent, trying video-capable accounts until
+    one returns content (some accounts' bearers are rejected by the endpoint;
+    one account's captcha score is stochastic)."""
+    try:
+        project_id = await ensure_user_project(user_id, account_id=_account_for(user_id))
+        candidates: list[str] = []
+        primary = _account_for_video(user_id)
+        if primary:
+            candidates.append(primary)
+        for acc in account_pool.account_ids():
+            if acc not in candidates and account_pool.is_video_capable(acc):
+                candidates.append(acc)
+        instruction = _agent_improve_instruction(prompt)
+        res: dict = {}
+        for acc_id in candidates[:5]:
+            res = await _client_for_acc(acc_id).improve_prompt(instruction, project_id=project_id)
+            log.info(
+                "✨ improve try acc=%s status=%s err=%s variants=%d",
+                acc_id, (res or {}).get("status"), (res or {}).get("error"),
+                len((res or {}).get("variants") or []),
+            )
+            if (res or {}).get("variants") or (res or {}).get("single"):
+                break
+        return res or {}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("prompt_improve exception: %s", exc.__class__.__name__, exc_info=True)
+        return {"error": "exception"}
+
+
+def _agent_variants_view(variants: list[dict], *, pick_prefix: str, keep_data: str):
+    """Build the 3-variant picker message + keyboard (shared by image & video)."""
+    rows = []
+    for i, v in enumerate(variants):
+        label = (v["title"] or v["prompt"])[:48]
+        rows.append([types.InlineKeyboardButton(text=f"{i + 1}. {label}", callback_data=f"{pick_prefix}{i}")])
+    rows.append([types.InlineKeyboardButton(text="↩️ Оставить мой", callback_data=keep_data)])
+    body = "✨ <b>Варианты промпта</b> — выбери, какой использовать:\n\n" + "\n\n".join(
+        f"<b>{i + 1}. {html.escape(v['title'])}</b>\n{html.escape(v['prompt'][:300])}"
+        for i, v in enumerate(variants)
+    )
+    return body, types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _agent_improve_flow(
+    callback: types.CallbackQuery, *, user_id: int, prompt_key: str,
+    source: str, pick_prefix: str, keep_data: str, rerender, edit_fn,
+    empty_prompt_msg: str,
+) -> None:
+    """Shared "✨ Улучшить промпт" flow for the image and video wizards."""
+    msg = callback.message
+    st = _ws(user_id)
+    prompt = (st.get(prompt_key) or "").strip()
+    if not prompt:
+        await callback.answer(empty_prompt_msg, show_alert=True)
+        return
+    price = action_price("prompt_improve")
+    if credit_store.balance(user_id) < price:
+        await callback.answer()
+        kb_low = types.InlineKeyboardMarkup(inline_keyboard=[
+            [_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]
+        ])
+        await edit_fn(msg, flow_copy.msg("low_balance", needed=price, have=credit_store.balance(user_id)),
+                      kb_low, parse_mode="HTML")
+        return
+    credit_store.charge(user_id, price)
+    metrics.log_event("prompt_improve", user_id=user_id, source=source)
+    await callback.answer("✨ Думаю над вариантами…")
+    try:
+        await msg.edit_text("✨ Подбираю варианты промпта…")
+    except Exception:
+        pass
+    res = await _agent_improve_call(user_id, prompt)
+    variants = [v for v in (res.get("variants") or []) if v.get("prompt")][:3]
+    single = res.get("single")
+    if not variants and not single:
+        credit_store.refund(user_id, price)
+        await rerender(msg, user_id=user_id, edit=True)
+        try:
+            await msg.answer("Не получилось улучшить промпт — кредиты вернул. Попробуй ещё раз 🙏")
+        except Exception:
+            pass
+        return
+    if not variants and single:
+        st[prompt_key] = single
+        await rerender(msg, user_id=user_id, edit=True)
+        return
+    st["ag_variants"] = [{"title": v.get("title", ""), "prompt": v.get("prompt", "")} for v in variants]
+    body, kb = _agent_variants_view(st["ag_variants"], pick_prefix=pick_prefix, keep_data=keep_data)
+    await edit_fn(msg, body, kb, parse_mode="HTML")
+
+
+async def _agent_pick(callback: types.CallbackQuery, *, user_id: int, idx_str: str,
+                      prompt_key: str, rerender) -> None:
+    st = _ws(user_id)
+    try:
+        idx = int(idx_str)
+    except (ValueError, TypeError):
+        await callback.answer()
+        return
+    variants = st.get("ag_variants") or []
+    if 0 <= idx < len(variants):
+        st[prompt_key] = variants[idx].get("prompt") or st.get(prompt_key)
+        await callback.answer("Готово ✨")
+    else:
+        await callback.answer()
+    st.pop("ag_variants", None)
+    await rerender(callback.message, user_id=user_id, edit=True)
+
+
 @dp.callback_query(F.data.startswith("ag:"))
 async def on_agent_action(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -8870,110 +8987,42 @@ async def on_agent_action(callback: types.CallbackQuery):
     msg = callback.message
     st = _ws(user_id)
 
+    # ── Video wizard (vprompt) ──
     if data.startswith("ag:vpick:"):
-        try:
-            idx = int(data.split(":")[2])
-        except (ValueError, IndexError):
-            await callback.answer()
-            return
-        variants = st.get("ag_variants") or []
-        if 0 <= idx < len(variants):
-            st["vprompt"] = variants[idx].get("prompt") or st.get("vprompt")
-            await callback.answer("Готово ✨")
-        else:
-            await callback.answer()
-        st.pop("ag_variants", None)
-        await show_new_video_wizard(msg, user_id=user_id, edit=True)
+        await _agent_pick(callback, user_id=user_id, idx_str=data.split(":")[2],
+                          prompt_key="vprompt", rerender=show_new_video_wizard)
         return
-
     if data == "ag:vkeep":
         st.pop("ag_variants", None)
         await callback.answer()
         await show_new_video_wizard(msg, user_id=user_id, edit=True)
         return
-
     if data == "ag:vimprove":
-        prompt = (st.get("vprompt") or "").strip()
-        if not prompt:
-            await callback.answer("Сначала опишите видео", show_alert=True)
-            return
-        price = action_price("prompt_improve")
-        if credit_store.balance(user_id) < price:
-            await callback.answer()
-            kb_low = types.InlineKeyboardMarkup(inline_keyboard=[
-                [_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]
-            ])
-            await _vid_edit(
-                msg, flow_copy.msg("low_balance", needed=price, have=credit_store.balance(user_id)),
-                kb_low, user_id, parse_mode="HTML",
-            )
-            return
-        credit_store.charge(user_id, price)
-        metrics.log_event("prompt_improve", user_id=user_id, source="video")
-        await callback.answer("✨ Думаю над вариантами…")
-        try:
-            await msg.edit_text("✨ Подбираю варианты промпта…")
-        except Exception:
-            pass
-        res: dict = {}
-        acc_id = None
-        try:
-            project_id = await ensure_user_project(user_id, account_id=_account_for(user_id))
-            # The agent accepts any project under a valid bearer, so try the
-            # health-routed account first, then other usable accounts (some
-            # accounts' bearers are rejected by the agent endpoint specifically).
-            candidates: list[str] = []
-            primary = _account_for_video(user_id)
-            if primary:
-                candidates.append(primary)
-            for acc in account_pool.account_ids():
-                if acc not in candidates and account_pool.is_video_capable(acc):
-                    candidates.append(acc)
-            instruction = _agent_improve_instruction(prompt)
-            for acc_id in candidates[:5]:
-                res = await _client_for_acc(acc_id).improve_prompt(
-                    instruction, project_id=project_id
-                )
-                log.info(
-                    "✨ improve try acc=%s status=%s err=%s variants=%d",
-                    acc_id, (res or {}).get("status"), (res or {}).get("error"),
-                    len((res or {}).get("variants") or []),
-                )
-                if (res or {}).get("variants") or (res or {}).get("single"):
-                    break
-        except Exception as exc:  # noqa: BLE001
-            log.warning("prompt_improve exception: %s", exc.__class__.__name__, exc_info=True)
-            res = {"error": "exception"}
-        log.info(
-            "✨ prompt_improve acc=%s err=%s status=%s variants=%d single=%s",
-            acc_id, (res or {}).get("error"), (res or {}).get("status"),
-            len((res or {}).get("variants") or []), bool((res or {}).get("single")),
+        await _agent_improve_flow(
+            callback, user_id=user_id, prompt_key="vprompt", source="video",
+            pick_prefix="ag:vpick:", keep_data="ag:vkeep",
+            rerender=show_new_video_wizard,
+            edit_fn=lambda m, t, kb, **kw: _vid_edit(m, t, kb, user_id, **kw),
+            empty_prompt_msg="Сначала опишите видео",
         )
-        variants = [v for v in ((res or {}).get("variants") or []) if v.get("prompt")][:3]
-        single = (res or {}).get("single")
-        if not variants and not single:
-            credit_store.refund(user_id, price)
-            await show_new_video_wizard(msg, user_id=user_id, edit=True)
-            try:
-                await msg.answer("Не получилось улучшить промпт — кредиты вернул. Попробуй ещё раз 🙏")
-            except Exception:
-                pass
-            return
-        if not variants and single:
-            st["vprompt"] = single
-            await show_new_video_wizard(msg, user_id=user_id, edit=True)
-            return
-        st["ag_variants"] = [{"title": v.get("title", ""), "prompt": v.get("prompt", "")} for v in variants]
-        rows = []
-        for i, v in enumerate(st["ag_variants"]):
-            label = (v["title"] or v["prompt"])[:48]
-            rows.append([types.InlineKeyboardButton(text=f"{i + 1}. {label}", callback_data=f"ag:vpick:{i}")])
-        rows.append([types.InlineKeyboardButton(text="↩️ Оставить мой", callback_data="ag:vkeep")])
-        body = "✨ <b>Варианты промпта</b> — выбери, какой использовать:\n\n" + "\n\n".join(
-            f"<b>{i + 1}. {html.escape(v['title'])}</b>\n{html.escape(v['prompt'][:300])}"
-            for i, v in enumerate(st["ag_variants"])
+        return
+
+    # ── Image wizard (pending_prompt) ──
+    if data.startswith("ag:pick:"):
+        await _agent_pick(callback, user_id=user_id, idx_str=data.split(":")[2],
+                          prompt_key="pending_prompt", rerender=show_wizard)
+        return
+    if data == "ag:keep":
+        st.pop("ag_variants", None)
+        await callback.answer()
+        await show_wizard(msg, user_id=user_id, edit=True)
+        return
+    if data == "ag:improve":
+        await _agent_improve_flow(
+            callback, user_id=user_id, prompt_key="pending_prompt", source="image",
+            pick_prefix="ag:pick:", keep_data="ag:keep", rerender=show_wizard,
+            edit_fn=_edit_or_answer, empty_prompt_msg="Сначала опиши картинку",
         )
-        await _vid_edit(msg, body, types.InlineKeyboardMarkup(inline_keyboard=rows), user_id, parse_mode="HTML")
         return
 
     await callback.answer()
@@ -11765,7 +11814,7 @@ async def handle_plain_text(message: types.Message):
         st["step"] = "wizard"
         picker_msg_id = st.get("picker_msg_id")
         if picker_msg_id:
-            kb = wizard_kb(st.get("count", DEFAULT_COUNT), st.get("fmt", DEFAULT_FMT), st.get("imodel", DEFAULT_IMAGE_MODEL), show_boost=bool(GEMINI_API_KEY))
+            kb = wizard_kb(st.get("count", DEFAULT_COUNT), st.get("fmt", DEFAULT_FMT), st.get("imodel", DEFAULT_IMAGE_MODEL), show_improve=True)
             wtext = _wizard_text(user_id)
             try:
                 await message.bot.edit_message_text(

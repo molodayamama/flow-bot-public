@@ -1791,6 +1791,10 @@ class BotImportSmokeTests(unittest.TestCase):
         self.assertIn("ag:vimprove", datas)
         import flow_core as _fc
         self.assertEqual(_fc.action_price("prompt_improve"), 5)
+        # The image wizard exposes the same agent improve button (ag:improve).
+        img_datas = [b.callback_data for row in fb.wizard_kb(1, "land", show_improve=True).inline_keyboard for b in row]
+        self.assertIn("ag:improve", img_datas)
+        self.assertNotIn("ag:improve", [b.callback_data for row in fb.wizard_kb(1, "land").inline_keyboard for b in row])
         fb.wizard_state[424242]["vengine"] = "veo"
         datas_veo = [b.callback_data for row in fb._nwiz_kb(424242).inline_keyboard for b in row]
         self.assertIn("v:neng:veo", datas_veo)
