@@ -236,6 +236,24 @@ Approved ad-hoc live probe helper:
 - Inline callback by data:
   `python tools/live_telegram_probe.py --env-file .env --bot-username <bot> --click-data m:vid`
 
+Approved live video-wizard driver:
+
+- `tools/live_video_probe.py` drives the real prompt-first video wizard end to
+  end and waits for the delivered video. It requires `--approve-external-action`
+  because it makes the bot call Google Flow and spends real credits/quota.
+- Text-to-video (Omni), one job:
+  `python tools/live_video_probe.py --approve-external-action --model omni-flash-4s --prompt "a calm cinematic sunrise over a quiet lake"`
+- Photo-to-video (Veo r2v), one job:
+  `python tools/live_video_probe.py --approve-external-action --model veo-lite --photo kotenok.jpg --prompt "the kitten slowly turns its head"`
+- Allowed models: `omni-flash-4s|6s|8s|10s` (text) and `veo-lite|veo-fast`
+  (need `--photo`). The probe refuses `veo-quality` and never cycles Veo quality
+  through `quality`.
+- It prints a sanitized JSON summary only (status, `has_video`, timings, bot
+  text previews); it never prints Telegram `file_id` values or secrets.
+- The bot routes a job to the acting user's assigned account. To exercise a
+  different account, an admin can `/acc_vid_off <id>` the sticky account first
+  and `/acc_vid_on <id>` afterwards; do not leave toggles changed.
+
 Run one Telethon probe at a time when reusing the same `.session` file.
 Concurrent probes can fail in the harness with
 `sqlite3.OperationalError: database is locked`; this is not evidence of a bot
