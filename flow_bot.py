@@ -2362,29 +2362,35 @@ class FlowHttpClient:
         users' agent conversations isolated (no shared/global session state).
         ``project_id`` must be the user's per-user project (the account-level
         session project is often empty when PER_USER_PROJECTS is on)."""
-        session = await self.keeper.get_session()
-        if not session["bearer"]:
-            return None
-        proj_raw = str(project_id or session.get("project_id") or "")
-        if not proj_raw:
-            return None
-        headers = dict(self._build_headers(session))
-        headers["Content-Type"] = "application/json"
-        headers["Accept"] = "*/*"
-        url = f"{self.API_BASE}/flowCreationAgent/sessions?projectId={proj_raw}"
-        try:
-            async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
-                async with http.post(
-                    url, headers=headers, data=b"{}", proxy=self._api_proxy(),
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as resp:
-                    if resp.status != 200:
-                        return None
-                    data = await resp.json(content_type=None)
-            sid = ((data or {}).get("sessionInfo") or {}).get("agentSessionId")
-            return str(sid) if sid else None
-        except Exception:  # noqa: BLE001 - best effort, caller handles None
-            return None
+        for attempt in range(2):
+            session = await self.keeper.get_session()
+            if not session["bearer"]:
+                return None
+            proj_raw = str(project_id or session.get("project_id") or "")
+            if not proj_raw:
+                return None
+            headers = dict(self._build_headers(session))
+            headers["Content-Type"] = "application/json"
+            headers["Accept"] = "*/*"
+            url = f"{self.API_BASE}/flowCreationAgent/sessions?projectId={proj_raw}"
+            try:
+                async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
+                    async with http.post(
+                        url, headers=headers, data=b"{}", proxy=self._api_proxy(),
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    ) as resp:
+                        status = resp.status
+                        if status == 401 and attempt == 0:
+                            await self.keeper._refresh_bearer()
+                            continue
+                        if status != 200:
+                            return None
+                        data = await resp.json(content_type=None)
+                sid = ((data or {}).get("sessionInfo") or {}).get("agentSessionId")
+                return str(sid) if sid else None
+            except Exception:  # noqa: BLE001 - best effort, caller handles None
+                return None
+        return None
 
     async def improve_prompt(
         self,
