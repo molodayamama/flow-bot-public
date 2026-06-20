@@ -8915,8 +8915,14 @@ async def on_agent_action(callback: types.CallbackQuery):
             res = await _client_for_acc(acc_id).improve_prompt(
                 _agent_improve_instruction(prompt), project_id=project_id
             )
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.warning("prompt_improve exception: %s", exc.__class__.__name__, exc_info=True)
             res = {"error": "exception"}
+        log.info(
+            "✨ prompt_improve acc=%s proj=%s err=%s status=%s variants=%d single=%s",
+            acc_id, bool(project_id), (res or {}).get("error"), (res or {}).get("status"),
+            len((res or {}).get("variants") or []), bool((res or {}).get("single")),
+        )
         variants = [v for v in ((res or {}).get("variants") or []) if v.get("prompt")][:3]
         single = (res or {}).get("single")
         if not variants and not single:
