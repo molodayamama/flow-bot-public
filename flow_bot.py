@@ -968,7 +968,7 @@ class SessionKeeper:
                         body = None
                     captured.append({
                         "method": request.method,
-                        "url": request.url.split("?")[0][:200],
+                        "url": _redact(request.url)[:320],
                         "body": _redact(body),
                     })
             except Exception:
@@ -977,7 +977,7 @@ class SessionKeeper:
         def _on_resp(response) -> None:
             try:
                 if _is_agent_url(response.url):
-                    responses.append({"url": response.url.split("?")[0][:200], "status": response.status})
+                    responses.append({"url": _redact(response.url)[:320], "status": response.status})
             except Exception:
                 pass
 
