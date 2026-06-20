@@ -5218,6 +5218,13 @@ def _nwiz_kb(user_id: int) -> types.InlineKeyboardMarkup:
     if has_photo:
         rows.append([B(text="🗑 Убрать фотографию", callback_data="v:nremove_photo")])
 
+    # AI-агент: улучшить промпт (если уже есть описание)
+    if (st.get("vprompt") or "").strip():
+        rows.append([B(
+            text=f"✨ Улучшить промпт · {action_price('prompt_improve')} кр",
+            callback_data="ag:vimprove",
+        )])
+
     # Изменить / Создать
     rows.append([
         B(text="✏️ Изменить", callback_data="v:nchange"),
@@ -8835,6 +8842,103 @@ async def _render_guided_step(message: types.Message, *, user_id: int):
     s = steps[step]
     text = flow_copy.msg("ideas_qa_step", n=step + 1, total=len(steps), q=s["text"])
     await _edit_or_answer(message, text, _guided_step_kb(step))
+
+
+def _agent_improve_instruction(prompt: str) -> str:
+    """Wrap the user's draft into an instruction that asks the agent for three
+    distinct, ready-to-use prompt variants (text only, no image generation)."""
+    return (
+        "Ты — помощник по промптам для генерации видео/изображений. "
+        "Улучши промпт ниже и предложи 3 РАЗНЫХ варианта на выбор (разные стиль/"
+        "настроение/детали), каждый — законченный готовый промпт. Только текст "
+        "вариантов, не запускай генерацию.\n\nИсходный промпт: " + prompt
+    )
+
+
+@dp.callback_query(F.data.startswith("ag:"))
+async def on_agent_action(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    data = callback.data or ""
+    msg = callback.message
+    st = _ws(user_id)
+
+    if data.startswith("ag:vpick:"):
+        try:
+            idx = int(data.split(":")[2])
+        except (ValueError, IndexError):
+            await callback.answer()
+            return
+        variants = st.get("ag_variants") or []
+        if 0 <= idx < len(variants):
+            st["vprompt"] = variants[idx].get("prompt") or st.get("vprompt")
+            await callback.answer("Готово ✨")
+        else:
+            await callback.answer()
+        st.pop("ag_variants", None)
+        await show_new_video_wizard(msg, user_id=user_id, edit=True)
+        return
+
+    if data == "ag:vkeep":
+        st.pop("ag_variants", None)
+        await callback.answer()
+        await show_new_video_wizard(msg, user_id=user_id, edit=True)
+        return
+
+    if data == "ag:vimprove":
+        prompt = (st.get("vprompt") or "").strip()
+        if not prompt:
+            await callback.answer("Сначала опишите видео", show_alert=True)
+            return
+        price = action_price("prompt_improve")
+        if credit_store.balance(user_id) < price:
+            await callback.answer()
+            kb_low = types.InlineKeyboardMarkup(inline_keyboard=[
+                [_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]
+            ])
+            await _vid_edit(
+                msg, flow_copy.msg("low_balance", needed=price, have=credit_store.balance(user_id)),
+                kb_low, user_id, parse_mode="HTML",
+            )
+            return
+        credit_store.charge(user_id, price)
+        metrics.log_event("prompt_improve", user_id=user_id, source="video")
+        await callback.answer("✨ Думаю над вариантами…")
+        try:
+            await msg.edit_text("✨ Подбираю варианты промпта…")
+        except Exception:
+            pass
+        try:
+            res = await _client_for(user_id).improve_prompt(_agent_improve_instruction(prompt))
+        except Exception:  # noqa: BLE001
+            res = {"error": "exception"}
+        variants = [v for v in ((res or {}).get("variants") or []) if v.get("prompt")][:3]
+        single = (res or {}).get("single")
+        if not variants and not single:
+            credit_store.refund(user_id, price)
+            await show_new_video_wizard(msg, user_id=user_id, edit=True)
+            try:
+                await msg.answer("Не получилось улучшить промпт — кредиты вернул. Попробуй ещё раз 🙏")
+            except Exception:
+                pass
+            return
+        if not variants and single:
+            st["vprompt"] = single
+            await show_new_video_wizard(msg, user_id=user_id, edit=True)
+            return
+        st["ag_variants"] = [{"title": v.get("title", ""), "prompt": v.get("prompt", "")} for v in variants]
+        rows = []
+        for i, v in enumerate(st["ag_variants"]):
+            label = (v["title"] or v["prompt"])[:48]
+            rows.append([types.InlineKeyboardButton(text=f"{i + 1}. {label}", callback_data=f"ag:vpick:{i}")])
+        rows.append([types.InlineKeyboardButton(text="↩️ Оставить мой", callback_data="ag:vkeep")])
+        body = "✨ <b>Варианты промпта</b> — выбери, какой использовать:\n\n" + "\n\n".join(
+            f"<b>{i + 1}. {html.escape(v['title'])}</b>\n{html.escape(v['prompt'][:300])}"
+            for i, v in enumerate(st["ag_variants"])
+        )
+        await _vid_edit(msg, body, types.InlineKeyboardMarkup(inline_keyboard=rows), user_id, parse_mode="HTML")
+        return
+
+    await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("gp:"))

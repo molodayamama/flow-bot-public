@@ -2539,6 +2539,7 @@ class AccountPool:
 PRICE_PER_IMAGE = 10        # 1 generated image = 10 credits
 IMAGE_EDIT_PRICE = 15       # edit uploaded/generated photo
 UPSCALE_PRICE = 5          # +0.5x of one image, rounded
+PROMPT_IMPROVE_PRICE = 5    # AI agent: improve a prompt (3 variants or one)
 SELLER_SERIES_PRICES = {3: 30, 5: 45, 8: 70}
 STARTER_CREDITS = 30        # one-time grant on first /start (balanced: 3 free images)
 LOW_BALANCE_THRESHOLD = 20  # nudge to top up below this
@@ -2578,6 +2579,8 @@ def action_price(action: str, num_images: int = 1) -> int:
         return _price_override("upscale", UPSCALE_PRICE)
     if action == "video_prompt_edit":
         return _price_override("edit_video", VIDEO_PROMPT_EDIT_PRICE)
+    if action == "prompt_improve":
+        return _price_override("prompt_improve", PROMPT_IMPROVE_PRICE)
     if action == "dl_raw":
         return 0
     return 0

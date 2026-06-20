@@ -1787,6 +1787,10 @@ class BotImportSmokeTests(unittest.TestCase):
         self.assertIn("v:neng:omni", datas)
         self.assertIn("v:neng:veo", datas)
         self.assertIn("v:ndur:4", datas)
+        # AI prompt-improve button appears once a draft prompt exists; costs 5.
+        self.assertIn("ag:vimprove", datas)
+        import flow_core as _fc
+        self.assertEqual(_fc.action_price("prompt_improve"), 5)
         fb.wizard_state[424242]["vengine"] = "veo"
         datas_veo = [b.callback_data for row in fb._nwiz_kb(424242).inline_keyboard for b in row]
         self.assertIn("v:neng:veo", datas_veo)
