@@ -321,6 +321,71 @@ async def handle_video_ab_post(request: web.Request) -> web.Response:
     })
 
 
+async def handle_agent_probe_post(request: web.Request) -> web.Response:
+    """Discover the reCAPTCHA action for flowCreationAgent (prompt improver).
+
+    Tries one or more candidate actions against the real agent endpoint using a
+    chosen account's live session/browser solver. Credits are not spent by the
+    agent call, but it still contacts Google, so it is gated by confirm=true.
+    Returns sanitized results only (status, action, parsed variant/single counts).
+    """
+    if not _video_clients:
+        return _json({"error": "video clients not available"}, 503)
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    if body.get("confirm") is not True:
+        return _json({"error": "confirm=true required"}, 400)
+
+    account_id = str(body.get("account") or body.get("account_id") or "").strip()
+    account_id = account_id or _pick_video_ab_account()
+    if not account_id or account_id not in _video_clients:
+        return _json({"error": f"account {account_id!r} not found"}, 404)
+
+    prompt = str(body.get("prompt") or "котёнок на лежанке").strip()[:500] or "котёнок на лежанке"
+    actions = body.get("actions")
+    if not isinstance(actions, list) or not actions:
+        single_action = body.get("action")
+        if single_action:
+            actions = [str(single_action)]
+        else:
+            from flow_bot import SessionKeeper
+            actions = list(SessionKeeper.AGENT_RECAPTCHA_ACTION_CANDIDATES)
+    actions = [str(a)[:64] for a in actions][:8]
+    try:
+        pause_sec = max(0.0, min(float(body.get("pause_sec", 3.0)), 30.0))
+    except (TypeError, ValueError):
+        pause_sec = 3.0
+
+    client = _video_clients[account_id]
+    results: list[dict] = []
+    found: str | None = None
+    for idx, action in enumerate(actions):
+        if idx and pause_sec > 0:
+            await asyncio.sleep(pause_sec)
+        try:
+            res = await client.improve_prompt(prompt, action=action)
+        except Exception as exc:  # noqa: BLE001 - debug endpoint must return JSON
+            log.warning("agent probe failed for %s/%s: %s", account_id, action, exc.__class__.__name__)
+            results.append({"action": action, "error": exc.__class__.__name__})
+            continue
+        results.append({
+            "action": action,
+            "status": res.get("status"),
+            "ok": res.get("ok"),
+            "variants": len(res.get("variants") or []),
+            "has_single": bool(res.get("single")),
+            "error": res.get("error"),
+            "preview": str(res.get("body_preview") or "")[:160],
+        })
+        if res.get("ok") and found is None:
+            found = action
+            break
+
+    _audit(request, "agent_probe", new={"account": account_id, "found": found})
+    return _json({"account": account_id, "found_action": found, "results": results})
+
+
 # ── ops cockpit ───────────────────────────────────────────────────────
 
 async def handle_ops_get(request: web.Request) -> web.Response:
@@ -1194,6 +1259,7 @@ def register_admin_routes(
     r.add_get ("/api/admin/sellers",                   handle_sellers_get)
     r.add_get ("/api/admin/video-health",              handle_video_health)
     r.add_post("/api/admin/video-ab",                  handle_video_ab_post)
+    r.add_post("/api/admin/agent-probe",               handle_agent_probe_post)
     r.add_get ("/api/admin/proxy-check",               handle_proxy_check)
     # Support
     r.add_get ("/api/admin/support",                   handle_support_get)

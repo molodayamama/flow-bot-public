@@ -145,6 +145,7 @@ from flow_core import (
     build_video_reference_images,
     flow_scene_create_url,
     flow_scene_workflows_url,
+    parse_agent_response,
     parse_video_gen_response,
     parse_video_scene_id,
     parse_scene_segments,
@@ -773,6 +774,13 @@ class SessionKeeper:
     # аккаунта, поэтому используем единственный верный action и ретраим его со
     # свежим токеном (score вероятностный — следующая попытка может пройти).
     VIDEO_RECAPTCHA_ACTION = "VIDEO_GENERATION"
+    # flowCreationAgent (улучшайзер промпта) — reCAPTCHA-action ещё не подтверждён
+    # фронтом; ниже список кандидатов для admin-дискавери (handle_agent_probe).
+    AGENT_RECAPTCHA_ACTION = "FLOW_CREATION_AGENT"
+    AGENT_RECAPTCHA_ACTION_CANDIDATES = [
+        "FLOW_CREATION_AGENT", "CREATION_AGENT", "AGENT",
+        "IMAGE_GENERATION", "VIDEO_GENERATION",
+    ]
     VIDEO_GEN_MAX_ATTEMPTS = 4          # video score стохастичен — даём больше шансов свежему токену
     VIDEO_GEN_403_BACKOFF_SEC = 3.0     # база нарастающего бэкоффа (+jitter) между ретраями
 
@@ -2181,6 +2189,96 @@ class FlowHttpClient:
                 arm["transport"]: {"status": arm.get("status"), "ok": arm.get("ok")}
                 for arm in arms
             },
+        }
+
+    async def improve_prompt(
+        self,
+        text: str,
+        *,
+        action: str | None = None,
+        project_id: str | None = None,
+        session_id: str | None = None,
+        agent_session_id: str | None = None,
+        turn_number: int = 1,
+        timeout_total: float = 90.0,
+    ) -> dict:
+        """Call Flow's ``flowCreationAgent:streamChat`` to improve a prompt.
+
+        Reuses the live bearer/project/cookies and the browser-JS reCAPTCHA
+        solver. Returns sanitized fields only (status, parsed variants/single,
+        message) — never bearer/cookie/token values. The reСАPTCHA ``action`` is
+        a parameter so the admin discovery probe can try candidates.
+        """
+        import uuid as _uuid
+
+        session = await self.keeper.get_session()
+        if not session["bearer"]:
+            return {"error": "missing_bearer"}
+        project_id = project_id or session.get("project_id")
+        if not project_id:
+            return {"error": "missing_project_id"}
+
+        action = action or SessionKeeper.AGENT_RECAPTCHA_ACTION
+        captcha_token = await self.keeper.solve_captcha(action)
+        if not captcha_token:
+            return {"error": "captcha_unavailable", "action": action}
+
+        headers = dict(self._build_headers(session))
+        headers["Content-Type"] = "application/json"
+        headers["Accept"] = "text/event-stream, text/event-stream"
+
+        proj = str(project_id)
+        if not proj.startswith("projects/"):
+            proj = f"projects/{proj}"
+        agent_session_id = agent_session_id or str(_uuid.uuid4())
+        body = {
+            "agentSessionId": agent_session_id,
+            "agentClientContext": {
+                "projectId": proj,
+                "clientSessionId": session_id or f";{int(time.time() * 1000)}",
+                "recaptchaContext": {
+                    "token": captcha_token,
+                    "applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB",
+                },
+                "turnNumber": int(turn_number),
+            },
+            "userMessage": {"userPrompt": {"parts": [{"text": str(text or "")}]}},
+        }
+        url = f"{self.API_BASE}/flowCreationAgent:streamChat?alt=sse"
+
+        status: int | None = None
+        raw = ""
+        error = ""
+        try:
+            async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
+                async with http.post(
+                    url,
+                    headers=headers,
+                    data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                    proxy=self._api_proxy(),
+                    timeout=aiohttp.ClientTimeout(total=timeout_total),
+                ) as resp:
+                    status = resp.status
+                    raw = await resp.text()
+        except Exception as exc:  # noqa: BLE001 - return JSON, never raw secrets
+            error = exc.__class__.__name__
+
+        parsed = (
+            parse_agent_response(raw)
+            if status == 200 and raw
+            else {"variants": [], "single": None, "message": ""}
+        )
+        return {
+            "ok": status == 200 and not error and bool(parsed["variants"] or parsed["single"]),
+            "status": status,
+            "action": action,
+            "error": error or None,
+            "variants": parsed["variants"],
+            "single": parsed["single"],
+            "message": parsed["message"][:600],
+            "agent_session_id": agent_session_id,
+            "turn_number": int(turn_number),
+            "body_preview": "" if status == 200 else self._video_ab_preview(raw),
         }
 
     async def generate_images(
