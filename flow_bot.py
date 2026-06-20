@@ -775,12 +775,15 @@ class SessionKeeper:
     # аккаунта, поэтому используем единственный верный action и ретраим его со
     # свежим токеном (score вероятностный — следующая попытка может пройти).
     VIDEO_RECAPTCHA_ACTION = "VIDEO_GENERATION"
-    # flowCreationAgent (улучшайзер промпта) — reCAPTCHA-action ещё не подтверждён
-    # фронтом; ниже список кандидатов для admin-дискавери (handle_agent_probe).
-    AGENT_RECAPTCHA_ACTION = "FLOW_CREATION_AGENT"
+    # flowCreationAgent (улучшайзер промпта) — reCAPTCHA-action ПОДТВЕРЖДЁН
+    # live-дискавери 2026-06-20: "CHAT_GENERATION" даёт HTTP 200 (тот же паттерн
+    # X_GENERATION, что IMAGE_/VIDEO_GENERATION). На фарм-аккаунтах бота агент
+    # пока отвечает пустым errorEvent (вероятно фича не opt-in на этих аккаунтах
+    # / нужен session lifecycle) — это следующий шаг расследования.
+    AGENT_RECAPTCHA_ACTION = "CHAT_GENERATION"
     AGENT_RECAPTCHA_ACTION_CANDIDATES = [
-        "FLOW_CREATION_AGENT", "CREATION_AGENT", "AGENT",
-        "IMAGE_GENERATION", "VIDEO_GENERATION",
+        "CHAT_GENERATION", "CREATIVE_AGENT", "FLOW_CREATION_AGENT",
+        "CREATION_AGENT", "AGENT", "IMAGE_GENERATION", "VIDEO_GENERATION",
     ]
     VIDEO_GEN_MAX_ATTEMPTS = 4          # video score стохастичен — даём больше шансов свежему токену
     VIDEO_GEN_403_BACKOFF_SEC = 3.0     # база нарастающего бэкоффа (+jitter) между ретраями
