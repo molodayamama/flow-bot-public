@@ -1006,12 +1006,14 @@ def video_frames_model_key(model_key: str) -> str:
 def video_reference_model_key(model_key: str, aspect: str = "portrait") -> str:
     """Resolve a friendly model id to the Ingredients (r2v) videoModelKey.
 
-    Confirmed from a live Ingredients capture (tools/video_raw_capture.json):
-    ``veo-lite`` -> ``veo_3_1_r2v_lite`` — tier suffix ONLY, NO orientation.
-    (Orientation is carried separately by ``aspectRatio`` in the request.) The
-    ``aspect`` arg is kept for signature stability but no longer affects the key.
+    Updated 2026-06-20 from a live Ingredients capture: the r2v model moved to the
+    ``abra`` family — ``abra_r2v_6s``. The old ``veo_3_1_r2v_*`` keys были удалены
+    Google (model-health их больше не отдаёт), из-за чего r2v отвечал 404
+    "Requested entity was not found". Подтверждена только 6s-вариация; держим её
+    как рабочий ключ (остальной payload r2v уже совпадает с фронтом). ``model_key``
+    и ``aspect`` сохранены для стабильности сигнатуры; ориентацию несёт aspectRatio.
     """
-    return f"veo_3_1_r2v_{_veo_tier(model_key)}"
+    return "abra_r2v_6s"
 
 
 def video_edit_model_key() -> str:
