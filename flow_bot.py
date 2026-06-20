@@ -2463,6 +2463,13 @@ class FlowHttpClient:
         headers = dict(self._build_headers(session))
         headers["Content-Type"] = "application/json"
         headers["Accept"] = "*/*"
+        # The collection needs ?projectId=<raw uuid> (confirmed by browser
+        # capture); a specific /<id> path does not.
+        if "projectId=" not in suffix and not suffix.startswith("/"):
+            proj_raw = str(session.get("project_id") or "")
+            if proj_raw:
+                sep = "&" if "?" in suffix else "?"
+                suffix = f"{suffix}{sep}projectId={proj_raw}"
         url = f"{self.API_BASE}/flowCreationAgent/sessions{suffix}"
         status: int | None = None
         raw = ""
