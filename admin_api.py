@@ -357,6 +357,7 @@ async def handle_agent_probe_post(request: web.Request) -> web.Response:
     except (TypeError, ValueError):
         pause_sec = 3.0
 
+    debug = body.get("debug") is True
     client = _video_clients[account_id]
     results: list[dict] = []
     found: str | None = None
@@ -364,12 +365,12 @@ async def handle_agent_probe_post(request: web.Request) -> web.Response:
         if idx and pause_sec > 0:
             await asyncio.sleep(pause_sec)
         try:
-            res = await client.improve_prompt(prompt, action=action)
+            res = await client.improve_prompt(prompt, action=action, debug=debug)
         except Exception as exc:  # noqa: BLE001 - debug endpoint must return JSON
             log.warning("agent probe failed for %s/%s: %s", account_id, action, exc.__class__.__name__)
             results.append({"action": action, "error": exc.__class__.__name__})
             continue
-        results.append({
+        row = {
             "action": action,
             "status": res.get("status"),
             "ok": res.get("ok"),
@@ -377,7 +378,11 @@ async def handle_agent_probe_post(request: web.Request) -> web.Response:
             "has_single": bool(res.get("single")),
             "error": res.get("error"),
             "preview": str(res.get("body_preview") or "")[:160],
-        })
+        }
+        if debug:
+            row["message"] = str(res.get("message") or "")[:400]
+            row["agent_text_preview"] = str(res.get("agent_text_preview") or "")[:2000]
+        results.append(row)
         if res.get("ok") and found is None:
             found = action
             break

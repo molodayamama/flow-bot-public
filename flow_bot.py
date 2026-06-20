@@ -145,6 +145,7 @@ from flow_core import (
     build_video_reference_images,
     flow_scene_create_url,
     flow_scene_workflows_url,
+    extract_agent_text,
     parse_agent_response,
     parse_video_gen_response,
     parse_video_scene_id,
@@ -2246,6 +2247,7 @@ class FlowHttpClient:
         agent_session_id: str | None = None,
         turn_number: int = 1,
         timeout_total: float = 90.0,
+        debug: bool = False,
     ) -> dict:
         """Call Flow's ``flowCreationAgent:streamChat`` to improve a prompt.
 
@@ -2313,7 +2315,7 @@ class FlowHttpClient:
             if status == 200 and raw
             else {"variants": [], "single": None, "message": ""}
         )
-        return {
+        out = {
             "ok": status == 200 and not error and bool(parsed["variants"] or parsed["single"]),
             "status": status,
             "action": action,
@@ -2325,6 +2327,9 @@ class FlowHttpClient:
             "turn_number": int(turn_number),
             "body_preview": "" if status == 200 else self._video_ab_preview(raw),
         }
+        if debug:
+            out["agent_text_preview"] = self._video_ab_preview(extract_agent_text(raw), limit=2000)
+        return out
 
     async def generate_images(
         self,
