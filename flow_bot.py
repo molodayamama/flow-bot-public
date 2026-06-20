@@ -4067,7 +4067,7 @@ def mp_jobs_kb(platform: str) -> types.InlineKeyboardMarkup:
         [B(text="📦 Мои товары (SKU)", callback_data="mp:projects")],
         [B(text="🙌 Сделайте за меня (под ключ)", callback_data="mp:done4you")],
         [B(text="💡 Советы по карточке", callback_data="mp:tips")],
-        [B(text="◀️ Площадки", callback_data="m:mp")],
+        [_menu_button("menu", "m:menu")],
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -4075,6 +4075,22 @@ def mp_jobs_kb(platform: str) -> types.InlineKeyboardMarkup:
 def _mp_back_kb() -> types.InlineKeyboardMarkup:
     B = types.InlineKeyboardButton
     return types.InlineKeyboardMarkup(inline_keyboard=[
+        [B(text="◀️ Назад", callback_data="m:mp")],
+        [_menu_button("menu", "m:menu")],
+    ])
+
+
+def _mp_photo_settings_kb(plat: str) -> types.InlineKeyboardMarkup:
+    """Экран приёма фото: выбор площадки (формат/стиль) прямо здесь, перед
+    генерацией — вместо отдельного шага выбора площадки в начале."""
+    B = types.InlineKeyboardButton
+    plat = plat if plat in _MP_PLAT_NAMES else "wb"
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [
+            _sel_btn("🟣 WB", plat == "wb", "mp:setplat:wb"),
+            _sel_btn("🔵 Ozon", plat == "ozon", "mp:setplat:ozon"),
+            _sel_btn("🟡 ЯМ", plat == "ym", "mp:setplat:ym"),
+        ],
         [B(text="◀️ Назад", callback_data="m:mp")],
         [_menu_button("menu", "m:menu")],
     ])
@@ -4088,7 +4104,7 @@ def mp_series_kb(platform: str) -> types.InlineKeyboardMarkup:
         [B(text=f"🧩 Мини-серия · 3 слайда · {action_price('mp_series', 3)} кр", callback_data="mp:series:3")],
         [B(text=f"🧩 Стандарт · 5 слайдов · {action_price('mp_series', 5)} кр", callback_data="mp:series:5")],
         [B(text=f"🧩 Полная карточка · 8 слайдов · {action_price('mp_series', 8)} кр", callback_data="mp:series:8")],
-        [B(text="◀️ Задачи", callback_data=f"mp:plat:{plat}")],
+        [B(text="◀️ Задачи", callback_data="m:mp")],
         [_menu_button("menu", "m:menu")],
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
@@ -8215,6 +8231,34 @@ async def on_marketplace_action(callback: types.CallbackQuery):
         )
         return
 
+    # Выбор площадки прямо на экране настроек (перед загрузкой фото).
+    if data.startswith("mp:setplat:"):
+        plat = data.split(":", 2)[2]
+        if plat not in _MP_PLAT_NAMES:
+            await callback.answer()
+            return
+        st = _ws(user_id)
+        st["mp_platform"] = plat
+        await callback.answer(_MP_PLAT_NAMES[plat])
+        metrics.log_event("mp_platform", user_id=user_id, source=f"setplat:{plat}")
+        try:
+            if st.get("await") == "mp_video_photo":
+                await msg.edit_text(
+                    _mp_video_request_text(plat),
+                    reply_markup=_mp_photo_settings_kb(plat),
+                    parse_mode="HTML",
+                )
+            else:
+                job = st.get("mp_preset", "whitebg")
+                await msg.edit_text(
+                    _mp_photo_request_text(plat, job),
+                    reply_markup=_mp_photo_settings_kb(plat),
+                    parse_mode="HTML",
+                )
+        except Exception:
+            pass
+        return
+
     if data == "mp:series":
         plat = _ws(user_id).get("mp_platform", "wb")
         if plat not in _MP_PLAT_NAMES:
@@ -8357,7 +8401,7 @@ async def on_marketplace_action(callback: types.CallbackQuery):
                 metrics.log_event("mp_job", user_id=user_id, source=f"{plat}:animate")
                 await msg.edit_text(
                     _mp_video_request_text(plat),
-                    reply_markup=_mp_back_kb(),
+                    reply_markup=_mp_photo_settings_kb(plat),
                     parse_mode="HTML",
                 )
             else:
@@ -8385,7 +8429,7 @@ async def on_marketplace_action(callback: types.CallbackQuery):
         metrics.log_event("mp_job", user_id=user_id, source=f"{plat}:{job}")
         await msg.edit_text(
             _mp_photo_request_text(plat, job),
-            reply_markup=_mp_back_kb(),
+            reply_markup=_mp_photo_settings_kb(plat),
             parse_mode="HTML",
         )
         return
@@ -8459,10 +8503,12 @@ async def on_menu_action(callback: types.CallbackQuery):
     elif data == "m:mp":
         await callback.answer()
         _reset_image_flow(user_id)
+        _ws(user_id).setdefault("mp_platform", "wb")
         await msg.edit_text(
             "🛒 <b>Карточки для маркетплейсов</b>\n\n"
-            "Выбери площадку — подставлю нужный формат и стиль карточки:",
-            reply_markup=mp_root_kb(),
+            "Выбери, что сделать с товаром. Площадку и формат подберём на шаге "
+            "настроек перед генерацией:",
+            reply_markup=mp_jobs_kb(_ws(user_id).get("mp_platform", "wb")),
         )
     elif data == "m:ideas":
         await callback.answer()

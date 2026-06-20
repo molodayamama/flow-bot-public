@@ -160,7 +160,15 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("mp:projects", cb)
         self.assertIn("mp:done4you", cb)
         self.assertIn("mp:tips", cb)
-        self.assertIn("m:mp", cb)  # back to platforms
+        # Platform is now chosen at the settings step, not upfront, so the jobs
+        # screen is the marketplace entry and goes back to the main menu.
+        self.assertIn("m:menu", cb)
+
+    def test_photo_settings_keyboard_has_platform_picker(self) -> None:
+        cb = self._callbacks(flow_bot._mp_photo_settings_kb("wb"))
+        self.assertIn("mp:setplat:wb", cb)
+        self.assertIn("mp:setplat:ozon", cb)
+        self.assertIn("mp:setplat:ym", cb)
 
     def test_series_keyboard_has_bundle_prices(self) -> None:
         kb = flow_bot.mp_series_kb("wb")
