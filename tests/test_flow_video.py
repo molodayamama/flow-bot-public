@@ -199,19 +199,20 @@ class TestBuildVideoPayload(unittest.TestCase):
             {"mediaId": "short-2", "imageUsageType": "IMAGE_USAGE_TYPE_ASSET"},
         ])
         # Ingredients payload serializes referenceImages and uses the r2v key.
-        # Live capture 2026-06-20: r2v model moved to abra family -> abra_r2v_6s
-        # (old veo_3_1_r2v_* removed -> 404). Orientation is carried by aspectRatio.
+        # Live capture 2026-06-20: Veo r2v key is veo_3_1_r2v_lite (NO orientation
+        # suffix). Orientation is carried by aspectRatio.
         p = self._build(model_key="veo-lite", aspect="portrait", reference_images=refs)
         req = p["requests"][0]
         self.assertEqual(req["referenceImages"], refs)
-        self.assertEqual(req["videoModelKey"], "abra_r2v_6s")
+        self.assertEqual(req["videoModelKey"], "veo_3_1_r2v_lite")
 
-    def test_reference_model_key_is_abra_r2v(self):
+    def test_reference_model_key_is_family_aware(self):
         import flow_core
-        # Live capture 2026-06-20: r2v key = abra_r2v_6s regardless of friendly tier.
-        self.assertEqual(flow_core.video_reference_model_key("veo-lite", "portrait"), "abra_r2v_6s")
-        self.assertEqual(flow_core.video_reference_model_key("veo-fast", "landscape"), "abra_r2v_6s")
+        # Live captures 2026-06-20: Veo -> veo_3_1_r2v_<tier>; Omni Flash -> abra_r2v_<dur>s.
+        self.assertEqual(flow_core.video_reference_model_key("veo-lite", "portrait"), "veo_3_1_r2v_lite")
+        self.assertEqual(flow_core.video_reference_model_key("veo-fast", "landscape"), "veo_3_1_r2v_fast")
         self.assertEqual(flow_core.video_reference_model_key("omni-flash-6s", "16:9"), "abra_r2v_6s")
+        self.assertEqual(flow_core.video_reference_model_key("omni-flash-4s", "portrait"), "abra_r2v_4s")
 
     def test_frames_model_key_tiers(self):
         import flow_core

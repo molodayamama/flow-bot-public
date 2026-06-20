@@ -296,6 +296,25 @@ ADMIN_IDS = _parse_ids(os.getenv("ADMIN_IDS", "")) | OWNER_IDS
 # button is hidden from the image wizard settings screen.
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 FLOW_URL = "https://labs.google/fx/tools/flow"
+
+
+def _video_failure_reason(item) -> str:
+    """Классифицировать FAILED-итем поллинга видео в причину для пользователя.
+
+    Из live-захвата: ``PUBLIC_ERROR_AUDIO_FILTERED`` — модель не смогла сделать
+    звук (видео заблокировано, помогает повтор с новым seed); ``DANGER_FILTER`` /
+    ``PROHIBITED_INPUT`` — модерация промпта/картинки.
+    """
+    try:
+        import json as _j
+        blob = _j.dumps(item, ensure_ascii=False)
+    except Exception:
+        blob = str(item)
+    if "PUBLIC_ERROR_AUDIO_FILTERED" in blob:
+        return "audio_filtered"
+    if "PUBLIC_ERROR_DANGER_FILTER" in blob or "PROHIBITED_INPUT" in blob:
+        return "danger_filter"
+    return ""
 # Файл с картой telegram_user_id -> flow_project_id (каждый юзер = свой проект).
 USER_PROJECTS_FILE = os.getenv("USER_PROJECTS_FILE", "user_projects.json")
 # Файл с захваченным форматом запроса редактирования (imageInputs). Бот учится
@@ -2581,12 +2600,18 @@ class FlowHttpClient:
                     "status":     "ok",
                 }
             if status == VIDEO_STATUS_FAILED:
-                # TEMP (capture-driven): тело FAILED-итема — там бывает причина
-                # (policy, бэкенд-ошибка); без него отказ неотличим от транскода.
+                # Причина из тела FAILED-итема: звук не сгенерился / модерация —
+                # это контент-фейлы (не вина аккаунта), их показываем юзеру.
+                reason = _video_failure_reason(poll_item)
                 try:
-                    log.warning("🎬 FAILED item: %s", _json.dumps(poll_item, ensure_ascii=False)[:600])
+                    log.warning("🎬 FAILED item (reason=%s): %s",
+                                reason or "?", _json.dumps(poll_item, ensure_ascii=False)[:600])
                 except Exception:
                     pass
+                if reason == "audio_filtered":
+                    return {"error": "audio filter", "failure": "audio_filtered"}
+                if reason == "danger_filter":
+                    return {"error": "danger filter", "failure": "danger_filter"}
                 return {"error": "Генерация видео завершилась с ошибкой на стороне Google"}
 
         return {"error": f"Таймаут ({VIDEO_POLL_TIMEOUT}с): видео не готово"}
@@ -8986,30 +9011,30 @@ async def _do_video_generate_and_send(
             "prompt": prompt,
         }
 
-    async def _fail_retry(i: int):
+    async def _fail_retry(i: int, message_key: str = "vid_gen_failed", error_type: str = "video_gen_failed"):
         nonlocal refunded_units
         refund_amt = single_price * (vcount - i)
         credit_store.refund(user_id, refund_amt)
         refunded_units += vcount - i
         _stash_retry()
         metrics.log_event("video_failed", user_id=user_id, source=vmode,
-                          payload={"model": model_id})
+                          payload={"model": model_id, "reason": error_type})
         metrics.log_event("credits_refunded", user_id=user_id, source=vmode,
                           payload={"amount": refund_amt})
         metrics.log_flow_job(
             user_id=user_id, account_id=acc_id,
             operation_type=f"video_{vmode}", model=model_id,
             bot_credits_charged=0, refund_amount=refund_amt,
-            duration_ms=_ms_since(_vid_started), status="fail", error_type="video_gen_failed",
+            duration_ms=_ms_since(_vid_started), status="fail", error_type=error_type,
         )
         fail_kb = types.InlineKeyboardMarkup(inline_keyboard=[
             [_menu_button("vid_retry", "v:retry")],
             [_menu_button("menu", "m:menu")],
         ])
         try:
-            await status_msg.edit_text(flow_copy.msg("vid_gen_failed"), reply_markup=fail_kb)
+            await status_msg.edit_text(flow_copy.msg(message_key), reply_markup=fail_kb)
         except Exception:
-            await message.answer(flow_copy.msg("vid_gen_failed"), reply_markup=fail_kb)
+            await message.answer(flow_copy.msg(message_key), reply_markup=fail_kb)
 
     sent_count = 0
     try:
@@ -9042,6 +9067,15 @@ async def _do_video_generate_and_send(
 
             # Slot released. Handle errors and optional failover.
             if "error" in result:
+                # Контент-фейлы (звук/модерация) — это НЕ проблема аккаунта:
+                # не остужаем аккаунт, не фейловеримся, показываем причину юзеру.
+                _content_fail = (result or {}).get("failure")
+                if _content_fail == "audio_filtered":
+                    await _fail_retry(i, "video_audio_filtered", "audio_filtered")
+                    return
+                if _content_fail == "danger_filter":
+                    await _fail_retry(i, "video_danger_filter", "danger_filter")
+                    return
                 # TEMP (capture-driven): surface why r2v/ingredients gen fails.
                 log.warning(
                     "🎬 gen failed: mode=%s model=%s aspect=%s err=%s",

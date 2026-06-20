@@ -1006,14 +1006,16 @@ def video_frames_model_key(model_key: str) -> str:
 def video_reference_model_key(model_key: str, aspect: str = "portrait") -> str:
     """Resolve a friendly model id to the Ingredients (r2v) videoModelKey.
 
-    Updated 2026-06-20 from a live Ingredients capture: the r2v model moved to the
-    ``abra`` family — ``abra_r2v_6s``. The old ``veo_3_1_r2v_*`` keys были удалены
-    Google (model-health их больше не отдаёт), из-за чего r2v отвечал 404
-    "Requested entity was not found". Подтверждена только 6s-вариация; держим её
-    как рабочий ключ (остальной payload r2v уже совпадает с фронтом). ``model_key``
-    и ``aspect`` сохранены для стабильности сигнатуры; ориентацию несёт aspectRatio.
+    Семейство-зависимо (подтверждено живыми Ingredients-захватами 2026-06-20):
+      * Omni Flash (abra) -> ``abra_r2v_{duration}s`` (напр. ``abra_r2v_6s``);
+      * Veo 3.1          -> ``veo_3_1_r2v_{tier}``   (напр. ``veo_3_1_r2v_lite``).
+    Оба ключа подтверждены успешной генерацией. Ориентацию несёт ``aspectRatio``,
+    поэтому ``aspect`` в ключ не входит (оставлен для стабильности сигнатуры).
     """
-    return "abra_r2v_6s"
+    meta = VIDEO_MODELS.get(model_key) or {}
+    if meta.get("family") == "omni-flash":
+        return f"abra_r2v_{int(meta.get('duration', 6))}s"
+    return f"veo_3_1_r2v_{_veo_tier(model_key)}"
 
 
 def video_edit_model_key() -> str:
