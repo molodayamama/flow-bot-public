@@ -2496,6 +2496,8 @@ class FlowHttpClient:
         solved_any = False
         refreshed_after_403 = False
         refreshed_after_401 = False
+        had_403 = False
+        attempts_made = 0
         action = SessionKeeper.VIDEO_RECAPTCHA_ACTION
         for _attempt in range(SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS):
             posted = False
@@ -2569,8 +2571,10 @@ class FlowHttpClient:
 
             if not posted:
                 continue
+            attempts_made = _attempt + 1
 
             if gen_status == 403:
+                had_403 = True
                 log.warning(
                     "🎬 video → 403 (попытка %d/%d, score/антифрод), свежий токен",
                     _attempt + 1, SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS,
@@ -2580,10 +2584,11 @@ class FlowHttpClient:
                     await self.keeper._refresh_bearer()
                     session = await self.keeper.get_session()
                     headers = self._build_headers(session)
-                # Нарастающий бэкофф + jitter: не «долбим» сразу, снижаем
-                # агрессивность между свежими токенами (video score стохастичен).
-                backoff = SessionKeeper.VIDEO_GEN_403_BACKOFF_SEC * (_attempt + 1) + random.uniform(1.0, 4.0)
-                await asyncio.sleep(backoff)
+                # Нарастающий бэкофф + jitter перед СЛЕДУЮЩЕЙ попыткой; после
+                # последней 403 не спим зря (всё равно выходим из цикла).
+                if _attempt < SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS - 1:
+                    backoff = SessionKeeper.VIDEO_GEN_403_BACKOFF_SEC * (_attempt + 1) + random.uniform(1.0, 4.0)
+                    await asyncio.sleep(backoff)
                 continue
             log.info(f"🎬 video {endpoint_name} → {gen_status} (action={action})")
             break
@@ -2601,6 +2606,8 @@ class FlowHttpClient:
             return {
                 "error": "Сервис отклонил запрос видео (403): низкий score/антифрод reCAPTCHA.",
                 "account_risk": "video_recaptcha_403",
+                "attempts": attempts_made,
+                "had_403": True,
             }
         if gen_status != 200:
             # TEMP (capture-driven): log the real API error body (no auth headers).
@@ -2675,6 +2682,8 @@ class FlowHttpClient:
                     "workflow_id": workflow_id,
                     "scene_id":    scene_id,
                     "status":     "ok",
+                    "attempts":   attempts_made,
+                    "had_403":    had_403,
                 }
             if status == VIDEO_STATUS_FAILED:
                 # Причина из тела FAILED-итема: звук не сгенерился / модерация —
@@ -5158,13 +5167,38 @@ async def cmd_status(message: types.Message):
         )
     pool_section = "\n".join(pool_lines) or "  (нет аккаунтов)"
 
+    # Видео-здоровье по аккаунтам (из video_outcome событий).
+    vh_lines = []
+    try:
+        vh = metrics.report_video_health((1, 24))
+        for win in ("1h", "24h"):
+            rows = vh.get("windows", {}).get(win, [])
+            if not rows:
+                continue
+            vh_lines.append(f"  <u>{win}</u>:")
+            for r in rows:
+                sr = r["success_rate"]
+                avg = r["avg_attempts_before_200"]
+                vh_lines.append(
+                    f"    <code>{r['account']}</code>: "
+                    f"att={r['video_attempts']} 403={r['video_403']} "
+                    f"ok={r['video_success']}(↻{r['video_success_after_retry']}) "
+                    f"fail={r['video_final_fail']} "
+                    f"avg={avg if avg is not None else '—'} "
+                    f"sr={int(sr * 100) if sr is not None else '—'}%"
+                )
+    except Exception:
+        pass
+    vh_section = "\n".join(vh_lines) or "  (нет видео-событий)"
+
     await message.answer(
         f"🔧 <b>Состояние бота</b>\n\n"
         f"Bearer токен: {bearer} (возраст: {age_min} мин)\n"
         f"Project ID:   {project} ({session['project_id'] or '—'})\n"
         f"Cookies:      {cookies} ({len(session['cookies'])} шт)\n"
         f"Капча:        {captcha_line}\n\n"
-        f"<b>Пул аккаунтов:</b>\n{pool_section}\n",
+        f"<b>Пул аккаунтов:</b>\n{pool_section}\n\n"
+        f"<b>Видео-здоровье:</b>\n{vh_section}\n",
         parse_mode="HTML",
     )
 
@@ -9115,6 +9149,13 @@ async def _do_video_generate_and_send(
         credit_store.refund(user_id, refund_amt)
         refunded_units += vcount - i
         _stash_retry()
+        _res = result if isinstance(result, dict) else {}
+        metrics.log_event(
+            "video_outcome", user_id=user_id, source=acc_id,
+            payload={"ok": False, "mode": vmode, "reason": error_type,
+                     "attempts": int(_res.get("attempts") or 1),
+                     "had_403": bool(_res.get("had_403"))},
+        )
         metrics.log_event("video_failed", user_id=user_id, source=vmode,
                           payload={"model": model_id, "reason": error_type})
         metrics.log_event("credits_refunded", user_id=user_id, source=vmode,
@@ -9227,6 +9268,12 @@ async def _do_video_generate_and_send(
                     return
 
             media_id = result["media_id"]
+            metrics.log_event(
+                "video_outcome", user_id=user_id, source=acc_id,
+                payload={"ok": True, "mode": vmode,
+                         "attempts": int((result or {}).get("attempts") or 1),
+                         "had_403": bool((result or {}).get("had_403"))},
+            )
             _stop_vid_anim()  # генерация готова — гасим анимацию фраз
             await update_status("⬇️ Готовлю видео для отправки…")
             video_bytes = await _client_for_acc(acc_id).fetch_video_bytes(media_id)

@@ -151,6 +151,11 @@ async def handle_sellers_get(request: web.Request) -> web.Response:
     return _json(metrics.report_sellers(limit))
 
 
+async def handle_video_health(request: web.Request) -> web.Response:
+    """Per-account video health (attempts/403/success/retry/fail) over 1h+24h."""
+    return _json(metrics.report_video_health((1, 24)))
+
+
 async def handle_proxy_check(request: web.Request) -> web.Response:
     """Diagnostic: per-account browser-egress IP vs API-egress IP.
 
@@ -1025,6 +1030,7 @@ def register_admin_routes(app: web.Application, pool: "AccountPool", keepers: di
     r.add_get ("/api/admin/users/{id}",                handle_user_detail_get)
     # Sellers (seller-bot segment)
     r.add_get ("/api/admin/sellers",                   handle_sellers_get)
+    r.add_get ("/api/admin/video-health",              handle_video_health)
     r.add_get ("/api/admin/proxy-check",               handle_proxy_check)
     # Support
     r.add_get ("/api/admin/support",                   handle_support_get)
@@ -1039,4 +1045,4 @@ def register_admin_routes(app: web.Application, pool: "AccountPool", keepers: di
     r.add_get ("/api/admin/analytics/channels",        handle_analytics_channels)
     r.add_get ("/api/admin/analytics/errors",          handle_analytics_errors)
     r.add_get ("/api/admin/analytics/active",          handle_analytics_active)
-    log.info("Admin API registered on /api/admin/* (%d routes)", 34)
+    log.info("Admin API registered on /api/admin/* (%d routes)", 35)

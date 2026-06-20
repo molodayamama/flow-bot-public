@@ -642,5 +642,35 @@ class SellerReportTests(MetricsTestBase):
         self.assertEqual(rep["sellers"], [])
 
 
+class VideoHealthReportTests(MetricsTestBase):
+    def test_report_video_health_aggregates(self) -> None:
+        metrics.log_event("video_outcome", user_id=1, source="sub1",
+                          payload={"ok": False, "attempts": 4, "had_403": True})
+        metrics.log_event("video_outcome", user_id=1, source="sub1",
+                          payload={"ok": True, "attempts": 3, "had_403": True})
+        metrics.log_event("video_outcome", user_id=2, source="sub2",
+                          payload={"ok": True, "attempts": 1, "had_403": False})
+
+        rows = {r["account"]: r for r in metrics.report_video_health((24,))["windows"]["24h"]}
+        s1 = rows["sub1"]
+        self.assertEqual(s1["video_attempts"], 2)
+        self.assertEqual(s1["video_403"], 2)
+        self.assertEqual(s1["video_success"], 1)
+        self.assertEqual(s1["video_success_after_retry"], 1)
+        self.assertEqual(s1["video_final_fail"], 1)
+        self.assertEqual(s1["avg_attempts_before_200"], 3.0)
+        self.assertEqual(s1["success_rate"], 0.5)
+
+        s2 = rows["sub2"]
+        self.assertEqual(s2["video_success"], 1)
+        self.assertEqual(s2["video_success_after_retry"], 0)
+        self.assertEqual(s2["success_rate"], 1.0)
+
+    def test_report_video_health_empty(self) -> None:
+        rep = metrics.report_video_health((1, 24))
+        self.assertEqual(rep["windows"]["1h"], [])
+        self.assertEqual(rep["windows"]["24h"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

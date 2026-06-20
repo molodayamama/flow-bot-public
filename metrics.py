@@ -1488,6 +1488,71 @@ def report_sellers(limit: int = 100) -> dict:
         return {"total_sellers": 0, "sellers": []}
 
 
+def report_video_health(hours_list: tuple[int, ...] = (1, 24)) -> dict:
+    """Per-account video health from ``video_outcome`` events over each window.
+
+    Each ``video_outcome`` event payload has ``ok``/``attempts``/``had_403``;
+    ``source`` is the account id. Returns, per window, per account:
+    video_attempts, video_403, video_success, video_success_after_retry,
+    video_final_fail, avg_attempts_before_200, success_rate.
+    """
+    import json as _j
+    out: dict = {"windows": {}}
+    try:
+        with _LOCK:
+            conn = _conn()
+            for hours in hours_list:
+                rows = _rows(
+                    conn,
+                    "SELECT source, payload_json FROM events "
+                    "WHERE event_name='video_outcome' "
+                    "AND created_at >= datetime('now', ?)",
+                    (f"-{int(hours)} hours",),
+                )
+                acc: dict = {}
+                for r in rows:
+                    a = r["source"] or "?"
+                    try:
+                        p = _j.loads(r["payload_json"]) if r["payload_json"] else {}
+                    except Exception:
+                        p = {}
+                    d = acc.setdefault(a, {
+                        "video_attempts": 0, "video_403": 0, "video_success": 0,
+                        "video_success_after_retry": 0, "video_final_fail": 0,
+                        "_attempts_sum_ok": 0,
+                    })
+                    d["video_attempts"] += 1
+                    if p.get("had_403"):
+                        d["video_403"] += 1
+                    if p.get("ok"):
+                        d["video_success"] += 1
+                        att = int(p.get("attempts") or 1)
+                        d["_attempts_sum_ok"] += att
+                        if att > 1:
+                            d["video_success_after_retry"] += 1
+                    else:
+                        d["video_final_fail"] += 1
+                per = []
+                for a, d in sorted(acc.items()):
+                    total = d["video_attempts"]
+                    succ = d["video_success"]
+                    per.append({
+                        "account": a,
+                        "video_attempts": total,
+                        "video_403": d["video_403"],
+                        "video_success": succ,
+                        "video_success_after_retry": d["video_success_after_retry"],
+                        "video_final_fail": d["video_final_fail"],
+                        "avg_attempts_before_200": round(d["_attempts_sum_ok"] / succ, 2) if succ else None,
+                        "success_rate": round(succ / total, 3) if total else None,
+                    })
+                out["windows"][f"{hours}h"] = per
+        return out
+    except Exception:  # noqa: BLE001
+        log.warning("report_video_health failed", exc_info=True)
+        return {"windows": {}}
+
+
 def report_channels() -> dict:
     """Атрибуция трафика по рекламным каналам (deep-link ``seed_<канал>``).
 

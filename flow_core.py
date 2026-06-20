@@ -2200,8 +2200,11 @@ class AccountPool:
         return True
 
     def is_video_capable(self, account_id: str) -> bool:
-        """True если аккаунт доступен (не в кулдауне/disabled) и может видео."""
+        """True если аккаунт доступен (не в кулдауне/disabled), может видео и имеет
+        ненулевую video_capacity (capacity=0 = image-only)."""
         if not self.is_available(account_id):
+            return False
+        if self._video_cap(account_id) <= 0:
             return False
         h = self._health.get(account_id)
         return bool(h and h.get("video_allowed", True))
@@ -2218,11 +2221,15 @@ class AccountPool:
         h = self._health.get(account_id)
         if h is None or h.get("disabled"):
             return False
+        if self._video_cap(account_id) <= 0:
+            return False
         return bool(h.get("video_allowed", True))
 
     def is_image_only(self, account_id: str) -> bool:
         h = self._health.get(account_id)
-        return bool(h and not h.get("video_allowed", True))
+        if h and not h.get("video_allowed", True):
+            return True
+        return self._video_cap(account_id) <= 0
 
     # ── capacity control ───────────────────────────────────────────────
 

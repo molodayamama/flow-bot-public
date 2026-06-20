@@ -301,6 +301,12 @@ class CapacityTests(unittest.IsolatedAsyncioTestCase):
             default_video_capacity=vid_cap,
         )
 
+    async def test_video_capacity_zero_is_image_only(self):
+        pool = self._pool(1, img_cap=2, vid_cap=0)
+        self.assertFalse(pool.is_video_capable("a1"))
+        self.assertFalse(pool.is_reference_usable("a1"))
+        self.assertTrue(pool.is_image_only("a1"))
+
     async def test_image_capacity_reported_correctly(self):
         pool = self._pool(2, img_cap=3, vid_cap=1)
         statuses = {s["id"]: s for s in pool.status()}
