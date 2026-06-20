@@ -8915,18 +8915,32 @@ async def on_agent_action(callback: types.CallbackQuery):
             await msg.edit_text("✨ Подбираю варианты промпта…")
         except Exception:
             pass
+        res: dict = {}
+        acc_id = None
         try:
-            acc_id = _account_for(user_id)
-            project_id = await ensure_user_project(user_id, account_id=acc_id)
-            res = await _client_for_acc(acc_id).improve_prompt(
-                _agent_improve_instruction(prompt), project_id=project_id
-            )
+            project_id = await ensure_user_project(user_id, account_id=_account_for(user_id))
+            # The agent accepts any project under a valid bearer, so try the
+            # health-routed account first, then other usable accounts (some
+            # accounts' bearers are rejected by the agent endpoint specifically).
+            candidates: list[str] = []
+            primary = _account_for_video(user_id) or _account_for(user_id)
+            if primary:
+                candidates.append(primary)
+            for acc in account_pool.account_ids():
+                if acc not in candidates and account_pool.is_reference_usable(acc):
+                    candidates.append(acc)
+            for acc_id in candidates[:4]:
+                res = await _client_for_acc(acc_id).improve_prompt(
+                    _agent_improve_instruction(prompt), project_id=project_id
+                )
+                if (res or {}).get("variants") or (res or {}).get("single"):
+                    break
         except Exception as exc:  # noqa: BLE001
             log.warning("prompt_improve exception: %s", exc.__class__.__name__, exc_info=True)
             res = {"error": "exception"}
         log.info(
-            "✨ prompt_improve acc=%s proj=%s err=%s status=%s variants=%d single=%s",
-            acc_id, bool(project_id), (res or {}).get("error"), (res or {}).get("status"),
+            "✨ prompt_improve acc=%s err=%s status=%s variants=%d single=%s",
+            acc_id, (res or {}).get("error"), (res or {}).get("status"),
             len((res or {}).get("variants") or []), bool((res or {}).get("single")),
         )
         variants = [v for v in ((res or {}).get("variants") or []) if v.get("prompt")][:3]
