@@ -471,8 +471,11 @@ async def handle_agent_sessions_post(request: web.Request) -> web.Response:
     method = str(body.get("method") or "GET").upper()
     suffix = str(body.get("suffix") or "")[:80]
     json_body = body.get("json_body") if isinstance(body.get("json_body"), dict) else None
+    proj = body.get("project_id")
+    proj = str(proj) if proj else None
     try:
-        result = await client.agent_session_call(method=method, suffix=suffix, json_body=json_body)
+        result = await client.agent_session_call(
+            method=method, suffix=suffix, json_body=json_body, project_id=proj)
     except Exception as exc:  # noqa: BLE001
         return _json({"error": exc.__class__.__name__}, 500)
     _audit(request, "agent_sessions", new={"account": account_id, "method": method, "suffix": suffix})

@@ -2488,7 +2488,7 @@ class FlowHttpClient:
 
     async def agent_session_call(
         self, *, method: str = "GET", suffix: str = "", json_body: dict | None = None,
-        timeout_total: float = 45.0,
+        project_id: str | None = None, timeout_total: float = 45.0,
     ) -> dict:
         """Explore/operate the flowCreationAgent/sessions endpoints (bearer only,
         no captcha). ``suffix`` is appended after ``/sessions`` (e.g. ``/<id>``).
@@ -2502,7 +2502,7 @@ class FlowHttpClient:
         # The collection needs ?projectId=<raw uuid> (confirmed by browser
         # capture); a specific /<id> path does not.
         if "projectId=" not in suffix and not suffix.startswith("/"):
-            proj_raw = str(session.get("project_id") or "")
+            proj_raw = str(project_id or session.get("project_id") or "")
             if proj_raw:
                 sep = "&" if "?" in suffix else "?"
                 suffix = f"{suffix}{sep}projectId={proj_raw}"
