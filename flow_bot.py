@@ -2450,6 +2450,44 @@ class FlowHttpClient:
             out["raw_preview"] = self._video_ab_preview(raw, limit=2000)
         return out
 
+    async def agent_session_call(
+        self, *, method: str = "GET", suffix: str = "", json_body: dict | None = None,
+        timeout_total: float = 45.0,
+    ) -> dict:
+        """Explore/operate the flowCreationAgent/sessions endpoints (bearer only,
+        no captcha). ``suffix`` is appended after ``/sessions`` (e.g. ``/<id>``).
+        Returns sanitized status + raw preview."""
+        session = await self.keeper.get_session()
+        if not session["bearer"]:
+            return {"error": "missing_bearer"}
+        headers = dict(self._build_headers(session))
+        headers["Content-Type"] = "application/json"
+        headers["Accept"] = "*/*"
+        url = f"{self.API_BASE}/flowCreationAgent/sessions{suffix}"
+        status: int | None = None
+        raw = ""
+        error = ""
+        try:
+            async with aiohttp.ClientSession(cookies=session["cookies"]) as http:
+                req = http.request(
+                    method.upper(), url, headers=headers,
+                    data=(json.dumps(json_body, ensure_ascii=False).encode("utf-8")
+                          if json_body is not None else None),
+                    proxy=self._api_proxy(),
+                    timeout=aiohttp.ClientTimeout(total=timeout_total),
+                )
+                async with req as resp:
+                    status = resp.status
+                    raw = await resp.text()
+        except Exception as exc:  # noqa: BLE001 - diagnostic, return JSON
+            error = exc.__class__.__name__
+        return {
+            "status": status,
+            "error": error or None,
+            "raw_len": len(raw or ""),
+            "raw_preview": self._video_ab_preview(raw, limit=2000),
+        }
+
     async def generate_images(
         self,
         prompt: str,

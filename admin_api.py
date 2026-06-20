@@ -451,6 +451,29 @@ async def handle_agent_capture_post(request: web.Request) -> web.Response:
     return _json({"account": account_id, "result": result})
 
 
+async def handle_agent_sessions_post(request: web.Request) -> web.Response:
+    """Explore flowCreationAgent/sessions (bearer only, no captcha, no spend)."""
+    if not _video_clients:
+        return _json({"error": "video clients not available"}, 503)
+    body = await _body(request) or {}
+    account_id = str(body.get("account") or body.get("account_id") or "").strip()
+    account_id = account_id or _pick_video_ab_account()
+    if not account_id or account_id not in _video_clients:
+        return _json({"error": f"account {account_id!r} not found"}, 404)
+    client = _video_clients[account_id]
+    if not hasattr(client, "agent_session_call"):
+        return _json({"error": "unavailable"}, 503)
+    method = str(body.get("method") or "GET").upper()
+    suffix = str(body.get("suffix") or "")[:80]
+    json_body = body.get("json_body") if isinstance(body.get("json_body"), dict) else None
+    try:
+        result = await client.agent_session_call(method=method, suffix=suffix, json_body=json_body)
+    except Exception as exc:  # noqa: BLE001
+        return _json({"error": exc.__class__.__name__}, 500)
+    _audit(request, "agent_sessions", new={"account": account_id, "method": method, "suffix": suffix})
+    return _json({"account": account_id, "result": result})
+
+
 # ── ops cockpit ───────────────────────────────────────────────────────
 
 async def handle_ops_get(request: web.Request) -> web.Response:
@@ -1327,6 +1350,7 @@ def register_admin_routes(
     r.add_post("/api/admin/agent-probe",               handle_agent_probe_post)
     r.add_post("/api/admin/agent-action-scan",         handle_agent_action_scan_post)
     r.add_post("/api/admin/agent-capture",             handle_agent_capture_post)
+    r.add_post("/api/admin/agent-sessions",            handle_agent_sessions_post)
     r.add_get ("/api/admin/proxy-check",               handle_proxy_check)
     # Support
     r.add_get ("/api/admin/support",                   handle_support_get)
