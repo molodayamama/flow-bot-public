@@ -4818,7 +4818,8 @@ def _nwiz_text(user_id: int) -> str:
     lines.append("")
     fmt_name = _VID_FMT_NAMES.get(vfmt, vfmt)
     if _nwiz_engine(st) == "veo":
-        details = f"💎 Качество · Формат: {fmt_name}"
+        q_name = _VID_VEO_QUAL_NAMES.get(st.get("vquality", "lite"), "Lite")
+        details = f"💎 Качество: {q_name} · Формат: {fmt_name}"
     else:
         details = f"⚡ Быстро · {dur}с · Формат: {fmt_name}"
     if style_key:
@@ -4853,9 +4854,15 @@ def _nwiz_kb(user_id: int) -> types.InlineKeyboardMarkup:
     fmt_emoji = "📱" if vfmt == "port" else "🖥"
     rows.append([B(text=f"{fmt_emoji} {fmt_name}", callback_data=f"v:nfmt:{next_fmt}")])
 
-    # Длительность — только для «Быстро» (Omni). «Качество» (Veo) — фикс. длина.
+    # Вторая ось: «Быстро» (Omni) → длительность; «Качество» (Veo) → уровень.
     if engine == "omni":
         rows.append([_sel_btn(f"{d}с", dur == d, f"v:ndur:{d}") for d in _VID_OMNI_DURATIONS])
+    else:
+        quality = st.get("vquality", "lite")
+        rows.append([
+            _sel_btn(_VID_VEO_QUAL_NAMES.get(t, t), quality == t, f"v:nqual:{t}")
+            for t in _VID_VEO_QUALITY_CYCLE
+        ])
 
     # Стили
     style_btn = f"🎨 Стиль: {style_label}" if style_key else "🎨 Стили"

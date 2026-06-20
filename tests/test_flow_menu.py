@@ -1791,6 +1791,13 @@ class BotImportSmokeTests(unittest.TestCase):
         datas_veo = [b.callback_data for row in fb._nwiz_kb(424242).inline_keyboard for b in row]
         self.assertIn("v:neng:veo", datas_veo)
         self.assertNotIn("v:ndur:4", datas_veo)
+        # 💎 Качество exposes the Veo level picker Lite/Fast/Quality.
+        self.assertIn("v:nqual:lite", datas_veo)
+        self.assertIn("v:nqual:fast", datas_veo)
+        self.assertIn("v:nqual:quality", datas_veo)
+        # Selecting Fast/Quality drives the corresponding Veo model.
+        self.assertEqual(fb._nwiz_model({"vengine": "veo", "vquality": "fast"}), "veo-fast")
+        self.assertEqual(fb._nwiz_model({"vengine": "veo", "vquality": "quality"}), "veo-quality")
 
 
 if __name__ == "__main__":
