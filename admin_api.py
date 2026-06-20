@@ -382,6 +382,8 @@ async def handle_agent_probe_post(request: web.Request) -> web.Response:
         if debug:
             row["message"] = str(res.get("message") or "")[:400]
             row["agent_text_preview"] = str(res.get("agent_text_preview") or "")[:2000]
+            row["raw_len"] = res.get("raw_len")
+            row["raw_preview"] = str(res.get("raw_preview") or "")[:2000]
         results.append(row)
         if res.get("ok") and found is None:
             found = action

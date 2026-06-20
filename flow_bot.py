@@ -2329,6 +2329,8 @@ class FlowHttpClient:
         }
         if debug:
             out["agent_text_preview"] = self._video_ab_preview(extract_agent_text(raw), limit=2000)
+            out["raw_len"] = len(raw or "")
+            out["raw_preview"] = self._video_ab_preview(raw, limit=2000)
         return out
 
     async def generate_images(
