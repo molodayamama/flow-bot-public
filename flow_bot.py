@@ -4099,23 +4099,54 @@ def mp_root_kb() -> types.InlineKeyboardMarkup:
 
 
 def mp_jobs_kb(platform: str) -> types.InlineKeyboardMarkup:
-    """Что сделать с товаром (после выбора площадки)."""
+    """Primary seller jobs. Secondary actions live behind ``mp:more``."""
     B = types.InlineKeyboardButton
     rows = [
-        [B(text="📸 Фото на белом фоне", callback_data="mp:job:whitebg")],
-        [B(text="🎨 Инфографика-карточка", callback_data="mp:job:info")],
-        [B(text="🧍 Товар на модели / на фоне", callback_data="mp:job:model")],
-        [B(text="🖼 Обложка / главный слайд", callback_data="mp:job:cover")],
+        [B(text="✨ Готовая карточка с инфографикой", callback_data="mp:job:info")],
+        [B(text="📸 Белый фон для каталога", callback_data="mp:job:whitebg")],
+        [B(text="🧍 Товар на модели / в сцене", callback_data="mp:job:model")],
         [B(text="🧩 Серия слайдов", callback_data="mp:series")],
-        [B(text="✂️ Убрать / заменить фон", callback_data="mp:job:bg")],
-        [B(text="🎬 Оживить фото → видео", callback_data="mp:job:animate")],
-        [B(text="🎨 Бренд-кит", callback_data="mp:brandkit")],
-        [B(text="🏷️ Ниша товара", callback_data="mp:niche")],
-        [B(text="📦 Мои товары (SKU)", callback_data="mp:projects")],
-        [B(text="💡 Советы по карточке", callback_data="mp:tips")],
+        [B(text="⚙️ Ещё", callback_data="mp:more")],
         [_menu_button("menu", "m:menu")],
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def mp_more_kb(platform: str) -> types.InlineKeyboardMarkup:
+    """Secondary seller jobs and workspace/settings actions."""
+    B = types.InlineKeyboardButton
+    rows = [
+        [B(text="🖼 Обложка / главный слайд", callback_data="mp:job:cover")],
+        [B(text="✂️ Заменить фон", callback_data="mp:job:bg")],
+        [B(text="🎬 Видео из фото товара", callback_data="mp:job:animate")],
+        [
+            B(text="🎨 Стиль бренда", callback_data="mp:brandkit"),
+            B(text="🏷️ Ниша", callback_data="mp:niche"),
+        ],
+        [B(text="📦 Мои товары (SKU)", callback_data="mp:projects")],
+        [B(text="💡 Советы по карточке", callback_data="mp:tips")],
+        [B(text="◀️ Основные задачи", callback_data="m:mp")],
+        [_menu_button("menu", "m:menu")],
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _mp_jobs_text(platform: str) -> str:
+    plat = platform if platform in _MP_PLAT_NAMES else "wb"
+    return (
+        "🛒 <b>Что сделать с товаром?</b>\n\n"
+        "Выбери результат, пришли фото товара и проверь цену перед созданием.\n"
+        f"По умолчанию: <b>{html.escape(_MP_PLAT_NAMES[plat])}</b>, "
+        f"{html.escape(_mp_platform_format_label(plat))}. Площадку можно поменять на следующем шаге."
+    )
+
+
+def _mp_more_text(platform: str) -> str:
+    return (
+        "⚙️ <b>Ещё для карточки</b>\n\n"
+        "Дополнительные задачи и настройки магазина. Если нужен быстрый результат, "
+        "вернись к основным задачам."
+    )
 
 
 def _mp_back_kb() -> types.InlineKeyboardMarkup:
@@ -4200,11 +4231,18 @@ _MP_JOB_SEED = {
 }
 _MP_PRODUCT_PHOTO_JOBS = frozenset(_MP_JOB_SEED)
 _MP_JOB_LABELS = {
-    "whitebg": "фото на белом фоне",
-    "info": "инфографика-карточка",
-    "model": "товар на модели / на фоне",
+    "whitebg": "белый фон для каталога",
+    "info": "готовая карточка с инфографикой",
+    "model": "товар на модели / в сцене",
     "cover": "обложка / главный слайд",
-    "bg": "убрать / заменить фон",
+    "bg": "заменить фон",
+}
+_MP_JOB_OUTCOMES = {
+    "whitebg": "чистое каталожное фото товара на белом фоне.",
+    "info": "карточка с крупным товаром, местом под заголовок и ключевые выгоды.",
+    "model": "реалистичная сцена с моделью или фоном, где товар выглядит в использовании.",
+    "cover": "главный слайд с крупным товаром и цепляющим ракурсом.",
+    "bg": "аккуратный новый фон без лишних деталей.",
 }
 _MP_SERIES_COUNTS = (3, 5, 8)
 _MP_SERIES_LABELS = {
@@ -4340,16 +4378,15 @@ def _mp_job_instruction(
 def _mp_photo_request_text(platform: str, job: str) -> str:
     platform_name = html.escape(_MP_PLAT_NAMES.get(platform, platform))
     job_label = html.escape(_MP_JOB_LABELS.get(job, job))
-    seed = html.escape(_MP_JOB_SEED.get(job, ""))
+    outcome = html.escape(_MP_JOB_OUTCOMES.get(job, "готовая карточка товара для маркетплейса."))
     format_label = html.escape(_mp_platform_format_label(platform))
     price = action_price("edit")
     return (
         f"🛒 <b>{platform_name}</b> · {job_label}\n\n"
         f"📐 Формат: <b>{format_label}</b> · стоимость: <b>{price} кр</b>\n\n"
-        "Пришли фото товара. Я применю выбранный пресет к реальному товару, "
-        "а не буду рисовать карточку с нуля.\n\n"
-        f"<blockquote>{seed}</blockquote>\n"
-        "Можно добавить подпись к фото — она станет уточнением к заданию."
+        "Пришли фото товара. Можно добавить короткую подпись: ниша, УТП, цвет бренда "
+        "или что обязательно показать.\n\n"
+        f"Что получится: {outcome}"
     )
 
 
@@ -4539,7 +4576,7 @@ def _mp_brandkit_text(user_id: int) -> str:
         "Пришли одним сообщением цвета, стиль, тон и правила для карточек. "
         "Например: «чёрный/золото, премиальный минимализм, крупный товар, "
         "без кислотных фонов, логотип не рисовать». "
-        "Я буду добавлять это в seller-задания и серии."
+        "Я буду учитывать это в карточках и сериях."
         f"{current}"
     )
 
@@ -4550,7 +4587,7 @@ def _mp_niche_text(user_id: int) -> str:
     return (
         "🏷️ <b>Ниша товара</b>\n\n"
         "Выбери основную категорию магазина. Я буду добавлять её как подсказку "
-        "к seller-заданиям и сериям, чтобы ракурсы, фон и акценты были ближе к товару.\n\n"
+        "к карточкам и сериям, чтобы ракурсы, фон и акценты были ближе к товару.\n\n"
         f"Текущая ниша: <b>{html.escape(current)}</b>"
     )
 
@@ -5982,9 +6019,15 @@ async def cmd_start(message: types.Message):
     await message.answer("👇", reply_markup=reply_menu_kb())
 
     if IS_SELLER:
-        # Селлер-бот: своё приветствие про маркетплейсы, без консьюмер-онбординга.
-        await message.answer(flow_copy.msg("welcome_seller"), parse_mode="HTML")
-        await show_main_menu(message, user_id=user_id)
+        # Селлер-бот: сразу показываем выбор задачи, без промежуточного hub-экрана.
+        st = _ws(user_id)
+        st.setdefault("mp_platform", "wb")
+        sent = await message.answer(
+            flow_copy.msg("welcome_seller"),
+            reply_markup=mp_jobs_kb(st.get("mp_platform", "wb")),
+            parse_mode="HTML",
+        )
+        _mp_stamp_message(user_id, sent)
         return
 
     if _referral_welcome_bonus > 0:
@@ -8534,8 +8577,9 @@ async def on_marketplace_action(callback: types.CallbackQuery):
         await callback.answer()
         metrics.log_event("mp_platform", user_id=user_id, source=plat)
         await msg.edit_text(
-            f"🛒 <b>{_MP_PLAT_NAMES[plat]}</b> — что сделать с товаром?",
+            _mp_jobs_text(plat),
             reply_markup=mp_jobs_kb(plat),
+            parse_mode="HTML",
         )
         return
 
@@ -8566,6 +8610,19 @@ async def on_marketplace_action(callback: types.CallbackQuery):
                 )
         except Exception:
             pass
+        return
+
+    if data == "mp:more":
+        plat = _ws(user_id).get("mp_platform", "wb")
+        if plat not in _MP_PLAT_NAMES:
+            plat = "wb"
+        await callback.answer()
+        metrics.log_event("mp_more_open", user_id=user_id, source=plat)
+        await msg.edit_text(
+            _mp_more_text(plat),
+            reply_markup=mp_more_kb(plat),
+            parse_mode="HTML",
+        )
         return
 
     # Подтверждение генерации карточки: генерим по ранее загруженному фото.
@@ -8945,10 +9002,9 @@ async def on_menu_action(callback: types.CallbackQuery):
         _reset_image_flow(user_id)
         _ws(user_id).setdefault("mp_platform", "wb")
         await msg.edit_text(
-            "🛒 <b>Карточки для маркетплейсов</b>\n\n"
-            "Выбери, что сделать с товаром. Площадку и формат подберём на шаге "
-            "настроек перед генерацией:",
+            _mp_jobs_text(_ws(user_id).get("mp_platform", "wb")),
             reply_markup=mp_jobs_kb(_ws(user_id).get("mp_platform", "wb")),
+            parse_mode="HTML",
         )
         _mp_stamp_message(user_id, msg)
     elif data == "m:ideas":

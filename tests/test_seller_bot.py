@@ -175,17 +175,69 @@ class SellerMenuTests(unittest.TestCase):
 
     def test_jobs_keyboard_has_core_jobs(self) -> None:
         cb = self._callbacks(flow_bot.mp_jobs_kb("wb"))
-        for job in ("whitebg", "info", "model", "cover", "bg", "animate"):
+        for job in ("info", "whitebg", "model"):
             self.assertIn(f"mp:job:{job}", cb)
         self.assertIn("mp:series", cb)
-        self.assertIn("mp:brandkit", cb)
-        self.assertIn("mp:niche", cb)
-        self.assertIn("mp:projects", cb)
+        self.assertIn("mp:more", cb)
+        for hidden in (
+            "mp:job:cover",
+            "mp:job:bg",
+            "mp:job:animate",
+            "mp:brandkit",
+            "mp:niche",
+            "mp:projects",
+            "mp:tips",
+        ):
+            self.assertNotIn(hidden, cb)
         self.assertNotIn("mp:done4you", cb)  # «Сделайте за меня (под ключ)» убрана
-        self.assertIn("mp:tips", cb)
         # Platform is now chosen at the settings step, not upfront, so the jobs
         # screen is the marketplace entry and goes back to the main menu.
         self.assertIn("m:menu", cb)
+        labels = [b.text for row in flow_bot.mp_jobs_kb("wb").inline_keyboard for b in row]
+        self.assertEqual(
+            labels[:4],
+            [
+                "✨ Готовая карточка с инфографикой",
+                "📸 Белый фон для каталога",
+                "🧍 Товар на модели / в сцене",
+                "🧩 Серия слайдов",
+            ],
+        )
+
+    def test_more_keyboard_keeps_secondary_seller_actions(self) -> None:
+        cb = self._callbacks(flow_bot.mp_more_kb("wb"))
+        for expected in (
+            "mp:job:cover",
+            "mp:job:bg",
+            "mp:job:animate",
+            "mp:brandkit",
+            "mp:niche",
+            "mp:projects",
+            "mp:tips",
+            "m:mp",
+            "m:menu",
+        ):
+            self.assertIn(expected, cb)
+        text = flow_bot._mp_more_text("wb")
+        self.assertIn("Дополнительные задачи", text)
+        self.assertIn("основным задачам", text)
+
+    def test_seller_start_goes_directly_to_jobs(self) -> None:
+        source = inspect.getsource(flow_bot.cmd_start)
+        seller_branch = source[source.index("if IS_SELLER:"):source.index("if _referral_welcome_bonus")]
+        self.assertIn("mp_jobs_kb", seller_branch)
+        self.assertIn("_mp_stamp_message", seller_branch)
+        self.assertNotIn("show_main_menu(message, user_id=user_id)", seller_branch)
+
+    def test_seller_copy_is_direct_and_no_hidden_done4you_promise(self) -> None:
+        welcome = flow_bot.flow_copy.msg("welcome_seller")
+        help_text = flow_bot.flow_copy.msg("seller_help")
+        self.assertIn("Выбери, что нужно", welcome)
+        self.assertIn("«Создать»", welcome)
+        self.assertNotIn("Сделайте за меня", welcome)
+        self.assertNotIn("Google", welcome + help_text)
+        self.assertNotIn("Flow", welcome + help_text)
+        self.assertNotIn("captcha", (welcome + help_text).lower())
 
     def test_photo_settings_keyboard_has_platform_picker(self) -> None:
         kb = flow_bot._mp_photo_settings_kb("wb")
