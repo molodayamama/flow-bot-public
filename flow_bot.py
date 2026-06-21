@@ -3981,20 +3981,24 @@ def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
 
 
 def _seller_image_keyboard(token: str) -> types.InlineKeyboardMarkup:
-    kb = _image_keyboard(token)
-    kb.inline_keyboard.append([
-        types.InlineKeyboardButton(
-            text="⬇️ Скачать для маркетплейса",
-            callback_data=action_callback_data("mpexport", token),
-        )
+    """Тулбар под seller-карточкой. Без «🔁 Повторить» — для seller он не работал
+    (нет сохранённого prompt-состояния; повтор = просто прислать фото заново)."""
+    B = types.InlineKeyboardButton
+    edit_price = action_price("edit")
+    edit_label = f"✏️ Изменить · {edit_price} кр" if edit_price > 0 else "✏️ Изменить"
+    upscale_price = action_price("realup")
+    upscale_label = (
+        f"{L('realup')} · {upscale_price} кр" if upscale_price > 0 else L("realup")
+    )
+    animate_price = _vid_family_min_price("ing")
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [B(text=edit_label, callback_data=action_callback_data("edit", token))],
+        [B(text=upscale_label, callback_data=action_callback_data("realup", token))],
+        [B(text=f"🎬 Оживить фото · от {animate_price} кр", callback_data=f"an:img:{token}")],
+        [B(text="⬇️ Скачать для маркетплейса", callback_data=action_callback_data("mpexport", token))],
+        [B(text="➕ В серию SKU", callback_data=action_callback_data("skuadd", token))],
+        [B(text="🛒 Новая карточка", callback_data="m:mp")],
     ])
-    kb.inline_keyboard.append([
-        types.InlineKeyboardButton(
-            text="➕ В серию SKU",
-            callback_data=action_callback_data("skuadd", token),
-        )
-    ])
-    return kb
 
 
 # ── меню и визард (кнопочный UX) ──────────────────────────────────────
@@ -4194,10 +4198,19 @@ def _mp_confirm_screen(user_id: int):
     plat = st.get("mp_platform", "wb")
     plat_name = _MP_PLAT_NAMES.get(plat, plat)
     kind = st.get("mp_pending_kind", "photo")
-    brand = _mp_brand_kit(user_id)
-    niche = _mp_niche_label(user_id)
+    try:
+        brand = _mp_brand_kit(user_id)
+    except Exception:
+        brand = ""
+    try:
+        niche = _mp_niche_label(user_id)
+    except Exception:
+        niche = ""
     caption = (st.get("mp_pending_caption") or "").strip()
-    credits = credit_store.balance(user_id)
+    try:
+        credits = credit_store.balance(user_id)
+    except Exception:
+        credits = 0
     if kind == "series":
         count = st.get("mp_series_count", 3)
         if count not in _MP_SERIES_COUNTS:
@@ -8042,17 +8055,14 @@ async def _send_original_file(message: types.Message, ref: ImageRef, *, marketpl
     (Telegram не пережимает документы, в отличие от фото), сохранив полное
     разрешение сгенерированной картинки.
     """
-    user_id = ref.user_id
     url = download_url(ref.source)
     if not url:
         await message.answer("⚠️ Нет ссылки на файл этой картинки.")
         return
 
-    try:
-        async with user_slot(user_id, message):
-            await _do_send_original_file(message, ref, url, marketplace_export=marketplace_export)
-    except RateLimited:
-        return
+    # Скачивание — бесплатная offline-операция: НЕ держим busy-слот, иначе
+    # зависшая/идущая генерация мешает забрать уже готовый файл (audit Major 11).
+    await _do_send_original_file(message, ref, url, marketplace_export=marketplace_export)
 
 
 async def _do_send_original_file(
