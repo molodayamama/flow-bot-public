@@ -6953,12 +6953,15 @@ async def _backend_generate(req: dict) -> dict:
 async def _seller_backend_call_and_send(
     message: types.Message, prompt: str, *, num_images: int, aspect_ratio: str,
     user_id: int, image_model: str, kind: str = "image", image_b64: str | None = None,
-) -> bool:
-    """Seller-side: ask the consumer backend to generate, then send the URLs."""
+) -> tuple[bool, str | None]:
+    """Seller-side: ask the consumer backend to generate, then send the URLs.
+
+    Returns ``(sent_any, backend_account_id)`` — the account_id is the REAL
+    consumer-backend account that did the work (for ``<acc>-sell`` event tagging)."""
     client = _backend_client()
     if client is None:
         await message.answer(flow_copy.msg("accounts_unavailable"))
-        return False
+        return False, None
     status_msg = await message.answer(flow_copy.msg("generating"))
     data = await client.generate(
         prompt=prompt, num_images=num_images, aspect_ratio=aspect_ratio,
@@ -6980,7 +6983,7 @@ async def _seller_backend_call_and_send(
             await status_msg.edit_text(friendly)
         except Exception:
             pass
-        return False
+        return False, data.get("account_id")
     try:
         await status_msg.delete()
     except Exception:
@@ -7000,7 +7003,7 @@ async def _seller_backend_call_and_send(
             sent_any = True
         except Exception:
             log.exception("seller backend send image failed")
-    return sent_any
+    return sent_any, data.get("account_id")
 
 
 async def _seller_generate_and_send(
@@ -7023,16 +7026,18 @@ async def _seller_generate_and_send(
     surcharge = image_model_extra(image_model) * max(1, num_images)
     started = time.monotonic()
     ok = False
+    backend_acc = None
     try:
         async with user_slot(user_id, message):
             async with credit_gate(user_id, action, message, num_images, surcharge=surcharge) as charge:
-                ok = await _seller_backend_call_and_send(
+                ok, backend_acc = await _seller_backend_call_and_send(
                     message, prompt, num_images=num_images, aspect_ratio=aspect_ratio,
                     user_id=user_id, image_model=image_model, kind=kind, image_b64=image_b64,
                 )
                 charge.ok = ok
     except RateLimited:
-        _log_image_job(user_id, action, image_model, started, ok=False, error="rate_limited")
+        _log_image_job(user_id, action, image_model, started, ok=False, error="rate_limited",
+                       account_id=_seller_acc_tag(backend_acc))
         return False
     except NotEnoughCredits:
         metrics.log_event("image_failed", user_id=user_id, source=action,
@@ -7043,7 +7048,8 @@ async def _seller_generate_and_send(
     if ok:
         metrics.log_event("credits_charged", user_id=user_id, source=action,
                           payload={"amount": charged, "action": action})
-    _log_image_job(user_id, action, image_model, started, ok=ok, charged=charged)
+    _log_image_job(user_id, action, image_model, started, ok=ok, charged=charged,
+                   account_id=_seller_acc_tag(backend_acc))
     if ok:
         await _maybe_brandkit_nudge(message, user_id)
     return ok
@@ -7361,11 +7367,21 @@ def _ms_since(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
 
 
-def _log_image_job(user_id, action, image_model, started, *, ok, charged=0, error=None):
-    """flow_jobs-запись для картиночной операции (никогда не бросает)."""
+def _seller_acc_tag(backend_acc: str | None) -> str | None:
+    """Tag a seller job with the real consumer-backend account, e.g. ``sub5-sell``."""
+    acc = (backend_acc or "").strip()
+    return f"{acc}-sell" if acc else None
+
+
+def _log_image_job(user_id, action, image_model, started, *, ok, charged=0, error=None,
+                   account_id: str | None = None):
+    """flow_jobs-запись для картиночной операции (никогда не бросает).
+
+    ``account_id`` — явный аккаунт (для seller передаём ``<acc>-sell``); иначе
+    берём назначенный пользователю аккаунт из пула."""
     metrics.log_flow_job(
         user_id=user_id,
-        account_id=account_pool.assigned_to(user_id) or FLOW_ACCOUNT_ID,
+        account_id=account_id or account_pool.assigned_to(user_id) or FLOW_ACCOUNT_ID,
         operation_type=_IMG_OP.get(action, "image"), model=image_model,
         bot_credits_charged=charged, duration_ms=_ms_since(started),
         status="success" if ok else "fail",
