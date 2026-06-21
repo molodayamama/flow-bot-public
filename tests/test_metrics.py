@@ -658,6 +658,32 @@ class SellerReportTests(MetricsTestBase):
         self.assertEqual(profile3["brand_kit"], "minimal premium")
         self.assertEqual(profile3["niche"], "electronics")
 
+    def test_seller_history_pairs_flow_jobs_with_marketplace_source(self) -> None:
+        metrics.log_event("mp_job", user_id=70, source="ym:series:3")
+        metrics.log_flow_job(
+            user_id=70,
+            account_id="seller-backend",
+            operation_type="mp_series",
+            model="nb2",
+            status="success",
+            bot_credits_charged=30,
+        )
+        metrics.log_flow_job(
+            user_id=70,
+            account_id="seller-backend",
+            operation_type="video_mp_animate",
+            model="veo-lite",
+            status="fail",
+            error_type="backend_failed",
+            refund_amount=75,
+        )
+
+        rows = metrics.get_seller_history(70, limit=5)
+        self.assertEqual([r["operation_type"] for r in rows], ["video_mp_animate", "mp_series"])
+        self.assertEqual(rows[0]["mp_source"], "ym:series:3")
+        self.assertEqual(rows[1]["bot_credits_charged"], 30)
+        self.assertEqual(rows[0]["refund_amount"], 75)
+
     def test_report_sellers_empty(self) -> None:
         rep = metrics.report_sellers()
         self.assertEqual(rep["total_sellers"], 0)

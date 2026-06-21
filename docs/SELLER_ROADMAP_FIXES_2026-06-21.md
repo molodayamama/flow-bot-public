@@ -54,3 +54,32 @@ Role handoff:
 - Validation: full offline suite and syntax checks passed.
 - Risks: Telegram file ids for latest gallery items are reused as saved SKU slide refs; if the latest gallery item is stale in Telegram, add-last may need the user to use the result toolbar instead.
 - Next role: Committer.
+
+## Major 10 — seller history vs gallery
+
+What changed:
+- Seller `Мои запросы` now renders recent jobs from `flow_jobs` instead of consumer-only `prompt_history`.
+- Seller job history pairs each job with the latest marketplace `mp_job` event to show platform/job context, status, and credit cost/refund.
+- If detailed job rows are unavailable but gallery entries exist, history now shows a gallery-backed fallback instead of claiming the history is empty.
+- Consumer prompt history behavior is unchanged.
+
+Files:
+- `metrics.py`
+- `flow_bot.py`
+- `flow_copy.py`
+- `tests/test_metrics.py`
+- `tests/test_seller_bot.py`
+- `docs/SELLER_ROADMAP_FIXES_2026-06-21.md`
+
+Verified:
+- `ENV_FILE=.env.example python -m py_compile flow_bot.py flow_copy.py metrics.py tests/test_seller_bot.py tests/test_metrics.py` — pass.
+- `ENV_FILE=.env.example python -m unittest discover -s tests -p "test_*.py"` — pass, 606 tests.
+
+Role handoff:
+- Task: Major 10 Gallery vs History reconciliation.
+- Role completed: Architect, Reviewer, Implementer, Verifier.
+- Files touched: `metrics.py`, `flow_bot.py`, `flow_copy.py`, `tests/test_metrics.py`, `tests/test_seller_bot.py`, `docs/SELLER_ROADMAP_FIXES_2026-06-21.md`.
+- Assumptions: exact original prompt text is not available in `flow_jobs`, so this task shows actual job metadata and uses gallery prompt snippets only for fallback.
+- Validation: full offline suite and syntax checks passed.
+- Risks: platform/job pairing is based on the nearest prior `mp_job` event; concurrent seller jobs are already constrained by user-level generation locking.
+- Next role: Committer.

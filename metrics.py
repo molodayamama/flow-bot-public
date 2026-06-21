@@ -87,6 +87,7 @@ __all__ = [
     # prompt history
     "save_prompt_history",
     "get_prompt_history",
+    "get_seller_history",
     # seller SKU projects
     "create_seller_sku_project",
     "get_seller_sku_project",
@@ -3356,6 +3357,47 @@ def get_prompt_history(user_id: int, limit: int = 10) -> list[str]:
             return [r["prompt"] for r in rows]
     except Exception:  # noqa: BLE001
         log.warning("get_prompt_history failed for user_id=%r", user_id, exc_info=True)
+        return []
+
+
+def get_seller_history(user_id: int, limit: int = 10) -> list[dict]:
+    """Return recent seller jobs with the nearest marketplace source event."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            return [
+                {
+                    "id": int(r["id"]),
+                    "created_at": r["created_at"],
+                    "operation_type": r["operation_type"],
+                    "model": r["model"],
+                    "status": r["status"],
+                    "error_type": r["error_type"],
+                    "bot_credits_charged": int(r["bot_credits_charged"] or 0),
+                    "refund_amount": int(r["refund_amount"] or 0),
+                    "mp_source": r["mp_source"],
+                }
+                for r in _rows(
+                    conn,
+                    """
+                    SELECT fj.id, fj.created_at, fj.operation_type, fj.model, fj.status,
+                           fj.error_type, fj.bot_credits_charged, fj.refund_amount,
+                           (
+                               SELECT e.source FROM events e
+                               WHERE e.user_id=fj.user_id
+                                 AND e.event_name='mp_job'
+                                 AND e.created_at <= fj.created_at
+                               ORDER BY e.id DESC LIMIT 1
+                           ) AS mp_source
+                    FROM flow_jobs fj
+                    WHERE fj.user_id=?
+                    ORDER BY fj.id DESC LIMIT ?
+                    """,
+                    (int(user_id), max(1, int(limit))),
+                )
+            ]
+    except Exception:  # noqa: BLE001
+        log.warning("get_seller_history failed for user_id=%r", user_id, exc_info=True)
         return []
 
 

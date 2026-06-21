@@ -403,6 +403,75 @@ class SellerMenuTests(unittest.TestCase):
         square_filename = flow_bot._marketplace_export_filename(square_ref, b"\x89PNG\r\n\x1a\nrest")
         self.assertTrue(square_filename.startswith("photozhab_yandex_market_1x1_"))
 
+    def test_seller_history_uses_flow_jobs(self) -> None:
+        source = inspect.getsource(flow_bot._show_prompt_history)
+        self.assertIn("if IS_SELLER", source)
+        self.assertIn("_seller_history_text(user_id)", source)
+        orig_history = getattr(flow_bot.metrics, "get_seller_history", None)
+        orig_gallery = getattr(flow_bot.metrics, "get_gallery", None)
+
+        def fake_history(user_id, limit=10):  # noqa: ANN001
+            return [
+                {
+                    "created_at": "2026-06-21 12:34:00",
+                    "operation_type": "mp_series",
+                    "status": "success",
+                    "bot_credits_charged": 30,
+                    "refund_amount": 0,
+                    "mp_source": "ym:series:3",
+                },
+                {
+                    "created_at": "2026-06-21 12:00:00",
+                    "operation_type": "edit",
+                    "status": "fail",
+                    "error_type": "backend_failed",
+                    "bot_credits_charged": 0,
+                    "refund_amount": 15,
+                    "mp_source": "wb:whitebg",
+                },
+            ]
+
+        flow_bot.metrics.get_seller_history = fake_history
+        flow_bot.metrics.get_gallery = lambda user_id, limit=5: []
+        try:
+            text = flow_bot._seller_history_text(777003)
+        finally:
+            if orig_history is None:
+                delattr(flow_bot.metrics, "get_seller_history")
+            else:
+                flow_bot.metrics.get_seller_history = orig_history
+            if orig_gallery is None:
+                delattr(flow_bot.metrics, "get_gallery")
+            else:
+                flow_bot.metrics.get_gallery = orig_gallery
+        self.assertIn("Яндекс Маркет", text)
+        self.assertIn("серия · 3 слайда", text)
+        self.assertIn("✅ готово", text)
+        self.assertIn("списано 30 кр", text)
+        self.assertIn("Wildberries", text)
+        self.assertIn("❌ ошибка", text)
+
+    def test_seller_history_falls_back_to_gallery(self) -> None:
+        orig_history = getattr(flow_bot.metrics, "get_seller_history", None)
+        orig_gallery = getattr(flow_bot.metrics, "get_gallery", None)
+        flow_bot.metrics.get_seller_history = lambda user_id, limit=10: []
+        flow_bot.metrics.get_gallery = lambda user_id, limit=5: [
+            {"created_at": "2026-06-21 13:00:00", "prompt": "карточка товара"}
+        ]
+        try:
+            text = flow_bot._seller_history_text(777004)
+        finally:
+            if orig_history is None:
+                delattr(flow_bot.metrics, "get_seller_history")
+            else:
+                flow_bot.metrics.get_seller_history = orig_history
+            if orig_gallery is None:
+                delattr(flow_bot.metrics, "get_gallery")
+            else:
+                flow_bot.metrics.get_gallery = orig_gallery
+        self.assertIn("Готовые работы уже есть", text)
+        self.assertIn("карточка товара", text)
+
     def test_brandkit_sets_profile_state(self) -> None:
         source = inspect.getsource(flow_bot.on_marketplace_action)
         self.assertIn('if data == "mp:brandkit":', source)
