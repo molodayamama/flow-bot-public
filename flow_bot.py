@@ -4678,10 +4678,11 @@ def reply_menu_kb() -> types.ReplyKeyboardMarkup:
 
 async def _show_help_screen(message: types.Message, *, edit: bool) -> None:
     kb = types.InlineKeyboardMarkup(inline_keyboard=[[_menu_button("menu", "m:menu")]])
+    help_text = flow_copy.msg("seller_help" if IS_SELLER else "help")
     if edit:
-        await message.edit_text(flow_copy.msg("help"), reply_markup=kb)
+        await message.edit_text(help_text, reply_markup=kb, parse_mode="HTML")
     else:
-        await message.answer(flow_copy.msg("help"), reply_markup=kb)
+        await message.answer(help_text, reply_markup=kb, parse_mode="HTML")
 
 
 def _wizard_text(user_id: int) -> str:
@@ -5664,9 +5665,12 @@ async def show_main_menu(
     last = _ws(user_id).get("last")
     credits = credit_store.balance(user_id)
     kb = main_menu_kb(show_repeat=bool(last), credits=credits)
-    import random as _random
-    _variants = flow_copy.MESSAGES.get("menu_title_variants") or [flow_copy.msg("menu_title")]
-    text = _random.choice(_variants)
+    if IS_SELLER:
+        text = flow_copy.msg("seller_menu_title")
+    else:
+        import random as _random
+        _variants = flow_copy.MESSAGES.get("menu_title_variants") or [flow_copy.msg("menu_title")]
+        text = _random.choice(_variants)
     try:
         if edit:
             await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -8175,6 +8179,7 @@ async def _show_prompt_history(message: types.Message, *, user_id: int) -> None:
 
 
 async def _show_support_menu(message: types.Message, *, user_id: int, edit: bool) -> None:
+    _ws(user_id).pop("support_await", None)  # уход в меню поддержки снимает «жду вопрос»
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text=L("support_new"), callback_data="m:support:new")],
         [types.InlineKeyboardButton(text=L("support_my"), callback_data="m:support:my")],
@@ -8599,7 +8604,11 @@ async def on_menu_action(callback: types.CallbackQuery):
         await callback.answer()
         st = _ws(user_id)
         st["support_await"] = True
-        await msg.edit_text(flow_copy.msg("support_ask"))
+        cancel_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="◀️ Отмена", callback_data="m:support")],
+            [_menu_button("menu", "m:menu")],
+        ])
+        await msg.edit_text(flow_copy.msg("support_ask"), reply_markup=cancel_kb)
     elif data == "m:support:my":
         await callback.answer()
         await _show_my_tickets(msg, user_id=user_id, edit=True)
