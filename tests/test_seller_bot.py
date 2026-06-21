@@ -99,6 +99,65 @@ class SellerMenuTests(unittest.TestCase):
         action_source = inspect.getsource(flow_bot.on_image_action)
         self.assertIn("_mp_stamp_message(user_id, sent)", action_source)
 
+    def test_seller_confirm_after_photo_upload_is_active_message(self) -> None:
+        import asyncio
+
+        class FakeCreditStore:
+            def balance(self, user_id):  # noqa: ANN001
+                return 100
+
+        class FakeMessage:
+            def __init__(self, user_id: int, file_id: str, message_id: int) -> None:
+                self.from_user = SimpleNamespace(id=user_id, username="seller")
+                self.photo = [SimpleNamespace(file_id=file_id)]
+                self.caption = "red shoes"
+                self.media_group_id = None
+                self._message_id = message_id
+                self.answers = []
+
+            async def answer(self, text, **kwargs):  # noqa: ANN001
+                self.answers.append((text, kwargs))
+                return SimpleNamespace(message_id=self._message_id)
+
+        async def run_case(await_key: str, pending_kind: str, message_id: int, extra: dict | None = None) -> None:
+            user_id = 909100 + message_id
+            st = flow_bot.wizard_state[user_id]
+            st.clear()
+            st.update({
+                "await": await_key,
+                "mp_platform": "wb",
+                "mp_preset": "whitebg",
+                "mp_pending_kind": pending_kind,
+            })
+            if extra:
+                st.update(extra)
+            msg = FakeMessage(user_id, f"file-{message_id}", message_id)
+            await flow_bot.handle_photo(msg)
+            self.assertEqual(st.get("mp_active_msg_id"), message_id)
+            self.assertEqual(st.get("mp_pending_file_id"), f"file-{message_id}")
+            self.assertIsNone(st.get("await"))
+            self.assertEqual(len(msg.answers), 1)
+            self.assertEqual(msg.answers[0][1].get("parse_mode"), "HTML")
+            st.clear()
+
+        was_seller = flow_bot.IS_SELLER
+        old_metrics = flow_bot.metrics
+        old_credit_store = flow_bot.credit_store
+        flow_bot.IS_SELLER = True
+        flow_bot.metrics = SimpleNamespace(
+            log_event=lambda *args, **kwargs: None,
+            upsert_user=lambda *args, **kwargs: None,
+            get_seller_profile=lambda user_id: {},
+        )
+        flow_bot.credit_store = FakeCreditStore()
+        try:
+            asyncio.run(run_case("mp_photo", "photo", 701))
+            asyncio.run(run_case("mp_series_photo", "series", 702, {"mp_series_count": 3}))
+        finally:
+            flow_bot.IS_SELLER = was_seller
+            flow_bot.metrics = old_metrics
+            flow_bot.credit_store = old_credit_store
+
     def test_backend_dispatch_by_kind(self) -> None:
         import asyncio
 

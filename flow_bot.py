@@ -12119,7 +12119,8 @@ async def handle_photo(message: types.Message):
             st["mp_pending_kind"] = "series"
             st["await"] = None
             ctext, ckb = _mp_confirm_screen(user_id)
-            await message.answer(ctext, reply_markup=ckb, parse_mode="HTML")
+            _sent = await message.answer(ctext, reply_markup=ckb, parse_mode="HTML")
+            _mp_stamp_message(user_id, _sent)  # чтобы stale-guard не отшил «Создать»
             return
         status_msg = await message.answer(flow_copy.msg("uploading_photo"))
         ref = await _upload_image_ref_from_photo_message(
@@ -12169,7 +12170,8 @@ async def handle_photo(message: types.Message):
             st["mp_pending_kind"] = "photo"
             st["await"] = None
             ctext, ckb = _mp_confirm_screen(user_id)
-            await message.answer(ctext, reply_markup=ckb, parse_mode="HTML")
+            _sent = await message.answer(ctext, reply_markup=ckb, parse_mode="HTML")
+            _mp_stamp_message(user_id, _sent)  # чтобы stale-guard не отшил «Создать»
             return
         status_msg = await message.answer(flow_copy.msg("uploading_photo"))
         ref = await _upload_image_ref_from_photo_message(
