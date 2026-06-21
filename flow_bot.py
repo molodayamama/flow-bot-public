@@ -3563,8 +3563,11 @@ bot = _make_bot()
 dp = Dispatcher()
 
 user_last_request: dict[int, float] = defaultdict(float)
-# Юзеры с запросом «в работе» — чтобы параллельные запросы не абузили.
-user_busy: set[int] = set()
+# Юзеры с запросом «в работе» (uid -> момент старта) — чтобы параллельные
+# запросы не абузили. Слот авто-протухает через BUSY_MAX_SEC: если операция
+# зависла и finally не отработал, юзер не остаётся залочен навсегда.
+user_busy: dict[int, float] = {}
+BUSY_MAX_SEC = 300  # старше — считаем зависшим и отпускаем
 
 # Каждый Telegram-пользователь -> свой Flow-проект (переживает рестарт).
 project_store = UserProjectStore(USER_PROJECTS_FILE)
@@ -3810,9 +3813,14 @@ async def user_slot(user_id: int, message: types.Message):
       и выполняем (не отклоняем за раннее нажатие).
     - Слот гарантированно освобождается в ``finally``.
     """
-    if user_id in user_busy:
+    busy_since = user_busy.get(user_id)
+    if busy_since is not None and (time.time() - busy_since) < BUSY_MAX_SEC:
         await message.answer("⏳ Ваш предыдущий запрос ещё выполняется — дождитесь его.")
         raise RateLimited
+    if busy_since is not None:
+        # Слот протух (операция зависла) — отпускаем и пускаем новый запрос.
+        log.warning("user_busy слот для %s протух (%.0fс), отпускаю", user_id, time.time() - busy_since)
+        user_busy.pop(user_id, None)
 
     elapsed = time.time() - user_last_request[user_id]
     remaining = COOLDOWN_SEC - elapsed
@@ -3823,14 +3831,14 @@ async def user_slot(user_id: int, message: types.Message):
     # Занимаем слот ДО любого await чтобы избежать race condition:
     # два одновременных запроса иначе оба пройдут проверку user_busy
     # и уйдут в sleep параллельно.
-    user_busy.add(user_id)
+    user_busy[user_id] = time.time()
     try:
         if remaining > 0:
             await message.answer(f"⏱️ Подождите {int(remaining) + 1} сек, выполняю...")
             await asyncio.sleep(remaining)
         yield
     finally:
-        user_busy.discard(user_id)
+        user_busy.pop(user_id, None)
         user_last_request[user_id] = time.time()
 
 
@@ -4250,13 +4258,26 @@ def _mp_video_prompt(
     return " ".join(parts)
 
 
+def _slides_word(n: int) -> str:
+    """Правильная форма слова «слайд» для числа (1 слайд, 3 слайда, 5 слайдов)."""
+    n = abs(int(n))
+    if 11 <= n % 100 <= 14:
+        return "слайдов"
+    d = n % 10
+    if d == 1:
+        return "слайд"
+    if 2 <= d <= 4:
+        return "слайда"
+    return "слайдов"
+
+
 def _mp_series_request_text(platform: str, count: int) -> str:
     platform_name = html.escape(_MP_PLAT_NAMES.get(platform, platform))
     count = count if count in _MP_SERIES_COUNTS else 3
     label = html.escape(_MP_SERIES_LABELS[count])
     price = action_price("mp_series", count)
     return (
-        f"🧩 <b>{platform_name}</b> · {label} · {count} слайда · {price} кр\n\n"
+        f"🧩 <b>{platform_name}</b> · {label} · {count} {_slides_word(count)} · {price} кр\n\n"
         "Пришли одно фото товара. Я соберу серию вертикальных слайдов 3:4 "
         "для карточки маркетплейса на основе этого товара.\n\n"
         "Можно добавить подпись к фото — например нишу, УТП, цвет бренда или "
@@ -4307,7 +4328,7 @@ def _mp_sku_projects_text(user_id: int) -> str:
         platform = item.get("platform") or ""
         platform_line = f" · {html.escape(platform)}" if platform else ""
         updated = (item.get("updated_at") or "")[:16]
-        lines.append(f"• <b>{sku}</b>{platform_line}: {count} слайд(ов), обновлено {updated}")
+        lines.append(f"• <b>{sku}</b>{platform_line}: {count} {_slides_word(count)}, обновлено {updated}")
     lines.append("\nДобавляй новые результаты кнопкой «➕ В серию SKU» под картинкой.")
     return "\n".join(lines)
 
@@ -12039,6 +12060,19 @@ async def handle_plain_text(message: types.Message):
             except Exception:
                 pass  # fallback: send new message below
         await show_wizard(message, user_id=user_id, edit=False)
+        return
+
+    # Seller-бот — это инструмент для карточек, а не свободный генератор. Случайный
+    # текст НЕ должен открывать платный image-визард: подсказываем выбрать задачу.
+    if IS_SELLER:
+        await message.answer(
+            "🛒 Я делаю карточки для маркетплейсов. Выбери задачу в меню "
+            "«Карточки» и пришли фото товара — там подберём формат и стиль.",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="🛒 Карточки", callback_data="m:mp")],
+                [_menu_button("menu", "m:menu")],
+            ]),
+        )
         return
 
     # Иначе пользователь прислал промпт «вхолодную», не открыв визард. Не генерируем
