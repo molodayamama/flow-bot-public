@@ -25,3 +25,32 @@ Role handoff:
 - Validation: full offline suite and syntax checks passed.
 - Risks: live generated composition quality still depends on the backend model following the new guidance.
 - Next role: Committer.
+
+## Major 9 — SKU/projects workspace
+
+What changed:
+- Added explicit seller SKU projects in metrics so a SKU can exist before any card is saved.
+- The projects screen now has clickable SKU buttons plus a direct `➕ Новый SKU` action.
+- Opening a SKU shows slide count, platform, latest prompt, and actions to add the current/latest card, rename, delete, or return to all SKUs.
+- Existing result-toolbar SKU saving still works, and SKU rename/delete updates both project metadata and saved slide rows.
+- Seller analytics now count explicit SKU projects as well as legacy item-only SKU rows.
+
+Files:
+- `metrics.py`
+- `flow_bot.py`
+- `tests/test_metrics.py`
+- `tests/test_seller_bot.py`
+- `docs/SELLER_ROADMAP_FIXES_2026-06-21.md`
+
+Verified:
+- `ENV_FILE=.env.example python -m py_compile flow_bot.py metrics.py tests/test_seller_bot.py tests/test_metrics.py` — pass.
+- `ENV_FILE=.env.example python -m unittest discover -s tests -p "test_*.py"` — pass, 603 tests.
+
+Role handoff:
+- Task: Major 9 SKU/projects workspace.
+- Role completed: Architect, Reviewer, Implementer, Verifier.
+- Files touched: `metrics.py`, `flow_bot.py`, `tests/test_metrics.py`, `tests/test_seller_bot.py`, `docs/SELLER_ROADMAP_FIXES_2026-06-21.md`.
+- Assumptions: empty SKU projects should be first-class rows instead of fake slide rows; export/series-building from a SKU remains outside this task.
+- Validation: full offline suite and syntax checks passed.
+- Risks: Telegram file ids for latest gallery items are reused as saved SKU slide refs; if the latest gallery item is stale in Telegram, add-last may need the user to use the result toolbar instead.
+- Next role: Committer.

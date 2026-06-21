@@ -315,10 +315,60 @@ class SellerMenuTests(unittest.TestCase):
         source = inspect.getsource(flow_bot.on_marketplace_action)
         self.assertIn('if data == "mp:projects":', source)
         self.assertIn("_show_sku_projects", source)
+        self.assertIn('data.startswith("mp:sku:open:")', source)
+        self.assertIn('if data == "mp:sku:addlast":', source)
+        self.assertIn('if data == "mp:sku:rename":', source)
+        self.assertIn('if data == "mp:sku:delete"', source)
+        self.assertIn("metrics.rename_seller_sku_project", inspect.getsource(flow_bot.handle_plain_text))
+        self.assertIn("metrics.delete_seller_sku_project", source)
         action_source = inspect.getsource(flow_bot.on_image_action)
         self.assertIn('elif action == "skuadd":', action_source)
         self.assertIn('st["mp_sku_pending"]', action_source)
         self.assertIn("_mp_sku_choice_kb(user_id)", action_source)
+
+    def test_sku_projects_keyboard_opens_items_and_creates_new(self) -> None:
+        projects = [
+            {"sku": "SKU-1 Red Shoes", "items": 1, "platform": "wb", "updated_at": "2026-06-21 10:00"},
+            {"sku": "SKU-2 Empty", "items": 0, "platform": "ym", "updated_at": "2026-06-21 11:00"},
+        ]
+        kb = flow_bot._mp_sku_projects_kb(777001, projects)
+        cb = self._callbacks(kb)
+        self.assertIn("mp:sku:open:0", cb)
+        self.assertIn("mp:sku:open:1", cb)
+        self.assertIn("mp:sku:new", cb)
+        self.assertEqual(flow_bot.wizard_state[777001]["mp_sku_project_choices"], ["SKU-1 Red Shoes", "SKU-2 Empty"])
+        text = flow_bot._mp_sku_projects_text(777001, projects)
+        self.assertIn("рабочее пространство", text)
+        self.assertIn("0 слайдов", text)
+
+    def test_sku_open_screen_has_workspace_actions(self) -> None:
+        orig_get = getattr(flow_bot.metrics, "get_seller_sku_project", None)
+
+        def fake_get(user_id, sku):  # noqa: ANN001
+            return {
+                "sku": sku,
+                "items": 3,
+                "platform": "ozon",
+                "updated_at": "2026-06-21 12:00",
+                "latest_prompt": "чистый белый фон",
+            }
+
+        flow_bot.metrics.get_seller_sku_project = fake_get
+        try:
+            text = flow_bot._mp_sku_open_text(777002, "SKU-OZON")
+            kb = flow_bot._mp_sku_open_kb()
+        finally:
+            if orig_get is None:
+                delattr(flow_bot.metrics, "get_seller_sku_project")
+            else:
+                flow_bot.metrics.get_seller_sku_project = orig_get
+        self.assertIn("SKU-OZON", text)
+        self.assertIn("3 слайда", text)
+        self.assertIn("Ozon", text)
+        cb = self._callbacks(kb)
+        self.assertIn("mp:sku:addlast", cb)
+        self.assertIn("mp:sku:rename", cb)
+        self.assertIn("mp:sku:delete", cb)
 
     def test_seller_image_keyboard_adds_export_and_sku_buttons(self) -> None:
         cb = self._callbacks(flow_bot._seller_image_keyboard("tok123"))

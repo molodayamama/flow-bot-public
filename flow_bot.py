@@ -4418,24 +4418,79 @@ def _mp_series_prompt(
     return prompt
 
 
-def _mp_sku_projects_text(user_id: int) -> str:
-    projects = metrics.list_seller_sku_projects(user_id, limit=12)
+def _mp_sku_projects(user_id: int, limit: int = 12) -> list[dict]:
+    projects = metrics.list_seller_sku_projects(user_id, limit=limit)
+    _ws(user_id)["mp_sku_project_choices"] = [str(p.get("sku") or "") for p in projects]
+    return projects
+
+
+def _mp_sku_projects_text(user_id: int, projects: list[dict] | None = None) -> str:
+    projects = _mp_sku_projects(user_id) if projects is None else projects
     if not projects:
         return (
             "📦 <b>Мои товары (SKU)</b>\n\n"
-            "Пока здесь пусто. Сгенерируй карточку товара и нажми под результатом "
-            "«➕ В серию SKU», чтобы собрать слайды по артикулу."
+            "Пока здесь пусто. Создай SKU сейчас или добавь результат кнопкой "
+            "«➕ В серию SKU» под готовой карточкой."
         )
-    lines = ["📦 <b>Мои товары (SKU)</b>"]
+    lines = ["📦 <b>Мои товары (SKU)</b>\n\nНажми на SKU ниже, чтобы открыть рабочее пространство."]
     for item in projects:
         sku = html.escape(str(item.get("sku") or "SKU"))
         count = int(item.get("items") or 0)
         platform = item.get("platform") or ""
         platform_line = f" · {html.escape(platform)}" if platform else ""
         updated = (item.get("updated_at") or "")[:16]
-        lines.append(f"• <b>{sku}</b>{platform_line}: {count} {_slides_word(count)}, обновлено {updated}")
-    lines.append("\nДобавляй новые результаты кнопкой «➕ В серию SKU» под картинкой.")
+        update_line = f", обновлено {updated}" if updated else ""
+        lines.append(f"• <b>{sku}</b>{platform_line}: {count} {_slides_word(count)}{update_line}")
+    lines.append("\nДобавляй текущую или последнюю карточку внутри нужного SKU.")
     return "\n".join(lines)
+
+
+def _mp_sku_projects_kb(user_id: int, projects: list[dict] | None = None) -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    projects = _mp_sku_projects(user_id) if projects is None else projects
+    _ws(user_id)["mp_sku_project_choices"] = [str(p.get("sku") or "") for p in projects]
+    rows: list[list[types.InlineKeyboardButton]] = []
+    for idx, item in enumerate(projects):
+        sku = str(item.get("sku") or "SKU")
+        count = int(item.get("items") or 0)
+        rows.append([B(text=f"📦 {sku[:42]} · {count} {_slides_word(count)}", callback_data=f"mp:sku:open:{idx}")])
+    rows.append([B(text="➕ Новый SKU", callback_data="mp:sku:new")])
+    rows.append([B(text="◀️ Маркетплейсы", callback_data="m:mp")])
+    rows.append([_menu_button("menu", "m:menu")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _mp_sku_open_text(user_id: int, sku: str) -> str:
+    project = metrics.get_seller_sku_project(user_id, sku) or {"sku": sku, "items": 0}
+    sku_name = str(project.get("sku") or sku or "SKU")
+    count = int(project.get("items") or 0)
+    platform = str(project.get("platform") or "").strip()
+    platform_label = _MP_PLAT_NAMES.get(platform, platform) if platform else "не задана"
+    updated = (project.get("updated_at") or "")[:16] or "—"
+    latest_prompt = str(project.get("latest_prompt") or "").strip()
+    lines = [
+        f"📦 <b>{html.escape(sku_name)}</b>",
+        "",
+        f"Слайдов: <b>{count} {_slides_word(count)}</b>",
+        f"Площадка: {html.escape(platform_label)}",
+        f"Обновлено: {html.escape(updated)}",
+    ]
+    if latest_prompt:
+        lines.append(f"Последний запрос: <blockquote>{html.escape(latest_prompt[:180])}</blockquote>")
+    else:
+        lines.append("В этом SKU пока нет сохранённых карточек.")
+    return "\n".join(lines)
+
+
+def _mp_sku_open_kb() -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [B(text="➕ Добавить текущую/последнюю карточку", callback_data="mp:sku:addlast")],
+        [B(text="✏️ Переименовать", callback_data="mp:sku:rename")],
+        [B(text="🗑 Удалить", callback_data="mp:sku:delete")],
+        [B(text="◀️ Все SKU", callback_data="mp:projects")],
+        [_menu_button("menu", "m:menu")],
+    ])
 
 
 def _mp_brandkit_text(user_id: int) -> str:
@@ -4478,11 +4533,9 @@ def _mp_niche_kb() -> types.InlineKeyboardMarkup:
 
 
 async def _show_sku_projects(message: types.Message, *, user_id: int, edit: bool) -> None:
-    text = _mp_sku_projects_text(user_id)
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [_menu_button("menu", "m:menu")],
-        [types.InlineKeyboardButton(text="◀️ Маркетплейсы", callback_data="m:mp")],
-    ])
+    projects = _mp_sku_projects(user_id)
+    text = _mp_sku_projects_text(user_id, projects)
+    kb = _mp_sku_projects_kb(user_id, projects)
     if edit:
         await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     else:
@@ -4508,10 +4561,24 @@ def _pending_sku_payload(user_id: int) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-async def _save_pending_sku_item(message: types.Message, user_id: int, sku: str) -> bool:
-    payload = _pending_sku_payload(user_id)
+def _latest_sku_payload(user_id: int, *, platform: str | None = None) -> dict | None:
+    rows = metrics.get_gallery(user_id, limit=1)
+    if not rows:
+        return None
+    row = rows[0]
+    file_id = str(row.get("file_id") or "")
+    if not file_id:
+        return None
+    return {
+        "file_id": file_id,
+        "token": str(row.get("token") or ""),
+        "prompt": str(row.get("prompt") or ""),
+        "platform": platform or str(_ws(user_id).get("mp_platform") or ""),
+    }
+
+
+async def _save_sku_payload(message: types.Message, user_id: int, sku: str, payload: dict) -> bool:
     if not payload:
-        _ws(user_id).pop("mp_sku_pending", None)
         await message.answer("Кнопка устарела. Нажми «➕ В серию SKU» под нужной картинкой ещё раз.")
         return False
     row_id = metrics.save_seller_sku_item(
@@ -4524,6 +4591,17 @@ async def _save_pending_sku_item(message: types.Message, user_id: int, sku: str)
     )
     if row_id <= 0:
         await message.answer("Не удалось сохранить SKU. Проверь название и попробуй ещё раз.")
+        return False
+    return True
+
+
+async def _save_pending_sku_item(message: types.Message, user_id: int, sku: str) -> bool:
+    payload = _pending_sku_payload(user_id)
+    if not payload:
+        _ws(user_id).pop("mp_sku_pending", None)
+        await message.answer("Кнопка устарела. Нажми «➕ В серию SKU» под нужной картинкой ещё раз.")
+        return False
+    if not await _save_sku_payload(message, user_id, sku, payload):
         return False
     st = _ws(user_id)
     st.pop("mp_sku_pending", None)
@@ -8469,6 +8547,102 @@ async def on_marketplace_action(callback: types.CallbackQuery):
         await _show_sku_projects(msg, user_id=user_id, edit=True)
         return
 
+    if data.startswith("mp:sku:open:"):
+        try:
+            idx = int(data.rsplit(":", 1)[1])
+        except (TypeError, ValueError):
+            await callback.answer()
+            return
+        st = _ws(user_id)
+        choices = st.get("mp_sku_project_choices") or [
+            str(p.get("sku") or "") for p in metrics.list_seller_sku_projects(user_id, limit=12)
+        ]
+        if idx < 0 or idx >= len(choices) or not choices[idx]:
+            await callback.answer("SKU не найден", show_alert=True)
+            return
+        sku = str(choices[idx])
+        st["mp_sku_open"] = sku
+        await callback.answer()
+        await msg.edit_text(_mp_sku_open_text(user_id, sku), reply_markup=_mp_sku_open_kb(), parse_mode="HTML")
+        return
+
+    if data == "mp:sku:addlast":
+        st = _ws(user_id)
+        sku = str(st.get("mp_sku_open") or "").strip()
+        if not sku:
+            await callback.answer("Сначала открой SKU", show_alert=True)
+            return
+        project = metrics.get_seller_sku_project(user_id, sku) or {}
+        payload = _pending_sku_payload(user_id) or _latest_sku_payload(
+            user_id, platform=str(project.get("platform") or st.get("mp_platform") or "")
+        )
+        if not payload:
+            await callback.answer("Нет карточки для добавления", show_alert=True)
+            return
+        if not await _save_sku_payload(msg, user_id, sku, payload):
+            await callback.answer("Не удалось сохранить", show_alert=True)
+            return
+        st.pop("mp_sku_pending", None)
+        st.pop("mp_sku_choices", None)
+        st["await"] = None
+        metrics.log_event("mp_sku_saved", user_id=user_id, source=str(payload.get("platform") or "seller"))
+        await callback.answer("Добавлено в SKU")
+        await msg.edit_text(_mp_sku_open_text(user_id, sku), reply_markup=_mp_sku_open_kb(), parse_mode="HTML")
+        return
+
+    if data == "mp:sku:rename":
+        sku = str(_ws(user_id).get("mp_sku_open") or "").strip()
+        if not sku:
+            await callback.answer("Сначала открой SKU", show_alert=True)
+            return
+        _ws(user_id)["await"] = "mp_sku_rename"
+        await callback.answer()
+        await msg.answer(
+            f"✏️ Пришли новое название для SKU <b>{html.escape(sku)}</b> одним сообщением.",
+            parse_mode="HTML",
+        )
+        return
+
+    if data == "mp:sku:delete":
+        sku = str(_ws(user_id).get("mp_sku_open") or "").strip()
+        if not sku:
+            await callback.answer("Сначала открой SKU", show_alert=True)
+            return
+        await callback.answer()
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="🗑 Да, удалить SKU", callback_data="mp:sku:delete:yes")],
+            [types.InlineKeyboardButton(text="◀️ Оставить", callback_data="mp:sku:backopen")],
+        ])
+        await msg.edit_text(
+            f"🗑 Удалить SKU <b>{html.escape(sku)}</b> и сохранённые слайды?",
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
+        return
+
+    if data == "mp:sku:backopen":
+        sku = str(_ws(user_id).get("mp_sku_open") or "").strip()
+        if not sku:
+            await callback.answer()
+            await _show_sku_projects(msg, user_id=user_id, edit=True)
+            return
+        await callback.answer()
+        await msg.edit_text(_mp_sku_open_text(user_id, sku), reply_markup=_mp_sku_open_kb(), parse_mode="HTML")
+        return
+
+    if data == "mp:sku:delete:yes":
+        st = _ws(user_id)
+        sku = str(st.get("mp_sku_open") or "").strip()
+        if not sku:
+            await callback.answer("Сначала открой SKU", show_alert=True)
+            return
+        deleted = metrics.delete_seller_sku_project(user_id, sku)
+        st.pop("mp_sku_open", None)
+        metrics.log_event("mp_sku_deleted", user_id=user_id, source="seller", payload={"rows": deleted})
+        await callback.answer("SKU удалён")
+        await _show_sku_projects(msg, user_id=user_id, edit=True)
+        return
+
     if data == "mp:brandkit":
         await callback.answer()
         st = _ws(user_id)
@@ -8516,13 +8690,12 @@ async def on_marketplace_action(callback: types.CallbackQuery):
         return
 
     if data == "mp:sku:new":
-        if not _pending_sku_payload(user_id):
-            await callback.answer("Кнопка устарела", show_alert=True)
-            return
         await callback.answer()
         _ws(user_id)["await"] = "mp_sku_name"
+        has_pending = bool(_pending_sku_payload(user_id))
+        title = "название нового SKU для этого результата" if has_pending else "название нового SKU"
         await msg.answer(
-            "📦 Пришли название товара или артикул одним сообщением. "
+            f"📦 Пришли {title} одним сообщением. "
             "Например: <code>SKU-104 красные ботинки</code>",
             parse_mode="HTML",
         )
@@ -11414,7 +11587,7 @@ async def on_image_action(callback: types.CallbackQuery):
             "token": token,
             "file_id": photos[-1].file_id,
             "prompt": ref.prompt or "",
-            "platform": st.get("mp_platform", ""),
+            "platform": ref.platform or st.get("mp_platform", ""),
         }
         st["await"] = "mp_sku_name"
         await callback.answer()
@@ -12121,7 +12294,44 @@ async def handle_plain_text(message: types.Message):
         if len(sku) < 2:
             await message.answer("📦 Название SKU слишком короткое. Пришли артикул или название товара.")
             return
-        await _save_pending_sku_item(message, user_id, sku)
+        if _pending_sku_payload(user_id):
+            await _save_pending_sku_item(message, user_id, sku)
+            return
+        ok = metrics.create_seller_sku_project(user_id, sku, platform=st.get("mp_platform"))
+        st["await"] = None
+        if not ok:
+            await message.answer("Не удалось создать SKU. Проверь название и попробуй ещё раз.")
+            return
+        st["mp_sku_open"] = sku
+        metrics.log_event("mp_sku_created", user_id=user_id, source=str(st.get("mp_platform") or "seller"))
+        await message.answer(
+            _mp_sku_open_text(user_id, sku),
+            reply_markup=_mp_sku_open_kb(),
+            parse_mode="HTML",
+        )
+        return
+    if awaiting == "mp_sku_rename":
+        new_sku = text.strip()
+        old_sku = str(st.get("mp_sku_open") or "").strip()
+        if len(new_sku) < 2:
+            await message.answer("📦 Новое название слишком короткое. Пришли артикул или название товара.")
+            return
+        if not old_sku:
+            st["await"] = None
+            await message.answer("Сначала открой SKU в разделе «Мои товары».")
+            return
+        ok = metrics.rename_seller_sku_project(user_id, old_sku, new_sku)
+        st["await"] = None
+        if not ok:
+            await message.answer("Не удалось переименовать SKU. Попробуй ещё раз позже.")
+            return
+        st["mp_sku_open"] = new_sku
+        metrics.log_event("mp_sku_renamed", user_id=user_id, source="seller")
+        await message.answer(
+            _mp_sku_open_text(user_id, new_sku),
+            reply_markup=_mp_sku_open_kb(),
+            parse_mode="HTML",
+        )
         return
     if awaiting == "mp_brandkit":
         brand = text.strip()

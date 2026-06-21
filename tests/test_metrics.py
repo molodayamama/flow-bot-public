@@ -598,6 +598,7 @@ class SellerReportTests(MetricsTestBase):
 
     def test_seller_sku_projects_group_generated_items(self) -> None:
         self.assertEqual(metrics.save_seller_sku_item(7, "", file_id="file-a"), 0)
+        self.assertTrue(metrics.create_seller_sku_project(7, "SKU-0 Empty", platform="ym"))
         self.assertGreater(
             metrics.save_seller_sku_item(
                 7, "  SKU-1   Red Shoes  ", file_id="file-a", token="tok-a",
@@ -621,11 +622,20 @@ class SellerReportTests(MetricsTestBase):
         )
 
         projects = metrics.list_seller_sku_projects(7)
-        self.assertEqual([p["sku"] for p in projects], ["SKU-2", "SKU-1 Red Shoes"])
+        self.assertEqual([p["sku"] for p in projects], ["SKU-2", "SKU-1 Red Shoes", "SKU-0 Empty"])
         self.assertEqual(projects[1]["items"], 2)
         self.assertEqual(projects[1]["latest_file_id"], "file-b")
         self.assertEqual(projects[1]["latest_prompt"], "second")
-        self.assertEqual(metrics.recent_seller_skus(7), ["SKU-2", "SKU-1 Red Shoes"])
+        self.assertEqual(projects[2]["items"], 0)
+        self.assertEqual(projects[2]["platform"], "ym")
+        self.assertEqual(metrics.recent_seller_skus(7), ["SKU-2", "SKU-1 Red Shoes", "SKU-0 Empty"])
+
+        self.assertTrue(metrics.rename_seller_sku_project(7, "SKU-0 Empty", "SKU-0 Renamed"))
+        renamed = metrics.get_seller_sku_project(7, "SKU-0 Renamed")
+        self.assertIsNotNone(renamed)
+        self.assertEqual(renamed["items"], 0)
+        self.assertGreaterEqual(metrics.delete_seller_sku_project(7, "SKU-0 Renamed"), 1)
+        self.assertIsNone(metrics.get_seller_sku_project(7, "SKU-0 Renamed"))
 
         metrics.log_event("mp_platform", user_id=7, username="seller7", source="wb")
         rep = metrics.report_sellers()

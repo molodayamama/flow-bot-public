@@ -88,6 +88,10 @@ __all__ = [
     "save_prompt_history",
     "get_prompt_history",
     # seller SKU projects
+    "create_seller_sku_project",
+    "get_seller_sku_project",
+    "rename_seller_sku_project",
+    "delete_seller_sku_project",
     "save_seller_sku_item",
     "list_seller_sku_projects",
     "recent_seller_skus",
@@ -250,6 +254,16 @@ CREATE TABLE IF NOT EXISTS seller_sku_items (
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_seller_sku_user ON seller_sku_items(user_id, sku, id);
+
+CREATE TABLE IF NOT EXISTS seller_sku_projects (
+    user_id    INTEGER NOT NULL,
+    sku        TEXT NOT NULL,
+    platform   TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, sku)
+);
+CREATE INDEX IF NOT EXISTS idx_seller_sku_projects_user ON seller_sku_projects(user_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS seller_profiles (
     user_id    INTEGER PRIMARY KEY,
@@ -1416,14 +1430,19 @@ def report_sellers(limit: int = 100) -> dict:
                 int(r["user_id"]): int(r["sku_projects"] or 0)
                 for r in _rows(
                     conn,
-                    "SELECT user_id, COUNT(DISTINCT sku) AS sku_projects "
-                    "FROM seller_sku_items GROUP BY user_id",
+                    "SELECT user_id, COUNT(*) AS sku_projects FROM ("
+                    "SELECT user_id, sku FROM seller_sku_projects "
+                    "UNION "
+                    "SELECT user_id, sku FROM seller_sku_items"
+                    ") GROUP BY user_id",
                 )
             }
             total_sku_projects = _scalar(
                 conn,
                 "SELECT COUNT(*) FROM ("
-                "SELECT user_id, sku FROM seller_sku_items GROUP BY user_id, sku"
+                "SELECT user_id, sku FROM seller_sku_projects "
+                "UNION "
+                "SELECT user_id, sku FROM seller_sku_items"
                 ")",
             ) or 0
             sellers = []
@@ -2855,6 +2874,122 @@ def _normalize_sku(sku: str) -> str:
     return " ".join((sku or "").strip().split())[:80]
 
 
+def create_seller_sku_project(user_id: int, sku: str, *, platform: str | None = None) -> bool:
+    """Create or refresh an empty seller SKU project."""
+    sku_norm = _normalize_sku(sku)
+    if not sku_norm:
+        return False
+    try:
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                """
+                INSERT INTO seller_sku_projects (user_id, sku, platform)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, sku) DO UPDATE SET
+                    platform=COALESCE(excluded.platform, seller_sku_projects.platform),
+                    updated_at=datetime('now')
+                """,
+                (int(user_id), sku_norm, (platform or "")[:40] or None),
+            )
+            conn.commit()
+            return True
+    except Exception:  # noqa: BLE001
+        log.warning("create_seller_sku_project failed for user_id=%r", user_id, exc_info=True)
+        return False
+
+
+def get_seller_sku_project(user_id: int, sku: str) -> dict | None:
+    """Return one grouped seller SKU project by name."""
+    sku_norm = _normalize_sku(sku)
+    if not sku_norm:
+        return None
+    try:
+        with _LOCK:
+            conn = _conn()
+            rows = _seller_sku_project_rows(conn, int(user_id), limit=200, sku=sku_norm)
+            return rows[0] if rows else None
+    except Exception:  # noqa: BLE001
+        log.warning("get_seller_sku_project failed for user_id=%r", user_id, exc_info=True)
+        return None
+
+
+def rename_seller_sku_project(user_id: int, old_sku: str, new_sku: str) -> bool:
+    """Rename a seller SKU project and all saved slide rows."""
+    old_norm = _normalize_sku(old_sku)
+    new_norm = _normalize_sku(new_sku)
+    if not old_norm or not new_norm:
+        return False
+    if old_norm == new_norm:
+        return True
+    try:
+        with _LOCK:
+            conn = _conn()
+            exists = _scalar(
+                conn,
+                """
+                SELECT 1 FROM seller_sku_projects WHERE user_id=? AND sku=?
+                UNION
+                SELECT 1 FROM seller_sku_items WHERE user_id=? AND sku=?
+                LIMIT 1
+                """,
+                (int(user_id), old_norm, int(user_id), old_norm),
+            )
+            if not exists:
+                return False
+            old_project = conn.execute(
+                "SELECT platform FROM seller_sku_projects WHERE user_id=? AND sku=?",
+                (int(user_id), old_norm),
+            ).fetchone()
+            old_platform = old_project["platform"] if old_project else None
+            conn.execute(
+                """
+                INSERT INTO seller_sku_projects (user_id, sku, platform)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, sku) DO UPDATE SET
+                    platform=COALESCE(seller_sku_projects.platform, excluded.platform),
+                    updated_at=datetime('now')
+                """,
+                (int(user_id), new_norm, old_platform),
+            )
+            conn.execute(
+                "UPDATE seller_sku_items SET sku=? WHERE user_id=? AND sku=?",
+                (new_norm, int(user_id), old_norm),
+            )
+            conn.execute(
+                "DELETE FROM seller_sku_projects WHERE user_id=? AND sku=?",
+                (int(user_id), old_norm),
+            )
+            conn.commit()
+            return True
+    except Exception:  # noqa: BLE001
+        log.warning("rename_seller_sku_project failed for user_id=%r", user_id, exc_info=True)
+        return False
+
+
+def delete_seller_sku_project(user_id: int, sku: str) -> int:
+    """Delete a seller SKU project and its saved slide rows; returns deleted rows."""
+    sku_norm = _normalize_sku(sku)
+    if not sku_norm:
+        return 0
+    try:
+        with _LOCK:
+            conn = _conn()
+            cur_items = conn.execute(
+                "DELETE FROM seller_sku_items WHERE user_id=? AND sku=?",
+                (int(user_id), sku_norm),
+            )
+            cur_project = conn.execute(
+                "DELETE FROM seller_sku_projects WHERE user_id=? AND sku=?",
+                (int(user_id), sku_norm),
+            )
+            conn.commit()
+            return max(0, int(cur_items.rowcount or 0)) + max(0, int(cur_project.rowcount or 0))
+    except Exception:  # noqa: BLE001
+        log.warning("delete_seller_sku_project failed for user_id=%r", user_id, exc_info=True)
+        return 0
+
+
 def save_seller_sku_item(
     user_id: int,
     sku: str,
@@ -2871,6 +3006,16 @@ def save_seller_sku_item(
     try:
         with _LOCK:
             conn = _conn()
+            conn.execute(
+                """
+                INSERT INTO seller_sku_projects (user_id, sku, platform)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, sku) DO UPDATE SET
+                    platform=COALESCE(excluded.platform, seller_sku_projects.platform),
+                    updated_at=datetime('now')
+                """,
+                (int(user_id), sku_norm, (platform or "")[:40] or None),
+            )
             cur = conn.execute(
                 "INSERT INTO seller_sku_items "
                 "(user_id, sku, platform, file_id, token, prompt) VALUES (?,?,?,?,?,?)",
@@ -2892,45 +3037,68 @@ def save_seller_sku_item(
         return 0
 
 
+def _seller_sku_project_rows(
+    conn: sqlite3.Connection, user_id: int, *, limit: int, sku: str | None = None
+) -> list[dict]:
+    where = "WHERE n.user_id=?"
+    params: list[object] = [int(user_id), int(user_id), int(user_id)]
+    if sku:
+        where += " AND n.sku=?"
+        params.append(sku)
+    params.append(max(1, int(limit)))
+    rows = _rows(
+        conn,
+        f"""
+        WITH names AS (
+            SELECT user_id, sku FROM seller_sku_projects WHERE user_id=?
+            UNION
+            SELECT user_id, sku FROM seller_sku_items WHERE user_id=?
+        )
+        SELECT n.sku,
+               COUNT(i.id) AS items,
+               COALESCE(MAX(i.created_at), p.updated_at) AS updated_at,
+               (SELECT file_id FROM seller_sku_items last
+                WHERE last.user_id=n.user_id AND last.sku=n.sku
+                ORDER BY last.id DESC LIMIT 1) AS latest_file_id,
+               (SELECT prompt FROM seller_sku_items last
+                WHERE last.user_id=n.user_id AND last.sku=n.sku
+                ORDER BY last.id DESC LIMIT 1) AS latest_prompt,
+               COALESCE(
+                   (SELECT platform FROM seller_sku_items last
+                    WHERE last.user_id=n.user_id AND last.sku=n.sku
+                    ORDER BY last.id DESC LIMIT 1),
+                   p.platform
+               ) AS platform,
+               COALESCE(MAX(i.id), 0) AS sort_item_id
+        FROM names n
+        LEFT JOIN seller_sku_projects p ON p.user_id=n.user_id AND p.sku=n.sku
+        LEFT JOIN seller_sku_items i ON i.user_id=n.user_id AND i.sku=n.sku
+        {where}
+        GROUP BY n.sku
+        ORDER BY sort_item_id DESC, p.updated_at DESC, n.sku COLLATE NOCASE ASC
+        LIMIT ?
+        """,
+        tuple(params),
+    )
+    return [
+        {
+            "sku": r["sku"],
+            "items": int(r["items"] or 0),
+            "updated_at": r["updated_at"],
+            "latest_file_id": r["latest_file_id"],
+            "latest_prompt": r["latest_prompt"],
+            "platform": r["platform"],
+        }
+        for r in rows
+    ]
+
+
 def list_seller_sku_projects(user_id: int, limit: int = 20) -> list[dict]:
     """Return grouped seller SKU projects, newest activity first."""
     try:
         with _LOCK:
             conn = _conn()
-            rows = _rows(
-                conn,
-                """
-                SELECT s.sku,
-                       COUNT(*) AS items,
-                       MAX(s.created_at) AS updated_at,
-                       (SELECT file_id FROM seller_sku_items last
-                        WHERE last.user_id=s.user_id AND last.sku=s.sku
-                        ORDER BY last.id DESC LIMIT 1) AS latest_file_id,
-                       (SELECT prompt FROM seller_sku_items last
-                        WHERE last.user_id=s.user_id AND last.sku=s.sku
-                        ORDER BY last.id DESC LIMIT 1) AS latest_prompt,
-                       (SELECT platform FROM seller_sku_items last
-                        WHERE last.user_id=s.user_id AND last.sku=s.sku
-                        ORDER BY last.id DESC LIMIT 1) AS platform
-                FROM seller_sku_items s
-                WHERE s.user_id=?
-                GROUP BY s.sku
-                ORDER BY MAX(s.id) DESC
-                LIMIT ?
-                """,
-                (int(user_id), max(1, int(limit))),
-            )
-            return [
-                {
-                    "sku": r["sku"],
-                    "items": int(r["items"] or 0),
-                    "updated_at": r["updated_at"],
-                    "latest_file_id": r["latest_file_id"],
-                    "latest_prompt": r["latest_prompt"],
-                    "platform": r["platform"],
-                }
-                for r in rows
-            ]
+            return _seller_sku_project_rows(conn, int(user_id), limit=max(1, int(limit)))
     except Exception:  # noqa: BLE001
         log.warning("list_seller_sku_projects failed for user_id=%r", user_id, exc_info=True)
         return []
