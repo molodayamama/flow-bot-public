@@ -165,10 +165,23 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("m:menu", cb)
 
     def test_photo_settings_keyboard_has_platform_picker(self) -> None:
-        cb = self._callbacks(flow_bot._mp_photo_settings_kb("wb"))
+        kb = flow_bot._mp_photo_settings_kb("wb")
+        cb = self._callbacks(kb)
         self.assertIn("mp:setplat:wb", cb)
         self.assertIn("mp:setplat:ozon", cb)
         self.assertIn("mp:setplat:ym", cb)
+        labels = " ".join(b.text for row in kb.inline_keyboard for b in row)
+        self.assertIn("WB 3:4", labels)
+        self.assertIn("Ozon 3:4", labels)
+        self.assertIn("ЯМ 1:1", labels)
+
+    def test_marketplace_platform_formats_are_real(self) -> None:
+        self.assertEqual(flow_bot._MP_PLATFORM_FMT, {"wb": "f34", "ozon": "f34", "ym": "sq"})
+        self.assertEqual(flow_bot._mp_platform_aspect("wb"), "portrait_34")
+        self.assertEqual(flow_bot._mp_platform_aspect("ozon"), "portrait_34")
+        self.assertEqual(flow_bot._mp_platform_aspect("ym"), "square")
+        self.assertIn("1080x1440", flow_bot._mp_platform_format_label("wb"))
+        self.assertIn("1000x1000", flow_bot._mp_platform_format_label("ym"))
 
     def test_mp_confirm_screen_shows_price_brand_and_create(self) -> None:
         flow_bot.wizard_state[5550001].update(
@@ -178,11 +191,21 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("кр", text)                  # цена показана
         self.assertIn("Бренд-кит", text)            # бренд-кит/ниша на экране решения
         self.assertIn("Ниша", text)
+        self.assertIn("3:4", text)
         cb = self._callbacks(kb)
         self.assertIn("mp:create", cb)              # есть явная кнопка «Создать»
         # «Создать» подписана ценой действия edit.
         labels = [b.text for row in kb.inline_keyboard for b in row]
         self.assertTrue(any("Создать" in lbl for lbl in labels))
+
+    def test_mp_confirm_screen_uses_platform_format(self) -> None:
+        flow_bot.wizard_state[5550002].update(
+            {"mp_platform": "ym", "mp_preset": "cover", "mp_pending_kind": "photo"}
+        )
+        text, _kb = flow_bot._mp_confirm_screen(5550002)
+        self.assertIn("Яндекс Маркет", text)
+        self.assertIn("1:1", text)
+        self.assertIn("1000x1000", text)
 
     def test_series_keyboard_has_bundle_prices(self) -> None:
         kb = flow_bot.mp_series_kb("wb")
@@ -205,7 +228,7 @@ class SellerMenuTests(unittest.TestCase):
         source = inspect.getsource(flow_bot.on_marketplace_action)
         self.assertIn('if job not in _MP_PRODUCT_PHOTO_JOBS:', source)
         self.assertIn('st["await"] = "mp_photo"', source)
-        self.assertIn('st["edit_fmt"] = "f34"', source)
+        self.assertIn('st["edit_fmt"] = _mp_platform_fmt(plat)', source)
         self.assertIn("_mp_photo_request_text(plat, job)", source)
         self.assertNotIn("await show_wizard(msg", source)
 
@@ -214,6 +237,17 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("загруженное фото", prompt)
         self.assertIn("Wildberries", prompt)
         self.assertIn("красные ботинки", prompt)
+        self.assertIn("3:4", prompt)
+        self.assertIn("верхнюю зону", prompt)
+
+    def test_marketplace_instruction_uses_platform_guidance(self) -> None:
+        ozon_prompt = flow_bot._mp_job_instruction("whitebg", "ozon")
+        ym_prompt = flow_bot._mp_job_instruction("cover", "ym")
+        self.assertIn("Ozon", ozon_prompt)
+        self.assertIn("светлая композиция", ozon_prompt)
+        self.assertIn("Яндекс Маркет", ym_prompt)
+        self.assertIn("1:1", ym_prompt)
+        self.assertIn("товар по центру", ym_prompt)
 
     def test_marketplace_series_waits_for_product_photo(self) -> None:
         source = inspect.getsource(flow_bot.on_marketplace_action)
@@ -230,6 +264,14 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("Ozon", prompt)
         self.assertIn("загруженное фото", prompt)
         self.assertIn("зелёная бутылка", prompt)
+        self.assertIn("3:4", prompt)
+
+    def test_marketplace_series_prompt_uses_platform_format(self) -> None:
+        prompt = flow_bot._mp_series_prompt("ym", 3)
+        self.assertIn("Яндекс Маркет", prompt)
+        self.assertIn("1:1", prompt)
+        self.assertIn("1000x1000", prompt)
+        self.assertIn("товар по центру", prompt)
 
     def test_marketplace_prompts_include_brand_kit_when_present(self) -> None:
         prompt = flow_bot._mp_job_instruction("cover", "wb", brand_kit="чёрный и золото")
@@ -295,11 +337,21 @@ class SellerMenuTests(unittest.TestCase):
             project_id="p",
             source={"mediaId": "mediaabcdef123456"},
             platform="wb",
+            aspect_ratio="portrait_34",
         )
         filename = flow_bot._marketplace_export_filename(ref, b"\x89PNG\r\n\x1a\nrest")
         self.assertTrue(filename.startswith("photozhab_wildberries_3x4_"))
         self.assertTrue(filename.endswith(".png"))
         self.assertIn("Wildberries", flow_bot._marketplace_export_caption(ref))
+        square_ref = flow_core.ImageRef(
+            user_id=1,
+            project_id="p",
+            source={"mediaId": "mediaabcdef123456"},
+            platform="ym",
+            aspect_ratio="square",
+        )
+        square_filename = flow_bot._marketplace_export_filename(square_ref, b"\x89PNG\r\n\x1a\nrest")
+        self.assertTrue(square_filename.startswith("photozhab_yandex_market_1x1_"))
 
     def test_brandkit_sets_profile_state(self) -> None:
         source = inspect.getsource(flow_bot.on_marketplace_action)

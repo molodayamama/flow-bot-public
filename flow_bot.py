@@ -4049,6 +4049,41 @@ def main_menu_kb(show_repeat: bool = False, credits: int | None = None) -> types
 
 # ── Маркетплейс-меню селлер-бота (docs/SELLER_BOT_PLAN.md §4) ─────────────
 _MP_PLAT_NAMES = {"wb": "Wildberries", "ozon": "Ozon", "ym": "Яндекс Маркет"}
+_MP_PLATFORM_FMT = {"wb": "f34", "ozon": "f34", "ym": "sq"}
+_MP_PLATFORM_SIZE = {"wb": "1080x1440", "ozon": "1080x1440", "ym": "1000x1000"}
+_MP_PLATFORM_GUIDANCE = {
+    "wb": (
+        "Wildberries: вертикальная 3:4 карточка, товар крупно; "
+        "оставь верхнюю зону под короткий заголовок или выгоду."
+    ),
+    "ozon": (
+        "Ozon: чистая светлая композиция, аккуратный белый или светло-серый фон, "
+        "понятная зона под преимущества без визуального шума."
+    ),
+    "ym": (
+        "Яндекс Маркет: квадратная 1:1 карточка, товар по центру, умеренные подписи; "
+        "важное не прижимать к краям."
+    ),
+}
+
+
+def _mp_platform_fmt(platform: str) -> str:
+    return _MP_PLATFORM_FMT.get(platform, "f34")
+
+
+def _mp_platform_format_label(platform: str) -> str:
+    fmt = _mp_platform_fmt(platform)
+    name = {"f34": "3:4", "sq": "1:1"}.get(fmt, fmt)
+    size = _MP_PLATFORM_SIZE.get(platform)
+    return f"{name} ({size})" if size else name
+
+
+def _mp_platform_aspect(platform: str) -> str:
+    return _fmt_to_aspect(_mp_platform_fmt(platform))
+
+
+def _mp_platform_guidance(platform: str) -> str:
+    return _MP_PLATFORM_GUIDANCE.get(platform, _MP_PLATFORM_GUIDANCE["wb"])
 
 
 def mp_root_kb() -> types.InlineKeyboardMarkup:
@@ -4098,9 +4133,9 @@ def _mp_photo_settings_kb(plat: str) -> types.InlineKeyboardMarkup:
     plat = plat if plat in _MP_PLAT_NAMES else "wb"
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [
-            _sel_btn("🟣 WB", plat == "wb", "mp:setplat:wb"),
-            _sel_btn("🔵 Ozon", plat == "ozon", "mp:setplat:ozon"),
-            _sel_btn("🟡 ЯМ", plat == "ym", "mp:setplat:ym"),
+            _sel_btn("🟣 WB 3:4", plat == "wb", "mp:setplat:wb"),
+            _sel_btn("🔵 Ozon 3:4", plat == "ozon", "mp:setplat:ozon"),
+            _sel_btn("🟡 ЯМ 1:1", plat == "ym", "mp:setplat:ym"),
         ],
         [B(text="◀️ Назад", callback_data="m:mp")],
         [_menu_button("menu", "m:menu")],
@@ -4197,6 +4232,7 @@ def _mp_confirm_screen(user_id: int):
     st = _ws(user_id)
     plat = st.get("mp_platform", "wb")
     plat_name = _MP_PLAT_NAMES.get(plat, plat)
+    format_label = _mp_platform_format_label(plat)
     kind = st.get("mp_pending_kind", "photo")
     try:
         brand = _mp_brand_kit(user_id)
@@ -4230,7 +4266,7 @@ def _mp_confirm_screen(user_id: int):
     ]
     if caption:
         lines.append(f"📝 Пожелание: {html.escape(caption[:150])}")
-    lines.append("📐 Формат: 3:4 (карточка маркетплейса)")
+    lines.append(f"📐 Формат: {html.escape(format_label)}")
     lines.append(f"💰 Стоимость: <b>{price} кр</b> · Баланс: {credits} кр")
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text=f"✅ Создать · {price} кр", callback_data="mp:create")],
@@ -4249,9 +4285,11 @@ def _mp_job_instruction(
 ) -> str:
     seed = _MP_JOB_SEED.get(job, "сделать продающую карточку товара для маркетплейса")
     platform_name = _MP_PLAT_NAMES.get(platform, platform)
+    format_label = _mp_platform_format_label(platform)
+    platform_guidance = _mp_platform_guidance(platform)
     prompt = (
         f"{seed}. Используй загруженное фото как исходный товар, сохрани товар узнаваемым. "
-        f"Формат карточки 3:4, площадка: {platform_name}."
+        f"Формат карточки {format_label}, площадка: {platform_name}. {platform_guidance}"
     )
     guidance = _mp_niche_guidance(niche)
     if guidance:
@@ -4269,8 +4307,11 @@ def _mp_photo_request_text(platform: str, job: str) -> str:
     platform_name = html.escape(_MP_PLAT_NAMES.get(platform, platform))
     job_label = html.escape(_MP_JOB_LABELS.get(job, job))
     seed = html.escape(_MP_JOB_SEED.get(job, ""))
+    format_label = html.escape(_mp_platform_format_label(platform))
+    price = action_price("edit")
     return (
         f"🛒 <b>{platform_name}</b> · {job_label}\n\n"
+        f"📐 Формат: <b>{format_label}</b> · стоимость: <b>{price} кр</b>\n\n"
         "Пришли фото товара. Я применю выбранный пресет к реальному товару, "
         "а не буду рисовать карточку с нуля.\n\n"
         f"<blockquote>{seed}</blockquote>\n"
@@ -4334,10 +4375,12 @@ def _mp_series_request_text(platform: str, count: int) -> str:
     platform_name = html.escape(_MP_PLAT_NAMES.get(platform, platform))
     count = count if count in _MP_SERIES_COUNTS else 3
     label = html.escape(_MP_SERIES_LABELS[count])
+    format_label = html.escape(_mp_platform_format_label(platform))
     price = action_price("mp_series", count)
     return (
         f"🧩 <b>{platform_name}</b> · {label} · {count} {_slides_word(count)} · {price} кр\n\n"
-        "Пришли одно фото товара. Я соберу серию вертикальных слайдов 3:4 "
+        f"📐 Формат серии: <b>{format_label}</b>\n\n"
+        "Пришли одно фото товара. Я соберу серию слайдов "
         "для карточки маркетплейса на основе этого товара.\n\n"
         "Можно добавить подпись к фото — например нишу, УТП, цвет бренда или "
         "что обязательно показать в серии."
@@ -4353,12 +4396,15 @@ def _mp_series_prompt(
 ) -> str:
     platform_name = _MP_PLAT_NAMES.get(platform, platform)
     count = count if count in _MP_SERIES_COUNTS else 3
+    format_label = _mp_platform_format_label(platform)
+    platform_guidance = _mp_platform_guidance(platform)
     prompt = (
-        f"Создай {count} разных вертикальных слайдов 3:4 для карточки товара на {platform_name}. "
+        f"Создай {count} разных слайдов формата {format_label} для карточки товара на {platform_name}. "
         "Используй загруженное фото как исходный товар, сохрани товар узнаваемым. "
         "Каждый результат должен быть отдельным слайдом одной серии: главный слайд, "
         "выгоды, характеристики, детали применения и доверие/гарантия. "
-        "Единый аккуратный стиль, крупный товар, чистая композиция, место под короткий читаемый текст."
+        "Единый аккуратный стиль, крупный товар, чистая композиция, место под короткий читаемый текст. "
+        f"{platform_guidance}"
     )
     guidance = _mp_niche_guidance(niche)
     if guidance:
@@ -8041,10 +8087,17 @@ def _marketplace_export_filename(ref: ImageRef, data: bytes) -> str:
         "ozon": "ozon",
         "ym": "yandex_market",
     }.get(platform, "marketplace")
+    aspect_slug = {
+        "portrait_34": "3x4",
+        "square": "1x1",
+        "landscape": "16x9",
+        "portrait": "9x16",
+        "landscape_43": "4x3",
+    }.get((getattr(ref, "aspect_ratio", "") or "").strip(), "card")
     media_id = ref.source.get("mediaId") if isinstance(ref.source, dict) else None
     suffix = str(media_id or "image")[-12:]
     ext = _image_ext_from_bytes(data)
-    return f"photozhab_{platform_slug}_3x4_{suffix}.{ext}"
+    return f"photozhab_{platform_slug}_{aspect_slug}_{suffix}.{ext}"
 
 
 def _marketplace_export_caption(ref: ImageRef) -> str:
@@ -8340,6 +8393,7 @@ async def on_marketplace_action(callback: types.CallbackQuery):
             return
         st = _ws(user_id)
         st["mp_platform"] = plat
+        st["edit_fmt"] = _mp_platform_fmt(plat)
         await callback.answer(_MP_PLAT_NAMES[plat])
         metrics.log_event("mp_platform", user_id=user_id, source=f"setplat:{plat}")
         try:
@@ -8368,9 +8422,10 @@ async def on_marketplace_action(callback: types.CallbackQuery):
             await callback.answer("Сначала пришли фото товара 🙏", show_alert=True)
             return
         plat = st.get("mp_platform", "wb")
+        st["edit_fmt"] = _mp_platform_fmt(plat)
         kind = st.get("mp_pending_kind", "photo")
         caption_text = (st.get("mp_pending_caption") or "").strip()
-        aspect = _fmt_to_aspect(st.get("edit_fmt", "f34"))
+        aspect = _mp_platform_aspect(plat)
         await callback.answer("Запускаю…")
         st.pop("mp_pending_file_id", None)  # защита от повторного клика → двойной генерации
         if kind == "series":
@@ -8509,7 +8564,7 @@ async def on_marketplace_action(callback: types.CallbackQuery):
         st["mp_platform"] = plat
         st["mp_series_count"] = count
         st["await"] = "mp_series_photo"
-        st["edit_fmt"] = "f34"
+        st["edit_fmt"] = _mp_platform_fmt(plat)
         metrics.log_event(
             "mp_job", user_id=user_id, source=f"{plat}:series:{count}",
             payload={"count": count},
@@ -8560,7 +8615,7 @@ async def on_marketplace_action(callback: types.CallbackQuery):
         st["mp_platform"] = plat
         st["mp_preset"] = job
         st["await"] = "mp_photo"
-        st["edit_fmt"] = "f34"  # 3:4 — вертикальная карточка маркетплейса
+        st["edit_fmt"] = _mp_platform_fmt(plat)
         st["edit_imodel"] = DEFAULT_IMAGE_MODEL
         metrics.log_event("mp_job", user_id=user_id, source=f"{plat}:{job}")
         await msg.edit_text(
@@ -11721,7 +11776,7 @@ async def handle_photo(message: types.Message):
             user_id=user_id,
             status_msg=status_msg,
             prompt=prompt,
-            aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", "f34")),
+            aspect_ratio=_mp_platform_aspect(plat),
         )
         if not ref:
             return
@@ -11771,7 +11826,7 @@ async def handle_photo(message: types.Message):
             user_id=user_id,
             status_msg=status_msg,
             prompt=instruction,
-            aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", "f34")),
+            aspect_ratio=_mp_platform_aspect(plat),
         )
         if not ref:
             return
@@ -11782,13 +11837,13 @@ async def handle_photo(message: types.Message):
         token = image_registry.add(ref)
         pending_edits[user_id] = token
         st["await"] = "edit"
-        st["edit_fmt"] = "f34"
+        st["edit_fmt"] = _mp_platform_fmt(plat)
         st["edit_imodel"] = st.get("edit_imodel", DEFAULT_IMAGE_MODEL)
         ok = await _edit_and_send(
             message,
             ref,
             instruction,
-            aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", "f34")),
+            aspect_ratio=_mp_platform_aspect(plat),
             image_model=st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
         )
         if ok:
