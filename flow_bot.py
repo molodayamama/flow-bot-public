@@ -4181,6 +4181,52 @@ def _mp_niche_guidance(niche: str | None) -> str:
     return f"{label}: {guidance}"
 
 
+def _mp_niche_label(user_id: int) -> str:
+    niche_id = _mp_niche(user_id)
+    item = _MP_NICHES.get(niche_id)
+    return item[0] if item else ""
+
+
+def _mp_confirm_screen(user_id: int):
+    """Экран подтверждения перед генерацией: задача, площадка, бренд-кит, ниша,
+    ЦЕНА, баланс — чтобы селлер видел стоимость и контекст до списания."""
+    st = _ws(user_id)
+    plat = st.get("mp_platform", "wb")
+    plat_name = _MP_PLAT_NAMES.get(plat, plat)
+    kind = st.get("mp_pending_kind", "photo")
+    brand = _mp_brand_kit(user_id)
+    niche = _mp_niche_label(user_id)
+    caption = (st.get("mp_pending_caption") or "").strip()
+    credits = credit_store.balance(user_id)
+    if kind == "series":
+        count = st.get("mp_series_count", 3)
+        if count not in _MP_SERIES_COUNTS:
+            count = 3
+        price = action_price("mp_series", count)
+        job_label = f"серия · {count} {_slides_word(count)}"
+    else:
+        job = st.get("mp_preset", "whitebg")
+        price = action_price("edit")
+        job_label = _MP_JOB_LABELS.get(job, job)
+    lines = [
+        f"🛒 <b>{html.escape(plat_name)}</b> · {html.escape(job_label)}",
+        "📎 Фото товара принято.",
+        "",
+        f"🎨 Бренд-кит: {html.escape(brand) if brand else '— (не задан)'}",
+        f"🏷️ Ниша: {html.escape(niche) if niche else '— (не задана)'}",
+    ]
+    if caption:
+        lines.append(f"📝 Пожелание: {html.escape(caption[:150])}")
+    lines.append("📐 Формат: 3:4 (карточка маркетплейса)")
+    lines.append(f"💰 Стоимость: <b>{price} кр</b> · Баланс: {credits} кр")
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=f"✅ Создать · {price} кр", callback_data="mp:create")],
+        [types.InlineKeyboardButton(text="✏️ Сменить задачу", callback_data="m:mp")],
+        [_menu_button("cancel", "m:menu")],
+    ])
+    return "\n".join(lines), kb
+
+
 def _mp_job_instruction(
     job: str,
     platform: str,
@@ -6828,14 +6874,13 @@ async def _seller_generate_and_send(
     return ok
 
 
-async def _seller_i2i_from_photo(
-    message: types.Message, instruction: str, *, num_images: int, aspect_ratio: str,
-    user_id: int, action: str,
+async def _seller_i2i_from_file_id(
+    message: types.Message, file_id: str, instruction: str, *, num_images: int,
+    aspect_ratio: str, user_id: int, action: str,
 ) -> bool:
-    """Seller marketplace photo job: download the product photo, run i2i via backend."""
+    """Seller marketplace photo job from a stored Telegram file_id: download, i2i."""
     try:
-        photo = message.photo[-1]
-        buf = await bot.download(photo.file_id)
+        buf = await bot.download(file_id)
         data = buf.read() if hasattr(buf, "read") else bytes(buf)
     except Exception:
         log.exception("seller photo download failed")
@@ -6845,6 +6890,17 @@ async def _seller_i2i_from_photo(
     return await _seller_generate_and_send(
         message, instruction, num_images=num_images, aspect_ratio=aspect_ratio,
         user_id=user_id, action=action, kind="i2i", image_b64=image_b64,
+    )
+
+
+async def _seller_i2i_from_photo(
+    message: types.Message, instruction: str, *, num_images: int, aspect_ratio: str,
+    user_id: int, action: str,
+) -> bool:
+    """Seller marketplace photo job: download the product photo, run i2i via backend."""
+    return await _seller_i2i_from_file_id(
+        message, message.photo[-1].file_id, instruction,
+        num_images=num_images, aspect_ratio=aspect_ratio, user_id=user_id, action=action,
     )
 
 
@@ -8283,6 +8339,41 @@ async def on_marketplace_action(callback: types.CallbackQuery):
                 )
         except Exception:
             pass
+        return
+
+    # Подтверждение генерации карточки: генерим по ранее загруженному фото.
+    if data == "mp:create":
+        st = _ws(user_id)
+        file_id = st.get("mp_pending_file_id")
+        if not file_id:
+            await callback.answer("Сначала пришли фото товара 🙏", show_alert=True)
+            return
+        plat = st.get("mp_platform", "wb")
+        kind = st.get("mp_pending_kind", "photo")
+        caption_text = (st.get("mp_pending_caption") or "").strip()
+        aspect = _fmt_to_aspect(st.get("edit_fmt", "f34"))
+        await callback.answer("Запускаю…")
+        st.pop("mp_pending_file_id", None)  # защита от повторного клика → двойной генерации
+        if kind == "series":
+            count = st.get("mp_series_count", 3)
+            if count not in _MP_SERIES_COUNTS:
+                count = 3
+            prompt = _mp_series_prompt(plat, count, caption_text,
+                                       brand_kit=_mp_brand_kit(user_id), niche=_mp_niche(user_id))
+            ok = await _seller_i2i_from_file_id(
+                callback.message, file_id, prompt, num_images=count,
+                aspect_ratio=aspect, user_id=user_id, action="mp_series",
+            )
+            if ok:
+                st.pop("mp_series_count", None)
+        else:
+            job = st.get("mp_preset", "whitebg")
+            instruction = _mp_job_instruction(job, plat, caption_text,
+                                              brand_kit=_mp_brand_kit(user_id), niche=_mp_niche(user_id))
+            await _seller_i2i_from_file_id(
+                callback.message, file_id, instruction, num_images=1,
+                aspect_ratio=aspect, user_id=user_id, action="edit",
+            )
         return
 
     if data == "mp:series":
@@ -11597,15 +11688,13 @@ async def handle_photo(message: types.Message):
         )
         metrics.log_event("mp_series_photo_uploaded", user_id=user_id, source=f"{plat}:{count}")
         if IS_SELLER:
-            # Seller: i2i через общий бэкенд основного бота (§A).
-            ok = await _seller_i2i_from_photo(
-                message, prompt, num_images=count,
-                aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", "f34")),
-                user_id=user_id, action="mp_series",
-            )
-            if ok:
-                st["await"] = None
-                st.pop("mp_series_count", None)
+            # Не генерируем сразу: показываем подтверждение с ценой, генерим по кнопке.
+            st["mp_pending_file_id"] = message.photo[-1].file_id
+            st["mp_pending_caption"] = caption_text
+            st["mp_pending_kind"] = "series"
+            st["await"] = None
+            ctext, ckb = _mp_confirm_screen(user_id)
+            await message.answer(ctext, reply_markup=ckb, parse_mode="HTML")
             return
         status_msg = await message.answer(flow_copy.msg("uploading_photo"))
         ref = await _upload_image_ref_from_photo_message(
@@ -11649,14 +11738,13 @@ async def handle_photo(message: types.Message):
         )
         metrics.log_event("mp_photo_uploaded", user_id=user_id, source=f"{plat}:{job}")
         if IS_SELLER:
-            # Seller: i2i через общий бэкенд основного бота (§A).
-            ok = await _seller_i2i_from_photo(
-                message, instruction, num_images=1,
-                aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", "f34")),
-                user_id=user_id, action="edit",
-            )
-            if ok:
-                st["await"] = None
+            # Не генерируем сразу: показываем подтверждение с ценой, генерим по кнопке.
+            st["mp_pending_file_id"] = message.photo[-1].file_id
+            st["mp_pending_caption"] = caption_text
+            st["mp_pending_kind"] = "photo"
+            st["await"] = None
+            ctext, ckb = _mp_confirm_screen(user_id)
+            await message.answer(ctext, reply_markup=ckb, parse_mode="HTML")
             return
         status_msg = await message.answer(flow_copy.msg("uploading_photo"))
         ref = await _upload_image_ref_from_photo_message(

@@ -170,6 +170,20 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("mp:setplat:ozon", cb)
         self.assertIn("mp:setplat:ym", cb)
 
+    def test_mp_confirm_screen_shows_price_brand_and_create(self) -> None:
+        flow_bot.wizard_state[5550001].update(
+            {"mp_platform": "wb", "mp_preset": "whitebg", "mp_pending_kind": "photo"}
+        )
+        text, kb = flow_bot._mp_confirm_screen(5550001)
+        self.assertIn("кр", text)                  # цена показана
+        self.assertIn("Бренд-кит", text)            # бренд-кит/ниша на экране решения
+        self.assertIn("Ниша", text)
+        cb = self._callbacks(kb)
+        self.assertIn("mp:create", cb)              # есть явная кнопка «Создать»
+        # «Создать» подписана ценой действия edit.
+        labels = [b.text for row in kb.inline_keyboard for b in row]
+        self.assertTrue(any("Создать" in lbl for lbl in labels))
+
     def test_series_keyboard_has_bundle_prices(self) -> None:
         kb = flow_bot.mp_series_kb("wb")
         cb = self._callbacks(kb)
