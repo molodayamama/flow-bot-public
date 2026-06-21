@@ -83,3 +83,29 @@ Role handoff:
 - Validation: full offline suite and syntax checks passed.
 - Risks: platform/job pairing is based on the nearest prior `mp_job` event; concurrent seller jobs are already constrained by user-level generation locking.
 - Next role: Committer.
+
+## Major 12 — stale marketplace buttons
+
+What changed:
+- Added active marketplace message stamping in `wizard_state` via `mp_active_msg_id`.
+- `mp:*` callbacks now reject clicks from older marketplace screens with “Это старый экран — открой актуальное меню”.
+- The guard attempts to remove the stale inline keyboard so old buttons stop looking live.
+- The marketplace hub, SKU projects screen, and result-toolbar SKU choice message all stamp the active message id, so normal current-screen and SKU-add flows keep working.
+
+Files:
+- `flow_bot.py`
+- `tests/test_seller_bot.py`
+- `docs/SELLER_ROADMAP_FIXES_2026-06-21.md`
+
+Verified:
+- `ENV_FILE=.env.example python -m py_compile flow_bot.py tests/test_seller_bot.py` — pass.
+- `ENV_FILE=.env.example python -m unittest discover -s tests -p "test_*.py"` — pass, 608 tests.
+
+Role handoff:
+- Task: Major 12 stale-button protection.
+- Role completed: Architect, Reviewer, Implementer, Verifier.
+- Files touched: `flow_bot.py`, `tests/test_seller_bot.py`, `docs/SELLER_ROADMAP_FIXES_2026-06-21.md`.
+- Assumptions: rejecting by Telegram `message_id` is sufficient for the seller marketplace wizard because these screens are single-message inline flows.
+- Validation: full offline suite and syntax checks passed.
+- Risks: if Telegram does not allow editing an old message markup, the callback is still rejected but the old keyboard may remain visible client-side.
+- Next role: Committer.

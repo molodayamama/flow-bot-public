@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 
 import flow_core
@@ -75,6 +76,28 @@ class SellerMenuTests(unittest.TestCase):
         ccb = self._callbacks(flow_bot.main_menu_kb())
         self.assertIn("m:gen", ccb)
         self.assertNotIn("m:mp", ccb)
+
+    def test_marketplace_stale_callback_detection(self) -> None:
+        user_id = 909001
+        flow_bot.wizard_state[user_id]["mp_active_msg_id"] = 200
+        stale = SimpleNamespace(message=SimpleNamespace(message_id=199))
+        current = SimpleNamespace(message=SimpleNamespace(message_id=200))
+        unknown = SimpleNamespace(message=SimpleNamespace(message_id=0))
+        self.assertTrue(flow_bot._mp_is_stale_callback(user_id, stale))
+        self.assertFalse(flow_bot._mp_is_stale_callback(user_id, current))
+        self.assertFalse(flow_bot._mp_is_stale_callback(user_id, unknown))
+        flow_bot._mp_stamp_message(user_id, SimpleNamespace(message_id=201))
+        self.assertEqual(flow_bot.wizard_state[user_id]["mp_active_msg_id"], 201)
+
+    def test_marketplace_callbacks_are_stale_guarded(self) -> None:
+        source = inspect.getsource(flow_bot.on_marketplace_action)
+        self.assertIn("_mp_is_stale_callback(user_id, callback)", source)
+        self.assertIn("_mp_reject_stale_callback(callback)", source)
+        menu_source = inspect.getsource(flow_bot.on_menu_action)
+        self.assertIn('elif data == "m:mp":', menu_source)
+        self.assertIn("_mp_stamp_message(user_id, msg)", menu_source)
+        action_source = inspect.getsource(flow_bot.on_image_action)
+        self.assertIn("_mp_stamp_message(user_id, sent)", action_source)
 
     def test_backend_dispatch_by_kind(self) -> None:
         import asyncio

@@ -4126,6 +4126,40 @@ def _mp_back_kb() -> types.InlineKeyboardMarkup:
     ])
 
 
+_MP_STALE_SCREEN_TEXT = "Это старый экран — открой актуальное меню"
+
+
+def _mp_message_id(message) -> int:
+    try:
+        return int(getattr(message, "message_id", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _mp_stamp_message(user_id: int, message) -> None:
+    msg_id = _mp_message_id(message)
+    if msg_id:
+        _ws(user_id)["mp_active_msg_id"] = msg_id
+
+
+def _mp_is_stale_callback(user_id: int, callback: types.CallbackQuery) -> bool:
+    current = _ws(user_id).get("mp_active_msg_id")
+    try:
+        current_id = int(current or 0)
+    except (TypeError, ValueError):
+        current_id = 0
+    clicked_id = _mp_message_id(getattr(callback, "message", None))
+    return bool(current_id and clicked_id and clicked_id != current_id)
+
+
+async def _mp_reject_stale_callback(callback: types.CallbackQuery) -> None:
+    await callback.answer(_MP_STALE_SCREEN_TEXT, show_alert=True)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+
 def _mp_photo_settings_kb(plat: str) -> types.InlineKeyboardMarkup:
     """Экран приёма фото: выбор площадки (формат/стиль) прямо здесь, перед
     генерацией — вместо отдельного шага выбора площадки в начале."""
@@ -4538,8 +4572,10 @@ async def _show_sku_projects(message: types.Message, *, user_id: int, edit: bool
     kb = _mp_sku_projects_kb(user_id, projects)
     if edit:
         await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        _mp_stamp_message(user_id, message)
     else:
-        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        _mp_stamp_message(user_id, sent)
 
 
 def _mp_sku_choice_kb(user_id: int) -> types.InlineKeyboardMarkup:
@@ -8536,6 +8572,10 @@ async def on_marketplace_action(callback: types.CallbackQuery):
                         first_name=getattr(callback.from_user, "first_name", None))
     data = callback.data or ""
     msg = callback.message
+    if _mp_is_stale_callback(user_id, callback):
+        await _mp_reject_stale_callback(callback)
+        return
+    _mp_stamp_message(user_id, msg)
 
     if data.startswith("mp:plat:"):
         plat = data.split(":", 2)[2]
@@ -8962,6 +9002,7 @@ async def on_menu_action(callback: types.CallbackQuery):
             "настроек перед генерацией:",
             reply_markup=mp_jobs_kb(_ws(user_id).get("mp_platform", "wb")),
         )
+        _mp_stamp_message(user_id, msg)
     elif data == "m:ideas":
         await callback.answer()
         _reset_image_flow(user_id)
@@ -11679,10 +11720,11 @@ async def on_image_action(callback: types.CallbackQuery):
         }
         st["await"] = "mp_sku_name"
         await callback.answer()
-        await callback.message.answer(
+        sent = await callback.message.answer(
             "📦 В какой SKU добавить этот результат?",
             reply_markup=_mp_sku_choice_kb(user_id),
         )
+        _mp_stamp_message(user_id, sent)
     elif action == "mpexport":
         if not IS_SELLER:
             await callback.answer()
