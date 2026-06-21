@@ -7044,7 +7044,35 @@ async def _seller_generate_and_send(
         metrics.log_event("credits_charged", user_id=user_id, source=action,
                           payload={"amount": charged, "action": action})
     _log_image_job(user_id, action, image_model, started, ok=ok, charged=charged)
+    if ok:
+        await _maybe_brandkit_nudge(message, user_id)
     return ok
+
+
+async def _maybe_brandkit_nudge(message: types.Message, user_id: int) -> None:
+    """После первой удачной seller-генерации (один раз) предлагаем заполнить
+    бренд-кит — чтобы карточки были в едином стиле магазина."""
+    if not IS_SELLER:
+        return
+    try:
+        if _mp_brand_kit(user_id):
+            return  # бренд-кит уже задан
+        if metrics.has_user_event(user_id, "brandkit_nudge_shown"):
+            return  # нудж уже показывали
+        metrics.log_event("brandkit_nudge_shown", user_id=user_id, source="seller")
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="🎨 Заполнить бренд-кит", callback_data="mp:brandkit")],
+            [_menu_button("menu", "m:menu")],
+        ])
+        await message.answer(
+            "🎉 <b>Поздравляем с первой карточкой!</b>\n\n"
+            "Чтобы усилить качество и держать единый стиль магазина (цвета, тон, "
+            "что показывать), заполни <b>бренд-кит</b> — я буду учитывать его в "
+            "каждой карточке и серии.",
+            reply_markup=kb, parse_mode="HTML",
+        )
+    except Exception:
+        log.warning("brandkit nudge failed", exc_info=True)
 
 
 async def _seller_i2i_from_file_id(

@@ -98,6 +98,7 @@ __all__ = [
     "recent_seller_skus",
     "save_seller_profile",
     "get_seller_profile",
+    "has_user_event",
 ]
 
 log = logging.getLogger("flow.metrics")
@@ -1958,6 +1959,24 @@ def report_errors(days: int = 7) -> dict:
 
 
 # ── users profile writers ──────────────────────────────────────────────
+
+
+def has_user_event(user_id: int, event_name: str) -> bool:
+    """True if the user already logged at least one event with this name.
+
+    Used for one-shot nudges (e.g. the post-first-generation brand-kit prompt).
+    Never raises."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT 1 FROM events WHERE user_id=? AND event_name=? LIMIT 1",
+                (user_id, event_name),
+            ).fetchone()
+            return row is not None
+    except Exception:  # noqa: BLE001
+        log.warning("has_user_event failed user=%r event=%r", user_id, event_name, exc_info=True)
+        return False
 
 
 def user_exists(user_id: int) -> bool:

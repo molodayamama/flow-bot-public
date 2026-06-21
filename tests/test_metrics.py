@@ -73,6 +73,14 @@ class EventTests(MetricsTestBase):
         self.assertEqual(self._count("events"), 1)
         self.assertEqual(self._one("SELECT event_name FROM events")[0], "fresh")
 
+    def test_has_user_event_one_shot_flag(self) -> None:
+        # Used for the one-shot post-first-generation brand-kit nudge.
+        self.assertFalse(metrics.has_user_event(42, "brandkit_nudge_shown"))
+        metrics.log_event("brandkit_nudge_shown", user_id=42)
+        self.assertTrue(metrics.has_user_event(42, "brandkit_nudge_shown"))
+        self.assertFalse(metrics.has_user_event(99, "brandkit_nudge_shown"))  # other user
+        self.assertFalse(metrics.has_user_event(42, "some_other_event"))
+
     def test_log_event_optional_args_are_fine(self) -> None:
         metrics.log_event("user_started")  # no user_id/username/source/payload
         self.assertEqual(self._count("events"), 1)
