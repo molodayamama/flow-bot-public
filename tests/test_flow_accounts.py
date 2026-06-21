@@ -57,6 +57,15 @@ class ParseFlowAccountsTests(unittest.TestCase):
         self.assertEqual(accs[0].browser_proxy_url, "direct")
         self.assertEqual(accs[0].api_proxy_url, "http://127.0.0.1:8120")
 
+    def test_account_proxy_option_decodes_separator_safe_value(self) -> None:
+        proxy = "http://user:p%40" + "ss%7Cword@127.0.0.1:8118"
+        accs = parse_flow_accounts(
+            "acc2=./profile2|proxy=" + proxy
+        )
+        expected = "http://user" + ":p@" + "ss|word@127.0.0.1:8118"
+        self.assertEqual(accs[0].browser_proxy_url, expected)
+        self.assertEqual(accs[0].api_proxy_url, expected)
+
 
 class AccountPoolTests(unittest.TestCase):
     def _pool(self, n: int = 2, **kw) -> AccountPool:
@@ -72,6 +81,18 @@ class AccountPoolTests(unittest.TestCase):
         a_second = pool.pick_for(222)                  # наименее загруженный
         self.assertNotEqual(a_first, a_second)
         self.assertEqual(pool.pick_for(222), a_second)
+
+    def test_add_account_hot_adds_runtime_state(self) -> None:
+        pool = self._pool(1)
+        added = pool.add_account(FlowAccount(id="a2", profile_dir="./p2"), runtime_status="warming")
+
+        self.assertTrue(added)
+        self.assertFalse(pool.add_account(FlowAccount(id="a2", profile_dir="./p2")))
+        by_id = {row["id"]: row for row in pool.status()}
+        self.assertIn("a2", by_id)
+        self.assertFalse(by_id["a2"]["runtime_ready"])
+        self.assertEqual(by_id["a2"]["runtime_status"], "warming")
+        self.assertEqual(by_id["a2"]["active_image_jobs"], 0)
 
     def test_failure_cooldown_and_failover(self) -> None:
         pool = self._pool(2, max_failures=3, cooldown_sec=600)

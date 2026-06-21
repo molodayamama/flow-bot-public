@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 from aiohttp import web
 
+import account_onboarding
 import config_store
 import metrics
 
@@ -108,6 +109,29 @@ def _startup_for_account(account_id: str) -> dict | None:
         item = accounts.get(account_id)
         return dict(item) if isinstance(item, dict) else None
     return None
+
+
+def _startup_set_account_status(account_id: str, status: str, *, ready: bool = False, error: str | None = None) -> None:
+    if not isinstance(_startup_state, dict):
+        return
+    item = _startup_state.setdefault("accounts", {}).setdefault(account_id, {})
+    item.update({"status": status, "ready": bool(ready), "updated_at": time.time()})
+    if error:
+        item["error"] = error
+    else:
+        item.pop("error", None)
+    accounts = _startup_state.get("accounts")
+    if isinstance(accounts, dict):
+        _startup_state["ready_accounts"] = sum(1 for a in accounts.values() if isinstance(a, dict) and a.get("ready"))
+        _startup_state["total_accounts"] = len(accounts)
+
+
+def _safe_reason(value: object, limit: int = 240) -> str:
+    text = str(value or "")
+    token_prefixes = ("Bearer" + r"\s+", "ya29" + r"\.", "session-" + "token=")
+    text = re.sub(r"(" + "|".join(token_prefixes) + r")[^\s\"']+", r"\1***", text)
+    text = re.sub(r"(https?://[^:/\s]+:)[^@\s]+@", r"\1***@", text)
+    return text[:limit]
 
 
 def _format_placeholders(text: str) -> set[str]:
@@ -635,6 +659,259 @@ async def handle_account_reset(request: web.Request) -> web.Response:
 
 
 # ── config: messages ───────────────────────────────────────────────────
+
+async def _warm_hot_added_account(account_id: str, keeper) -> None:
+    if _pool is not None:
+        _pool.set_runtime_ready(account_id, False, "warming")
+    _startup_set_account_status(account_id, "running", ready=False)
+    try:
+        await keeper.start()
+    except Exception as exc:  # noqa: BLE001 - background warmup state
+        log.warning("hot-added account warmup failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
+        if _pool is not None:
+            _pool.set_runtime_ready(account_id, False, "error")
+        _startup_set_account_status(account_id, "error", ready=False, error=exc.__class__.__name__)
+        return
+    if _pool is not None:
+        _pool.set_runtime_ready(account_id, True, "ready")
+    _startup_set_account_status(account_id, "ready", ready=True)
+
+
+def _try_hot_add_account(account_id: str, profile_dir: str, proxy_url: str) -> dict:
+    if _pool is None:
+        return {"runtime_added": False, "runtime_reason": "pool_not_initialized"}
+    if account_id in _pool.account_ids():
+        return {"runtime_added": False, "runtime_reason": "already_in_runtime"}
+    entry = account_onboarding.AccountEntry(
+        account_id=account_id,
+        profile_dir=profile_dir,
+        proxy_url=proxy_url,
+    )
+    account = account_onboarding.account_from_entry(entry)
+    if not _pool.add_account(account):
+        return {"runtime_added": False, "runtime_reason": "pool_rejected"}
+
+    if _keepers is None or _video_clients is None:
+        _startup_set_account_status(account_id, "pending_restart", ready=False)
+        return {"runtime_added": True, "runtime_reason": "restart_required_for_clients"}
+
+    try:
+        from flow_bot import FlowHttpClient, SessionKeeper
+
+        keeper = SessionKeeper(
+            account_id=account.id,
+            profile_dir=account.profile_dir,
+            browser_proxy_url=account.browser_proxy_url,
+            api_proxy_url=account.api_proxy_url,
+        )
+        _keepers[account.id] = keeper
+        _video_clients[account.id] = FlowHttpClient(keeper)
+        _startup_set_account_status(account.id, "pending", ready=False)
+        asyncio.create_task(_warm_hot_added_account(account.id, keeper))
+        return {"runtime_added": True, "runtime_reason": "warming"}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("hot-add client setup failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
+        if _pool is not None:
+            _pool.set_runtime_ready(account_id, False, "pending_restart")
+        _startup_set_account_status(account_id, "pending_restart", ready=False, error=exc.__class__.__name__)
+        return {"runtime_added": True, "runtime_reason": "restart_required_for_clients"}
+
+
+async def handle_account_onboard_post(request: web.Request) -> web.Response:
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    if body.get("confirm_login") is not True:
+        return _json({"error": "confirm_login=true required"}, 400)
+
+    account_id = str(body.get("id") or body.get("account_id") or "").strip()
+    email = str(body.get("email") or "").strip()
+    password = str(body.get("password") or "")
+    totp_secret = str(body.get("totp_secret") or body.get("totp") or "")
+    proxy_url = str(body.get("proxy") or body.get("proxy_url") or "").strip()
+    profile_dir = str(body.get("profile_dir") or "").strip() or None
+    try:
+        timeout_sec = max(30, min(int(body.get("timeout_sec", 180)), 300))
+    except (TypeError, ValueError):
+        timeout_sec = 180
+
+    try:
+        proxy_label = account_onboarding.proxy_public_label(proxy_url)
+    except account_onboarding.AccountOnboardingError:
+        proxy_label = "(invalid)"
+    try:
+        default_profile = account_onboarding.default_profile_dir(account_id) if account_id else ""
+    except account_onboarding.AccountOnboardingError:
+        default_profile = ""
+    safe_new = {
+        "id": account_id,
+        "profile_dir": profile_dir or default_profile,
+        "proxy": proxy_label,
+    }
+    try:
+        result = await account_onboarding.onboard_google_flow_account(
+            account_id=account_id,
+            email=email,
+            password=password,
+            totp_secret=totp_secret,
+            proxy_url=proxy_url,
+            profile_dir=profile_dir,
+            timeout_sec=timeout_sec,
+        )
+    except account_onboarding.AccountOnboardingError as exc:
+        status = 409 if exc.code in {"account_exists", "profile_exists"} else 400
+        _audit(request, "account.onboard", new=safe_new, result=exc.code)
+        return _json({"ok": False, "status": exc.code, "error": exc.code}, status)
+    except PermissionError:
+        _audit(request, "account.onboard", new=safe_new, result="env_permission_denied")
+        return _json({"ok": False, "status": "env_permission_denied", "error": "env_permission_denied"}, 500)
+    except Exception as exc:  # noqa: BLE001 - admin endpoint must return JSON
+        log.warning("account onboard failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
+        _audit(request, "account.onboard", new=safe_new, result="error")
+        return _json({"ok": False, "status": "login_failed", "error": exc.__class__.__name__}, 500)
+
+    if result.get("ok"):
+        result.update(_try_hot_add_account(
+            str(result.get("account_id") or account_id),
+            str(result.get("profile_dir") or safe_new["profile_dir"]),
+            proxy_url,
+        ))
+    try:
+        metrics.log_event(
+            "account_onboard",
+            source=str(result.get("account_id") or account_id),
+            payload={
+                "status": result.get("status"),
+                "env_updated": bool(result.get("env_updated")),
+                "runtime_added": bool(result.get("runtime_added")),
+                "proxy": safe_new["proxy"],
+            },
+        )
+    except Exception:
+        log.warning("account_onboard metrics log failed", exc_info=True)
+    _audit(
+        request,
+        "account.onboard",
+        new={
+            "id": result.get("account_id") or account_id,
+            "profile_dir": result.get("profile_dir") or safe_new["profile_dir"],
+            "proxy": safe_new["proxy"],
+            "status": result.get("status"),
+            "env_updated": result.get("env_updated"),
+            "runtime_added": result.get("runtime_added"),
+        },
+        result="ok" if result.get("ok") else str(result.get("status") or "login_failed"),
+    )
+    return _json(result)
+
+
+def _account_client(account_id: str):
+    if not _video_clients or account_id not in _video_clients:
+        return None
+    return _video_clients[account_id]
+
+
+async def handle_account_test_image_post(request: web.Request) -> web.Response:
+    account_id = request.match_info["id"]
+    client = _account_client(account_id)
+    if client is None:
+        return _json({"error": f"account {account_id!r} not found"}, 404)
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    if body.get("confirm_spend") is not True:
+        return _json({"error": "confirm_spend=true required"}, 400)
+    prompt = str(body.get("prompt") or "simple studio product photo on a clean white background").strip()[:500]
+    prompt = prompt or "simple studio product photo on a clean white background"
+    try:
+        from flow_core import result_pairs
+
+        started = time.time()
+        result = await client.generate_images(
+            prompt=prompt,
+            aspect_ratio="square",
+            num_images=1,
+            allow_browser_fallback=False,
+        )
+        image_count = len(result_pairs(result)) if isinstance(result, dict) else 0
+        error = result.get("error") if isinstance(result, dict) else "bad_response"
+        ok = image_count > 0 and not error
+        reason = f"{image_count} image accepted" if ok else _safe_reason(error or "no_image_returned")
+        payload = {
+            "account": account_id,
+            "ok": ok,
+            "status": "success" if ok else "fail",
+            "reason": reason,
+            "image_count": image_count,
+            "duration_ms": int((time.time() - started) * 1000),
+        }
+    except Exception as exc:  # noqa: BLE001
+        log.warning("account image test failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
+        payload = {
+            "account": account_id,
+            "ok": False,
+            "status": "fail",
+            "reason": exc.__class__.__name__,
+        }
+    try:
+        metrics.log_event("account_image_test", source=account_id, payload=payload)
+    except Exception:
+        log.warning("account_image_test metrics log failed", exc_info=True)
+    _audit(request, "account.test_image", new={"id": account_id, "ok": payload.get("ok")})
+    return _json(payload)
+
+
+async def handle_account_test_video_post(request: web.Request) -> web.Response:
+    account_id = request.match_info["id"]
+    client = _account_client(account_id)
+    if client is None:
+        return _json({"error": f"account {account_id!r} not found"}, 404)
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    if body.get("confirm_spend") is not True:
+        return _json({"error": "confirm_spend=true required"}, 400)
+    prompt = str(body.get("prompt") or "simple cinematic shot of a calm sunrise over a lake").strip()[:500]
+    prompt = prompt or "simple cinematic shot of a calm sunrise over a lake"
+    try:
+        started = time.time()
+        result = await client.video_transport_ab_test(
+            prompt=prompt,
+            model_key=str(body.get("model") or "omni-flash-4s"),
+            aspect=str(body.get("aspect") or "landscape"),
+            order="direct_first",
+            pause_sec=0,
+            transports=["direct_http"],
+        )
+        arms = result.get("arms", []) if isinstance(result, dict) else []
+        first = arms[0] if arms and isinstance(arms[0], dict) else {}
+        ok = bool(first.get("ok"))
+        reason = "HTTP 200 accepted" if ok else _safe_reason(
+            first.get("error") or first.get("body_preview") or f"status={first.get('status')}"
+        )
+        payload = {
+            "account": account_id,
+            "ok": ok,
+            "status": "success" if ok else "fail",
+            "reason": reason,
+            "http_status": first.get("status"),
+            "duration_ms": int((time.time() - started) * 1000),
+        }
+    except Exception as exc:  # noqa: BLE001
+        log.warning("account video test failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
+        payload = {
+            "account": account_id,
+            "ok": False,
+            "status": "fail",
+            "reason": exc.__class__.__name__,
+        }
+    try:
+        metrics.log_event("account_video_test", source=account_id, payload=payload)
+    except Exception:
+        log.warning("account_video_test metrics log failed", exc_info=True)
+    _audit(request, "account.test_video", new={"id": account_id, "ok": payload.get("ok")})
+    return _json(payload)
+
 
 def _message_defaults() -> dict:
     try:
@@ -1334,10 +1611,13 @@ def register_admin_routes(
     r.add_get ("/api/admin/stats",                     handle_stats)
     r.add_get ("/api/admin/log",                       handle_log)
     r.add_get ("/api/admin/accounts",                  handle_accounts_get)
+    r.add_post("/api/admin/accounts/onboard",          handle_account_onboard_post)
     r.add_post("/api/admin/accounts/{id}/enable",      handle_account_enable)
     r.add_post("/api/admin/accounts/{id}/disable",     handle_account_disable)
     r.add_post("/api/admin/accounts/{id}/video",       handle_account_video)
     r.add_post("/api/admin/accounts/{id}/reset",       handle_account_reset)
+    r.add_post("/api/admin/accounts/{id}/test-image",  handle_account_test_image_post)
+    r.add_post("/api/admin/accounts/{id}/test-video",  handle_account_test_video_post)
     r.add_get ("/api/admin/config/messages",           handle_messages_get)
     r.add_post("/api/admin/config/messages",           handle_messages_post)
     r.add_get ("/api/admin/config/labels",             handle_labels_get)
@@ -1373,4 +1653,4 @@ def register_admin_routes(
     r.add_get ("/api/admin/analytics/channels",        handle_analytics_channels)
     r.add_get ("/api/admin/analytics/errors",          handle_analytics_errors)
     r.add_get ("/api/admin/analytics/active",          handle_analytics_active)
-    log.info("Admin API registered on /api/admin/* (%d routes)", 36)
+    log.info("Admin API registered on /api/admin/* (%d routes)", 39)

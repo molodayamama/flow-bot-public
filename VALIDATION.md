@@ -42,12 +42,16 @@ Requires explicit approval.
 
 - `python login.py`
 - Any script that opens persistent Chrome profile via Playwright.
+- Admin account onboarding from `/admin.html` / `POST /api/admin/accounts/onboard`
+  with `confirm_login=true` (opens Chrome, creates a persistent profile, logs in
+  to Google, and may update `.env` `FLOW_ACCOUNTS`).
 
 Risks:
 
 - Can mutate or delete `google_profile/`.
 - Can open a visible browser.
 - Can affect logged-in Google account/session state.
+- Can create or mutate `google_profile_*` directories and `.env`.
 
 ### Network/External API
 
@@ -64,6 +68,10 @@ Requires explicit approval.
 - `python telegram_bot_tester.py --mode telegram-ramp --prompt "simple safe landscape test" --max-steps 3 --delay-sec 90 --approve-external-action`
 - Admin video transport A/B diagnostic, approval required and spends quota/captcha:
   `curl -sS -X POST http://127.0.0.1:<admin-port>/api/admin/video-ab -H "Content-Type: application/json" -d '{"confirm_spend":true,"account":"<account_id>","model":"omni-flash-4s","aspect":"landscape","prompt":"simple cinematic shot of a calm sunrise over a lake","pause_sec":4}'`
+- Admin account image smoke, approval required and may spend captcha/quota:
+  `curl -sS -X POST http://127.0.0.1:<admin-port>/api/admin/accounts/<account_id>/test-image -H "Content-Type: application/json" -d '{"confirm_spend":true}'`
+- Admin account video smoke, approval required and sends one real video submit:
+  `curl -sS -X POST http://127.0.0.1:<admin-port>/api/admin/accounts/<account_id>/test-video -H "Content-Type: application/json" -d '{"confirm_spend":true}'`
 
 Risks:
 
@@ -131,12 +139,16 @@ Python code change:
 Admin UI/API change:
 
 - Syntax check, assumption:
-  `python -m py_compile admin_api.py metrics.py flow_core.py flow_copy.py flow_bot.py`
+  `python -m py_compile admin_api.py metrics.py flow_core.py flow_copy.py flow_bot.py account_onboarding.py`
 - Static admin JavaScript parse check, assumption:
   `node -e "const fs=require('fs'); const html=fs.readFileSync('deploy/photozhab/admin.html','utf8'); const scripts=[...html.matchAll(/<script>([\\s\\S]*?)<\\/script>/g)].map(m=>m[1]); for (const s of scripts) new Function(s); console.log('admin.html scripts parse OK');"`
 - Seller admin panel changes should include targeted metrics/admin handler tests:
   `python -m unittest discover -s tests -p "test_metrics.py"` and
   `python -m unittest discover -s tests -p "test_admin_api.py"`.
+- Account onboarding changes should include:
+  `python -m unittest discover -s tests -p "test_account_onboarding.py"`,
+  `python -m unittest discover -s tests -p "test_admin_api.py"`, and
+  `python -m unittest discover -s tests -p "test_flow_accounts.py"`.
 - Offline tests, assumption:
   `python -m unittest discover -s tests -p "test_*.py"`
 - Startup/video routing health changes should also include targeted routing and

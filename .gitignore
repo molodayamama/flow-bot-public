@@ -23,6 +23,7 @@ google_profile_acc4/
 google_profile_acc5/
 google_profile_acc6/
 google_profile_sub*/
+google_profile_*/
 
 # Diagnostic screenshots from create_new_project() failures (account UI state)
 debug_screens/

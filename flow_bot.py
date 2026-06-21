@@ -2239,6 +2239,7 @@ class FlowHttpClient:
         order: str = "direct_first",
         pause_sec: float = 4.0,
         project_id: str | None = None,
+        transports: list[str] | None = None,
     ) -> dict:
         """Costly admin diagnostic: compare direct HTTP and browser fetch video submit.
 
@@ -2260,8 +2261,11 @@ class FlowHttpClient:
         proxy = self._api_proxy()
         action = SessionKeeper.VIDEO_RECAPTCHA_ACTION
         sess_id = f";{int(time.time() * 1000)}"
-        transports = ["direct_http", "browser_fetch"]
-        if order == "browser_first":
+        transports = [str(t) for t in (transports or ["direct_http", "browser_fetch"])]
+        transports = [t for t in transports if t in {"direct_http", "browser_fetch"}]
+        if not transports:
+            transports = ["direct_http"]
+        if order == "browser_first" and transports == ["direct_http", "browser_fetch"]:
             transports.reverse()
 
         arms: list[dict] = []

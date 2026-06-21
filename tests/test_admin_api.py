@@ -33,6 +33,7 @@ class _FakeKeeper:
 class _FakeVideoClient:
     def __init__(self, result=None):
         self.calls = []
+        self.image_calls = []
         self._result = result or {
             "arms": [
                 {"transport": "direct_http", "status": 403, "ok": False},
@@ -44,13 +45,18 @@ class _FakeVideoClient:
         self.calls.append(kwargs)
         return self._result
 
+    async def generate_images(self, **kwargs):
+        self.image_calls.append(kwargs)
+        return {"responses": [{"generatedImage": {"mediaStoreUri": "media://one"}}]}
+
 
 class _JsonReq:
     headers = {}
     remote = "test"
 
-    def __init__(self, body):
+    def __init__(self, body, match_info=None):
         self._body = body
+        self.match_info = match_info or {}
 
     async def json(self):
         return self._body
@@ -190,6 +196,108 @@ class VideoAbEndpointTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(resp.status, 404)
         self.assertIn("missing", body["error"])
+
+
+class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.addCleanup(self._reset_globals)
+        self._orig_log_event = admin_api.metrics.log_event
+        self._orig_onboard = admin_api.account_onboarding.onboard_google_flow_account
+        self._orig_hot_add = admin_api._try_hot_add_account
+        self.logged_events = []
+        admin_api.metrics.log_event = lambda *args, **kwargs: self.logged_events.append((args, kwargs))
+
+    def _reset_globals(self):
+        admin_api._pool = None
+        admin_api._keepers = None
+        admin_api._video_clients = None
+        admin_api._startup_state = None
+        admin_api.metrics.log_event = self._orig_log_event
+        admin_api.account_onboarding.onboard_google_flow_account = self._orig_onboard
+        admin_api._try_hot_add_account = self._orig_hot_add
+
+    async def test_onboard_requires_explicit_login_confirmation(self):
+        resp = await admin_api.handle_account_onboard_post(_JsonReq({"id": "sub7"}))
+        body = json.loads(resp.body)
+
+        self.assertEqual(resp.status, 400)
+        self.assertIn("confirm_login", body["error"])
+
+    async def test_onboard_success_sanitizes_response_and_hot_adds(self):
+        calls = []
+
+        async def fake_onboard(**kwargs):
+            calls.append(kwargs)
+            return {
+                "ok": True,
+                "account_id": kwargs["account_id"],
+                "profile_dir": "./google_profile_sub7",
+                "proxy": "http://10.0.0.1:8118",
+                "status": "active",
+                "env_updated": True,
+                "restart_required": True,
+            }
+
+        admin_api.account_onboarding.onboard_google_flow_account = fake_onboard
+        admin_api._try_hot_add_account = lambda account_id, profile_dir, proxy_url: {
+            "runtime_added": True,
+            "runtime_reason": "warming",
+        }
+
+        proxy = "http://user:" + "pass@10.0.0.1:8118"
+        resp = await admin_api.handle_account_onboard_post(_JsonReq({
+            "confirm_login": True,
+            "id": "sub7",
+            "email": "account@example.com",
+            "password": "secret-password",
+            "totp_secret": "SECRETSECRET",
+            "proxy": proxy,
+        }))
+        body = json.loads(resp.body)
+
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["runtime_added"])
+        encoded = json.dumps(body, ensure_ascii=False)
+        self.assertNotIn("secret-password", encoded)
+        self.assertNotIn("SECRETSECRET", encoded)
+        self.assertNotIn("user:pass", encoded)
+        self.assertEqual(calls[0]["password"], "secret-password")
+        self.assertTrue(any(args and args[0] == "account_onboard" for args, _ in self.logged_events))
+
+    async def test_image_test_requires_confirm_and_then_calls_client(self):
+        client = _FakeVideoClient()
+        admin_api._video_clients = {"sub7": client}
+
+        resp = await admin_api.handle_account_test_image_post(_JsonReq({}, {"id": "sub7"}))
+        self.assertEqual(resp.status, 400)
+        self.assertEqual(client.image_calls, [])
+
+        resp = await admin_api.handle_account_test_image_post(_JsonReq({"confirm_spend": True}, {"id": "sub7"}))
+        body = json.loads(resp.body)
+
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(client.image_calls[0]["num_images"], 1)
+        self.assertFalse(client.image_calls[0]["allow_browser_fallback"])
+
+    async def test_video_test_requires_confirm_and_uses_single_transport(self):
+        client = _FakeVideoClient(result={
+            "arms": [{"transport": "direct_http", "status": 200, "ok": True}]
+        })
+        admin_api._video_clients = {"sub7": client}
+
+        resp = await admin_api.handle_account_test_video_post(_JsonReq({}, {"id": "sub7"}))
+        self.assertEqual(resp.status, 400)
+        self.assertEqual(client.calls, [])
+
+        resp = await admin_api.handle_account_test_video_post(_JsonReq({"confirm_spend": True}, {"id": "sub7"}))
+        body = json.loads(resp.body)
+
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(client.calls[0]["transports"], ["direct_http"])
+        self.assertEqual(client.calls[0]["pause_sec"], 0)
 
 
 class AdminApiValidationTests(unittest.TestCase):

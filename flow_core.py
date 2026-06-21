@@ -34,6 +34,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 # ── Google Flow constants ─────────────────────────────────────────────
 
@@ -2027,7 +2028,7 @@ def parse_flow_accounts(
                 continue
             key, _, value = option.partition("=")
             key = key.strip().lower().replace("-", "_")
-            value = value.strip()
+            value = unquote(value.strip())
             if not value:
                 continue
             if key == "proxy":
@@ -2124,6 +2125,28 @@ class AccountPool:
 
     def get(self, account_id: str) -> FlowAccount | None:
         return self._accounts.get(account_id)
+
+    def add_account(self, account: FlowAccount, *, runtime_status: str = "warming") -> bool:
+        """Add a newly onboarded account to the runtime pool.
+
+        Persistent membership still comes from FLOW_ACCOUNTS on restart; this is
+        a best-effort hot-add used by the admin onboarding flow after .env is
+        updated successfully.
+        """
+        if account.id in self._accounts:
+            return False
+        self._accounts[account.id] = account
+        self._health[account.id] = {
+            "fails": 0,
+            "cooldown_until": 0.0,
+            "disabled": False,
+            "video_allowed": True,
+        }
+        self._runtime_ready[account.id] = False
+        self._runtime_status[account.id] = runtime_status or "warming"
+        self._active_image[account.id] = 0
+        self._active_video[account.id] = 0
+        return True
 
     def __len__(self) -> int:
         return len(self._accounts)
