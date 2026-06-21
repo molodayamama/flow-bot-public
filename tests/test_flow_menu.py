@@ -1686,14 +1686,26 @@ class BotImportSmokeTests(unittest.TestCase):
             self.assertIn("СБП/Карта · выгоднее", method_texts)
             stars_rows = fb.topup_stars_kb().inline_keyboard  # public Stars packs (no test pack)
             stars_texts = [b.text for row in stars_rows for b in row]
-            self.assertIn("45 кр · только картинки · ~4 карт. · 35⭐", stars_texts)
-            self.assertTrue(any("1500 кр" in text and "900⭐" in text and "🔥 +30%" in text for text in stars_texts))
-            fb.topup_stars_kb(is_admin=True)  # includes the admin test pack
+            self.assertIn("45 кр · ≈4 карточек · 35⭐", stars_texts)
+            self.assertTrue(any("1500 кр" in text and "≈150 карточек" in text and "900⭐" in text for text in stars_texts))
+            admin_stars_texts = [b.text for row in fb.topup_stars_kb(is_admin=True).inline_keyboard for b in row]
+            self.assertFalse(any("Тест" in text for text in admin_stars_texts))
+            old_test_flag = fb.TOPUP_TEST_PACKS_ENABLED
+            fb.TOPUP_TEST_PACKS_ENABLED = True
+            try:
+                flagged_admin_texts = [b.text for row in fb.topup_stars_kb(is_admin=True).inline_keyboard for b in row]
+                flagged_user_texts = [b.text for row in fb.topup_stars_kb(is_admin=False).inline_keyboard for b in row]
+                self.assertTrue(any("Тест" in text for text in flagged_admin_texts))
+                self.assertFalse(any("Тест" in text for text in flagged_user_texts))
+            finally:
+                fb.TOPUP_TEST_PACKS_ENABLED = old_test_flag
             robo_texts = [b.text for row in fb.topup_robo_kb().inline_keyboard for b in row]
-            self.assertIn("45 кр · только картинки · ~4 карт. · 45 ₽", robo_texts)
-            self.assertTrue(any("100 кр" in text and "2 видео" in text and "90 ₽" in text for text in robo_texts))
-            # rub badge: 1.0₽/кр (trial) vs 0.70₽/кр (1500) → +43% more credits
-            self.assertTrue(any("1500 кр" in text and "1050 ₽" in text and "🔥 +" in text for text in robo_texts))
+            self.assertIn("45 кр · ≈4 карточек · 45 ₽", robo_texts)
+            self.assertTrue(any("100 кр" in text and "≈2 видео" in text and "90 ₽" in text for text in robo_texts))
+            self.assertTrue(any("1500 кр" in text and "≈150 карточек" in text and "1050 ₽" in text for text in robo_texts))
+            self.assertFalse(any("🔥" in text or "+%" in text for text in stars_texts + robo_texts))
+            self.assertIn("картинка от", fb._topup_copy("topup_screen"))
+            self.assertIn("видео от", fb._topup_copy("topup_robo_screen"))
             fb._image_keyboard("abcd1234")
             fb.video_family_kb()           # family buttons now carry "· от N кр"
             fb.ingredients_kb(1, "land", 1, "veo-fast", has_caption=True)

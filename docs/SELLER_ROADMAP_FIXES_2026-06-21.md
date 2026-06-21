@@ -109,3 +109,32 @@ Role handoff:
 - Validation: full offline suite and syntax checks passed.
 - Risks: if Telegram does not allow editing an old message markup, the callback is still rejected but the old keyboard may remain visible client-side.
 - Next role: Committer.
+
+## Major 13 — payment copy
+
+What changed:
+- Normal top-up keyboards no longer show test packs to anyone, including admins.
+- Test packs are available only when the explicit `TOPUP_TEST_PACKS_ENABLED`/`PAYMENT_TEST_PACKS_ENABLED` flag is enabled for an admin session.
+- Stars and СБП/карта pack labels now show credits, approximate card/video capacity, and the plain price without percentage value badges.
+- Top-up screens now explain what credits buy: image generation from the current image price and video generation from the cheapest video price.
+- Payment copy stays provider-neutral and avoids backend/captcha wording.
+
+Files:
+- `flow_bot.py`
+- `flow_copy.py`
+- `tests/test_flow_menu.py`
+- `docs/SELLER_ROADMAP_FIXES_2026-06-21.md`
+- `HANDOFF.md`
+
+Verified:
+- `ENV_FILE=.env.example python -m py_compile flow_bot.py flow_copy.py tests\test_flow_menu.py` — pass.
+- `ENV_FILE=.env.example python -m unittest discover -s tests -p "test_*.py"` — pass, 608 tests.
+
+Role handoff:
+- Task: Major 13 payment copy.
+- Role completed: Architect, Reviewer, Implementer, Verifier.
+- Files touched: `flow_bot.py`, `flow_copy.py`, `tests/test_flow_menu.py`, `docs/SELLER_ROADMAP_FIXES_2026-06-21.md`, `HANDOFF.md`.
+- Assumptions: the explicit test-pack flag is an admin/dev path and should default off in live seller UI.
+- Validation: full offline suite and syntax checks passed.
+- Risks: live pack availability depends on deploy-time env/config, but the default code path hides test packs.
+- Next role: Committer.

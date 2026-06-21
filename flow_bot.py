@@ -5076,6 +5076,9 @@ UPLOAD_VIDEO_EDIT_ENABLED = False
 # topup_method_kb() reads config_store at call-time so changes survive restarts.
 STARS_PAYMENT_ENABLED: bool = True
 SBP_PAYMENT_ENABLED: bool = True
+TOPUP_TEST_PACKS_ENABLED: bool = _env_any(
+    "TOPUP_TEST_PACKS_ENABLED", "PAYMENT_TEST_PACKS_ENABLED", default="0"
+).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _vid_clear(user_id: int) -> None:
@@ -5710,74 +5713,34 @@ def _rub_display(amount: str) -> str:
     return f"{value:.2f}"
 
 
+def _topup_image_price() -> int:
+    return action_price("edit") if IS_SELLER else price_gen(1)
+
+
+def _topup_video_price() -> int:
+    prices = [int(m.get("price") or 0) for m in VIDEO_MODELS.values() if int(m.get("price") or 0) > 0]
+    return min(prices) if prices else video_price("omni-flash-4s", 1)
+
+
+def _topup_copy(key: str) -> str:
+    return flow_copy.msg(key, image_price=_topup_image_price(), video_price=_topup_video_price())
+
+
+def _include_test_packs(is_admin: bool = False) -> bool:
+    return bool(TOPUP_TEST_PACKS_ENABLED and is_admin)
+
+
 def _pack_usage_hint(credits: int) -> str:
-    images = max(0, int(credits) // price_gen(1))
-    cheapest_video = min(int(m["price"]) for m in VIDEO_MODELS.values())
-    videos = max(0, int(credits) // cheapest_video)
-    text = f"~{images} карт."
+    """Краткий hint, сколько карточек/видео можно создать на пакет."""
+    credits = max(0, int(credits))
+    cards = credits // max(_topup_image_price(), 1)
+    videos = credits // max(_topup_video_price(), 1)
+    parts = []
+    if cards:
+        parts.append(f"≈{cards} карточек")
     if videos:
-        text += f" / {videos} видео"
-    return text
-
-
-def _pack_value_bonus_pct(pack_id: str) -> int:
-    p = credit_pack(pack_id)
-    base = credit_pack("trial")
-    if not p or not base or pack_id not in {"medium", "large", "xl"}:
-        return 0
-    base_rate = float(base["credits"]) / float(base["stars"])
-    rate = float(p["credits"]) / float(p["stars"])
-    return max(0, round((rate / base_rate - 1.0) * 100))
-
-
-def _value_suffix(pack_id: str) -> str:
-    pct = _pack_value_bonus_pct(pack_id)
-    return f" 🔥 +{pct}%" if pct else ""
-
-
-def _stars_per_credit(pack_id: str) -> float | None:
-    """Stars cost per 1 credit for this pack; None if unknown."""
-    p = credit_pack(pack_id)
-    if not p or not p.get("stars") or not p.get("credits"):
-        return None
-    return float(p["stars"]) / float(p["credits"])
-
-
-def _rub_per_credit(pack_id: str) -> float | None:
-    """Rub cost per 1 credit; None if unknown."""
-    p = credit_pack(pack_id)
-    if not p or not p.get("credits"):
-        return None
-    try:
-        amount = float(_robokassa_pack_amount(pack_id))
-        return amount / float(p["credits"])
-    except Exception:
-        return None
-
-
-def _discount_badge(pack_id: str, base_id: str = "trial") -> str:
-    """Returns ' 🔥 +N%' (extra credits vs base pack), or ''."""
-    base_rate = _stars_per_credit(base_id)
-    this_rate = _stars_per_credit(pack_id)
-    if base_rate is None or this_rate is None or this_rate >= base_rate:
-        return ""
-    # "+N%" = сколько кредитов больше получаешь за те же Stars
-    pct = round((base_rate / this_rate - 1.0) * 100)
-    return f" 🔥 +{pct}%" if pct >= 5 else ""
-
-
-def _pack_usage_hint(credits: int) -> str:
-    """Краткий hint сколько видео/картинок можно создать на этот пак."""
-    min_vid = min(
-        video_price(m, 1, "text")
-        for m in ("omni-flash-4s", "veo-lite")
-        if video_price(m, 1, "text") > 0
-    )
-    vids = credits // min_vid
-    if vids >= 1:
-        return f"~{vids} видео"
-    imgs = credits // max(price_gen(1), 1)
-    return f"~{imgs} карт."
+        parts.append(f"≈{videos} видео")
+    return " / ".join(parts) if parts else "для старта"
 
 
 def _stars_pack_label(pack_id: str) -> str:
@@ -5786,12 +5749,7 @@ def _stars_pack_label(pack_id: str) -> str:
         return pack_id
     if p.get("test"):
         return f"🧪 Тест · {p['credits']} кр · {p['stars']}⭐"
-    if pack_id == "trial":
-        return f"{p['credits']} кр · только картинки · ~{p['credits'] // price_gen(1)} карт. · {p['stars']}⭐"
-    rate = _stars_per_credit(pack_id)
-    rate_str = f" · {rate:.1f}⭐/кр" if rate else ""
-    badge = _discount_badge(pack_id)
-    return f"{p['credits']} кр{rate_str} · {p['stars']}⭐{badge}"
+    return f"{p['credits']} кр · {_pack_usage_hint(p['credits'])} · {p['stars']}⭐"
 
 
 def _robokassa_pack_label(pack_id: str) -> str:
@@ -5799,17 +5757,7 @@ def _robokassa_pack_label(pack_id: str) -> str:
     if not p:
         return "СБП/карта"
     amount = _rub_display(_robokassa_pack_amount(pack_id))
-    if pack_id == "trial":
-        return f"{p['credits']} кр · только картинки · ~{p['credits'] // price_gen(1)} карт. · {amount} ₽"
-    rate = _rub_per_credit(pack_id)
-    # для рублёвых пакетов сравниваем через рублёвую ставку: +N% = больше кредитов за те же ₽
-    base_r = _rub_per_credit("trial")
-    badge = ""
-    if base_r and rate and rate < base_r:
-        pct = round((base_r / rate - 1.0) * 100)
-        badge = f" 🔥 +{pct}%" if pct >= 5 else ""
-    usage = _pack_usage_hint(p["credits"])
-    return f"{p['credits']} кр · {usage} · {amount} ₽{badge}"
+    return f"{p['credits']} кр · {_pack_usage_hint(p['credits'])} · {amount} ₽"
 
 
 def topup_method_kb() -> types.InlineKeyboardMarkup:
@@ -5857,7 +5805,7 @@ def topup_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
 
 def topup_stars_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
     rows = []
-    for pid in public_pack_ids(include_test=is_admin, seller=IS_SELLER):
+    for pid in public_pack_ids(include_test=_include_test_packs(is_admin), seller=IS_SELLER):
         rows.append([types.InlineKeyboardButton(text=_stars_pack_label(pid), callback_data=f"m:pack:{pid}")])
     rows.append([_menu_button("back", "m:topup")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
@@ -5866,7 +5814,7 @@ def topup_stars_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
 def topup_robo_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
     rows = [
         [types.InlineKeyboardButton(text=_robokassa_pack_label(pid), callback_data=f"m:robo:{pid}")]
-        for pid in public_pack_ids(include_test=is_admin, seller=IS_SELLER)
+        for pid in public_pack_ids(include_test=_include_test_packs(is_admin), seller=IS_SELLER)
     ]
     rows.append([_menu_button("back", "m:topup")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
@@ -9017,13 +8965,13 @@ async def on_menu_action(callback: types.CallbackQuery):
         await callback.answer()
         metrics.log_event("topup_opened", user_id=user_id, source="menu")
         await msg.edit_text(
-            flow_copy.msg("topup_screen"),
+            _topup_copy("topup_screen"),
             reply_markup=topup_kb(is_admin=user_id in ADMIN_IDS),
         )
     elif data == "m:pay:stars":
         await callback.answer()
         await msg.edit_text(
-            flow_copy.msg("topup_stars_screen"),
+            _topup_copy("topup_stars_screen"),
             reply_markup=topup_stars_kb(is_admin=user_id in ADMIN_IDS),
         )
     elif data == "m:pay:robo":
@@ -9032,7 +8980,7 @@ async def on_menu_action(callback: types.CallbackQuery):
             return
         await callback.answer()
         await msg.edit_text(
-            flow_copy.msg("topup_robo_screen"),
+            _topup_copy("topup_robo_screen"),
             reply_markup=topup_robo_kb(is_admin=user_id in ADMIN_IDS),
         )
     elif data.startswith("m:pack:"):
