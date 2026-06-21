@@ -6815,9 +6815,18 @@ async def _seller_backend_call_and_send(
     )
     images = data.get("images") or []
     if data.get("error") or not images:
-        err = str(data.get("error") or flow_copy.msg("nothing_returned"))[:300]
+        # Понятный финальный статус вместо технической ошибки. Кредиты вернёт
+        # credit_gate (charge.ok остаётся False) — поэтому прямо говорим об этом.
+        raw = str(data.get("error") or "").lower()
+        if any(k in raw for k in ("rate", "limit", "429", "quota", "перегруж",
+                                   "busy", "unavailable", "account", "капч", "captcha", "403")):
+            friendly = "⏳ Сервис сейчас перегружен. Кредиты возвращены — попробуй ещё раз через пару минут 🙏"
+        elif raw:
+            friendly = "❌ Не получилось создать карточку. Кредиты возвращены — попробуй ещё раз или измени фото/описание."
+        else:
+            friendly = "❌ Карточка не получилась. Кредиты возвращены — попробуй ещё раз 🙏"
         try:
-            await status_msg.edit_text(f"❌ {html.escape(err)}")
+            await status_msg.edit_text(friendly)
         except Exception:
             pass
         return False
