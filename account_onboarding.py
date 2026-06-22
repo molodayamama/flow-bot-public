@@ -33,7 +33,7 @@ FLOW_PROJECT_CTA_RE = re.compile(
     re.I,
 )
 FLOW_NEW_PROJECT_RE = re.compile(r"^\s*new project\s*$", re.I)
-FLOW_CREATE_WITH_FLOW_RE = re.compile(r"^\s*create with flow\s*$", re.I)
+FLOW_CREATE_WITH_FLOW_RE = re.compile(r"^\s*create with (?:google )?flow\s*$", re.I)
 FLOW_NEXT_RE = re.compile(r"^\s*(next|далее)\s*$", re.I)
 FLOW_CONTINUE_RE = re.compile(r"^\s*(continue|accept|agree|got it|продолжить|принять|согласен|согласна)\s*$", re.I)
 FLOW_SIGN_IN_RE = re.compile(
@@ -870,6 +870,8 @@ def _flow_setup_step_candidates(page) -> list[tuple[str, object]]:
         ("flow_continue_text", lambda: page.get_by_text(FLOW_CONTINUE_RE)),
         ("flow_next_button_text", lambda: page.locator('button:has-text("Next")')),
         ("flow_continue_button_text", lambda: page.locator('button:has-text("Continue")')),
+        ("create_with_google_flow_button_text", lambda: page.locator('button:has-text("Create with Google Flow")')),
+        ("create_with_flow_button_text", lambda: page.locator('button:has-text("Create with Flow")')),
     ]
 
 

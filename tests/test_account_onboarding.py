@@ -112,7 +112,7 @@ class _FakeFlowOnboardingPage:
 
     def _label(self) -> str:
         return {
-            "create_with_flow": "Create with Flow",
+            "create_with_flow": "Create with Google Flow",
             "next": "Next",
             "continue": "Continue",
             "new_project": "New Project",
@@ -261,7 +261,9 @@ class AccountOnboardingHelperTests(unittest.TestCase):
         self.assertIsNotNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create project"))
         self.assertIsNotNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("New flow"))
         self.assertIsNotNone(ao.FLOW_CREATE_WITH_FLOW_RE.fullmatch("Create with Flow"))
+        self.assertIsNotNone(ao.FLOW_CREATE_WITH_FLOW_RE.fullmatch("Create with Google Flow"))
         self.assertIsNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create with Flow"))
+        self.assertIsNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create with Google Flow"))
         self.assertIsNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create"))
         self.assertIsNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create account"))
 
@@ -410,7 +412,7 @@ class AccountOnboardingFlowStatusTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["reason"], "project_created")
         self.assertEqual(result["final_host"], "labs.google")
         self.assertTrue(page.scrolled)
-        self.assertEqual(page.clicks, ["Create with Flow", "Next", "Continue", "New Project"])
+        self.assertEqual(page.clicks, ["Create with Google Flow", "Next", "Continue", "New Project"])
 
     async def test_submit_google_login_fills_direct_accounts_page(self) -> None:
         page = _FakeGoogleLoginPage()
