@@ -41,6 +41,34 @@ class AccountOnboardingHelperTests(unittest.TestCase):
     def test_get_progress_unknown_id_is_empty(self) -> None:
         self.assertEqual(ao.get_progress("nope-zzz"), {})
 
+    def test_project_cta_matches_flow_actions_only(self) -> None:
+        self.assertIsNotNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("New project"))
+        self.assertIsNotNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create project"))
+        self.assertIsNotNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("New flow"))
+        self.assertIsNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create"))
+        self.assertIsNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create account"))
+
+    def test_project_cta_candidates_prioritize_new_project(self) -> None:
+        labels = [label for label, _getter in ao._flow_project_cta_candidates(object())]
+        self.assertEqual(labels[:3], [
+            "new_project_button",
+            "new_project_link",
+            "new_project_text",
+        ])
+        self.assertIn("project_cta_button", labels)
+        self.assertNotIn("create_button", labels)
+
+    def test_project_id_from_flow_project_urls(self) -> None:
+        self.assertEqual(
+            ao._project_id_from_url("https://labs.google/fx/tools/flow/project/proj-1"),
+            "proj-1",
+        )
+        self.assertEqual(
+            ao._project_id_from_url("https://api.example/v1/projects/proj-2/media"),
+            "proj-2",
+        )
+        self.assertIsNone(ao._project_id_from_url("https://labs.google/fx/tools/flow"))
+
     def test_proxy_public_label_strips_credentials(self) -> None:
         proxy = "http://user:" + "pass@10.0.0.1:8118"
         self.assertEqual(

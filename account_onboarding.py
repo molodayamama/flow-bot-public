@@ -27,6 +27,8 @@ log = logging.getLogger(__name__)
 FLOW_URL = "https://labs.google/fx/tools/flow"
 ACCOUNT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,31}$")
 TWO_FA_CODE_RE = re.compile(r"^\d{6,8}$")
+FLOW_PROJECT_CTA_RE = re.compile(r"^\s*(new project|create project|new flow)\s*$", re.I)
+FLOW_NEW_PROJECT_RE = re.compile(r"^\s*new project\s*$", re.I)
 
 
 # Live onboarding progress, keyed by account id, polled by the admin panel.
@@ -611,37 +613,83 @@ def _project_id_from_url(url: str) -> str | None:
     return None
 
 
+def _flow_project_cta_candidates(page) -> list[tuple[str, object]]:
+    # Keep exact Flow CTAs before broad icon fallbacks. Plain "Create" is
+    # intentionally excluded: Google account pages use it for "Create account".
+    return [
+        ("new_project_button", lambda: page.get_by_role("button", name=FLOW_NEW_PROJECT_RE)),
+        ("new_project_link", lambda: page.get_by_role("link", name=FLOW_NEW_PROJECT_RE)),
+        ("new_project_text", lambda: page.get_by_text(FLOW_NEW_PROJECT_RE)),
+        ("project_cta_button", lambda: page.get_by_role("button", name=FLOW_PROJECT_CTA_RE)),
+        ("project_cta_link", lambda: page.get_by_role("link", name=FLOW_PROJECT_CTA_RE)),
+        ("project_cta_text", lambda: page.get_by_text(FLOW_PROJECT_CTA_RE)),
+        ("new_project_aria", lambda: page.locator('[aria-label*="new project" i]')),
+        ("create_project_aria", lambda: page.locator('[aria-label*="create project" i]')),
+        ("new_project_button_text", lambda: page.locator('button:has-text("New project")')),
+        ("create_project_button_text", lambda: page.locator('button:has-text("Create project")')),
+        ("new_flow_button_text", lambda: page.locator('button:has-text("New flow")')),
+        ("new_icon_button", lambda: page.locator('button[aria-label*="new" i]')),
+        ("plus_button", lambda: page.locator('button:has-text("+")')),
+    ]
+
+
+async def _wait_for_project_url(page, timeout_ms: int) -> str | None:
+    deadline = time.time() + max(timeout_ms, 0) / 1000
+    while time.time() < deadline:
+        pid = _project_id_from_url(page.url)
+        if pid:
+            return pid
+        remaining_ms = int((deadline - time.time()) * 1000)
+        await page.wait_for_timeout(max(100, min(500, remaining_ms)))
+    return _project_id_from_url(page.url)
+
+
 async def _ensure_flow_project(page) -> dict:
     if _project_id_from_url(page.url):
         log.info("onboard project: already open host=%s", _host(page.url))
         return _login_result(True, "active", "project_opened", page.url)
-    candidates = [
-        lambda: page.get_by_role("button", name=re.compile(r"new flow", re.I)),
-        lambda: page.get_by_role("link", name=re.compile(r"new flow", re.I)),
-        lambda: page.get_by_text(re.compile(r"^\s*new flow\s*$", re.I)),
-        lambda: page.get_by_role("button", name=re.compile(r"new project|create", re.I)),
-        lambda: page.locator('[aria-label*="new" i]'),
-        lambda: page.locator('button:has-text("+")'),
-    ]
-    clicked = False
-    for getter in candidates:
+    try:
+        await page.wait_for_load_state("networkidle", timeout=10_000)
+    except Exception:
+        pass
+
+    clicked_any = False
+    for label, getter in _flow_project_cta_candidates(page):
         try:
             loc = getter().first
             if await loc.count() > 0 and await loc.is_visible(timeout=1_000):
+                try:
+                    await loc.scroll_into_view_if_needed(timeout=2_000)
+                except Exception:
+                    pass
                 await loc.click(timeout=5_000)
-                clicked = True
-                break
+                clicked_any = True
+                log.info("onboard project: clicked cta=%s host=%s", label, _host(page.url))
+                if await _wait_for_project_url(page, 12_000):
+                    log.info("onboard project: created host=%s", _host(page.url))
+                    return _login_result(True, "active", "project_created", page.url)
+                if "accounts.google." in page.url:
+                    body = await _page_text(page)
+                    challenge = _challenge_status(page.url, body)
+                    log.info(
+                        "onboard project: redirected to google host=%s challenge=%s",
+                        _host(page.url), challenge,
+                    )
+                    return _login_result(
+                        False,
+                        challenge or "needs_challenge",
+                        "project_creation_google_redirect",
+                        page.url,
+                    )
+                if "labs.google" not in page.url:
+                    log.info("onboard project: unexpected redirect host=%s", _host(page.url))
+                    return _login_result(False, "needs_challenge", "project_creation_redirect", page.url)
         except Exception:
             continue
-    if not clicked:
-        log.info("onboard project: 'new flow' button not found host=%s", _host(page.url))
-        return _login_result(False, "needs_project", "new_flow_button_not_found", page.url)
-    try:
-        await page.wait_for_url("**/project/**", timeout=20_000)
-    except Exception:
-        pass
-    await page.wait_for_timeout(1500)
-    if _project_id_from_url(page.url):
+    if not clicked_any:
+        log.info("onboard project: 'new project' button not found host=%s", _host(page.url))
+        return _login_result(False, "needs_project", "new_project_button_not_found", page.url)
+    if await _wait_for_project_url(page, 10_000):
         log.info("onboard project: created host=%s", _host(page.url))
         return _login_result(True, "active", "project_created", page.url)
     log.info("onboard project: not created host=%s", _host(page.url))

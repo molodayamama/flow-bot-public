@@ -299,6 +299,28 @@ ADMIN_IDS = _parse_ids(os.getenv("ADMIN_IDS", "")) | OWNER_IDS
 # button is hidden from the image wizard settings screen.
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 FLOW_URL = "https://labs.google/fx/tools/flow"
+FLOW_PROJECT_CTA_RE = re.compile(r"^\s*(new project|create project|new flow)\s*$", re.I)
+FLOW_NEW_PROJECT_RE = re.compile(r"^\s*new project\s*$", re.I)
+
+
+def _flow_project_cta_candidates(page):
+    # Prefer exact Flow project CTAs. Plain "Create" is too broad and can match
+    # Google account UI such as "Create account" after redirects.
+    return [
+        ("new_project_button", lambda: page.get_by_role("button", name=FLOW_NEW_PROJECT_RE)),
+        ("new_project_link", lambda: page.get_by_role("link", name=FLOW_NEW_PROJECT_RE)),
+        ("new_project_text", lambda: page.get_by_text(FLOW_NEW_PROJECT_RE)),
+        ("project_cta_button", lambda: page.get_by_role("button", name=FLOW_PROJECT_CTA_RE)),
+        ("project_cta_link", lambda: page.get_by_role("link", name=FLOW_PROJECT_CTA_RE)),
+        ("project_cta_text", lambda: page.get_by_text(FLOW_PROJECT_CTA_RE)),
+        ("new_project_aria", lambda: page.locator('[aria-label*="new project" i]')),
+        ("create_project_aria", lambda: page.locator('[aria-label*="create project" i]')),
+        ("new_project_button_text", lambda: page.locator('button:has-text("New project")')),
+        ("create_project_button_text", lambda: page.locator('button:has-text("Create project")')),
+        ("new_flow_button_text", lambda: page.locator('button:has-text("New flow")')),
+        ("new_icon_button", lambda: page.locator('button[aria-label*="new" i]')),
+        ("plus_button", lambda: page.locator('button:has-text("+")')),
+    ]
 
 
 def _video_failure_reason(item) -> str:
@@ -685,31 +707,54 @@ class SessionKeeper:
                 except Exception:
                     pass
 
+                async def _wait_for_new_project(wait_sec: float) -> str | None:
+                    deadline = time.time() + wait_sec
+                    while time.time() < deadline:
+                        pid = self._project_id_from_url(tab.url) or next(
+                            (p for p in seen_pids if p != baseline_pid), None
+                        )
+                        if pid and pid != baseline_pid:
+                            return pid
+                        await asyncio.sleep(0.5)
+                    return None
+
                 clicked = False
-                candidates = [
-                    lambda: tab.get_by_role("button", name=re.compile(r"new flow", re.I)),
-                    lambda: tab.get_by_role("link", name=re.compile(r"new flow", re.I)),
-                    lambda: tab.get_by_text(re.compile(r"^\s*new flow\s*$", re.I)),
-                    lambda: tab.get_by_role("button", name=re.compile(r"new project|create", re.I)),
-                    # Аккаунты с уже существующим проектом часто авто-резюмят его —
-                    # тогда "New flow" нет в виде текстовой кнопки списка проектов,
-                    # а есть иконка "+"/aria-label рядом с панелью инструментов.
-                    lambda: tab.locator('[aria-label*="new" i]'),
-                    lambda: tab.locator('button:has-text("+")'),
-                ]
-                for getter in candidates:
+                candidates = _flow_project_cta_candidates(tab)
+                for label, getter in candidates:
                     try:
                         loc = getter().first
                         if await loc.count() > 0 and await loc.is_visible(timeout=1_000):
+                            try:
+                                await loc.scroll_into_view_if_needed(timeout=2_000)
+                            except Exception:
+                                pass
                             await loc.click(timeout=5_000)
                             clicked = True
-                            break
+                            log.info("create_new_project: clicked project cta %s", label)
+                            pid = await _wait_for_new_project(12)
+                            if pid:
+                                log.info("create_new_project: created %s", pid)
+                                return pid
+                            if "accounts.google." in tab.url:
+                                log.warning(
+                                    "create_new_project: Google redirected during project creation "
+                                    "(account %s, url=%s)",
+                                    self.account_id, tab.url,
+                                )
+                                return None
+                            if "labs.google" not in tab.url:
+                                log.warning(
+                                    "create_new_project: unexpected redirect during project creation "
+                                    "(account %s, url=%s)",
+                                    self.account_id, tab.url,
+                                )
+                                return None
                     except Exception:
                         continue
 
                 if not clicked:
                     log.warning(
-                        "⚠️ Кнопка 'New flow' не найдена (аккаунт %s, url=%s) — новый проект не создан",
+                        "⚠️ Кнопка 'New project' не найдена (аккаунт %s, url=%s) — новый проект не создан",
                         self.account_id, tab.url,
                     )
                     # Скрин для пост-мортема — следующий сбой сам себя задокументирует,
@@ -725,23 +770,12 @@ class SessionKeeper:
                         pass
                     return None
 
-                # Ждём, пока вкладка перейдёт на новый /project/ и сделает запрос.
-                try:
-                    await tab.wait_for_url("**/project/**", timeout=15_000)
-                except Exception:
-                    pass
+                pid = await _wait_for_new_project(8)
+                if pid:
+                    log.info(f"🆕 Новый проект создан: {pid}")
+                    return pid
 
-                deadline = time.time() + 8
-                while time.time() < deadline:
-                    pid = self._project_id_from_url(tab.url) or next(
-                        (p for p in seen_pids if p != baseline_pid), None
-                    )
-                    if pid and pid != baseline_pid:
-                        log.info(f"🆕 Новый проект создан: {pid}")
-                        return pid
-                    await asyncio.sleep(0.5)
-
-                log.warning("⚠️ Новый project_id не появился после клика 'New flow'")
+                log.warning("⚠️ Новый project_id не появился после клика 'New project'")
                 return None
             except Exception as e:
                 if self._is_target_closed_error(e):
