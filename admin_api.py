@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import re
+import secrets
 import string
 import time
 from typing import TYPE_CHECKING
@@ -37,6 +38,8 @@ _keepers: dict | None = None
 _video_clients: dict | None = None
 _startup_state: dict | None = None
 GCREDITS_LOOKUP_TIMEOUT_SEC = 3.0
+ONBOARD_SESSION_TTL_SEC = 10 * 60
+_onboard_sessions: dict[str, dict] = {}
 
 
 # ── helpers ────────────────────────────────────────────────────────────
@@ -715,6 +718,218 @@ def _try_hot_add_account(account_id: str, profile_dir: str, proxy_url: str) -> d
             _pool.set_runtime_ready(account_id, False, "pending_restart")
         _startup_set_account_status(account_id, "pending_restart", ready=False, error=exc.__class__.__name__)
         return {"runtime_added": True, "runtime_reason": "restart_required_for_clients"}
+
+
+async def _cleanup_onboard_sessions() -> None:
+    now = time.time()
+    expired = [
+        session_id
+        for session_id, item in list(_onboard_sessions.items())
+        if now - float(item.get("updated_at", item.get("created_at", now))) > ONBOARD_SESSION_TTL_SEC
+    ]
+    for session_id in expired:
+        item = _onboard_sessions.pop(session_id, None)
+        session = item.get("session") if item else None
+        if session is not None:
+            await session.close()
+
+
+def _store_onboard_session(session) -> str:
+    session_id = secrets.token_urlsafe(18)
+    now = time.time()
+    _onboard_sessions[session_id] = {
+        "session": session,
+        "created_at": now,
+        "updated_at": now,
+    }
+    return session_id
+
+
+def _get_onboard_session(session_id: str):
+    item = _onboard_sessions.get(session_id)
+    if not item:
+        return None
+    item["updated_at"] = time.time()
+    return item.get("session")
+
+
+async def _drop_onboard_session(session_id: str) -> None:
+    item = _onboard_sessions.pop(session_id, None)
+    session = item.get("session") if item else None
+    if session is not None:
+        await session.close()
+
+
+def _safe_onboard_session_result(result: dict, session_id: str | None, session=None) -> dict:
+    status = str(result.get("status") or "login_failed")
+    data = {
+        "ok": bool(result.get("ok")),
+        "status": status,
+        "reason": _safe_reason(str(result.get("reason") or status)),
+        "needs_2fa": status == "needs_2fa",
+        "ready_to_add": status == "active",
+    }
+    if session is not None:
+        data.update({
+            "account_id": session.account_id,
+            "profile_dir": session.profile_dir,
+            "proxy": account_onboarding.proxy_public_label(session.proxy_url),
+        })
+    if session_id:
+        data["session_id"] = session_id
+    return data
+
+
+async def handle_account_onboard_start_post(request: web.Request) -> web.Response:
+    await _cleanup_onboard_sessions()
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    if body.get("confirm_login") is not True:
+        return _json({"error": "confirm_login=true required"}, 400)
+
+    account_id = str(body.get("id") or body.get("account_id") or "").strip()
+    email = str(body.get("email") or "").strip()
+    password = str(body.get("password") or "")
+    proxy_url = str(body.get("proxy") or body.get("proxy_url") or "").strip()
+    profile_dir = str(body.get("profile_dir") or "").strip() or None
+    try:
+        timeout_sec = max(30, min(int(body.get("timeout_sec", 180)), 300))
+    except (TypeError, ValueError):
+        timeout_sec = 180
+
+    try:
+        proxy_label = account_onboarding.proxy_public_label(proxy_url)
+    except account_onboarding.AccountOnboardingError:
+        proxy_label = "(invalid)"
+    try:
+        default_profile = account_onboarding.default_profile_dir(account_id) if account_id else ""
+    except account_onboarding.AccountOnboardingError:
+        default_profile = ""
+    safe_new = {
+        "id": account_id,
+        "profile_dir": profile_dir or default_profile,
+        "proxy": proxy_label,
+    }
+    try:
+        session, result = await account_onboarding.start_google_flow_login(
+            account_id=account_id,
+            email=email,
+            password=password,
+            proxy_url=proxy_url,
+            profile_dir=profile_dir or account_onboarding.default_profile_dir(account_id),
+            timeout_sec=timeout_sec,
+        )
+    except account_onboarding.AccountOnboardingError as exc:
+        status = 409 if exc.code in {"account_exists", "profile_exists"} else 400
+        _audit(request, "account.onboard_start", new=safe_new, result=exc.code)
+        return _json({"ok": False, "status": exc.code, "error": exc.code}, status)
+    except Exception as exc:  # noqa: BLE001 - admin endpoint must return JSON
+        log.warning("account onboard start failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
+        _audit(request, "account.onboard_start", new=safe_new, result="error")
+        return _json({"ok": False, "status": "login_failed", "error": exc.__class__.__name__}, 500)
+
+    session_id = _store_onboard_session(session) if session is not None else None
+    response = _safe_onboard_session_result(result, session_id, session)
+    try:
+        metrics.log_event(
+            "account_onboard_start",
+            source=account_id,
+            payload={"status": response.get("status"), "proxy": safe_new["proxy"]},
+        )
+    except Exception:
+        log.warning("account_onboard_start metrics log failed", exc_info=True)
+    _audit(request, "account.onboard_start", new=safe_new, result=str(response.get("status") or "login_failed"))
+    return _json(response)
+
+
+async def handle_account_onboard_2fa_post(request: web.Request) -> web.Response:
+    await _cleanup_onboard_sessions()
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    session_id = str(body.get("session_id") or "").strip()
+    code = str(body.get("code") or body.get("two_fa_code") or "").strip()
+    session = _get_onboard_session(session_id)
+    if session is None:
+        return _json({"ok": False, "status": "session_expired", "error": "session_expired"}, 404)
+    try:
+        result = await session.submit_2fa_code(code)
+    except account_onboarding.AccountOnboardingError as exc:
+        _audit(request, "account.onboard_2fa", new={"id": session.account_id}, result=exc.code)
+        return _json({"ok": False, "status": exc.code, "error": exc.code}, 400)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("account onboard 2fa failed for %s: %s", session.account_id, exc.__class__.__name__, exc_info=True)
+        _audit(request, "account.onboard_2fa", new={"id": session.account_id}, result="error")
+        return _json({"ok": False, "status": "login_failed", "error": exc.__class__.__name__}, 500)
+    response = _safe_onboard_session_result(result, session_id, session)
+    _audit(request, "account.onboard_2fa", new={"id": session.account_id}, result=str(response.get("status")))
+    return _json(response)
+
+
+async def handle_account_onboard_complete_post(request: web.Request) -> web.Response:
+    await _cleanup_onboard_sessions()
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    if body.get("confirm_add") is not True:
+        return _json({"error": "confirm_add=true required"}, 400)
+    session_id = str(body.get("session_id") or "").strip()
+    session = _get_onboard_session(session_id)
+    if session is None:
+        return _json({"ok": False, "status": "session_expired", "error": "session_expired"}, 404)
+    safe_new = {
+        "id": session.account_id,
+        "profile_dir": session.profile_dir,
+        "proxy": account_onboarding.proxy_public_label(session.proxy_url),
+    }
+    try:
+        result = account_onboarding.complete_google_flow_login(session)
+    except account_onboarding.AccountOnboardingError as exc:
+        status = 409 if exc.code == "account_exists" else 400
+        _audit(request, "account.onboard_complete", new=safe_new, result=exc.code)
+        return _json({"ok": False, "status": exc.code, "error": exc.code}, status)
+    except PermissionError:
+        _audit(request, "account.onboard_complete", new=safe_new, result="env_permission_denied")
+        return _json({"ok": False, "status": "env_permission_denied", "error": "env_permission_denied"}, 500)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("account onboard complete failed for %s: %s", session.account_id, exc.__class__.__name__, exc_info=True)
+        _audit(request, "account.onboard_complete", new=safe_new, result="error")
+        return _json({"ok": False, "status": "login_failed", "error": exc.__class__.__name__}, 500)
+
+    result.update(_try_hot_add_account(
+        str(result.get("account_id") or session.account_id),
+        str(result.get("profile_dir") or session.profile_dir),
+        session.proxy_url,
+    ))
+    try:
+        metrics.log_event(
+            "account_onboard",
+            source=session.account_id,
+            payload={
+                "status": result.get("status"),
+                "env_updated": bool(result.get("env_updated")),
+                "runtime_added": bool(result.get("runtime_added")),
+                "proxy": safe_new["proxy"],
+            },
+        )
+    except Exception:
+        log.warning("account_onboard metrics log failed", exc_info=True)
+    _audit(
+        request,
+        "account.onboard_complete",
+        new={
+            "id": result.get("account_id") or session.account_id,
+            "profile_dir": result.get("profile_dir") or session.profile_dir,
+            "proxy": safe_new["proxy"],
+            "status": result.get("status"),
+            "env_updated": result.get("env_updated"),
+            "runtime_added": result.get("runtime_added"),
+        },
+        result="ok",
+    )
+    await _drop_onboard_session(session_id)
+    return _json(result)
 
 
 async def handle_account_onboard_post(request: web.Request) -> web.Response:
@@ -1611,6 +1826,9 @@ def register_admin_routes(
     r.add_get ("/api/admin/stats",                     handle_stats)
     r.add_get ("/api/admin/log",                       handle_log)
     r.add_get ("/api/admin/accounts",                  handle_accounts_get)
+    r.add_post("/api/admin/accounts/onboard/start",    handle_account_onboard_start_post)
+    r.add_post("/api/admin/accounts/onboard/2fa",      handle_account_onboard_2fa_post)
+    r.add_post("/api/admin/accounts/onboard/complete", handle_account_onboard_complete_post)
     r.add_post("/api/admin/accounts/onboard",          handle_account_onboard_post)
     r.add_post("/api/admin/accounts/{id}/enable",      handle_account_enable)
     r.add_post("/api/admin/accounts/{id}/disable",     handle_account_disable)
@@ -1653,4 +1871,4 @@ def register_admin_routes(
     r.add_get ("/api/admin/analytics/channels",        handle_analytics_channels)
     r.add_get ("/api/admin/analytics/errors",          handle_analytics_errors)
     r.add_get ("/api/admin/analytics/active",          handle_analytics_active)
-    log.info("Admin API registered on /api/admin/* (%d routes)", 39)
+    log.info("Admin API registered on /api/admin/* (%d routes)", 42)

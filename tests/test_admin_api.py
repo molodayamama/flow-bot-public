@@ -50,6 +50,24 @@ class _FakeVideoClient:
         return {"responses": [{"generatedImage": {"mediaStoreUri": "media://one"}}]}
 
 
+class _FakeOnboardSession:
+    def __init__(self, account_id="sub7", profile_dir="./google_profile_sub7", proxy_url=""):
+        self.account_id = account_id
+        self.profile_dir = profile_dir
+        self.proxy_url = proxy_url
+        self.status = "needs_2fa"
+        self.closed = False
+        self.codes = []
+
+    async def submit_2fa_code(self, code):
+        self.codes.append(code)
+        self.status = "active"
+        return {"ok": True, "status": "active", "reason": "flow_opened"}
+
+    async def close(self):
+        self.closed = True
+
+
 class _JsonReq:
     headers = {}
     remote = "test"
@@ -203,6 +221,8 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self._reset_globals)
         self._orig_log_event = admin_api.metrics.log_event
         self._orig_onboard = admin_api.account_onboarding.onboard_google_flow_account
+        self._orig_start_login = admin_api.account_onboarding.start_google_flow_login
+        self._orig_complete_login = admin_api.account_onboarding.complete_google_flow_login
         self._orig_hot_add = admin_api._try_hot_add_account
         self.logged_events = []
         admin_api.metrics.log_event = lambda *args, **kwargs: self.logged_events.append((args, kwargs))
@@ -212,8 +232,11 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         admin_api._keepers = None
         admin_api._video_clients = None
         admin_api._startup_state = None
+        admin_api._onboard_sessions.clear()
         admin_api.metrics.log_event = self._orig_log_event
         admin_api.account_onboarding.onboard_google_flow_account = self._orig_onboard
+        admin_api.account_onboarding.start_google_flow_login = self._orig_start_login
+        admin_api.account_onboarding.complete_google_flow_login = self._orig_complete_login
         admin_api._try_hot_add_account = self._orig_hot_add
 
     async def test_onboard_requires_explicit_login_confirmation(self):
@@ -264,6 +287,94 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("user:pass", encoded)
         self.assertEqual(calls[0]["password"], "secret-password")
         self.assertTrue(any(args and args[0] == "account_onboard" for args, _ in self.logged_events))
+
+    async def test_staged_onboard_accepts_one_time_2fa_then_completes(self):
+        calls = []
+        session_holder = {}
+
+        async def fake_start_login(**kwargs):
+            calls.append(kwargs)
+            session = _FakeOnboardSession(
+                account_id=kwargs["account_id"],
+                profile_dir=kwargs["profile_dir"],
+                proxy_url=kwargs["proxy_url"],
+            )
+            session_holder["session"] = session
+            return session, {"ok": False, "status": "needs_2fa", "reason": "two_fa_code_required"}
+
+        def fake_complete(session):
+            self.assertIs(session, session_holder["session"])
+            self.assertEqual(session.status, "active")
+            return {
+                "ok": True,
+                "account_id": session.account_id,
+                "profile_dir": session.profile_dir,
+                "proxy": "http://10.0.0.1:8126",
+                "status": "active",
+                "env_updated": True,
+                "restart_required": True,
+            }
+
+        admin_api.account_onboarding.start_google_flow_login = fake_start_login
+        admin_api.account_onboarding.complete_google_flow_login = fake_complete
+        admin_api._try_hot_add_account = lambda account_id, profile_dir, proxy_url: {
+            "runtime_added": True,
+            "runtime_reason": "warming",
+        }
+
+        proxy = "http://user:" + "pass@10.0.0.1:8126"
+        resp = await admin_api.handle_account_onboard_start_post(_JsonReq({
+            "confirm_login": True,
+            "id": "sub7",
+            "email": "account@example.com",
+            "password": "secret-password",
+            "proxy": proxy,
+        }))
+        body = json.loads(resp.body)
+
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(body["needs_2fa"])
+        self.assertIn("session_id", body)
+        encoded = json.dumps(body, ensure_ascii=False)
+        self.assertNotIn("secret-password", encoded)
+        self.assertNotIn("user:pass", encoded)
+        self.assertEqual(calls[0]["password"], "secret-password")
+
+        resp = await admin_api.handle_account_onboard_2fa_post(_JsonReq({
+            "session_id": body["session_id"],
+            "code": "123456",
+        }))
+        twofa = json.loads(resp.body)
+
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(twofa["ready_to_add"])
+        self.assertEqual(session_holder["session"].codes, ["123456"])
+
+        resp = await admin_api.handle_account_onboard_complete_post(_JsonReq({
+            "confirm_add": True,
+            "session_id": body["session_id"],
+        }))
+        done = json.loads(resp.body)
+
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(done["ok"])
+        self.assertTrue(done["runtime_added"])
+        self.assertTrue(session_holder["session"].closed)
+        self.assertNotIn(body["session_id"], admin_api._onboard_sessions)
+
+    async def test_staged_onboard_complete_requires_confirm(self):
+        session = _FakeOnboardSession()
+        session.status = "active"
+        session_id = admin_api._store_onboard_session(session)
+
+        resp = await admin_api.handle_account_onboard_complete_post(_JsonReq({
+            "session_id": session_id,
+        }))
+        body = json.loads(resp.body)
+
+        self.assertEqual(resp.status, 400)
+        self.assertIn("confirm_add", body["error"])
+        self.assertFalse(session.closed)
 
     async def test_image_test_requires_confirm_and_then_calls_client(self):
         client = _FakeVideoClient()

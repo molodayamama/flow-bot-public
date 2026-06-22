@@ -23,6 +23,7 @@ from flow_core import FlowAccount, parse_flow_accounts
 
 FLOW_URL = "https://labs.google/fx/tools/flow"
 ACCOUNT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,31}$")
+TWO_FA_CODE_RE = re.compile(r"^\d{6,8}$")
 
 
 class AccountOnboardingError(ValueError):
@@ -42,10 +43,71 @@ class AccountEntry:
     video_capacity: int | None = None
 
 
+@dataclass
+class PendingGoogleLogin:
+    account_id: str
+    profile_dir: str
+    proxy_url: str
+    pw: object
+    context: object
+    page: object
+    created_at: float
+    status: str = "pending"
+    closed: bool = False
+
+    async def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            await self.context.close()
+        except Exception:
+            pass
+        try:
+            await self.pw.stop()
+        except Exception:
+            pass
+
+    async def submit_2fa_code(self, code: str, *, timeout_sec: int = 90) -> dict:
+        if self.closed:
+            raise AccountOnboardingError("session_closed")
+        cleaned = validate_2fa_code(code)
+        deadline_ms = max(30_000, int(timeout_sec) * 1000)
+        filled = await _fill_first(self.page, [
+            'input[name="totpPin"]',
+            'input[type="tel"]',
+            'input[aria-label*="code" i]',
+            'input[aria-label*="код" i]',
+            'input[type="text"]',
+        ], cleaned)
+        if not filled:
+            self.status = "needs_challenge"
+            return _login_result(False, "needs_challenge", "two_fa_field_not_found", self.page.url)
+        await _click_next(
+            self.page,
+            "#totpNext button",
+            'button:has-text("Next")',
+            'button:has-text("Далее")',
+        )
+        await self.page.wait_for_timeout(3000)
+        result = await _open_flow_status(self.page, deadline_ms)
+        self.status = str(result.get("status") or "login_failed")
+        return result
+
+
 def validate_account_id(account_id: str) -> str:
     cleaned = (account_id or "").strip()
     if not ACCOUNT_ID_RE.fullmatch(cleaned):
         raise AccountOnboardingError("invalid_account_id")
+    return cleaned
+
+
+def validate_2fa_code(code: str) -> str:
+    cleaned = re.sub(r"\s+", "", code or "")
+    if not cleaned:
+        raise AccountOnboardingError("two_fa_required")
+    if not TWO_FA_CODE_RE.fullmatch(cleaned):
+        raise AccountOnboardingError("invalid_two_fa_code")
     return cleaned
 
 
@@ -199,6 +261,21 @@ def account_from_entry(entry: AccountEntry) -> FlowAccount:
     )
 
 
+def _assert_account_not_configured(account_id: str, env_path: str | os.PathLike[str] | None = None) -> None:
+    account_id = validate_account_id(account_id)
+    env_file = _env_file_path(env_path)
+    try:
+        text = env_file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        text = ""
+    for line in text.splitlines():
+        parsed = _split_env_assignment(line)
+        if parsed:
+            existing = parse_flow_accounts(parsed[1]) if parsed[1].strip() else []
+            if any(acc.id == account_id for acc in existing):
+                raise AccountOnboardingError("account_exists")
+
+
 def totp_code(secret: str, *, now: int | None = None, digits: int = 6, period: int = 30) -> str:
     cleaned = re.sub(r"\s+", "", secret or "").upper()
     if not cleaned:
@@ -281,6 +358,175 @@ def _challenge_status(url: str, body_text: str) -> str | None:
     )):
         return "needs_challenge"
     return None
+
+
+def _login_result(ok: bool, status: str, reason: str, url: str = "") -> dict:
+    return {
+        "ok": ok,
+        "status": status,
+        "reason": reason,
+        "final_host": urlparse(url).hostname or "",
+    }
+
+
+async def _open_flow_status(page, deadline_ms: int) -> dict:
+    await page.goto(FLOW_URL, timeout=deadline_ms, wait_until="domcontentloaded")
+    try:
+        await page.wait_for_url("**/fx/tools/flow**", timeout=min(deadline_ms, 30_000))
+    except Exception:
+        pass
+    await page.wait_for_timeout(2500)
+    body = await _page_text(page)
+    if "accounts.google." in page.url:
+        challenge = _challenge_status(page.url, body)
+        return _login_result(False, challenge or "login_failed", "still_on_google_login", page.url)
+    if "labs.google" in page.url:
+        return _login_result(True, "active", "flow_opened", page.url)
+    return _login_result(False, "needs_challenge", "unexpected_redirect", page.url)
+
+
+async def start_google_flow_login(
+    *,
+    account_id: str,
+    email: str,
+    password: str,
+    profile_dir: str,
+    proxy_url: str = "",
+    env_path: str | os.PathLike[str] | None = None,
+    timeout_sec: int = 180,
+) -> tuple[PendingGoogleLogin | None, dict]:
+    """Start Google login and keep the browser alive for a one-time 2FA code.
+
+    Returns ``(session, result)``. The session is present only when the login is
+    waiting for 2FA or has already opened Flow and can be finalized. Password is
+    used only to fill the page and is not stored.
+    """
+    account_id = validate_account_id(account_id)
+    if not email.strip():
+        raise AccountOnboardingError("email_required")
+    if not password:
+        raise AccountOnboardingError("password_required")
+    _assert_account_not_configured(account_id, env_path)
+    profile_path = Path(profile_dir)
+    if profile_path.exists() and any(profile_path.iterdir()):
+        raise AccountOnboardingError("profile_exists")
+    profile_path.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as exc:  # noqa: BLE001
+        raise AccountOnboardingError("playwright_unavailable") from exc
+
+    deadline_ms = max(30_000, int(timeout_sec) * 1000)
+    pw = None
+    context = None
+    session: PendingGoogleLogin | None = None
+    try:
+        pw = await async_playwright().start()
+        launch_kwargs = {
+            "user_data_dir": str(profile_path),
+            "channel": "chrome",
+            "headless": False,
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+            ],
+        }
+        proxy_cfg = playwright_proxy_config(proxy_url)
+        if proxy_cfg:
+            launch_kwargs["proxy"] = proxy_cfg
+        context = await pw.chromium.launch_persistent_context(**launch_kwargs)
+        page = context.pages[0] if context.pages else await context.new_page()
+        session = PendingGoogleLogin(
+            account_id=account_id,
+            profile_dir=str(profile_path),
+            proxy_url=proxy_url,
+            pw=pw,
+            context=context,
+            page=page,
+            created_at=time.time(),
+        )
+        await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+        await page.goto(FLOW_URL, timeout=deadline_ms, wait_until="domcontentloaded")
+        await page.wait_for_timeout(1500)
+        if "accounts.google." in page.url:
+            filled_email = await _fill_first(page, [
+                'input[type="email"]',
+                'input[name="identifier"]',
+                '#identifierId',
+            ], email)
+            if filled_email:
+                await _click_next(page, "#identifierNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
+                await page.wait_for_timeout(1500)
+
+            filled_password = await _fill_first(page, [
+                'input[type="password"]',
+                'input[name="Passwd"]',
+            ], password)
+            if filled_password:
+                await _click_next(page, "#passwordNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
+                await page.wait_for_timeout(2500)
+
+            body = await _page_text(page)
+            challenge = _challenge_status(page.url, body)
+            if challenge == "needs_2fa":
+                session.status = "needs_2fa"
+                return session, _login_result(False, "needs_2fa", "two_fa_code_required", page.url)
+            if challenge == "needs_challenge":
+                result = _login_result(False, "needs_challenge", "google_challenge", page.url)
+                await session.close()
+                return None, result
+
+        result = await _open_flow_status(page, deadline_ms)
+        session.status = str(result.get("status") or "login_failed")
+        if session.status == "active":
+            return session, result
+        await session.close()
+        return None, result
+    except Exception:
+        if session is not None:
+            await session.close()
+        elif context is not None:
+            try:
+                await context.close()
+            except Exception:
+                pass
+            if pw is not None:
+                try:
+                    await pw.stop()
+                except Exception:
+                    pass
+        raise
+
+
+def complete_google_flow_login(
+    session: PendingGoogleLogin,
+    *,
+    env_path: str | os.PathLike[str] | None = None,
+) -> dict:
+    if session.closed:
+        raise AccountOnboardingError("session_closed")
+    if session.status != "active":
+        raise AccountOnboardingError("login_not_active")
+    entry = AccountEntry(
+        account_id=session.account_id,
+        profile_dir=session.profile_dir,
+        proxy_url=session.proxy_url,
+    )
+    env_update = append_flow_account_to_env(entry, env_path=env_path)
+    return {
+        "ok": True,
+        "account_id": session.account_id,
+        "profile_dir": session.profile_dir,
+        "proxy": proxy_public_label(session.proxy_url),
+        "status": "active",
+        "reason": "flow_opened",
+        "env_updated": True,
+        "restart_required": True,
+        "accounts_count": env_update["accounts_count"],
+    }
 
 
 async def login_google_flow_profile(

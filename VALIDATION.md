@@ -42,9 +42,13 @@ Requires explicit approval.
 
 - `python login.py`
 - Any script that opens persistent Chrome profile via Playwright.
-- Admin account onboarding from `/admin.html` / `POST /api/admin/accounts/onboard`
-  with `confirm_login=true` (opens Chrome, creates a persistent profile, logs in
-  to Google, and may update `.env` `FLOW_ACCOUNTS`).
+- Admin account onboarding from `/admin.html`:
+  `POST /api/admin/accounts/onboard/start` with `confirm_login=true` opens
+  Chrome, creates a persistent profile, and logs in to Google until Flow opens or
+  Google asks for a one-time 2FA code; `POST /api/admin/accounts/onboard/2fa`
+  submits that code into the open browser session; `POST
+  /api/admin/accounts/onboard/complete` with `confirm_add=true` updates `.env`
+  `FLOW_ACCOUNTS`.
 
 Risks:
 

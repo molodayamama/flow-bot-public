@@ -13,6 +13,12 @@ class AccountOnboardingHelperTests(unittest.TestCase):
         secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
         self.assertEqual(ao.totp_code(secret, now=59, digits=8), "94287082")
 
+    def test_validate_2fa_code_accepts_one_time_code_only(self) -> None:
+        self.assertEqual(ao.validate_2fa_code(" 123 456 "), "123456")
+        with self.assertRaises(ao.AccountOnboardingError) as ctx:
+            ao.validate_2fa_code("JBSWY3DPEHPK3PXP")
+        self.assertEqual(ctx.exception.code, "invalid_two_fa_code")
+
     def test_proxy_public_label_strips_credentials(self) -> None:
         proxy = "http://user:" + "pass@10.0.0.1:8118"
         self.assertEqual(
