@@ -1381,6 +1381,9 @@ function setOnboardStatus(text, kind='info') {
 
 function accountOnboardReason(data) {
   const status = data && (data.status || data.error);
+  if (onboardNeedsGoogleLogin(data)) {
+    return 'Flow открыт без входа в Google: войди в аккаунт в VNC-браузере (:99 / noVNC) и нажми «Проверить снова»';
+  }
   const map = {
     invalid_account_id:'ID: буквы/цифры/_/-, начинается с буквы, до 32 символов',
     account_exists:'Такой account id уже есть в FLOW_ACCOUNTS',
@@ -1396,12 +1399,23 @@ function accountOnboardReason(data) {
     invalid_two_fa_code:'2FA-код должен быть 6 цифр из Google Authenticator',
     session_expired:'Сессия логина истекла, начни логин заново',
     login_not_active:'Сначала заверши Google login и 2FA',
-    needs_project:'Flow открылся, но проект не создался: создай его в VNC-браузере (:99 / noVNC) и нажми «Проверить снова»',
+    needs_project:'Flow открыт, но проект не создался: создай проект в VNC-браузере (:99 / noVNC) и нажми «Проверить снова»',
     needs_challenge:'Google требует доп. проверку: пройди её в VNC-браузере (:99 / noVNC :6080) и нажми «Проверить снова»',
     env_permission_denied:'Бот не смог записать .env на сервере',
     login_failed:'Логин не завершился',
   };
   return map[status] || (data && (data.reason || data.error)) || 'Не удалось добавить аккаунт';
+}
+
+function onboardNeedsGoogleLogin(data) {
+  const reason = data && String(data.reason || '');
+  return ['flow_signed_out', 'flow_signed_out_google_login', 'still_on_google_login', 'google_login_form_not_ready'].includes(reason);
+}
+
+function onboardChallengeStatusText(data) {
+  return onboardNeedsGoogleLogin(data)
+    ? 'Flow открыт без входа в Google. Открой серверный браузер по VNC, войди в аккаунт Google, затем нажми «Проверить снова».'
+    : 'Google требует доп. проверку. Открой серверный браузер по VNC, пройди проверку вручную, затем нажми «Проверить снова».';
 }
 
 function resetOnboardFlow(keepInputs=false) {
@@ -1510,9 +1524,9 @@ async function startOnboardLogin() {
     if (data.needs_2fa) {
       setOnboardStatus('Google запросил 2FA: введи текущий код из Authenticator и нажми «Отправить 2FA».');
     } else if (data.needs_challenge) {
-      setOnboardStatus('Google требует доп. проверку. Открой серверный браузер по VNC, пройди проверку вручную, затем нажми «Проверить снова».', 'fail');
+      setOnboardStatus(onboardChallengeStatusText(data), 'fail');
     } else if (data.needs_project) {
-      setOnboardStatus('Flow открылся, но проект не создался. Открой серверный браузер по VNC, создай проект (или доведи вход) вручную, затем нажми «Проверить снова».', 'fail');
+      setOnboardStatus('Flow открыт, но проект не создался. Открой серверный браузер по VNC, создай проект вручную, затем нажми «Проверить снова».', 'fail');
     } else {
       setOnboardStatus('Google login успешен. Нажми «Добавить аккаунт», чтобы записать .env.', 'ok');
     }
@@ -1552,7 +1566,7 @@ async function recheckOnboard() {
       ? 'Теперь Google просит 2FA: введи код и нажми «Отправить 2FA».'
       : (data.needs_project
         ? 'Проект всё ещё не создан. Создай его в VNC-браузере и нажми «Проверить снова».'
-        : 'Проверка ещё не пройдена. Доведи её в VNC-браузере и нажми «Проверить снова».'), 'fail');
+        : onboardChallengeStatusText(data)), 'fail');
     return;
   }
   const reason = accountOnboardReason(data);
@@ -1600,7 +1614,7 @@ async function submitOnboard2fa() {
     setOnboardPending(data);
     setOnboardStatus(data.needs_project
       ? 'После 2FA Flow открыт, но проект не создался. Создай его в VNC-браузере, затем «Проверить снова».'
-      : 'После 2FA Google требует доп. проверку. Пройди её в VNC-браузере, затем «Проверить снова».', 'fail');
+      : onboardChallengeStatusText(data), 'fail');
     return;
   }
   const reason = accountOnboardReason(data);

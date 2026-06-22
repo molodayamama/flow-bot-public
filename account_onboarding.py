@@ -29,6 +29,17 @@ ACCOUNT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,31}$")
 TWO_FA_CODE_RE = re.compile(r"^\d{6,8}$")
 FLOW_PROJECT_CTA_RE = re.compile(r"^\s*(new project|create project|new flow)\s*$", re.I)
 FLOW_NEW_PROJECT_RE = re.compile(r"^\s*new project\s*$", re.I)
+FLOW_SIGN_IN_RE = re.compile(
+    r"^\s*(sign in|sign in with google|log in|log in with google|войти|войти через google)\s*$",
+    re.I,
+)
+FLOW_SIGNED_OUT_TEXT_RE = re.compile(
+    r"(sign[\s-]*in|log[\s-]*in)(?:\s+(?:with|to)\s+google)?|"
+    r"(?:choose|use)\s+an?\s+account\s+to\s+continue|"
+    r"войд(?:ите|и)(?:\s+через\s+google)?|"
+    r"аккаунт(?: google)?,?\s+чтобы продолжить",
+    re.I,
+)
 
 
 # Live onboarding progress, keyed by account id, polled by the admin panel.
@@ -53,6 +64,7 @@ _BRANCH_LABELS: dict[str, str] = {
     "needs_2fa": "Google запросил 2FA-код",
     "needs_challenge": "Google просит доп. проверку",
     "needs_project": "Flow открыт, но проект не создан — нужен ручной разбор",
+    "sign_in_clicked": "Flow просит вход — открываю Google login",
     "2fa_submit": "Отправляю 2FA-код",
     "2fa_field_not_found": "Поле 2FA не найдено",
     "recheck": "Перепроверяю вход",
@@ -558,6 +570,64 @@ async def _page_text(page) -> str:
         return ""
 
 
+def _flow_text_looks_signed_out(body_text: str) -> bool:
+    return bool(FLOW_SIGNED_OUT_TEXT_RE.search(body_text or ""))
+
+
+def _flow_sign_in_candidates(page) -> list[tuple[str, object]]:
+    return [
+        ("sign_in_button", lambda: page.get_by_role("button", name=FLOW_SIGN_IN_RE)),
+        ("sign_in_link", lambda: page.get_by_role("link", name=FLOW_SIGN_IN_RE)),
+        ("sign_in_text", lambda: page.get_by_text(FLOW_SIGN_IN_RE)),
+        ("sign_in_aria", lambda: page.locator('[aria-label*="sign in" i]')),
+        ("login_aria", lambda: page.locator('[aria-label*="log in" i]')),
+        ("google_accounts_link", lambda: page.locator('a[href*="accounts.google."]')),
+        ("sign_in_button_text", lambda: page.locator('button:has-text("Sign in")')),
+        ("login_button_text", lambda: page.locator('button:has-text("Log in")')),
+    ]
+
+
+async def _has_flow_sign_in_cta(page) -> bool:
+    for _label, getter in _flow_sign_in_candidates(page):
+        try:
+            loc = getter().first
+            if await loc.count() > 0 and await loc.is_visible(timeout=500):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _flow_page_is_signed_out(page, body_text: str | None = None) -> bool:
+    if "labs.google" not in (page.url or ""):
+        return False
+    if await _has_flow_sign_in_cta(page):
+        return True
+    body = body_text if body_text is not None else await _page_text(page)
+    return _flow_text_looks_signed_out(body)
+
+
+async def _click_flow_sign_in(page) -> bool:
+    for _label, getter in _flow_sign_in_candidates(page):
+        try:
+            loc = getter().first
+            if await loc.count() > 0 and await loc.is_visible(timeout=1_000):
+                try:
+                    await loc.scroll_into_view_if_needed(timeout=2_000)
+                except Exception:
+                    pass
+                await loc.click(timeout=5_000)
+                await page.wait_for_timeout(1500)
+                try:
+                    await page.wait_for_url("**accounts.google.**", timeout=15_000)
+                except Exception:
+                    pass
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _challenge_status(url: str, body_text: str) -> str | None:
     low = f"{url}\n{body_text}".lower()
     if any(token in low for token in ("totp", "authenticator", "verification code", "код подтверждения")):
@@ -573,6 +643,53 @@ def _challenge_status(url: str, body_text: str) -> str | None:
         "unusual",
     )):
         return "needs_challenge"
+    return None
+
+
+async def _submit_google_login_if_needed(
+    page,
+    *,
+    account_id: str,
+    email: str,
+    password: str,
+) -> dict | None:
+    if "labs.google" in (page.url or "") and await _flow_page_is_signed_out(page):
+        clicked = await _click_flow_sign_in(page)
+        _stage(account_id, "sign_in_clicked", ok=bool(clicked), host=_host(page.url))
+
+    if "accounts.google." not in (page.url or ""):
+        return None
+
+    filled_email = await _fill_first(page, [
+        'input[type="email"]',
+        'input[name="identifier"]',
+        '#identifierId',
+    ], email)
+    _stage(account_id, "email_filled", ok=bool(filled_email))
+    if filled_email:
+        await _click_next(page, "#identifierNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
+        await page.wait_for_timeout(1500)
+
+    filled_password = await _fill_first(page, [
+        'input[type="password"]',
+        'input[name="Passwd"]',
+    ], password)
+    _stage(account_id, "password_filled", ok=bool(filled_password))
+    if filled_password:
+        await _click_next(page, "#passwordNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
+        await page.wait_for_timeout(2500)
+
+    body = await _page_text(page)
+    challenge = _challenge_status(page.url, body)
+    if challenge == "needs_2fa":
+        _stage(account_id, "needs_2fa", host=_host(page.url))
+        return _login_result(False, "needs_2fa", "two_fa_code_required", page.url)
+    if challenge == "needs_challenge":
+        _stage(account_id, "needs_challenge", host=_host(page.url))
+        return _login_result(False, "needs_challenge", "google_challenge", page.url)
+    if "accounts.google." in (page.url or "") and (not filled_email and not filled_password):
+        _stage(account_id, "needs_challenge", host=_host(page.url))
+        return _login_result(False, "needs_challenge", "google_login_form_not_ready", page.url)
     return None
 
 
@@ -598,6 +715,23 @@ async def _open_flow_status(page, deadline_ms: int) -> dict:
         log.info("onboard flow-status: still on google host=%s challenge=%s", _host(page.url), challenge)
         return _login_result(False, challenge or "login_failed", "still_on_google_login", page.url)
     if "labs.google" in page.url:
+        if await _flow_page_is_signed_out(page, body):
+            clicked = await _click_flow_sign_in(page)
+            body = await _page_text(page)
+            if "accounts.google." in page.url:
+                challenge = _challenge_status(page.url, body)
+                log.info(
+                    "onboard flow-status: flow signed out, opened google host=%s challenge=%s",
+                    _host(page.url), challenge,
+                )
+                return _login_result(
+                    False,
+                    challenge or "needs_challenge",
+                    "flow_signed_out_google_login",
+                    page.url,
+                )
+            log.info("onboard flow-status: flow signed out host=%s clicked=%s", _host(page.url), clicked)
+            return _login_result(False, "needs_challenge", "flow_signed_out", page.url)
         log.info("onboard flow-status: flow opened host=%s", _host(page.url))
         return _login_result(True, "active", "flow_opened", page.url)
     log.info("onboard flow-status: unexpected redirect host=%s", _host(page.url))
@@ -780,38 +914,15 @@ async def start_google_flow_login(
         await page.goto(FLOW_URL, timeout=deadline_ms, wait_until="domcontentloaded")
         await page.wait_for_timeout(1500)
         _stage(account_id, "page_loaded", host=_host(page.url))
-        if "accounts.google." in page.url:
-            filled_email = await _fill_first(page, [
-                'input[type="email"]',
-                'input[name="identifier"]',
-                '#identifierId',
-            ], email)
-            _stage(account_id, "email_filled", ok=bool(filled_email))
-            if filled_email:
-                await _click_next(page, "#identifierNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
-                await page.wait_for_timeout(1500)
-
-            filled_password = await _fill_first(page, [
-                'input[type="password"]',
-                'input[name="Passwd"]',
-            ], password)
-            _stage(account_id, "password_filled", ok=bool(filled_password))
-            if filled_password:
-                await _click_next(page, "#passwordNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
-                await page.wait_for_timeout(2500)
-
-            body = await _page_text(page)
-            challenge = _challenge_status(page.url, body)
-            if challenge == "needs_2fa":
-                session.status = "needs_2fa"
-                _stage(account_id, "needs_2fa", host=_host(page.url))
-                return session, _login_result(False, "needs_2fa", "two_fa_code_required", page.url)
-            if challenge == "needs_challenge":
-                # Keep the browser alive: the operator can finish Google's
-                # "verify it's you" challenge over VNC, then call recheck.
-                session.status = "needs_challenge"
-                _stage(account_id, "needs_challenge", host=_host(page.url))
-                return session, _login_result(False, "needs_challenge", "google_challenge", page.url)
+        login_result = await _submit_google_login_if_needed(
+            page,
+            account_id=account_id,
+            email=email,
+            password=password,
+        )
+        if login_result is not None:
+            session.status = str(login_result.get("status") or "login_failed")
+            return session, login_result
 
         result = await _open_flow_status(page, deadline_ms)
         if result.get("ok"):

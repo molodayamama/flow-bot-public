@@ -7,6 +7,72 @@ from pathlib import Path
 import account_onboarding as ao
 
 
+class _FakeLocator:
+    def __init__(self, *, visible: bool = False, text: str = "", on_click=None) -> None:
+        self.visible = visible
+        self.text = text
+        self.on_click = on_click
+
+    @property
+    def first(self):
+        return self
+
+    async def count(self) -> int:
+        return 1 if self.visible else 0
+
+    async def is_visible(self, timeout: int = 0) -> bool:
+        return self.visible
+
+    async def scroll_into_view_if_needed(self, timeout: int = 0) -> None:
+        return None
+
+    async def click(self, timeout: int = 0) -> None:
+        if self.on_click:
+            self.on_click()
+
+    async def inner_text(self, timeout: int = 0) -> str:
+        return self.text
+
+
+class _FakeFlowPage:
+    def __init__(
+        self,
+        *,
+        body_text: str,
+        sign_in_visible: bool = False,
+        click_opens_google: bool = False,
+    ) -> None:
+        self.url = ao.FLOW_URL
+        self.body_text = body_text
+        self.sign_in_visible = sign_in_visible
+        self.click_opens_google = click_opens_google
+
+    async def goto(self, url: str, timeout: int = 0, wait_until: str = "") -> None:
+        self.url = url
+
+    async def wait_for_url(self, pattern: str, timeout: int = 0) -> None:
+        return None
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        return None
+
+    def _click_sign_in(self) -> None:
+        if self.click_opens_google:
+            self.url = "https://accounts.google.com/signin/v2/identifier"
+            self.body_text = "Sign in"
+
+    def get_by_role(self, role: str, name=None):
+        return _FakeLocator(visible=self.sign_in_visible, on_click=self._click_sign_in)
+
+    def get_by_text(self, pattern):
+        return _FakeLocator(visible=self.sign_in_visible, on_click=self._click_sign_in)
+
+    def locator(self, selector: str):
+        if selector == "body":
+            return _FakeLocator(visible=True, text=self.body_text)
+        return _FakeLocator(visible=self.sign_in_visible, on_click=self._click_sign_in)
+
+
 class AccountOnboardingHelperTests(unittest.TestCase):
     def test_totp_code_matches_rfc_vector(self) -> None:
         # RFC 6238 test secret for SHA1; at t=59 the 8-digit code is 94287082.
@@ -47,6 +113,11 @@ class AccountOnboardingHelperTests(unittest.TestCase):
         self.assertIsNotNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("New flow"))
         self.assertIsNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create"))
         self.assertIsNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create account"))
+
+    def test_flow_signed_out_text_requires_login_phrase(self) -> None:
+        self.assertTrue(ao._flow_text_looks_signed_out("Sign in with Google to continue"))
+        self.assertTrue(ao._flow_text_looks_signed_out("Choose an account to continue"))
+        self.assertFalse(ao._flow_text_looks_signed_out("New project\nManage your Google Account"))
 
     def test_project_cta_candidates_prioritize_new_project(self) -> None:
         labels = [label for label, _getter in ao._flow_project_cta_candidates(object())]
@@ -139,6 +210,31 @@ class AccountOnboardingHelperTests(unittest.TestCase):
             text = env_path.read_text(encoding="utf-8")
             self.assertIn("main=./google_profile", text)
             self.assertNotIn("sub7=", text)
+
+
+class AccountOnboardingFlowStatusTests(unittest.IsolatedAsyncioTestCase):
+    async def test_open_flow_status_does_not_treat_signed_out_flow_as_active(self) -> None:
+        page = _FakeFlowPage(
+            body_text="Sign in with Google",
+            sign_in_visible=True,
+            click_opens_google=True,
+        )
+
+        result = await ao._open_flow_status(page, 1000)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "needs_challenge")
+        self.assertEqual(result["reason"], "flow_signed_out_google_login")
+        self.assertEqual(result["final_host"], "accounts.google.com")
+
+    async def test_open_flow_status_treats_logged_in_flow_as_active(self) -> None:
+        page = _FakeFlowPage(body_text="New project\nCreate project")
+
+        result = await ao._open_flow_status(page, 1000)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "active")
+        self.assertEqual(result["reason"], "flow_opened")
 
 
 if __name__ == "__main__":
