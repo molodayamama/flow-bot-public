@@ -25,12 +25,21 @@ from flow_core import FlowAccount, parse_flow_accounts
 log = logging.getLogger(__name__)
 
 FLOW_URL = "https://labs.google/fx/tools/flow"
+GOOGLE_LOGIN_URL = "https://accounts.google.com/"
 ACCOUNT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,31}$")
 TWO_FA_CODE_RE = re.compile(r"^\d{6,8}$")
-FLOW_PROJECT_CTA_RE = re.compile(r"^\s*(new project|create project|new flow)\s*$", re.I)
+FLOW_PROJECT_CTA_RE = re.compile(
+    r"^\s*(new project|create project|new flow|create with flow)\s*$",
+    re.I,
+)
 FLOW_NEW_PROJECT_RE = re.compile(r"^\s*new project\s*$", re.I)
+FLOW_CREATE_WITH_FLOW_RE = re.compile(r"^\s*create with flow\s*$", re.I)
 FLOW_SIGN_IN_RE = re.compile(
     r"^\s*(sign in|sign in with google|log in|log in with google|войти|войти через google)\s*$",
+    re.I,
+)
+GOOGLE_USE_ANOTHER_ACCOUNT_RE = re.compile(
+    r"^\s*(use another account|add account|другой аккаунт|использовать другой аккаунт)\s*$",
     re.I,
 )
 FLOW_SIGNED_OUT_TEXT_RE = re.compile(
@@ -628,6 +637,32 @@ async def _click_flow_sign_in(page) -> bool:
     return False
 
 
+def _google_use_another_account_candidates(page) -> list[tuple[str, object]]:
+    return [
+        ("use_another_account_button", lambda: page.get_by_role("button", name=GOOGLE_USE_ANOTHER_ACCOUNT_RE)),
+        ("use_another_account_link", lambda: page.get_by_role("link", name=GOOGLE_USE_ANOTHER_ACCOUNT_RE)),
+        ("use_another_account_text", lambda: page.get_by_text(GOOGLE_USE_ANOTHER_ACCOUNT_RE)),
+        ("use_another_account_data", lambda: page.locator('[data-identifier=""]')),
+    ]
+
+
+async def _click_google_use_another_account(page) -> bool:
+    for _label, getter in _google_use_another_account_candidates(page):
+        try:
+            loc = getter().first
+            if await loc.count() > 0 and await loc.is_visible(timeout=1_000):
+                try:
+                    await loc.scroll_into_view_if_needed(timeout=2_000)
+                except Exception:
+                    pass
+                await loc.click(timeout=5_000)
+                await page.wait_for_timeout(1500)
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _challenge_status(url: str, body_text: str) -> str | None:
     low = f"{url}\n{body_text}".lower()
     if any(token in low for token in ("totp", "authenticator", "verification code", "код подтверждения")):
@@ -652,6 +687,8 @@ async def _submit_google_login_if_needed(
     account_id: str,
     email: str,
     password: str,
+    totp_secret: str = "",
+    deadline_ms: int = 90_000,
 ) -> dict | None:
     if "labs.google" in (page.url or "") and await _flow_page_is_signed_out(page):
         clicked = await _click_flow_sign_in(page)
@@ -660,25 +697,76 @@ async def _submit_google_login_if_needed(
     if "accounts.google." not in (page.url or ""):
         return None
 
-    filled_email = await _fill_first(page, [
-        'input[type="email"]',
-        'input[name="identifier"]',
-        '#identifierId',
-    ], email)
-    _stage(account_id, "email_filled", ok=bool(filled_email))
-    if filled_email:
-        await _click_next(page, "#identifierNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
-        await page.wait_for_timeout(1500)
+    deadline = time.time() + max(30_000, int(deadline_ms)) / 1000
+    clicked_account_chooser = False
+    while time.time() < deadline:
+        if "accounts.google." not in (page.url or ""):
+            return None
 
-    filled_password = await _fill_first(page, [
-        'input[type="password"]',
-        'input[name="Passwd"]',
-    ], password)
-    _stage(account_id, "password_filled", ok=bool(filled_password))
-    if filled_password:
-        await _click_next(page, "#passwordNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
-        await page.wait_for_timeout(2500)
+        body = await _page_text(page)
+        challenge = _challenge_status(page.url, body)
+        if challenge == "needs_2fa":
+            if totp_secret.strip():
+                try:
+                    code = totp_code(totp_secret)
+                except AccountOnboardingError as exc:
+                    _stage(account_id, "needs_2fa", host=_host(page.url))
+                    return _login_result(False, "needs_2fa", exc.code, page.url)
+                filled_totp = await _fill_first(page, [
+                    'input[name="totpPin"]',
+                    'input[type="tel"]',
+                    'input[aria-label*="code" i]',
+                    'input[aria-label*="код" i]',
+                    'input[type="text"]',
+                ], code, timeout_ms=2_000)
+                _stage(account_id, "2fa_submit", host=_host(page.url), auto=True, ok=bool(filled_totp))
+                if not filled_totp:
+                    _stage(account_id, "2fa_field_not_found", host=_host(page.url))
+                    return _login_result(False, "needs_challenge", "totp_field_not_found", page.url)
+                await _click_next(
+                    page,
+                    "#totpNext button",
+                    'button:has-text("Next")',
+                    'button:has-text("Далее")',
+                )
+                await page.wait_for_timeout(3000)
+                continue
+            _stage(account_id, "needs_2fa", host=_host(page.url))
+            return _login_result(False, "needs_2fa", "two_fa_code_required", page.url)
+        if challenge == "needs_challenge":
+            _stage(account_id, "needs_challenge", host=_host(page.url))
+            return _login_result(False, "needs_challenge", "google_challenge", page.url)
 
+        filled_email = await _fill_first(page, [
+            'input[type="email"]',
+            'input[name="identifier"]',
+            '#identifierId',
+        ], email, timeout_ms=2_000)
+        if filled_email:
+            _stage(account_id, "email_filled", ok=True)
+            await _click_next(page, "#identifierNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
+            await page.wait_for_timeout(1800)
+            continue
+
+        if not clicked_account_chooser and await _click_google_use_another_account(page):
+            clicked_account_chooser = True
+            _stage(account_id, "email_filled", ok=False, chooser=True)
+            continue
+
+        filled_password = await _fill_first(page, [
+            'input[type="password"]',
+            'input[name="Passwd"]',
+        ], password, timeout_ms=2_000)
+        if filled_password:
+            _stage(account_id, "password_filled", ok=True)
+            await _click_next(page, "#passwordNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
+            await page.wait_for_timeout(2500)
+            continue
+
+        await page.wait_for_timeout(1000)
+
+    if "accounts.google." not in (page.url or ""):
+        return None
     body = await _page_text(page)
     challenge = _challenge_status(page.url, body)
     if challenge == "needs_2fa":
@@ -687,10 +775,8 @@ async def _submit_google_login_if_needed(
     if challenge == "needs_challenge":
         _stage(account_id, "needs_challenge", host=_host(page.url))
         return _login_result(False, "needs_challenge", "google_challenge", page.url)
-    if "accounts.google." in (page.url or "") and (not filled_email and not filled_password):
-        _stage(account_id, "needs_challenge", host=_host(page.url))
-        return _login_result(False, "needs_challenge", "google_login_form_not_ready", page.url)
-    return None
+    _stage(account_id, "needs_challenge", host=_host(page.url))
+    return _login_result(False, "needs_challenge", "google_login_form_not_ready", page.url)
 
 
 def _login_result(ok: bool, status: str, reason: str, url: str = "") -> dict:
@@ -754,13 +840,18 @@ def _flow_project_cta_candidates(page) -> list[tuple[str, object]]:
         ("new_project_button", lambda: page.get_by_role("button", name=FLOW_NEW_PROJECT_RE)),
         ("new_project_link", lambda: page.get_by_role("link", name=FLOW_NEW_PROJECT_RE)),
         ("new_project_text", lambda: page.get_by_text(FLOW_NEW_PROJECT_RE)),
+        ("create_with_flow_button", lambda: page.get_by_role("button", name=FLOW_CREATE_WITH_FLOW_RE)),
+        ("create_with_flow_link", lambda: page.get_by_role("link", name=FLOW_CREATE_WITH_FLOW_RE)),
+        ("create_with_flow_text", lambda: page.get_by_text(FLOW_CREATE_WITH_FLOW_RE)),
         ("project_cta_button", lambda: page.get_by_role("button", name=FLOW_PROJECT_CTA_RE)),
         ("project_cta_link", lambda: page.get_by_role("link", name=FLOW_PROJECT_CTA_RE)),
         ("project_cta_text", lambda: page.get_by_text(FLOW_PROJECT_CTA_RE)),
         ("new_project_aria", lambda: page.locator('[aria-label*="new project" i]')),
         ("create_project_aria", lambda: page.locator('[aria-label*="create project" i]')),
+        ("create_with_flow_aria", lambda: page.locator('[aria-label*="create with flow" i]')),
         ("new_project_button_text", lambda: page.locator('button:has-text("New project")')),
         ("create_project_button_text", lambda: page.locator('button:has-text("Create project")')),
+        ("create_with_flow_button_text", lambda: page.locator('button:has-text("Create with Flow")')),
         ("new_flow_button_text", lambda: page.locator('button:has-text("New flow")')),
         ("new_icon_button", lambda: page.locator('button[aria-label*="new" i]')),
         ("plus_button", lambda: page.locator('button:has-text("+")')),
@@ -835,6 +926,7 @@ async def start_google_flow_login(
     account_id: str,
     email: str,
     password: str,
+    totp_secret: str = "",
     profile_dir: str,
     proxy_url: str = "",
     env_path: str | os.PathLike[str] | None = None,
@@ -911,7 +1003,7 @@ async def start_google_flow_login(
         )
         await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-        await page.goto(FLOW_URL, timeout=deadline_ms, wait_until="domcontentloaded")
+        await page.goto(GOOGLE_LOGIN_URL, timeout=deadline_ms, wait_until="domcontentloaded")
         await page.wait_for_timeout(1500)
         _stage(account_id, "page_loaded", host=_host(page.url))
         login_result = await _submit_google_login_if_needed(
@@ -919,6 +1011,8 @@ async def start_google_flow_login(
             account_id=account_id,
             email=email,
             password=password,
+            totp_secret=totp_secret,
+            deadline_ms=deadline_ms,
         )
         if login_result is not None:
             session.status = str(login_result.get("status") or "login_failed")

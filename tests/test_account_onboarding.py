@@ -8,10 +8,11 @@ import account_onboarding as ao
 
 
 class _FakeLocator:
-    def __init__(self, *, visible: bool = False, text: str = "", on_click=None) -> None:
+    def __init__(self, *, visible: bool = False, text: str = "", on_click=None, on_fill=None) -> None:
         self.visible = visible
         self.text = text
         self.on_click = on_click
+        self.on_fill = on_fill
 
     @property
     def first(self):
@@ -29,6 +30,10 @@ class _FakeLocator:
     async def click(self, timeout: int = 0) -> None:
         if self.on_click:
             self.on_click()
+
+    async def fill(self, value: str, timeout: int = 0) -> None:
+        if self.on_fill:
+            self.on_fill(value)
 
     async def inner_text(self, timeout: int = 0) -> str:
         return self.text
@@ -73,6 +78,67 @@ class _FakeFlowPage:
         return _FakeLocator(visible=self.sign_in_visible, on_click=self._click_sign_in)
 
 
+class _FakeGoogleLoginPage:
+    def __init__(self, *, phase: str = "email") -> None:
+        self.url = "https://accounts.google.com/"
+        self.phase = phase
+        self.filled_email = ""
+        self.filled_password = ""
+        self.filled_totp = ""
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        return None
+
+    def _body_text(self) -> str:
+        if self.phase == "totp":
+            return "Enter a verification code from your authenticator app"
+        return "Sign in"
+
+    def _email_next(self) -> None:
+        if self.filled_email:
+            self.phase = "password"
+
+    def _password_next(self) -> None:
+        if self.filled_password:
+            self.url = "https://myaccount.google.com/"
+
+    def _totp_next(self) -> None:
+        if self.filled_totp:
+            self.url = "https://myaccount.google.com/"
+
+    def locator(self, selector: str):
+        if selector == "body":
+            return _FakeLocator(visible=True, text=self._body_text())
+        if selector in {'input[type="email"]', 'input[name="identifier"]', "#identifierId"}:
+            return _FakeLocator(
+                visible=self.phase == "email",
+                on_fill=lambda value: setattr(self, "filled_email", value),
+            )
+        if selector in {'input[type="password"]', 'input[name="Passwd"]'}:
+            return _FakeLocator(
+                visible=self.phase == "password",
+                on_fill=lambda value: setattr(self, "filled_password", value),
+            )
+        if selector in {'input[name="totpPin"]', 'input[type="tel"]'}:
+            return _FakeLocator(
+                visible=self.phase == "totp",
+                on_fill=lambda value: setattr(self, "filled_totp", value),
+            )
+        if selector == "#identifierNext button":
+            return _FakeLocator(visible=self.phase == "email", on_click=self._email_next)
+        if selector == "#passwordNext button":
+            return _FakeLocator(visible=self.phase == "password", on_click=self._password_next)
+        if selector == "#totpNext button":
+            return _FakeLocator(visible=self.phase == "totp", on_click=self._totp_next)
+        return _FakeLocator()
+
+    def get_by_role(self, role: str, name=None):
+        return _FakeLocator()
+
+    def get_by_text(self, pattern):
+        return _FakeLocator()
+
+
 class AccountOnboardingHelperTests(unittest.TestCase):
     def test_totp_code_matches_rfc_vector(self) -> None:
         # RFC 6238 test secret for SHA1; at t=59 the 8-digit code is 94287082.
@@ -111,6 +177,7 @@ class AccountOnboardingHelperTests(unittest.TestCase):
         self.assertIsNotNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("New project"))
         self.assertIsNotNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create project"))
         self.assertIsNotNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("New flow"))
+        self.assertIsNotNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create with Flow"))
         self.assertIsNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create"))
         self.assertIsNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create account"))
 
@@ -126,6 +193,7 @@ class AccountOnboardingHelperTests(unittest.TestCase):
             "new_project_link",
             "new_project_text",
         ])
+        self.assertIn("create_with_flow_button", labels)
         self.assertIn("project_cta_button", labels)
         self.assertNotIn("create_button", labels)
 
@@ -213,6 +281,12 @@ class AccountOnboardingHelperTests(unittest.TestCase):
 
 
 class AccountOnboardingFlowStatusTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        ao._PROGRESS.pop("subT", None)
+
+    async def asyncTearDown(self) -> None:
+        ao._PROGRESS.pop("subT", None)
+
     async def test_open_flow_status_does_not_treat_signed_out_flow_as_active(self) -> None:
         page = _FakeFlowPage(
             body_text="Sign in with Google",
@@ -235,6 +309,54 @@ class AccountOnboardingFlowStatusTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["status"], "active")
         self.assertEqual(result["reason"], "flow_opened")
+
+    async def test_submit_google_login_fills_direct_accounts_page(self) -> None:
+        page = _FakeGoogleLoginPage()
+
+        result = await ao._submit_google_login_if_needed(
+            page,
+            account_id="subT",
+            email="account@example.com",
+            password="secret-password",
+            deadline_ms=30_000,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(page.url, "https://myaccount.google.com/")
+        self.assertEqual(page.filled_email, "account@example.com")
+        self.assertEqual(page.filled_password, "secret-password")
+
+    async def test_submit_google_login_keeps_2fa_session_without_totp_secret(self) -> None:
+        page = _FakeGoogleLoginPage(phase="totp")
+
+        result = await ao._submit_google_login_if_needed(
+            page,
+            account_id="subT",
+            email="account@example.com",
+            password="secret-password",
+            deadline_ms=30_000,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "needs_2fa")
+        self.assertEqual(result["reason"], "two_fa_code_required")
+
+    async def test_submit_google_login_can_auto_submit_totp_secret(self) -> None:
+        page = _FakeGoogleLoginPage(phase="totp")
+
+        result = await ao._submit_google_login_if_needed(
+            page,
+            account_id="subT",
+            email="account@example.com",
+            password="secret-password",
+            totp_secret="GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+            deadline_ms=30_000,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(page.url, "https://myaccount.google.com/")
+        self.assertRegex(page.filled_totp, r"^\d{6}$")
 
 
 if __name__ == "__main__":

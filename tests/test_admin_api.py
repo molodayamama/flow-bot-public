@@ -385,6 +385,7 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
             "id": "sub7",
             "email": "account@example.com",
             "password": "secret-password",
+            "totp_secret": "SECRETSECRET",
             "proxy": proxy,
         }))
         body = json.loads(resp.body)
@@ -394,8 +395,10 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("session_id", body)
         encoded = json.dumps(body, ensure_ascii=False)
         self.assertNotIn("secret-password", encoded)
+        self.assertNotIn("SECRETSECRET", encoded)
         self.assertNotIn("user:pass", encoded)
         self.assertEqual(calls[0]["password"], "secret-password")
+        self.assertEqual(calls[0]["totp_secret"], "SECRETSECRET")
 
         resp = await admin_api.handle_account_onboard_2fa_post(_JsonReq({
             "session_id": body["session_id"],

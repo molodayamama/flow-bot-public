@@ -1052,6 +1052,7 @@ async def handle_account_onboard_start_post(request: web.Request) -> web.Respons
     account_id = str(body.get("id") or body.get("account_id") or "").strip()
     email = str(body.get("email") or "").strip()
     password = str(body.get("password") or "")
+    totp_secret = str(body.get("totp_secret") or body.get("totp") or "")
     proxy_url = str(body.get("proxy") or body.get("proxy_url") or "").strip()
     profile_dir = str(body.get("profile_dir") or "").strip() or None
     mode = str(body.get("mode") or "add").strip().lower()
@@ -1099,6 +1100,7 @@ async def handle_account_onboard_start_post(request: web.Request) -> web.Respons
             account_id=account_id,
             email=email,
             password=password,
+            totp_secret=totp_secret,
             proxy_url=proxy_url,
             profile_dir=profile_dir or account_onboarding.default_profile_dir(account_id),
             timeout_sec=timeout_sec,
