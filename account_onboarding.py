@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import re
 import struct
@@ -21,9 +22,45 @@ from urllib.parse import quote, unquote, urlparse
 from flow_core import FlowAccount, parse_flow_accounts
 
 
+log = logging.getLogger(__name__)
+
 FLOW_URL = "https://labs.google/fx/tools/flow"
 ACCOUNT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,31}$")
 TWO_FA_CODE_RE = re.compile(r"^\d{6,8}$")
+
+
+def _stage(account_id: str, stage: str, **extra) -> None:
+    """Emit a single onboarding-stage line to the bot log.
+
+    Secrets never reach here: callers pass only stage names, booleans, status
+    codes, and URL *hosts* — never passwords, codes, cookies, or full URLs.
+    """
+    suffix = ""
+    if extra:
+        suffix = " " + " ".join(f"{k}={v}" for k, v in extra.items())
+    log.info("onboard[%s] %s%s", account_id, stage, suffix)
+
+
+def _host(url: str) -> str:
+    try:
+        return urlparse(url or "").hostname or ""
+    except Exception:
+        return ""
+
+
+def _onboarding_display_env() -> dict | None:
+    """Launch the onboarding browser on a VNC-visible X display when configured.
+
+    Operators pass Google "verify it's you" challenges by watching this browser
+    over VNC. The bot itself runs under a throwaway ``xvfb-run`` display the
+    operator cannot see, so onboarding overrides ``DISPLAY`` (default ``:99``,
+    which the VNC stack is attached to). Set ``ONBOARDING_DISPLAY`` empty to keep
+    the inherited display.
+    """
+    display = os.getenv("ONBOARDING_DISPLAY", ":99").strip()
+    if not display:
+        return None
+    return {**os.environ, "DISPLAY": display}
 
 
 class AccountOnboardingError(ValueError):
@@ -73,6 +110,7 @@ class PendingGoogleLogin:
             raise AccountOnboardingError("session_closed")
         cleaned = validate_2fa_code(code)
         deadline_ms = max(30_000, int(timeout_sec) * 1000)
+        _stage(self.account_id, "2fa_submit", host=_host(self.page.url))
         filled = await _fill_first(self.page, [
             'input[name="totpPin"]',
             'input[type="tel"]',
@@ -82,6 +120,7 @@ class PendingGoogleLogin:
         ], cleaned)
         if not filled:
             self.status = "needs_challenge"
+            _stage(self.account_id, "2fa_field_not_found", host=_host(self.page.url))
             return _login_result(False, "needs_challenge", "two_fa_field_not_found", self.page.url)
         await _click_next(
             self.page,
@@ -94,6 +133,23 @@ class PendingGoogleLogin:
         if result.get("ok"):
             result = await _ensure_flow_project(self.page)
         self.status = str(result.get("status") or "login_failed")
+        _stage(self.account_id, "2fa_result", status=self.status, reason=result.get("reason"))
+        return result
+
+    async def recheck(self, *, timeout_sec: int = 90) -> dict:
+        """Re-evaluate login after the operator finished a manual Google
+        challenge in the VNC-visible browser. Re-opens Flow and ensures a
+        project, then updates ``status`` so ``complete`` can finalize.
+        """
+        if self.closed:
+            raise AccountOnboardingError("session_closed")
+        deadline_ms = max(30_000, int(timeout_sec) * 1000)
+        _stage(self.account_id, "recheck", host=_host(self.page.url))
+        result = await _open_flow_status(self.page, deadline_ms)
+        if result.get("ok"):
+            result = await _ensure_flow_project(self.page)
+        self.status = str(result.get("status") or "login_failed")
+        _stage(self.account_id, "recheck_result", status=self.status, reason=result.get("reason"))
         return result
 
 
@@ -444,9 +500,12 @@ async def _open_flow_status(page, deadline_ms: int) -> dict:
     body = await _page_text(page)
     if "accounts.google." in page.url:
         challenge = _challenge_status(page.url, body)
+        log.info("onboard flow-status: still on google host=%s challenge=%s", _host(page.url), challenge)
         return _login_result(False, challenge or "login_failed", "still_on_google_login", page.url)
     if "labs.google" in page.url:
+        log.info("onboard flow-status: flow opened host=%s", _host(page.url))
         return _login_result(True, "active", "flow_opened", page.url)
+    log.info("onboard flow-status: unexpected redirect host=%s", _host(page.url))
     return _login_result(False, "needs_challenge", "unexpected_redirect", page.url)
 
 
@@ -461,6 +520,7 @@ def _project_id_from_url(url: str) -> str | None:
 
 async def _ensure_flow_project(page) -> dict:
     if _project_id_from_url(page.url):
+        log.info("onboard project: already open host=%s", _host(page.url))
         return _login_result(True, "active", "project_opened", page.url)
     candidates = [
         lambda: page.get_by_role("button", name=re.compile(r"new flow", re.I)),
@@ -481,6 +541,7 @@ async def _ensure_flow_project(page) -> dict:
         except Exception:
             continue
     if not clicked:
+        log.info("onboard project: 'new flow' button not found host=%s", _host(page.url))
         return _login_result(False, "needs_project", "new_flow_button_not_found", page.url)
     try:
         await page.wait_for_url("**/project/**", timeout=20_000)
@@ -488,7 +549,9 @@ async def _ensure_flow_project(page) -> dict:
         pass
     await page.wait_for_timeout(1500)
     if _project_id_from_url(page.url):
+        log.info("onboard project: created host=%s", _host(page.url))
         return _login_result(True, "active", "project_created", page.url)
+    log.info("onboard project: not created host=%s", _host(page.url))
     return _login_result(False, "needs_project", "project_not_created", page.url)
 
 
@@ -519,8 +582,16 @@ async def start_google_flow_login(
         _assert_account_not_configured(account_id, env_path)
     profile_path = Path(profile_dir)
     if not allow_existing_profile and profile_path.exists() and any(profile_path.iterdir()):
+        _stage(account_id, "profile_exists", profile=os.path.basename(str(profile_path)))
         raise AccountOnboardingError("profile_exists")
     profile_path.mkdir(parents=True, exist_ok=True)
+    _stage(
+        account_id,
+        "login_start",
+        profile=os.path.basename(str(profile_path)),
+        proxy=proxy_public_label(proxy_url),
+        existing_profile=allow_existing_profile,
+    )
 
     try:
         from playwright.async_api import async_playwright
@@ -546,6 +617,12 @@ async def start_google_flow_login(
         proxy_cfg = playwright_proxy_config(proxy_url)
         if proxy_cfg:
             launch_kwargs["proxy"] = proxy_cfg
+        display_env = _onboarding_display_env()
+        if display_env is not None:
+            launch_kwargs["env"] = display_env
+            _stage(account_id, "browser_launch", display=display_env.get("DISPLAY"))
+        else:
+            _stage(account_id, "browser_launch", display="(inherited)")
         context = await pw.chromium.launch_persistent_context(**launch_kwargs)
         page = context.pages[0] if context.pages else await context.new_page()
         session = PendingGoogleLogin(
@@ -561,12 +638,14 @@ async def start_google_flow_login(
 
         await page.goto(FLOW_URL, timeout=deadline_ms, wait_until="domcontentloaded")
         await page.wait_for_timeout(1500)
+        _stage(account_id, "page_loaded", host=_host(page.url))
         if "accounts.google." in page.url:
             filled_email = await _fill_first(page, [
                 'input[type="email"]',
                 'input[name="identifier"]',
                 '#identifierId',
             ], email)
+            _stage(account_id, "email_filled", ok=bool(filled_email))
             if filled_email:
                 await _click_next(page, "#identifierNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
                 await page.wait_for_timeout(1500)
@@ -575,6 +654,7 @@ async def start_google_flow_login(
                 'input[type="password"]',
                 'input[name="Passwd"]',
             ], password)
+            _stage(account_id, "password_filled", ok=bool(filled_password))
             if filled_password:
                 await _click_next(page, "#passwordNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
                 await page.wait_for_timeout(2500)
@@ -583,17 +663,23 @@ async def start_google_flow_login(
             challenge = _challenge_status(page.url, body)
             if challenge == "needs_2fa":
                 session.status = "needs_2fa"
+                _stage(account_id, "needs_2fa", host=_host(page.url))
                 return session, _login_result(False, "needs_2fa", "two_fa_code_required", page.url)
             if challenge == "needs_challenge":
-                result = _login_result(False, "needs_challenge", "google_challenge", page.url)
-                await session.close()
-                return None, result
+                # Keep the browser alive: the operator can finish Google's
+                # "verify it's you" challenge over VNC, then call recheck.
+                session.status = "needs_challenge"
+                _stage(account_id, "needs_challenge", host=_host(page.url))
+                return session, _login_result(False, "needs_challenge", "google_challenge", page.url)
 
         result = await _open_flow_status(page, deadline_ms)
         if result.get("ok"):
             result = await _ensure_flow_project(page)
         session.status = str(result.get("status") or "login_failed")
-        if session.status == "active":
+        _stage(account_id, "login_result", status=session.status, reason=result.get("reason"))
+        # Active means done; needs_2fa/needs_challenge keep the browser alive so
+        # the operator can finish via 2FA code or a manual VNC challenge + recheck.
+        if session.status in {"active", "needs_2fa", "needs_challenge"}:
             return session, result
         await session.close()
         return None, result
@@ -628,6 +714,7 @@ def complete_google_flow_login(
         proxy_url=session.proxy_url,
     )
     env_update = append_flow_account_to_env(entry, env_path=env_path)
+    _stage(session.account_id, "env_written", accounts_count=env_update["accounts_count"])
     return {
         "ok": True,
         "account_id": session.account_id,

@@ -115,6 +115,10 @@ class _FakeOnboardSession:
         self.status = "active"
         return {"ok": True, "status": "active", "reason": "flow_opened"}
 
+    async def recheck(self):
+        self.status = "active"
+        return {"ok": True, "status": "active", "reason": "project_opened"}
+
     async def close(self):
         self.closed = True
 
@@ -494,6 +498,60 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(body["ok"])
         self.assertEqual(calls, ["sub7"])
         self.assertEqual([a["id"] for a in admin_api._pool.status()], ["sub8"])
+
+    async def test_delete_is_idempotent_when_already_absent(self):
+        # sub7 is gone from the pool, .env, and startup — a repeated delete
+        # click must return ok (already_removed), not a scary 404.
+        admin_api._pool = _FakePool([
+            {"id": "sub8", "profile_dir": "./google_profile_sub8", "disabled": False,
+             "cooldown_left": 0, "fails": 0},
+        ])
+        admin_api._startup_state = None
+
+        def fake_remove_env(account_id):
+            raise admin_api.account_onboarding.AccountOnboardingError("account_not_found")
+
+        admin_api.account_onboarding.remove_flow_account_from_env = fake_remove_env
+
+        resp = await admin_api.handle_account_delete(_JsonReq({"confirm_delete": True}, {"id": "sub7"}))
+        body = json.loads(resp.body)
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["status"], "already_removed")
+        # sub8 untouched.
+        self.assertEqual([a["id"] for a in admin_api._pool.status()], ["sub8"])
+
+    async def test_delete_purges_startup_ghost(self):
+        # A deleted account must not linger as a startup ghost card.
+        admin_api._pool = _FakePool([
+            {"id": "sub7", "profile_dir": "./google_profile_sub7", "disabled": False,
+             "cooldown_left": 0, "fails": 0},
+            {"id": "sub8", "profile_dir": "./google_profile_sub8", "disabled": False,
+             "cooldown_left": 0, "fails": 0},
+        ])
+        admin_api._startup_state = {"accounts": {"sub7": {"status": "stopped", "ready": False}}}
+        admin_api.account_onboarding.remove_flow_account_from_env = lambda account_id: {"accounts_count": 1}
+
+        self.assertIsNotNone(admin_api._startup_for_account("sub7"))
+        resp = await admin_api.handle_account_delete(_JsonReq({"confirm_delete": True}, {"id": "sub7"}))
+        body = json.loads(resp.body)
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(body["ok"])
+        self.assertIsNone(admin_api._startup_for_account("sub7"))
+        self.assertEqual([a["id"] for a in admin_api._pool.status()], ["sub8"])
+
+    async def test_recheck_finalizes_after_manual_challenge(self):
+        session = _FakeOnboardSession()
+        session.status = "needs_challenge"
+        session_id = admin_api._store_onboard_session(session, mode="add")
+
+        resp = await admin_api.handle_account_onboard_recheck_post(
+            _JsonReq({"session_id": session_id})
+        )
+        body = json.loads(resp.body)
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(body["ready_to_add"])
+        self.assertEqual(body["status"], "active")
 
     async def test_image_test_requires_confirm_and_then_calls_client(self):
         client = _FakeVideoClient()

@@ -132,6 +132,22 @@ def _startup_set_account_status(account_id: str, status: str, *, ready: bool = F
         _startup_state["total_accounts"] = len(accounts)
 
 
+def _startup_remove_account(account_id: str) -> bool:
+    """Drop an account from the startup snapshot so a deleted account can't
+    linger as a ghost card. Returns True if an entry was removed."""
+    if not isinstance(_startup_state, dict):
+        return False
+    accounts = _startup_state.get("accounts")
+    if not isinstance(accounts, dict) or account_id not in accounts:
+        return False
+    accounts.pop(account_id, None)
+    _startup_state["ready_accounts"] = sum(
+        1 for a in accounts.values() if isinstance(a, dict) and a.get("ready")
+    )
+    _startup_state["total_accounts"] = len(accounts)
+    return True
+
+
 def _safe_reason(value: object, limit: int = 240) -> str:
     text = str(value or "")
     token_prefixes = ("Bearer" + r"\s+", "ya29" + r"\.", "session-" + "token=")
@@ -761,29 +777,56 @@ async def handle_account_delete(request: web.Request) -> web.Response:
         return _json({"error": "confirm_delete=true required"}, 400)
     if _pool is None:
         return _json({"error": "pool not initialized"}, 503)
+
     before = next((a for a in _pool.status() if a.get("id") == acc_id), None)
-    if before is None:
-        return _json({"error": f"account {acc_id!r} not found"}, 404)
-    if len(_pool.account_ids()) <= 1:
+    in_pool = before is not None
+    in_startup = _startup_for_account(acc_id) is not None
+
+    # Guard against emptying the pool (only meaningful for a live pool member).
+    if in_pool and len(_pool.account_ids()) <= 1:
         return _json({"ok": False, "status": "last_account", "error": "last_account"}, 400)
+
+    # Best-effort .env removal. Tolerate "already gone" so repeated clicks and
+    # half-finished onboards (env-only / runtime-only ghosts) can still be
+    # cleaned up instead of getting stuck on a scary 404.
+    env_count = None
+    env_removed = False
     try:
         env_update = account_onboarding.remove_flow_account_from_env(acc_id)
+        env_count = env_update.get("accounts_count")
+        env_removed = True
     except account_onboarding.AccountOnboardingError as exc:
-        status = 404 if exc.code == "account_not_found" else 400
-        _audit(request, "account.delete", old=before, new={"id": acc_id}, result=exc.code)
-        return _json({"ok": False, "status": exc.code, "error": exc.code}, status)
+        if exc.code != "account_not_found":
+            _audit(request, "account.delete", old=before, new={"id": acc_id}, result=exc.code)
+            return _json({"ok": False, "status": exc.code, "error": exc.code}, 400)
     except PermissionError:
         _audit(request, "account.delete", old=before, new={"id": acc_id}, result="env_permission_denied")
         return _json({"ok": False, "status": "env_permission_denied", "error": "env_permission_denied"}, 500)
-    await _close_runtime_account(acc_id)
+
+    # Nothing anywhere → idempotent success so re-clicks don't error out.
+    if not (in_pool or in_startup or env_removed):
+        log.info("account.delete %s: already absent (idempotent)", acc_id)
+        _audit(request, "account.delete", new={"id": acc_id}, result="already_removed")
+        return _json({"ok": True, "id": acc_id, "status": "already_removed",
+                      "runtime_removed": False, "profile_removed": False})
+
+    # Fast teardown: schedule the slow browser close in the background so the
+    # response returns immediately and the UI refreshes cleanly.
+    await _close_runtime_account(acc_id, background=True)
     runtime_removed = _pool.remove_account(acc_id)
+    ghost_removed = _startup_remove_account(acc_id)
     _remove_account_metadata(acc_id)
-    _audit(request, "account.delete", old=before, new={"id": acc_id, "runtime_removed": runtime_removed})
+    log.info(
+        "account.delete %s: env_removed=%s runtime_removed=%s ghost_removed=%s",
+        acc_id, env_removed, runtime_removed, ghost_removed,
+    )
+    _audit(request, "account.delete", old=before,
+           new={"id": acc_id, "runtime_removed": runtime_removed, "env_removed": env_removed})
     return _json({
         "ok": True,
         "id": acc_id,
         "runtime_removed": runtime_removed,
-        "accounts_count": env_update.get("accounts_count"),
+        "accounts_count": env_count,
         "profile_removed": False,
     })
 
@@ -811,18 +854,29 @@ async def _warm_hot_added_account(account_id: str, keeper) -> None:
     _startup_set_account_status(account_id, "ready", ready=True)
 
 
-async def _close_runtime_account(account_id: str) -> None:
+async def _close_runtime_account(account_id: str, *, background: bool = False) -> None:
+    """Stop a runtime account. With ``background=True`` the (potentially slow)
+    browser teardown is scheduled instead of awaited, so HTTP handlers like
+    delete stay fast and the client doesn't time out / double-submit."""
     if _pool is not None:
         _pool.set_runtime_ready(account_id, False, "stopped")
     _startup_set_account_status(account_id, "stopped", ready=False)
     if _video_clients is not None:
         _video_clients.pop(account_id, None)
     keeper = _keepers.pop(account_id, None) if _keepers is not None else None
-    if keeper is not None:
+    if keeper is None:
+        return
+
+    async def _teardown() -> None:
         try:
             await keeper.close()
         except Exception as exc:  # noqa: BLE001
             log.warning("runtime account close failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
+
+    if background:
+        asyncio.create_task(_teardown())
+    else:
+        await _teardown()
 
 
 def _start_runtime_account(account_id: str) -> dict:
@@ -972,6 +1026,7 @@ def _safe_onboard_session_result(result: dict, session_id: str | None, session=N
         "status": status,
         "reason": _safe_reason(str(result.get("reason") or status)),
         "needs_2fa": status == "needs_2fa",
+        "needs_challenge": status == "needs_challenge",
         "ready_to_add": status == "active",
     }
     if session is not None:
@@ -1103,6 +1158,35 @@ async def handle_account_onboard_2fa_post(request: web.Request) -> web.Response:
     return _json(response)
 
 
+async def handle_account_onboard_recheck_post(request: web.Request) -> web.Response:
+    """Re-evaluate a kept-alive login after a manual Google challenge.
+
+    The operator finishes Google's "verify it's you" step in the VNC-visible
+    browser, then this re-opens Flow/ensures a project and reports whether the
+    account is ready to add.
+    """
+    await _cleanup_onboard_sessions()
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    session_id = str(body.get("session_id") or "").strip()
+    session = _get_onboard_session(session_id)
+    if session is None:
+        return _json({"ok": False, "status": "session_expired", "error": "session_expired"}, 404)
+    try:
+        result = await session.recheck()
+    except account_onboarding.AccountOnboardingError as exc:
+        _audit(request, "account.onboard_recheck", new={"id": session.account_id}, result=exc.code)
+        return _json({"ok": False, "status": exc.code, "error": exc.code}, 400)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("account onboard recheck failed for %s: %s", session.account_id, exc.__class__.__name__, exc_info=True)
+        _audit(request, "account.onboard_recheck", new={"id": session.account_id}, result="error")
+        return _json({"ok": False, "status": "login_failed", "error": exc.__class__.__name__}, 500)
+    response = _safe_onboard_session_result(result, session_id, session)
+    _audit(request, "account.onboard_recheck", new={"id": session.account_id}, result=str(response.get("status")))
+    return _json(response)
+
+
 async def handle_account_onboard_complete_post(request: web.Request) -> web.Response:
     await _cleanup_onboard_sessions()
     body = await _body(request)
@@ -1159,6 +1243,11 @@ async def handle_account_onboard_complete_post(request: web.Request) -> web.Resp
             str(result.get("profile_dir") or session.profile_dir),
             session.proxy_url,
         ))
+    log.info(
+        "account.onboard_complete %s mode=%s status=%s env_updated=%s runtime_added=%s reason=%s",
+        session.account_id, mode, result.get("status"), result.get("env_updated"),
+        result.get("runtime_added"), result.get("runtime_reason"),
+    )
     try:
         metrics.log_event(
             "account_onboard",
@@ -2084,6 +2173,7 @@ def register_admin_routes(
     r.add_get ("/api/admin/accounts",                  handle_accounts_get)
     r.add_post("/api/admin/accounts/onboard/start",    handle_account_onboard_start_post)
     r.add_post("/api/admin/accounts/onboard/2fa",      handle_account_onboard_2fa_post)
+    r.add_post("/api/admin/accounts/onboard/recheck",  handle_account_onboard_recheck_post)
     r.add_post("/api/admin/accounts/onboard/complete", handle_account_onboard_complete_post)
     r.add_post("/api/admin/accounts/onboard",          handle_account_onboard_post)
     r.add_post("/api/admin/accounts/{id}/enable",      handle_account_enable)
