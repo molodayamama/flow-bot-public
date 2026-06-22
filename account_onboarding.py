@@ -703,6 +703,35 @@ async def _submit_google_login_if_needed(
         if "accounts.google." not in (page.url or ""):
             return None
 
+        filled_email = await _fill_first(page, [
+            'input[type="email"]',
+            'input[name="identifier"]',
+            '#identifierId',
+        ], email, timeout_ms=2_000)
+        if filled_email:
+            _stage(account_id, "email_filled", ok=True)
+            await _click_next(page, "#identifierNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
+            await page.wait_for_timeout(1800)
+            continue
+
+        if not clicked_account_chooser and await _click_google_use_another_account(page):
+            clicked_account_chooser = True
+            _stage(account_id, "email_filled", ok=False, chooser=True)
+            continue
+
+        # Google password verification URLs often contain /challenge/pwd and
+        # page text like "verify it's you"; if a password field is visible,
+        # this is still the normal password step, not a manual challenge.
+        filled_password = await _fill_first(page, [
+            'input[type="password"]',
+            'input[name="Passwd"]',
+        ], password, timeout_ms=2_000)
+        if filled_password:
+            _stage(account_id, "password_filled", ok=True)
+            await _click_next(page, "#passwordNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
+            await page.wait_for_timeout(2500)
+            continue
+
         body = await _page_text(page)
         challenge = _challenge_status(page.url, body)
         if challenge == "needs_2fa":
@@ -736,32 +765,6 @@ async def _submit_google_login_if_needed(
         if challenge == "needs_challenge":
             _stage(account_id, "needs_challenge", host=_host(page.url))
             return _login_result(False, "needs_challenge", "google_challenge", page.url)
-
-        filled_email = await _fill_first(page, [
-            'input[type="email"]',
-            'input[name="identifier"]',
-            '#identifierId',
-        ], email, timeout_ms=2_000)
-        if filled_email:
-            _stage(account_id, "email_filled", ok=True)
-            await _click_next(page, "#identifierNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
-            await page.wait_for_timeout(1800)
-            continue
-
-        if not clicked_account_chooser and await _click_google_use_another_account(page):
-            clicked_account_chooser = True
-            _stage(account_id, "email_filled", ok=False, chooser=True)
-            continue
-
-        filled_password = await _fill_first(page, [
-            'input[type="password"]',
-            'input[name="Passwd"]',
-        ], password, timeout_ms=2_000)
-        if filled_password:
-            _stage(account_id, "password_filled", ok=True)
-            await _click_next(page, "#passwordNext button", 'button:has-text("Next")', 'button:has-text("Далее")')
-            await page.wait_for_timeout(2500)
-            continue
 
         await page.wait_for_timeout(1000)
 

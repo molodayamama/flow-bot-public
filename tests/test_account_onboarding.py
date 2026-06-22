@@ -80,7 +80,11 @@ class _FakeFlowPage:
 
 class _FakeGoogleLoginPage:
     def __init__(self, *, phase: str = "email") -> None:
-        self.url = "https://accounts.google.com/"
+        self.url = (
+            "https://accounts.google.com/v3/signin/challenge/pwd"
+            if phase == "password_verify"
+            else "https://accounts.google.com/"
+        )
         self.phase = phase
         self.filled_email = ""
         self.filled_password = ""
@@ -90,6 +94,8 @@ class _FakeGoogleLoginPage:
         return None
 
     def _body_text(self) -> str:
+        if self.phase == "password_verify":
+            return "To continue, first verify it's you"
         if self.phase == "totp":
             return "Enter a verification code from your authenticator app"
         return "Sign in"
@@ -116,7 +122,7 @@ class _FakeGoogleLoginPage:
             )
         if selector in {'input[type="password"]', 'input[name="Passwd"]'}:
             return _FakeLocator(
-                visible=self.phase == "password",
+                visible=self.phase in {"password", "password_verify"},
                 on_fill=lambda value: setattr(self, "filled_password", value),
             )
         if selector in {'input[name="totpPin"]', 'input[type="tel"]'}:
@@ -127,7 +133,7 @@ class _FakeGoogleLoginPage:
         if selector == "#identifierNext button":
             return _FakeLocator(visible=self.phase == "email", on_click=self._email_next)
         if selector == "#passwordNext button":
-            return _FakeLocator(visible=self.phase == "password", on_click=self._password_next)
+            return _FakeLocator(visible=self.phase in {"password", "password_verify"}, on_click=self._password_next)
         if selector == "#totpNext button":
             return _FakeLocator(visible=self.phase == "totp", on_click=self._totp_next)
         return _FakeLocator()
@@ -341,6 +347,21 @@ class AccountOnboardingFlowStatusTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "needs_2fa")
         self.assertEqual(result["reason"], "two_fa_code_required")
+
+    async def test_submit_google_login_fills_password_before_challenge_classification(self) -> None:
+        page = _FakeGoogleLoginPage(phase="password_verify")
+
+        result = await ao._submit_google_login_if_needed(
+            page,
+            account_id="subT",
+            email="account@example.com",
+            password="secret-password",
+            deadline_ms=30_000,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(page.url, "https://myaccount.google.com/")
+        self.assertEqual(page.filled_password, "secret-password")
 
     async def test_submit_google_login_can_auto_submit_totp_secret(self) -> None:
         page = _FakeGoogleLoginPage(phase="totp")
