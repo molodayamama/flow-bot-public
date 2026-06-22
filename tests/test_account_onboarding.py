@@ -78,6 +78,83 @@ class _FakeFlowPage:
         return _FakeLocator(visible=self.sign_in_visible, on_click=self._click_sign_in)
 
 
+class _FakeMouse:
+    async def wheel(self, x: int, y: int) -> None:
+        return None
+
+    async def click(self, x: int, y: int) -> None:
+        return None
+
+
+class _FakeKeyboard:
+    async def press(self, key: str) -> None:
+        return None
+
+
+class _FakeFlowOnboardingPage:
+    def __init__(self) -> None:
+        self.url = ao.FLOW_URL
+        self.step = "create_with_flow"
+        self.clicks: list[str] = []
+        self.mouse = _FakeMouse()
+        self.keyboard = _FakeKeyboard()
+        self.viewport_size = {"width": 1280, "height": 800}
+        self.scrolled = False
+
+    async def wait_for_load_state(self, state: str, timeout: int = 0) -> None:
+        return None
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        return None
+
+    async def evaluate(self, script: str) -> None:
+        self.scrolled = True
+
+    def _label(self) -> str:
+        return {
+            "create_with_flow": "Create with Flow",
+            "next": "Next",
+            "continue": "Continue",
+            "new_project": "New Project",
+        }.get(self.step, "")
+
+    def _matches(self, pattern) -> bool:
+        label = self._label()
+        if not label:
+            return False
+        if hasattr(pattern, "fullmatch"):
+            return bool(pattern.fullmatch(label))
+        return str(pattern or "").lower() == label.lower()
+
+    def _click_current(self) -> None:
+        label = self._label()
+        if label:
+            self.clicks.append(label)
+        if self.step == "create_with_flow":
+            self.step = "next"
+        elif self.step == "next":
+            self.step = "continue"
+        elif self.step == "continue":
+            self.step = "new_project"
+        elif self.step == "new_project":
+            self.step = "project"
+            self.url = f"{ao.FLOW_URL}/project/proj-123"
+
+    def get_by_role(self, role: str, name=None):
+        return _FakeLocator(visible=role == "button" and self._matches(name), on_click=self._click_current)
+
+    def get_by_text(self, pattern):
+        return _FakeLocator(visible=self._matches(pattern), on_click=self._click_current)
+
+    def locator(self, selector: str):
+        if selector == "body":
+            return _FakeLocator(visible=True, text=self._label())
+        if 'button:has-text("' in selector:
+            text = selector.split('button:has-text("', 1)[1].split('"', 1)[0]
+            return _FakeLocator(visible=text.lower() == self._label().lower(), on_click=self._click_current)
+        return _FakeLocator()
+
+
 class _FakeGoogleLoginPage:
     def __init__(self, *, phase: str = "email") -> None:
         self.url = (
@@ -183,7 +260,8 @@ class AccountOnboardingHelperTests(unittest.TestCase):
         self.assertIsNotNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("New project"))
         self.assertIsNotNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create project"))
         self.assertIsNotNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("New flow"))
-        self.assertIsNotNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create with Flow"))
+        self.assertIsNotNone(ao.FLOW_CREATE_WITH_FLOW_RE.fullmatch("Create with Flow"))
+        self.assertIsNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create with Flow"))
         self.assertIsNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create"))
         self.assertIsNone(ao.FLOW_PROJECT_CTA_RE.fullmatch("Create account"))
 
@@ -199,9 +277,15 @@ class AccountOnboardingHelperTests(unittest.TestCase):
             "new_project_link",
             "new_project_text",
         ])
-        self.assertIn("create_with_flow_button", labels)
         self.assertIn("project_cta_button", labels)
+        self.assertNotIn("create_with_flow_button", labels)
         self.assertNotIn("create_button", labels)
+
+    def test_flow_setup_candidates_include_first_run_steps(self) -> None:
+        labels = [label for label, _getter in ao._flow_setup_step_candidates(object())]
+        self.assertIn("create_with_flow_button", labels)
+        self.assertIn("flow_next_button", labels)
+        self.assertIn("flow_continue_button", labels)
 
     def test_project_id_from_flow_project_urls(self) -> None:
         self.assertEqual(
@@ -315,6 +399,18 @@ class AccountOnboardingFlowStatusTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["status"], "active")
         self.assertEqual(result["reason"], "flow_opened")
+
+    async def test_ensure_flow_project_runs_first_run_setup_steps(self) -> None:
+        page = _FakeFlowOnboardingPage()
+
+        result = await ao._ensure_flow_project(page)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "active")
+        self.assertEqual(result["reason"], "project_created")
+        self.assertEqual(result["final_host"], "labs.google")
+        self.assertTrue(page.scrolled)
+        self.assertEqual(page.clicks, ["Create with Flow", "Next", "Continue", "New Project"])
 
     async def test_submit_google_login_fills_direct_accounts_page(self) -> None:
         page = _FakeGoogleLoginPage()

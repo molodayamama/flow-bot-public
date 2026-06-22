@@ -29,11 +29,13 @@ GOOGLE_LOGIN_URL = "https://accounts.google.com/"
 ACCOUNT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,31}$")
 TWO_FA_CODE_RE = re.compile(r"^\d{6,8}$")
 FLOW_PROJECT_CTA_RE = re.compile(
-    r"^\s*(new project|create project|new flow|create with flow)\s*$",
+    r"^\s*(new project|create project|new flow)\s*$",
     re.I,
 )
 FLOW_NEW_PROJECT_RE = re.compile(r"^\s*new project\s*$", re.I)
 FLOW_CREATE_WITH_FLOW_RE = re.compile(r"^\s*create with flow\s*$", re.I)
+FLOW_NEXT_RE = re.compile(r"^\s*(next|далее)\s*$", re.I)
+FLOW_CONTINUE_RE = re.compile(r"^\s*(continue|accept|agree|got it|продолжить|принять|согласен|согласна)\s*$", re.I)
 FLOW_SIGN_IN_RE = re.compile(
     r"^\s*(sign in|sign in with google|log in|log in with google|войти|войти через google)\s*$",
     re.I,
@@ -843,22 +845,88 @@ def _flow_project_cta_candidates(page) -> list[tuple[str, object]]:
         ("new_project_button", lambda: page.get_by_role("button", name=FLOW_NEW_PROJECT_RE)),
         ("new_project_link", lambda: page.get_by_role("link", name=FLOW_NEW_PROJECT_RE)),
         ("new_project_text", lambda: page.get_by_text(FLOW_NEW_PROJECT_RE)),
-        ("create_with_flow_button", lambda: page.get_by_role("button", name=FLOW_CREATE_WITH_FLOW_RE)),
-        ("create_with_flow_link", lambda: page.get_by_role("link", name=FLOW_CREATE_WITH_FLOW_RE)),
-        ("create_with_flow_text", lambda: page.get_by_text(FLOW_CREATE_WITH_FLOW_RE)),
         ("project_cta_button", lambda: page.get_by_role("button", name=FLOW_PROJECT_CTA_RE)),
         ("project_cta_link", lambda: page.get_by_role("link", name=FLOW_PROJECT_CTA_RE)),
         ("project_cta_text", lambda: page.get_by_text(FLOW_PROJECT_CTA_RE)),
         ("new_project_aria", lambda: page.locator('[aria-label*="new project" i]')),
         ("create_project_aria", lambda: page.locator('[aria-label*="create project" i]')),
-        ("create_with_flow_aria", lambda: page.locator('[aria-label*="create with flow" i]')),
         ("new_project_button_text", lambda: page.locator('button:has-text("New project")')),
         ("create_project_button_text", lambda: page.locator('button:has-text("Create project")')),
-        ("create_with_flow_button_text", lambda: page.locator('button:has-text("Create with Flow")')),
         ("new_flow_button_text", lambda: page.locator('button:has-text("New flow")')),
         ("new_icon_button", lambda: page.locator('button[aria-label*="new" i]')),
         ("plus_button", lambda: page.locator('button:has-text("+")')),
     ]
+
+
+def _flow_setup_step_candidates(page) -> list[tuple[str, object]]:
+    return [
+        ("create_with_flow_button", lambda: page.get_by_role("button", name=FLOW_CREATE_WITH_FLOW_RE)),
+        ("create_with_flow_link", lambda: page.get_by_role("link", name=FLOW_CREATE_WITH_FLOW_RE)),
+        ("create_with_flow_text", lambda: page.get_by_text(FLOW_CREATE_WITH_FLOW_RE)),
+        ("flow_next_button", lambda: page.get_by_role("button", name=FLOW_NEXT_RE)),
+        ("flow_next_link", lambda: page.get_by_role("link", name=FLOW_NEXT_RE)),
+        ("flow_continue_button", lambda: page.get_by_role("button", name=FLOW_CONTINUE_RE)),
+        ("flow_continue_link", lambda: page.get_by_role("link", name=FLOW_CONTINUE_RE)),
+        ("flow_continue_text", lambda: page.get_by_text(FLOW_CONTINUE_RE)),
+        ("flow_next_button_text", lambda: page.locator('button:has-text("Next")')),
+        ("flow_continue_button_text", lambda: page.locator('button:has-text("Continue")')),
+    ]
+
+
+async def _scroll_flow_agreement_to_bottom(page) -> None:
+    try:
+        await page.evaluate(
+            """() => {
+                const nodes = [document.scrollingElement, document.body, document.documentElement,
+                    ...Array.from(document.querySelectorAll('*'))];
+                for (const el of nodes) {
+                    if (!el || typeof el.scrollHeight !== 'number') continue;
+                    if (el.scrollHeight > el.clientHeight + 20) {
+                        try { el.scrollTop = el.scrollHeight; } catch (_) {}
+                    }
+                }
+                try { window.scrollTo(0, document.body.scrollHeight); } catch (_) {}
+            }"""
+        )
+    except Exception:
+        pass
+    try:
+        await page.mouse.wheel(0, 3000)
+    except Exception:
+        pass
+    await page.wait_for_timeout(300)
+
+
+async def _dismiss_flow_overlay(page) -> None:
+    try:
+        await page.keyboard.press("Escape")
+    except Exception:
+        pass
+    try:
+        viewport = page.viewport_size or {}
+        x = min(40, int(viewport.get("width") or 1280) - 1)
+        y = min(40, int(viewport.get("height") or 800) - 1)
+        await page.mouse.click(max(1, x), max(1, y))
+    except Exception:
+        pass
+    await page.wait_for_timeout(300)
+
+
+async def _click_first_visible_candidate(page, candidates: list[tuple[str, object]], *, timeout_ms: int = 1_000) -> str | None:
+    for label, getter in candidates:
+        try:
+            loc = getter().first
+            if await loc.count() > 0 and await loc.is_visible(timeout=timeout_ms):
+                try:
+                    await loc.scroll_into_view_if_needed(timeout=2_000)
+                except Exception:
+                    pass
+                await loc.click(timeout=5_000)
+                await page.wait_for_timeout(900)
+                return label
+        except Exception:
+            continue
+    return None
 
 
 async def _wait_for_project_url(page, timeout_ms: int) -> str | None:
@@ -882,38 +950,50 @@ async def _ensure_flow_project(page) -> dict:
         pass
 
     clicked_any = False
-    for label, getter in _flow_project_cta_candidates(page):
-        try:
-            loc = getter().first
-            if await loc.count() > 0 and await loc.is_visible(timeout=1_000):
-                try:
-                    await loc.scroll_into_view_if_needed(timeout=2_000)
-                except Exception:
-                    pass
-                await loc.click(timeout=5_000)
-                clicked_any = True
-                log.info("onboard project: clicked cta=%s host=%s", label, _host(page.url))
-                if await _wait_for_project_url(page, 12_000):
-                    log.info("onboard project: created host=%s", _host(page.url))
-                    return _login_result(True, "active", "project_created", page.url)
-                if "accounts.google." in page.url:
-                    body = await _page_text(page)
-                    challenge = _challenge_status(page.url, body)
-                    log.info(
-                        "onboard project: redirected to google host=%s challenge=%s",
-                        _host(page.url), challenge,
-                    )
-                    return _login_result(
-                        False,
-                        challenge or "needs_challenge",
-                        "project_creation_google_redirect",
-                        page.url,
-                    )
-                if "labs.google" not in page.url:
-                    log.info("onboard project: unexpected redirect host=%s", _host(page.url))
-                    return _login_result(False, "needs_challenge", "project_creation_redirect", page.url)
-        except Exception:
+    for _attempt in range(12):
+        if _project_id_from_url(page.url):
+            log.info("onboard project: created host=%s", _host(page.url))
+            return _login_result(True, "active", "project_created", page.url)
+        if "accounts.google." in page.url:
+            body = await _page_text(page)
+            challenge = _challenge_status(page.url, body)
+            log.info(
+                "onboard project: redirected to google host=%s challenge=%s",
+                _host(page.url), challenge,
+            )
+            return _login_result(
+                False,
+                challenge or "needs_challenge",
+                "project_creation_google_redirect",
+                page.url,
+            )
+        if "labs.google" not in page.url:
+            log.info("onboard project: unexpected redirect host=%s", _host(page.url))
+            return _login_result(False, "needs_challenge", "project_creation_redirect", page.url)
+
+        await _scroll_flow_agreement_to_bottom(page)
+
+        setup_label = await _click_first_visible_candidate(page, _flow_setup_step_candidates(page), timeout_ms=800)
+        if setup_label:
+            clicked_any = True
+            log.info("onboard project: clicked setup=%s host=%s", setup_label, _host(page.url))
             continue
+
+        cta_label = await _click_first_visible_candidate(page, _flow_project_cta_candidates(page), timeout_ms=800)
+        if cta_label:
+            clicked_any = True
+            log.info("onboard project: clicked cta=%s host=%s", cta_label, _host(page.url))
+            if await _wait_for_project_url(page, 8_000):
+                log.info("onboard project: created host=%s", _host(page.url))
+                return _login_result(True, "active", "project_created", page.url)
+            await _dismiss_flow_overlay(page)
+            if await _wait_for_project_url(page, 3_000):
+                log.info("onboard project: created host=%s", _host(page.url))
+                return _login_result(True, "active", "project_created", page.url)
+            continue
+
+        await _dismiss_flow_overlay(page)
+        await page.wait_for_timeout(750)
     if not clicked_any:
         log.info("onboard project: 'new project' button not found host=%s", _host(page.url))
         return _login_result(False, "needs_project", "new_project_button_not_found", page.url)
