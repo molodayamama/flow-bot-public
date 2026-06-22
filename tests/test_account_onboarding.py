@@ -19,6 +19,28 @@ class AccountOnboardingHelperTests(unittest.TestCase):
             ao.validate_2fa_code("JBSWY3DPEHPK3PXP")
         self.assertEqual(ctx.exception.code, "invalid_two_fa_code")
 
+    def test_progress_tracks_steps_and_resets_on_new_run(self) -> None:
+        ao._PROGRESS.pop("subX", None)
+        ao._stage("subX", "login_start")
+        ao._stage("subX", "password_filled")
+        p = ao.get_progress("subX")
+        self.assertEqual(p["step"], 5)
+        self.assertEqual(p["total"], 7)
+        self.assertIn("парол", p["label"].lower())
+        # A branch stage keeps the step but updates the label + done flag.
+        ao._stage("subX", "needs_project")
+        p = ao.get_progress("subX")
+        self.assertEqual(p["step"], 5)
+        self.assertTrue(p["done"])
+        self.assertIn("проект", p["label"].lower())
+        # A fresh login_start resets the counter.
+        ao._stage("subX", "login_start")
+        self.assertEqual(ao.get_progress("subX")["step"], 1)
+        ao._PROGRESS.pop("subX", None)
+
+    def test_get_progress_unknown_id_is_empty(self) -> None:
+        self.assertEqual(ao.get_progress("nope-zzz"), {})
+
     def test_proxy_public_label_strips_credentials(self) -> None:
         proxy = "http://user:" + "pass@10.0.0.1:8118"
         self.assertEqual(

@@ -1027,6 +1027,7 @@ def _safe_onboard_session_result(result: dict, session_id: str | None, session=N
         "reason": _safe_reason(str(result.get("reason") or status)),
         "needs_2fa": status == "needs_2fa",
         "needs_challenge": status == "needs_challenge",
+        "needs_project": status == "needs_project",
         "ready_to_add": status == "active",
     }
     if session is not None:
@@ -1156,6 +1157,15 @@ async def handle_account_onboard_2fa_post(request: web.Request) -> web.Response:
     response = _safe_onboard_session_result(result, session_id, session)
     _audit(request, "account.onboard_2fa", new={"id": session.account_id}, result=str(response.get("status")))
     return _json(response)
+
+
+async def handle_account_onboard_progress_get(request: web.Request) -> web.Response:
+    """Live onboarding progress for a given account id, polled by the panel
+    while a login/2FA/recheck request is in flight. Secret-free."""
+    account_id = str(request.query.get("id") or request.query.get("account_id") or "").strip()
+    if not account_id:
+        return _json({}, 200)
+    return _json(account_onboarding.get_progress(account_id))
 
 
 async def handle_account_onboard_recheck_post(request: web.Request) -> web.Response:
@@ -2173,6 +2183,7 @@ def register_admin_routes(
     r.add_get ("/api/admin/accounts",                  handle_accounts_get)
     r.add_post("/api/admin/accounts/onboard/start",    handle_account_onboard_start_post)
     r.add_post("/api/admin/accounts/onboard/2fa",      handle_account_onboard_2fa_post)
+    r.add_get ("/api/admin/accounts/onboard/progress", handle_account_onboard_progress_get)
     r.add_post("/api/admin/accounts/onboard/recheck",  handle_account_onboard_recheck_post)
     r.add_post("/api/admin/accounts/onboard/complete", handle_account_onboard_complete_post)
     r.add_post("/api/admin/accounts/onboard",          handle_account_onboard_post)

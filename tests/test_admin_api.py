@@ -540,6 +540,23 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(admin_api._startup_for_account("sub7"))
         self.assertEqual([a["id"] for a in admin_api._pool.status()], ["sub8"])
 
+    async def test_onboard_progress_endpoint_returns_snapshot(self):
+        admin_api.account_onboarding._PROGRESS.pop("sub7", None)
+        admin_api.account_onboarding._stage("sub7", "login_start")
+        admin_api.account_onboarding._stage("sub7", "flow_opened")
+        req = SimpleNamespace(query={"id": "sub7"}, headers={}, remote="test")
+        resp = await admin_api.handle_account_onboard_progress_get(req)
+        body = json.loads(resp.body)
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(body["step"], 6)
+        self.assertEqual(body["account_id"], "sub7")
+        # No id -> empty object, not an error.
+        resp2 = await admin_api.handle_account_onboard_progress_get(
+            SimpleNamespace(query={}, headers={}, remote="test")
+        )
+        self.assertEqual(json.loads(resp2.body), {})
+        admin_api.account_onboarding._PROGRESS.pop("sub7", None)
+
     async def test_recheck_finalizes_after_manual_challenge(self):
         session = _FakeOnboardSession()
         session.status = "needs_challenge"

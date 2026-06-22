@@ -1346,7 +1346,25 @@ let onboardSession = null;
 let onboardAutoProxy = '';
 let onboardMode = 'add';
 let onboardReplace = false;  // пересоздать существующий id/профиль с нуля
+let onboardPoll = null;      // interval: live login progress from the bot
 let lastAccounts = [];
+
+// Опрашиваем серверный прогресс логина (этапы сменяют друг друга в статусе),
+// пока висит длинный запрос start/2fa/recheck. id = account id аккаунта.
+function startOnboardProgressPoll(id) {
+  stopOnboardProgressPoll();
+  if (!id) return;
+  onboardPoll = setInterval(async () => {
+    const p = await api('GET', `/accounts/onboard/progress?id=${encodeURIComponent(id)}`);
+    if (p && p.label) {
+      const step = p.step ? `Шаг ${p.step}/${p.total || 7} · ` : '';
+      setOnboardStatus(`${step}${p.label}`, p.status === 'login_failed' ? 'fail' : 'info');
+    }
+  }, 1200);
+}
+function stopOnboardProgressPoll() {
+  if (onboardPoll) { clearInterval(onboardPoll); onboardPoll = null; }
+}
 const onboardProxyPresets = {
   sub6:'http://127.0.0.1:8125',
   sub7:'http://127.0.0.1:8126',
@@ -1378,7 +1396,7 @@ function accountOnboardReason(data) {
     invalid_two_fa_code:'2FA-код должен быть 6 цифр из Google Authenticator',
     session_expired:'Сессия логина истекла, начни логин заново',
     login_not_active:'Сначала заверши Google login и 2FA',
-    needs_project:'Flow открылся, но проект не создался. Нужен ручной разбор.',
+    needs_project:'Flow открылся, но проект не создался: создай его в VNC-браузере (:99 / noVNC) и нажми «Проверить снова»',
     needs_challenge:'Google требует доп. проверку: пройди её в VNC-браузере (:99 / noVNC :6080) и нажми «Проверить снова»',
     env_permission_denied:'Бот не смог записать .env на сервере',
     login_failed:'Логин не завершился',
@@ -1388,6 +1406,7 @@ function accountOnboardReason(data) {
 
 function resetOnboardFlow(keepInputs=false) {
   onboardSession = null;
+  stopOnboardProgressPoll();
   const code = document.getElementById('onboard-code');
   const twofa = document.getElementById('onboard-2fa');
   const recheck = document.getElementById('onboard-recheck');
@@ -1440,8 +1459,8 @@ function setOnboardPending(data) {
     if (data && data.needs_2fa) code.focus();
   }
   if (twofa) twofa.disabled = !(data && data.needs_2fa);
-  // Кнопка «Проверить снова» — для ручной доп. проверки Google в VNC-браузере.
-  if (recheck) recheck.disabled = !(data && (data.needs_challenge || data.needs_2fa));
+  // Кнопка «Проверить снова» — для ручной доп. проверки/создания проекта в VNC.
+  if (recheck) recheck.disabled = !(data && (data.needs_challenge || data.needs_2fa || data.needs_project));
   if (submit) submit.disabled = !(data && data.ready_to_add);
 }
 
@@ -1461,6 +1480,7 @@ async function startOnboardLogin() {
   const oldText = btn.textContent;
   btn.textContent = 'Логин...';
   setOnboardStatus('Открываю Chrome-профиль и прохожу Google login. Это может занять 1-3 минуты.');
+  startOnboardProgressPoll(id);
   const res = await apiSave('/accounts/onboard/start', {
     confirm_login:true,
     mode:onboardMode,
@@ -1470,6 +1490,7 @@ async function startOnboardLogin() {
     proxy,
     confirm_replace:onboardReplace,
   }, 300000);
+  stopOnboardProgressPoll();
   btn.textContent = oldText;
   btn.disabled = false;
   const data = res.data || {};
@@ -1483,13 +1504,15 @@ async function startOnboardLogin() {
     onboardReplace = true;
     return startOnboardLogin();
   }
-  if (res.ok && (data.needs_2fa || data.needs_challenge || data.ready_to_add)) {
+  if (res.ok && (data.needs_2fa || data.needs_challenge || data.needs_project || data.ready_to_add)) {
     document.getElementById('onboard-password').value = '';
     setOnboardPending(data);
     if (data.needs_2fa) {
       setOnboardStatus('Google запросил 2FA: введи текущий код из Authenticator и нажми «Отправить 2FA».');
     } else if (data.needs_challenge) {
-      setOnboardStatus('Google требует доп. проверку. Открой серверный браузер по VNC (noVNC :6080 / display :99), пройди проверку вручную, затем нажми «Проверить снова».', 'fail');
+      setOnboardStatus('Google требует доп. проверку. Открой серверный браузер по VNC, пройди проверку вручную, затем нажми «Проверить снова».', 'fail');
+    } else if (data.needs_project) {
+      setOnboardStatus('Flow открылся, но проект не создался. Открой серверный браузер по VNC, создай проект (или доведи вход) вручную, затем нажми «Проверить снова».', 'fail');
     } else {
       setOnboardStatus('Google login успешен. Нажми «Добавить аккаунт», чтобы записать .env.', 'ok');
     }
@@ -1511,9 +1534,11 @@ async function recheckOnboard() {
   const oldText = btn.textContent;
   btn.textContent = 'Проверяю...';
   setOnboardStatus('Проверяю, прошла ли доп. проверка Google и открылся ли Flow...');
+  startOnboardProgressPoll(onboardSession.account_id);
   const res = await apiSave('/accounts/onboard/recheck', {
     session_id:onboardSession.session_id,
   }, 180000);
+  stopOnboardProgressPoll();
   btn.textContent = oldText;
   const data = res.data || {};
   if (res.ok && data.ready_to_add) {
@@ -1521,11 +1546,13 @@ async function recheckOnboard() {
     setOnboardStatus('Проверка пройдена, Flow открыт. Нажми «Добавить аккаунт», чтобы записать .env.', 'ok');
     return;
   }
-  if (res.ok && (data.needs_challenge || data.needs_2fa)) {
+  if (res.ok && (data.needs_challenge || data.needs_2fa || data.needs_project)) {
     setOnboardPending(data);
     setOnboardStatus(data.needs_2fa
       ? 'Теперь Google просит 2FA: введи код и нажми «Отправить 2FA».'
-      : 'Проверка ещё не пройдена. Доведи её в VNC-браузере и нажми «Проверить снова».', 'fail');
+      : (data.needs_project
+        ? 'Проект всё ещё не создан. Создай его в VNC-браузере и нажми «Проверить снова».'
+        : 'Проверка ещё не пройдена. Доведи её в VNC-браузере и нажми «Проверить снова».'), 'fail');
     return;
   }
   const reason = accountOnboardReason(data);
@@ -1550,10 +1577,12 @@ async function submitOnboard2fa() {
   const oldText = btn.textContent;
   btn.textContent = 'Проверяю...';
   setOnboardStatus('Отправляю 2FA-код в открытый серверный Chrome...');
+  startOnboardProgressPoll(onboardSession.account_id);
   const res = await apiSave('/accounts/onboard/2fa', {
     session_id:onboardSession.session_id,
     code,
   }, 180000);
+  stopOnboardProgressPoll();
   btn.textContent = oldText;
   codeEl.value = '';
   const data = res.data || {};
@@ -1567,9 +1596,11 @@ async function submitOnboard2fa() {
     setOnboardStatus(accountOnboardReason(data), 'fail');
     return;
   }
-  if (res.ok && data.needs_challenge) {
+  if (res.ok && (data.needs_challenge || data.needs_project)) {
     setOnboardPending(data);
-    setOnboardStatus('После 2FA Google требует доп. проверку. Пройди её в VNC-браузере (noVNC :6080), затем «Проверить снова».', 'fail');
+    setOnboardStatus(data.needs_project
+      ? 'После 2FA Flow открыт, но проект не создался. Создай его в VNC-браузере, затем «Проверить снова».'
+      : 'После 2FA Google требует доп. проверку. Пройди её в VNC-браузере, затем «Проверить снова».', 'fail');
     return;
   }
   const reason = accountOnboardReason(data);

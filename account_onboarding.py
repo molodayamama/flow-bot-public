@@ -29,8 +29,91 @@ ACCOUNT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,31}$")
 TWO_FA_CODE_RE = re.compile(r"^\d{6,8}$")
 
 
+# Live onboarding progress, keyed by account id, polled by the admin panel.
+# Values are secret-free (stage names, step numbers, human labels, hosts).
+_PROGRESS: dict[str, dict] = {}
+_PROGRESS_TTL_SEC = 900
+_TOTAL_STEPS = 7
+
+# Happy-path steps that advance the "N of 7" counter.
+_STEP_LABELS: dict[str, tuple[int, str]] = {
+    "login_start": (1, "Открываю профиль Chrome"),
+    "browser_launch": (2, "Запускаю браузер"),
+    "page_loaded": (3, "Открываю Google / Flow"),
+    "email_filled": (4, "Ввожу Google-логин"),
+    "password_filled": (5, "Ввожу пароль"),
+    "flow_opened": (6, "Flow открыт"),
+    "project_ready": (7, "Проект готов"),
+}
+
+# Branch / informational stages: keep the current step, show their own label.
+_BRANCH_LABELS: dict[str, str] = {
+    "needs_2fa": "Google запросил 2FA-код",
+    "needs_challenge": "Google просит доп. проверку",
+    "needs_project": "Flow открыт, но проект не создан — нужен ручной разбор",
+    "2fa_submit": "Отправляю 2FA-код",
+    "2fa_field_not_found": "Поле 2FA не найдено",
+    "recheck": "Перепроверяю вход",
+    "env_written": "Записываю аккаунт в .env",
+    "profile_exists": "Папка профиля уже существует",
+}
+
+# Final-status labels for *_result stages.
+_STATUS_LABELS: dict[str, str] = {
+    "active": "Готово — Flow и проект открыты",
+    "needs_2fa": "Нужен 2FA-код",
+    "needs_challenge": "Нужна доп. проверка Google",
+    "needs_project": "Проект не создан — нужен ручной разбор",
+    "login_failed": "Логин не завершился",
+}
+
+
+def _record_progress(account_id: str, stage: str, extra: dict) -> None:
+    if not account_id:
+        return
+    if stage == "login_start":
+        _PROGRESS.pop(account_id, None)  # fresh run resets the counter
+    prev = _PROGRESS.get(account_id) or {}
+    step = int(prev.get("step", 0))
+    if stage in _STEP_LABELS:
+        step, label = _STEP_LABELS[stage]
+    elif stage in _BRANCH_LABELS:
+        label = _BRANCH_LABELS[stage]
+    elif stage.endswith("_result"):
+        status = str(extra.get("status") or "")
+        label = _STATUS_LABELS.get(status, status or "Готово")
+    else:
+        label = stage
+    status = str(extra.get("status") or prev.get("status") or "")
+    done = stage.endswith("_result") or stage in {
+        "needs_2fa", "needs_challenge", "needs_project", "env_written", "profile_exists",
+    }
+    _PROGRESS[account_id] = {
+        "account_id": account_id,
+        "step": step,
+        "total": _TOTAL_STEPS,
+        "label": label,
+        "stage": stage,
+        "status": status,
+        "done": bool(done),
+        "updated_at": time.time(),
+    }
+
+
+def get_progress(account_id: str) -> dict:
+    """Return the latest secret-free progress snapshot for an account id."""
+    now = time.time()
+    # Opportunistic TTL prune so the dict can't grow unbounded.
+    for aid in [k for k, v in _PROGRESS.items()
+                if now - float(v.get("updated_at", 0)) > _PROGRESS_TTL_SEC]:
+        _PROGRESS.pop(aid, None)
+    item = _PROGRESS.get(account_id)
+    return dict(item) if isinstance(item, dict) else {}
+
+
 def _stage(account_id: str, stage: str, **extra) -> None:
-    """Emit a single onboarding-stage line to the bot log.
+    """Emit a single onboarding-stage line to the bot log AND the live
+    progress store polled by the admin panel.
 
     Secrets never reach here: callers pass only stage names, booleans, status
     codes, and URL *hosts* — never passwords, codes, cookies, or full URLs.
@@ -39,6 +122,10 @@ def _stage(account_id: str, stage: str, **extra) -> None:
     if extra:
         suffix = " " + " ".join(f"{k}={v}" for k, v in extra.items())
     log.info("onboard[%s] %s%s", account_id, stage, suffix)
+    try:
+        _record_progress(account_id, stage, extra)
+    except Exception:  # progress is best-effort, never break login
+        log.debug("progress record failed", exc_info=True)
 
 
 def _host(url: str) -> str:
@@ -131,7 +218,10 @@ class PendingGoogleLogin:
         await self.page.wait_for_timeout(3000)
         result = await _open_flow_status(self.page, deadline_ms)
         if result.get("ok"):
+            _stage(self.account_id, "flow_opened", host=_host(self.page.url))
             result = await _ensure_flow_project(self.page)
+            if result.get("ok"):
+                _stage(self.account_id, "project_ready", host=_host(self.page.url))
         self.status = str(result.get("status") or "login_failed")
         _stage(self.account_id, "2fa_result", status=self.status, reason=result.get("reason"))
         return result
@@ -147,7 +237,10 @@ class PendingGoogleLogin:
         _stage(self.account_id, "recheck", host=_host(self.page.url))
         result = await _open_flow_status(self.page, deadline_ms)
         if result.get("ok"):
+            _stage(self.account_id, "flow_opened", host=_host(self.page.url))
             result = await _ensure_flow_project(self.page)
+            if result.get("ok"):
+                _stage(self.account_id, "project_ready", host=_host(self.page.url))
         self.status = str(result.get("status") or "login_failed")
         _stage(self.account_id, "recheck_result", status=self.status, reason=result.get("reason"))
         return result
@@ -674,12 +767,16 @@ async def start_google_flow_login(
 
         result = await _open_flow_status(page, deadline_ms)
         if result.get("ok"):
+            _stage(account_id, "flow_opened", host=_host(page.url))
             result = await _ensure_flow_project(page)
+            if result.get("ok"):
+                _stage(account_id, "project_ready", host=_host(page.url))
         session.status = str(result.get("status") or "login_failed")
         _stage(account_id, "login_result", status=session.status, reason=result.get("reason"))
-        # Active means done; needs_2fa/needs_challenge keep the browser alive so
-        # the operator can finish via 2FA code or a manual VNC challenge + recheck.
-        if session.status in {"active", "needs_2fa", "needs_challenge"}:
+        # Active means done. needs_2fa/needs_challenge/needs_project all keep the
+        # browser alive so the operator can finish via a 2FA code, or a manual
+        # VNC step (challenge / project creation) followed by «Проверить снова».
+        if session.status in {"active", "needs_2fa", "needs_challenge", "needs_project"}:
             return session, result
         await session.close()
         return None, result
