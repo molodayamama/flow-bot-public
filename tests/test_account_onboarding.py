@@ -75,6 +75,21 @@ class AccountOnboardingHelperTests(unittest.TestCase):
 
             self.assertEqual(ctx.exception.code, "account_exists")
 
+    def test_remove_flow_account_from_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / ".env"
+            env_path.write_text(
+                "FLOW_ACCOUNTS=main=./google_profile;sub7=./google_profile_sub7|proxy=http://127.0.0.1:8126\n",
+                encoding="utf-8",
+            )
+
+            result = ao.remove_flow_account_from_env("sub7", env_path=env_path)
+
+            self.assertEqual(result["accounts_count"], 1)
+            text = env_path.read_text(encoding="utf-8")
+            self.assertIn("main=./google_profile", text)
+            self.assertNotIn("sub7=", text)
+
 
 if __name__ == "__main__":
     unittest.main()

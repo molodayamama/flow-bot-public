@@ -1343,6 +1343,8 @@ function renderLog(log) {
 const accountTestState = {};
 let onboardSession = null;
 let onboardAutoProxy = '';
+let onboardMode = 'add';
+let lastAccounts = [];
 const onboardProxyPresets = {
   sub6:'http://127.0.0.1:8125',
   sub7:'http://127.0.0.1:8126',
@@ -1362,6 +1364,8 @@ function accountOnboardReason(data) {
   const map = {
     invalid_account_id:'ID: буквы/цифры/_/-, начинается с буквы, до 32 символов',
     account_exists:'Такой account id уже есть в FLOW_ACCOUNTS',
+    account_not_found:'Аккаунт не найден в пуле',
+    last_account:'Нельзя удалить последний аккаунт пула',
     profile_exists:'Папка профиля уже существует',
     email_required:'Нужен Google login',
     password_required:'Нужен Google password',
@@ -1372,6 +1376,7 @@ function accountOnboardReason(data) {
     invalid_two_fa_code:'2FA-код должен быть 6 цифр из Google Authenticator',
     session_expired:'Сессия логина истекла, начни логин заново',
     login_not_active:'Сначала заверши Google login и 2FA',
+    needs_project:'Flow открылся, но проект не создался. Нужен ручной разбор.',
     needs_challenge:'Google запросил дополнительную проверку, нужен ручной разбор',
     env_permission_denied:'Бот не смог записать .env на сервере',
     login_failed:'Логин не завершился',
@@ -1395,6 +1400,7 @@ function resetOnboardFlow(keepInputs=false) {
 }
 
 function syncOnboardProxyPreset() {
+  onboardMode = 'add';
   const id = document.getElementById('onboard-id').value.trim().toLowerCase();
   const proxy = document.getElementById('onboard-proxy');
   const preset = onboardProxyPresets[id];
@@ -1403,6 +1409,17 @@ function syncOnboardProxyPreset() {
     proxy.value = preset;
     onboardAutoProxy = preset;
   }
+}
+
+function prepareRelogin(id) {
+  const acc = lastAccounts.find(a => String(a.id) === String(id)) || {};
+  onboardMode = 'relogin';
+  resetOnboardFlow(true);
+  document.getElementById('onboard-id').value = id;
+  document.getElementById('onboard-email').value = acc.email || '';
+  document.getElementById('onboard-proxy').value = acc.proxy || '';
+  document.getElementById('onboard-password').focus();
+  setOnboardStatus(`Перелогин ${id}: введи Google password и нажми «Начать логин».`);
 }
 
 function setOnboardPending(data) {
@@ -1438,6 +1455,7 @@ async function startOnboardLogin() {
   setOnboardStatus('Открываю Chrome-профиль и прохожу Google login. Это может занять 1-3 минуты.');
   const res = await apiSave('/accounts/onboard/start', {
     confirm_login:true,
+    mode:onboardMode,
     id,
     email,
     password,
@@ -1445,9 +1463,13 @@ async function startOnboardLogin() {
   }, 300000);
   btn.textContent = oldText;
   btn.disabled = false;
-  document.getElementById('onboard-password').value = '';
   const data = res.data || {};
+  if (!res.ok && data.can_relogin && confirm(`Аккаунт ${id} уже есть. Перелогинить существующий профиль вместо добавления нового?`)) {
+    onboardMode = 'relogin';
+    return startOnboardLogin();
+  }
   if (res.ok && (data.needs_2fa || data.ready_to_add)) {
+    document.getElementById('onboard-password').value = '';
     setOnboardPending(data);
     if (data.needs_2fa) {
       setOnboardStatus('Google запросил 2FA: введи текущий код из Authenticator и нажми «Отправить 2FA».');
@@ -1521,8 +1543,10 @@ async function onboardAccount() {
     document.getElementById('onboard-email').value = '';
     document.getElementById('onboard-code').value = '';
     const runtime = data.runtime_reason === 'warming' ? ' · прогрев в фоне' : (data.restart_required ? ' · нужен рестарт/деплой' : '');
-    setOnboardStatus(`Аккаунт ${data.account_id} добавлен в .env${runtime}`, 'ok');
-    toast('success', `Аккаунт ${data.account_id} добавлен`);
+    const doneText = onboardMode === 'relogin' ? 'перелогинен' : 'добавлен в .env';
+    setOnboardStatus(`Аккаунт ${data.account_id} ${doneText}${runtime}`, 'ok');
+    toast('success', `Аккаунт ${data.account_id} ${doneText}`);
+    onboardMode = 'add';
     resetOnboardFlow();
     await loadAccounts();
     return;
@@ -1553,8 +1577,10 @@ function accountActionHtml(a) {
     <div class="account-action-stack">
       <button class="btn btn-ghost btn-sm" onclick="resetFailures('${idArg}')">Сбросить ошибки</button>
       <div class="account-action-buttons">
+        <button class="btn btn-ghost btn-sm" onclick="prepareRelogin('${idArg}')">Перелогин</button>
         <button class="btn btn-ghost btn-sm" ${image.status==='running'?'disabled':''} onclick="runAccountTest('${idArg}','image')">${esc(imageLabel)}</button>
         <button class="btn btn-ghost btn-sm" ${video.status==='running'?'disabled':''} onclick="runAccountTest('${idArg}','video')">${esc(videoLabel)}</button>
+        <button class="btn btn-ghost btn-sm" title="Удалить аккаунт" onclick="deleteAccount('${idArg}')">🗑</button>
       </div>
       ${reason ? `<div class="account-test-reason ${cls}">${esc(reason)}</div>` : ''}
     </div>
@@ -1595,6 +1621,13 @@ function accountStatusBadge(a) {
   return '<span class="badge badge-green">активен</span>';
 }
 
+function gCreditsCell(a) {
+  const gc = a.g_credits;
+  if (!gc) return '<span style="color:var(--pz-faint)">—</span>';
+  if (gc.error) return `<span style="color:var(--pz-coral)">${esc(gc.error)}</span>`;
+  return `${esc(gc.credits)}${gc.is_paid?' 💳':' 🆓'}`;
+}
+
 async function loadVideoHealth() {
   const data = await api('GET','/video-health');
   const rows = (data && data.windows && Array.isArray(data.windows['24h']))
@@ -1619,6 +1652,7 @@ async function loadVideoHealth() {
 async function loadAccounts() {
   const accs = await api('GET','/accounts');
   if (!Array.isArray(accs)) {
+    lastAccounts = [];
     document.getElementById('accounts-tbody').innerHTML = `
       <tr><td colspan="8" style="color:var(--pz-faint);padding:18px;text-align:center">
         Аккаунты временно недоступны. Обновите позже.
@@ -1627,11 +1661,13 @@ async function loadAccounts() {
     await loadVideoHealth();
     return;
   }
+  lastAccounts = accs;
   document.getElementById('accounts-tbody').innerHTML = accs.map(a=>`
     <tr>
       <td>
         <div class="mono" style="color:var(--pz-cyan)">${esc(a.id)}</div>
         <div style="font-size:11px;color:var(--pz-faint);margin-top:2px">${esc(a.profile_dir)}</div>
+        ${a.email ? `<div style="font-size:11px;color:var(--pz-faint);margin-top:2px">${esc(a.email)}</div>` : ''}
       </td>
       <td>${accountStatusBadge(a)}</td>
       <td class="mono">
@@ -1639,7 +1675,7 @@ async function loadAccounts() {
         ${(a.jobs_total??0)>0?`<div style="font-size:10px;font-weight:400;color:var(--pz-faint);margin-top:1px"><span style="color:var(--pz-green)">✓${a.jobs_success??0}</span>&thinsp;<span style="color:var(--pz-coral)">✗${a.jobs_fail??0}</span></div>`:''}
       </td>
       <td class="mono" style="color:${(a.fails||0)>0?'var(--pz-coral)':'var(--pz-faint)'}">${a.fails??0}</td>
-      <td class="mono">${a.g_credits ? `${a.g_credits.credits}${a.g_credits.is_paid?' 💳':' 🆓'}` : '<span style="color:var(--pz-faint)">—</span>'}</td>
+      <td class="mono">${gCreditsCell(a)}</td>
       <td><label class="toggle"><input type="checkbox" ${a.video_allowed?'checked':''} onchange="toggleVideo('${esc(a.id)}',this.checked)"><span class="toggle-slider"></span></label></td>
       <td><label class="toggle"><input type="checkbox" ${!a.disabled?'checked':''} onchange="toggleDisabled('${esc(a.id)}',!this.checked)"><span class="toggle-slider"></span></label></td>
       <td>${accountActionHtml(a)}</td>
@@ -1659,6 +1695,17 @@ async function toggleDisabled(id, disabled) {
 async function resetFailures(id) {
   const r = await api('POST',`/accounts/${id}/reset`);
   r ? (toast('success',`Счётчик ошибок ${id} сброшен`), loadAccounts()) : toast('error','Бот оффлайн');
+}
+
+async function deleteAccount(id) {
+  if (!confirm(`Удалить аккаунт ${id} из FLOW_ACCOUNTS и runtime? Профиль на диске останется.`)) return;
+  const r = await apiSave(`/accounts/${encodeURIComponent(id)}/delete`, {confirm_delete:true}, 120000);
+  if (r.ok && r.data && r.data.ok) {
+    toast('success', `Аккаунт ${id} удалён`);
+    await loadAccounts();
+  } else {
+    toast('error', accountOnboardReason((r && r.data) || {}));
+  }
 }
 
 /* ── Messages ──────────────────────────────────────── */

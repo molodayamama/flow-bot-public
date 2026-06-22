@@ -15,12 +15,39 @@ class _FakePool:
     def status(self):
         return self._accounts
 
+    def get(self, account_id):
+        for item in self._accounts:
+            if item.get("id") == account_id:
+                return SimpleNamespace(
+                    profile_dir=item.get("profile_dir"),
+                    browser_proxy_url=item.get("proxy"),
+                    api_proxy_url=item.get("proxy"),
+                )
+        return None
+
+    def remove_account(self, account_id):
+        before = len(self._accounts)
+        self._accounts = [a for a in self._accounts if a.get("id") != account_id]
+        return len(self._accounts) != before
+
+    def account_ids(self):
+        return [str(a.get("id")) for a in self._accounts]
+
+    def set_runtime_ready(self, account_id, ready, status=None):
+        for item in self._accounts:
+            if item.get("id") == account_id:
+                item["runtime_ready"] = bool(ready)
+                item["runtime_status"] = status
+                return True
+        return False
+
 
 class _FakeKeeper:
     def __init__(self, credits_dict=None, raises=False, delay=0.0):
         self._credits = credits_dict
         self._raises = raises
         self._delay = delay
+        self.closed = False
 
     async def get_g_credits(self):
         if self._delay:
@@ -28,6 +55,9 @@ class _FakeKeeper:
         if self._raises:
             raise RuntimeError("boom")
         return self._credits
+
+    async def close(self):
+        self.closed = True
 
 
 class _FakeVideoClient:
@@ -223,6 +253,7 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         self._orig_onboard = admin_api.account_onboarding.onboard_google_flow_account
         self._orig_start_login = admin_api.account_onboarding.start_google_flow_login
         self._orig_complete_login = admin_api.account_onboarding.complete_google_flow_login
+        self._orig_remove_env = admin_api.account_onboarding.remove_flow_account_from_env
         self._orig_hot_add = admin_api._try_hot_add_account
         self.logged_events = []
         admin_api.metrics.log_event = lambda *args, **kwargs: self.logged_events.append((args, kwargs))
@@ -237,6 +268,7 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         admin_api.account_onboarding.onboard_google_flow_account = self._orig_onboard
         admin_api.account_onboarding.start_google_flow_login = self._orig_start_login
         admin_api.account_onboarding.complete_google_flow_login = self._orig_complete_login
+        admin_api.account_onboarding.remove_flow_account_from_env = self._orig_remove_env
         admin_api._try_hot_add_account = self._orig_hot_add
 
     async def test_onboard_requires_explicit_login_confirmation(self):
@@ -375,6 +407,72 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.status, 400)
         self.assertIn("confirm_add", body["error"])
         self.assertFalse(session.closed)
+
+    async def test_relogin_start_closes_runtime_and_uses_existing_profile(self):
+        calls = []
+        keeper = _FakeKeeper({"credits": 1})
+        admin_api._pool = _FakePool([
+            {"id": "sub7", "profile_dir": "./google_profile_sub7", "disabled": False,
+             "cooldown_left": 0, "fails": 0, "proxy": "http://127.0.0.1:8126"},
+        ])
+        admin_api._keepers = {"sub7": keeper}
+        admin_api._video_clients = {"sub7": object()}
+
+        async def fake_start_login(**kwargs):
+            calls.append(kwargs)
+            session = _FakeOnboardSession(
+                account_id=kwargs["account_id"],
+                profile_dir=kwargs["profile_dir"],
+                proxy_url=kwargs["proxy_url"],
+            )
+            session.status = "active"
+            return session, {"ok": True, "status": "active", "reason": "project_opened"}
+
+        admin_api.account_onboarding.start_google_flow_login = fake_start_login
+
+        resp = await admin_api.handle_account_onboard_start_post(_JsonReq({
+            "confirm_login": True,
+            "mode": "relogin",
+            "id": "sub7",
+            "email": "account@example.com",
+            "password": "secret-password",
+        }))
+        body = json.loads(resp.body)
+
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(body["ready_to_add"])
+        self.assertTrue(keeper.closed)
+        self.assertNotIn("sub7", admin_api._keepers)
+        self.assertTrue(calls[0]["allow_existing_profile"])
+        self.assertTrue(calls[0]["skip_account_exists"])
+        self.assertEqual(calls[0]["profile_dir"], "./google_profile_sub7")
+
+    async def test_delete_account_requires_confirm_and_removes_runtime(self):
+        calls = []
+        admin_api._pool = _FakePool([
+            {"id": "sub7", "profile_dir": "./google_profile_sub7", "disabled": False,
+             "cooldown_left": 0, "fails": 0},
+            {"id": "sub8", "profile_dir": "./google_profile_sub8", "disabled": False,
+             "cooldown_left": 0, "fails": 0},
+        ])
+
+        def fake_remove_env(account_id):
+            calls.append(account_id)
+            return {"accounts_count": 1}
+
+        admin_api.account_onboarding.remove_flow_account_from_env = fake_remove_env
+
+        resp = await admin_api.handle_account_delete(_JsonReq({}, {"id": "sub7"}))
+        self.assertEqual(resp.status, 400)
+        self.assertEqual(calls, [])
+
+        resp = await admin_api.handle_account_delete(_JsonReq({"confirm_delete": True}, {"id": "sub7"}))
+        body = json.loads(resp.body)
+
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(calls, ["sub7"])
+        self.assertEqual([a["id"] for a in admin_api._pool.status()], ["sub8"])
 
     async def test_image_test_requires_confirm_and_then_calls_client(self):
         client = _FakeVideoClient()

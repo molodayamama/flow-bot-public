@@ -14,10 +14,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import secrets
 import string
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aiohttp import web
@@ -40,6 +42,7 @@ _startup_state: dict | None = None
 GCREDITS_LOOKUP_TIMEOUT_SEC = 3.0
 ONBOARD_SESSION_TTL_SEC = 10 * 60
 _onboard_sessions: dict[str, dict] = {}
+ACCOUNT_METADATA_FILE = Path(os.getenv("ACCOUNT_METADATA_FILE", "account_metadata.json"))
 
 
 # ── helpers ────────────────────────────────────────────────────────────
@@ -135,6 +138,87 @@ def _safe_reason(value: object, limit: int = 240) -> str:
     text = re.sub(r"(" + "|".join(token_prefixes) + r")[^\s\"']+", r"\1***", text)
     text = re.sub(r"(https?://[^:/\s]+:)[^@\s]+@", r"\1***@", text)
     return text[:limit]
+
+
+def _load_account_metadata() -> dict:
+    try:
+        data = json.loads(ACCOUNT_METADATA_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_account_metadata(data: dict) -> None:
+    ACCOUNT_METADATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ACCOUNT_METADATA_FILE.with_name(f".{ACCOUNT_METADATA_FILE.name}.tmp.{os.getpid()}")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, ACCOUNT_METADATA_FILE)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
+def _set_account_email(account_id: str, email: str) -> None:
+    cleaned = (email or "").strip()
+    if not cleaned:
+        return
+    data = _load_account_metadata()
+    item = data.get(account_id) if isinstance(data.get(account_id), dict) else {}
+    item["email"] = cleaned
+    item["updated_at"] = int(time.time())
+    data[account_id] = item
+    _save_account_metadata(data)
+
+
+def _remove_account_metadata(account_id: str) -> None:
+    data = _load_account_metadata()
+    if account_id in data:
+        data.pop(account_id, None)
+        _save_account_metadata(data)
+
+
+def _profile_email_guess(profile_dir: str | None) -> str:
+    if not profile_dir:
+        return ""
+    root = Path(profile_dir)
+    candidates = [
+        root / "Default" / "Preferences",
+        root / "Profile 1" / "Preferences",
+        root / "Preferences",
+    ]
+    email_re = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+    def walk(obj, depth: int = 0) -> str:
+        if depth > 5:
+            return ""
+        if isinstance(obj, dict):
+            for key, val in obj.items():
+                if isinstance(val, str) and key.lower() in {"email", "user_email", "username", "user_name"}:
+                    if email_re.match(val):
+                        return val
+                found = walk(val, depth + 1)
+                if found:
+                    return found
+        elif isinstance(obj, list):
+            for item in obj:
+                found = walk(item, depth + 1)
+                if found:
+                    return found
+        return ""
+
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        found = walk(data)
+        if found:
+            return found
+    return ""
 
 
 def _format_placeholders(text: str) -> set[str]:
@@ -566,6 +650,7 @@ async def handle_accounts_get(request: web.Request) -> web.Response:
         return _json({"error": "pool not initialized"}, 503)
     accounts = _pool.status()
     stats = metrics.report_account_stats()
+    metadata = _load_account_metadata()
 
     gcredits_map: dict = {}
     if _keepers:
@@ -588,6 +673,12 @@ async def handle_accounts_get(request: web.Request) -> web.Response:
         acc["last_activity"] = s.get("last_activity")
         acc["last_error"] = s.get("last_error")
         acc["g_credits"] = gcredits_map.get(acc["id"])
+        pool_acc = _pool.get(str(acc["id"])) if _pool is not None else None
+        meta = metadata.get(str(acc["id"])) if isinstance(metadata.get(str(acc["id"])), dict) else {}
+        acc["email"] = str(meta.get("email") or _profile_email_guess(acc.get("profile_dir")) or "")
+        if pool_acc is not None:
+            proxy_raw = pool_acc.browser_proxy_url or pool_acc.api_proxy_url or ""
+            acc["proxy"] = account_onboarding.proxy_public_label(proxy_raw) if proxy_raw else ""
         startup = _startup_for_account(str(acc["id"]))
         if startup is not None:
             acc["startup"] = startup
@@ -661,6 +752,42 @@ async def handle_account_reset(request: web.Request) -> web.Response:
     return _json({"ok": True, "id": acc_id, "fails": 0, "cooldown_left": 0})
 
 
+async def handle_account_delete(request: web.Request) -> web.Response:
+    acc_id = request.match_info["id"]
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    if body.get("confirm_delete") is not True:
+        return _json({"error": "confirm_delete=true required"}, 400)
+    if _pool is None:
+        return _json({"error": "pool not initialized"}, 503)
+    before = next((a for a in _pool.status() if a.get("id") == acc_id), None)
+    if before is None:
+        return _json({"error": f"account {acc_id!r} not found"}, 404)
+    if len(_pool.account_ids()) <= 1:
+        return _json({"ok": False, "status": "last_account", "error": "last_account"}, 400)
+    try:
+        env_update = account_onboarding.remove_flow_account_from_env(acc_id)
+    except account_onboarding.AccountOnboardingError as exc:
+        status = 404 if exc.code == "account_not_found" else 400
+        _audit(request, "account.delete", old=before, new={"id": acc_id}, result=exc.code)
+        return _json({"ok": False, "status": exc.code, "error": exc.code}, status)
+    except PermissionError:
+        _audit(request, "account.delete", old=before, new={"id": acc_id}, result="env_permission_denied")
+        return _json({"ok": False, "status": "env_permission_denied", "error": "env_permission_denied"}, 500)
+    await _close_runtime_account(acc_id)
+    runtime_removed = _pool.remove_account(acc_id)
+    _remove_account_metadata(acc_id)
+    _audit(request, "account.delete", old=before, new={"id": acc_id, "runtime_removed": runtime_removed})
+    return _json({
+        "ok": True,
+        "id": acc_id,
+        "runtime_removed": runtime_removed,
+        "accounts_count": env_update.get("accounts_count"),
+        "profile_removed": False,
+    })
+
+
 # ── config: messages ───────────────────────────────────────────────────
 
 async def _warm_hot_added_account(account_id: str, keeper) -> None:
@@ -669,6 +796,10 @@ async def _warm_hot_added_account(account_id: str, keeper) -> None:
     _startup_set_account_status(account_id, "running", ready=False)
     try:
         await keeper.start()
+        try:
+            await keeper.create_new_project()
+        except Exception as exc:  # noqa: BLE001 - project init is best effort
+            log.warning("hot-added account project init failed for %s: %s", account_id, exc.__class__.__name__)
     except Exception as exc:  # noqa: BLE001 - background warmup state
         log.warning("hot-added account warmup failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
         if _pool is not None:
@@ -678,6 +809,51 @@ async def _warm_hot_added_account(account_id: str, keeper) -> None:
     if _pool is not None:
         _pool.set_runtime_ready(account_id, True, "ready")
     _startup_set_account_status(account_id, "ready", ready=True)
+
+
+async def _close_runtime_account(account_id: str) -> None:
+    if _pool is not None:
+        _pool.set_runtime_ready(account_id, False, "stopped")
+    _startup_set_account_status(account_id, "stopped", ready=False)
+    if _video_clients is not None:
+        _video_clients.pop(account_id, None)
+    keeper = _keepers.pop(account_id, None) if _keepers is not None else None
+    if keeper is not None:
+        try:
+            await keeper.close()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("runtime account close failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
+
+
+def _start_runtime_account(account_id: str) -> dict:
+    if _pool is None:
+        return {"runtime_added": False, "runtime_reason": "pool_not_initialized"}
+    account = _pool.get(account_id)
+    if account is None:
+        return {"runtime_added": False, "runtime_reason": "account_not_found"}
+    if _keepers is None or _video_clients is None:
+        _startup_set_account_status(account_id, "pending_restart", ready=False)
+        return {"runtime_added": False, "runtime_reason": "restart_required_for_clients"}
+    try:
+        from flow_bot import FlowHttpClient, SessionKeeper
+
+        keeper = SessionKeeper(
+            account_id=account.id,
+            profile_dir=account.profile_dir,
+            browser_proxy_url=account.browser_proxy_url,
+            api_proxy_url=account.api_proxy_url,
+        )
+        _keepers[account.id] = keeper
+        _video_clients[account.id] = FlowHttpClient(keeper)
+        _startup_set_account_status(account.id, "pending", ready=False)
+        asyncio.create_task(_warm_hot_added_account(account.id, keeper))
+        return {"runtime_added": True, "runtime_reason": "warming"}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("runtime account start failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
+        if _pool is not None:
+            _pool.set_runtime_ready(account_id, False, "pending_restart")
+        _startup_set_account_status(account_id, "pending_restart", ready=False, error=exc.__class__.__name__)
+        return {"runtime_added": False, "runtime_reason": "restart_required_for_clients"}
 
 
 def _try_hot_add_account(account_id: str, profile_dir: str, proxy_url: str) -> dict:
@@ -734,13 +910,14 @@ async def _cleanup_onboard_sessions() -> None:
             await session.close()
 
 
-def _store_onboard_session(session) -> str:
+def _store_onboard_session(session, **meta) -> str:
     session_id = secrets.token_urlsafe(18)
     now = time.time()
     _onboard_sessions[session_id] = {
         "session": session,
         "created_at": now,
         "updated_at": now,
+        **meta,
     }
     return session_id
 
@@ -751,6 +928,13 @@ def _get_onboard_session(session_id: str):
         return None
     item["updated_at"] = time.time()
     return item.get("session")
+
+
+def _get_onboard_item(session_id: str) -> dict | None:
+    item = _onboard_sessions.get(session_id)
+    if item:
+        item["updated_at"] = time.time()
+    return item
 
 
 async def _drop_onboard_session(session_id: str) -> None:
@@ -793,10 +977,19 @@ async def handle_account_onboard_start_post(request: web.Request) -> web.Respons
     password = str(body.get("password") or "")
     proxy_url = str(body.get("proxy") or body.get("proxy_url") or "").strip()
     profile_dir = str(body.get("profile_dir") or "").strip() or None
+    mode = str(body.get("mode") or "add").strip().lower()
+    relogin = mode == "relogin"
     try:
         timeout_sec = max(30, min(int(body.get("timeout_sec", 180)), 300))
     except (TypeError, ValueError):
         timeout_sec = 180
+
+    pool_acc = _pool.get(account_id) if (_pool is not None and account_id) else None
+    if relogin:
+        if pool_acc is None:
+            return _json({"ok": False, "status": "account_not_found", "error": "account_not_found"}, 404)
+        profile_dir = pool_acc.profile_dir
+        proxy_url = proxy_url or pool_acc.browser_proxy_url or pool_acc.api_proxy_url or ""
 
     try:
         proxy_label = account_onboarding.proxy_public_label(proxy_url)
@@ -812,6 +1005,8 @@ async def handle_account_onboard_start_post(request: web.Request) -> web.Respons
         "proxy": proxy_label,
     }
     try:
+        if relogin:
+            await _close_runtime_account(account_id)
         session, result = await account_onboarding.start_google_flow_login(
             account_id=account_id,
             email=email,
@@ -819,18 +1014,24 @@ async def handle_account_onboard_start_post(request: web.Request) -> web.Respons
             proxy_url=proxy_url,
             profile_dir=profile_dir or account_onboarding.default_profile_dir(account_id),
             timeout_sec=timeout_sec,
+            allow_existing_profile=relogin,
+            skip_account_exists=relogin,
         )
     except account_onboarding.AccountOnboardingError as exc:
         status = 409 if exc.code in {"account_exists", "profile_exists"} else 400
         _audit(request, "account.onboard_start", new=safe_new, result=exc.code)
-        return _json({"ok": False, "status": exc.code, "error": exc.code}, status)
+        payload = {"ok": False, "status": exc.code, "error": exc.code}
+        if exc.code == "account_exists":
+            payload["can_relogin"] = True
+        return _json(payload, status)
     except Exception as exc:  # noqa: BLE001 - admin endpoint must return JSON
         log.warning("account onboard start failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
         _audit(request, "account.onboard_start", new=safe_new, result="error")
         return _json({"ok": False, "status": "login_failed", "error": exc.__class__.__name__}, 500)
 
-    session_id = _store_onboard_session(session) if session is not None else None
+    session_id = _store_onboard_session(session, mode="relogin" if relogin else "add", email=email) if session is not None else None
     response = _safe_onboard_session_result(result, session_id, session)
+    response["mode"] = "relogin" if relogin else "add"
     try:
         metrics.log_event(
             "account_onboard_start",
@@ -875,16 +1076,32 @@ async def handle_account_onboard_complete_post(request: web.Request) -> web.Resp
     if body.get("confirm_add") is not True:
         return _json({"error": "confirm_add=true required"}, 400)
     session_id = str(body.get("session_id") or "").strip()
-    session = _get_onboard_session(session_id)
+    item = _get_onboard_item(session_id)
+    session = item.get("session") if item else None
     if session is None:
         return _json({"ok": False, "status": "session_expired", "error": "session_expired"}, 404)
+    mode = str(item.get("mode") or "add") if item else "add"
     safe_new = {
         "id": session.account_id,
         "profile_dir": session.profile_dir,
         "proxy": account_onboarding.proxy_public_label(session.proxy_url),
     }
     try:
-        result = account_onboarding.complete_google_flow_login(session)
+        if mode == "relogin":
+            if session.status != "active":
+                raise account_onboarding.AccountOnboardingError("login_not_active")
+            result = {
+                "ok": True,
+                "account_id": session.account_id,
+                "profile_dir": session.profile_dir,
+                "proxy": account_onboarding.proxy_public_label(session.proxy_url),
+                "status": "active",
+                "reason": "relogin_complete",
+                "env_updated": False,
+                "restart_required": False,
+            }
+        else:
+            result = account_onboarding.complete_google_flow_login(session)
     except account_onboarding.AccountOnboardingError as exc:
         status = 409 if exc.code == "account_exists" else 400
         _audit(request, "account.onboard_complete", new=safe_new, result=exc.code)
@@ -897,11 +1114,16 @@ async def handle_account_onboard_complete_post(request: web.Request) -> web.Resp
         _audit(request, "account.onboard_complete", new=safe_new, result="error")
         return _json({"ok": False, "status": "login_failed", "error": exc.__class__.__name__}, 500)
 
-    result.update(_try_hot_add_account(
-        str(result.get("account_id") or session.account_id),
-        str(result.get("profile_dir") or session.profile_dir),
-        session.proxy_url,
-    ))
+    _set_account_email(session.account_id, str(item.get("email") or ""))
+    await _drop_onboard_session(session_id)
+    if mode == "relogin":
+        result.update(_start_runtime_account(session.account_id))
+    else:
+        result.update(_try_hot_add_account(
+            str(result.get("account_id") or session.account_id),
+            str(result.get("profile_dir") or session.profile_dir),
+            session.proxy_url,
+        ))
     try:
         metrics.log_event(
             "account_onboard",
@@ -928,7 +1150,6 @@ async def handle_account_onboard_complete_post(request: web.Request) -> web.Resp
         },
         result="ok",
     )
-    await _drop_onboard_session(session_id)
     return _json(result)
 
 
@@ -1834,6 +2055,7 @@ def register_admin_routes(
     r.add_post("/api/admin/accounts/{id}/disable",     handle_account_disable)
     r.add_post("/api/admin/accounts/{id}/video",       handle_account_video)
     r.add_post("/api/admin/accounts/{id}/reset",       handle_account_reset)
+    r.add_post("/api/admin/accounts/{id}/delete",      handle_account_delete)
     r.add_post("/api/admin/accounts/{id}/test-image",  handle_account_test_image_post)
     r.add_post("/api/admin/accounts/{id}/test-video",  handle_account_test_video_post)
     r.add_get ("/api/admin/config/messages",           handle_messages_get)
@@ -1871,4 +2093,4 @@ def register_admin_routes(
     r.add_get ("/api/admin/analytics/channels",        handle_analytics_channels)
     r.add_get ("/api/admin/analytics/errors",          handle_analytics_errors)
     r.add_get ("/api/admin/analytics/active",          handle_analytics_active)
-    log.info("Admin API registered on /api/admin/* (%d routes)", 42)
+    log.info("Admin API registered on /api/admin/* (%d routes)", 43)

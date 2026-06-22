@@ -48,7 +48,10 @@ Requires explicit approval.
   Google asks for a one-time 2FA code; `POST /api/admin/accounts/onboard/2fa`
   submits that code into the open browser session; `POST
   /api/admin/accounts/onboard/complete` with `confirm_add=true` updates `.env`
-  `FLOW_ACCOUNTS`.
+  `FLOW_ACCOUNTS` for new accounts. Relogin mode reuses an existing profile and
+  stops/restarts that account's runtime keeper. Account deletion
+  `POST /api/admin/accounts/<id>/delete` with `confirm_delete=true` removes the
+  account from `.env`/runtime but leaves the profile directory on disk.
 
 Risks:
 

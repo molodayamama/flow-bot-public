@@ -1417,7 +1417,10 @@ class SessionKeeper:
                             "get_g_credits non-200 for %s: status=%s body=%s",
                             self.account_id, resp.status, body,
                         )
-                        return self._gcredits_cache
+                        return self._gcredits_cache or {
+                            "error": "auth_401" if resp.status == 401 else f"http_{resp.status}",
+                            "status": resp.status,
+                        }
                     data = await resp.json(content_type=None)
         except Exception as e:
             log.warning("get_g_credits failed for %s: %s", self.account_id, e)
@@ -1433,7 +1436,7 @@ class SessionKeeper:
                 "get_g_credits unparseable response for %s: %s",
                 self.account_id, str(data)[:200],
             )
-        return parsed or self._gcredits_cache
+        return parsed or self._gcredits_cache or {"error": "unparseable"}
 
     async def get_capmonster_balance(self) -> str:
         """Возвращает баланс CapMonster в виде строки."""
@@ -6420,7 +6423,9 @@ async def cmd_admin_accounts(message: types.Message):
         )
         media_cap = "🎬+🖼" if s.get("video_allowed", True) else "🖼 only"
         gc = gcredits_map.get(s["id"])
-        if gc:
+        if gc and gc.get("error"):
+            gc_str = f" · G {html.escape(str(gc.get('error')))}"
+        elif gc:
             paid = "💳" if gc.get("is_paid") else "🆓"
             gc_str = f" · G {gc['credits']}{paid}"
         else:

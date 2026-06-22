@@ -94,6 +94,13 @@ class AccountPoolTests(unittest.TestCase):
         self.assertEqual(by_id["a2"]["runtime_status"], "warming")
         self.assertEqual(by_id["a2"]["active_image_jobs"], 0)
 
+    def test_remove_account_drops_runtime_state(self) -> None:
+        pool = self._pool(2)
+
+        self.assertTrue(pool.remove_account("a2"))
+        self.assertNotIn("a2", pool.account_ids())
+        self.assertFalse(pool.remove_account("a1"))  # keep at least one account
+
     def test_failure_cooldown_and_failover(self) -> None:
         pool = self._pool(2, max_failures=3, cooldown_sec=600)
         acc = pool.pick_for(111)

@@ -145,6 +145,7 @@ metrics.db-shm
 
 # Привязки user→account пула Flow-аккаунтов (runtime state)
 flow_accounts_state.json
+account_metadata.json
 
 # Local agent/research artifacts
 .claude/agent-memory/

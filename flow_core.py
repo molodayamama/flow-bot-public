@@ -2148,6 +2148,26 @@ class AccountPool:
         self._active_video[account.id] = 0
         return True
 
+    def remove_account(self, account_id: str) -> bool:
+        """Remove an account from the runtime pool.
+
+        Persistent membership is still controlled by FLOW_ACCOUNTS; callers must
+        update .env separately before removing from runtime.
+        """
+        if account_id not in self._accounts or len(self._accounts) <= 1:
+            return False
+        del self._accounts[account_id]
+        self._health.pop(account_id, None)
+        self._runtime_ready.pop(account_id, None)
+        self._runtime_status.pop(account_id, None)
+        self._image_sems.pop(account_id, None)
+        self._video_sems.pop(account_id, None)
+        self._active_image.pop(account_id, None)
+        self._active_video.pop(account_id, None)
+        self._assign = {k: v for k, v in self._assign.items() if v != account_id}
+        self._save()
+        return True
+
     def __len__(self) -> int:
         return len(self._accounts)
 

@@ -91,6 +91,8 @@ class PendingGoogleLogin:
         )
         await self.page.wait_for_timeout(3000)
         result = await _open_flow_status(self.page, deadline_ms)
+        if result.get("ok"):
+            result = await _ensure_flow_project(self.page)
         self.status = str(result.get("status") or "login_failed")
         return result
 
@@ -249,6 +251,69 @@ def append_flow_account_to_env(
     }
 
 
+def remove_flow_account_from_env(
+    account_id: str,
+    *,
+    env_path: str | os.PathLike[str] | None = None,
+) -> dict:
+    """Atomically remove one account from FLOW_ACCOUNTS in .env."""
+    account_id = validate_account_id(account_id)
+    env_file = _env_file_path(env_path)
+    try:
+        text = env_file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise AccountOnboardingError("account_not_found") from None
+
+    lines = text.splitlines(keepends=True)
+    target_idx = -1
+    current_value = ""
+    prefix = "FLOW_ACCOUNTS="
+    for idx, line in enumerate(lines):
+        parsed = _split_env_assignment(line.rstrip("\r\n"))
+        if parsed is not None:
+            prefix, current_value = parsed
+            target_idx = idx
+
+    if target_idx < 0:
+        raise AccountOnboardingError("account_not_found")
+    entries = [p for p in current_value.split(";") if p.strip()]
+    kept: list[str] = []
+    removed: list[str] = []
+    for raw in entries:
+        entry_id = raw.split("=", 1)[0].strip()
+        if entry_id == account_id:
+            removed.append(raw)
+        else:
+            kept.append(raw)
+    if not removed:
+        raise AccountOnboardingError("account_not_found")
+
+    newline = "\n"
+    if lines[target_idx].endswith("\r\n"):
+        newline = "\r\n"
+    lines[target_idx] = f"{prefix}{';'.join(kept)}{newline}"
+    tmp = env_file.with_name(f".{env_file.name}.tmp.{os.getpid()}")
+    try:
+        tmp.write_text("".join(lines), encoding="utf-8")
+        try:
+            mode = env_file.stat().st_mode
+            os.chmod(tmp, mode)
+        except OSError:
+            pass
+        os.replace(tmp, env_file)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+    return {
+        "account_id": account_id,
+        "env_path": str(env_file),
+        "accounts_count": len(kept),
+    }
+
+
 def account_from_entry(entry: AccountEntry) -> FlowAccount:
     proxy = normalize_proxy_url(entry.proxy_url)
     return FlowAccount(
@@ -385,6 +450,48 @@ async def _open_flow_status(page, deadline_ms: int) -> dict:
     return _login_result(False, "needs_challenge", "unexpected_redirect", page.url)
 
 
+def _project_id_from_url(url: str) -> str | None:
+    for marker in ("/project/", "/projects/"):
+        if marker in (url or ""):
+            pid = url.split(marker, 1)[-1].split("?", 1)[0].split("/", 1)[0]
+            if pid:
+                return pid
+    return None
+
+
+async def _ensure_flow_project(page) -> dict:
+    if _project_id_from_url(page.url):
+        return _login_result(True, "active", "project_opened", page.url)
+    candidates = [
+        lambda: page.get_by_role("button", name=re.compile(r"new flow", re.I)),
+        lambda: page.get_by_role("link", name=re.compile(r"new flow", re.I)),
+        lambda: page.get_by_text(re.compile(r"^\s*new flow\s*$", re.I)),
+        lambda: page.get_by_role("button", name=re.compile(r"new project|create", re.I)),
+        lambda: page.locator('[aria-label*="new" i]'),
+        lambda: page.locator('button:has-text("+")'),
+    ]
+    clicked = False
+    for getter in candidates:
+        try:
+            loc = getter().first
+            if await loc.count() > 0 and await loc.is_visible(timeout=1_000):
+                await loc.click(timeout=5_000)
+                clicked = True
+                break
+        except Exception:
+            continue
+    if not clicked:
+        return _login_result(False, "needs_project", "new_flow_button_not_found", page.url)
+    try:
+        await page.wait_for_url("**/project/**", timeout=20_000)
+    except Exception:
+        pass
+    await page.wait_for_timeout(1500)
+    if _project_id_from_url(page.url):
+        return _login_result(True, "active", "project_created", page.url)
+    return _login_result(False, "needs_project", "project_not_created", page.url)
+
+
 async def start_google_flow_login(
     *,
     account_id: str,
@@ -394,6 +501,8 @@ async def start_google_flow_login(
     proxy_url: str = "",
     env_path: str | os.PathLike[str] | None = None,
     timeout_sec: int = 180,
+    allow_existing_profile: bool = False,
+    skip_account_exists: bool = False,
 ) -> tuple[PendingGoogleLogin | None, dict]:
     """Start Google login and keep the browser alive for a one-time 2FA code.
 
@@ -406,9 +515,10 @@ async def start_google_flow_login(
         raise AccountOnboardingError("email_required")
     if not password:
         raise AccountOnboardingError("password_required")
-    _assert_account_not_configured(account_id, env_path)
+    if not skip_account_exists:
+        _assert_account_not_configured(account_id, env_path)
     profile_path = Path(profile_dir)
-    if profile_path.exists() and any(profile_path.iterdir()):
+    if not allow_existing_profile and profile_path.exists() and any(profile_path.iterdir()):
         raise AccountOnboardingError("profile_exists")
     profile_path.mkdir(parents=True, exist_ok=True)
 
@@ -480,6 +590,8 @@ async def start_google_flow_login(
                 return None, result
 
         result = await _open_flow_status(page, deadline_ms)
+        if result.get("ok"):
+            result = await _ensure_flow_project(page)
         session.status = str(result.get("status") or "login_failed")
         if session.status == "active":
             return session, result
