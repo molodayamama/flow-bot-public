@@ -8,6 +8,27 @@ from types import SimpleNamespace
 import admin_api
 
 
+class WipeProfileDirTests(unittest.TestCase):
+    def test_wipes_only_profile_dirs(self) -> None:
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            prof = Path(tmp) / "google_profile_zz"
+            prof.mkdir()
+            (prof / "Preferences").write_text("{}", encoding="utf-8")
+            other = Path(tmp) / "important_data"
+            other.mkdir()
+            (other / "keep.txt").write_text("x", encoding="utf-8")
+            # Профильный каталог — удаляется.
+            admin_api._wipe_profile_dir(str(prof))
+            self.assertFalse(prof.exists())
+            # Непрофильный — НЕ трогаем (защита от случайного rmtree).
+            admin_api._wipe_profile_dir(str(other))
+            self.assertTrue(other.exists())
+            # Пустой путь — без ошибок.
+            admin_api._wipe_profile_dir("")
+
+
 class _FakePool:
     def __init__(self, accounts):
         self._accounts = accounts

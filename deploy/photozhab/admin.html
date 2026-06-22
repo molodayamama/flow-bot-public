@@ -1344,6 +1344,7 @@ const accountTestState = {};
 let onboardSession = null;
 let onboardAutoProxy = '';
 let onboardMode = 'add';
+let onboardReplace = false;  // пересоздать существующий id/профиль с нуля
 let lastAccounts = [];
 const onboardProxyPresets = {
   sub6:'http://127.0.0.1:8125',
@@ -1401,6 +1402,7 @@ function resetOnboardFlow(keepInputs=false) {
 
 function syncOnboardProxyPreset() {
   onboardMode = 'add';
+  onboardReplace = false;
   const id = document.getElementById('onboard-id').value.trim().toLowerCase();
   const proxy = document.getElementById('onboard-proxy');
   const preset = onboardProxyPresets[id];
@@ -1460,12 +1462,19 @@ async function startOnboardLogin() {
     email,
     password,
     proxy,
+    confirm_replace:onboardReplace,
   }, 300000);
   btn.textContent = oldText;
   btn.disabled = false;
   const data = res.data || {};
   if (!res.ok && data.can_relogin && confirm(`Аккаунт ${id} уже есть. Перелогинить существующий профиль вместо добавления нового?`)) {
     onboardMode = 'relogin';
+    onboardReplace = false;
+    return startOnboardLogin();
+  }
+  if (!res.ok && data.can_replace && confirm(`Аккаунт/профиль «${id}» уже существует. Пересоздать с нуля? Старый профиль и запись в .env будут удалены, потребуется заново пройти Google login.`)) {
+    onboardMode = 'add';
+    onboardReplace = true;
     return startOnboardLogin();
   }
   if (res.ok && (data.needs_2fa || data.ready_to_add)) {
@@ -1547,6 +1556,7 @@ async function onboardAccount() {
     setOnboardStatus(`Аккаунт ${data.account_id} ${doneText}${runtime}`, 'ok');
     toast('success', `Аккаунт ${data.account_id} ${doneText}`);
     onboardMode = 'add';
+    onboardReplace = false;
     resetOnboardFlow();
     await loadAccounts();
     return;

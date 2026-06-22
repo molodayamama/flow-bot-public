@@ -937,6 +937,27 @@ def _get_onboard_item(session_id: str) -> dict | None:
     return item
 
 
+def _wipe_profile_dir(profile_dir: str) -> None:
+    """Удалить каталог профиля (для пересоздания аккаунта).
+
+    Защита: удаляем только пути, чей basename содержит ``google_profile`` —
+    чтобы случайно не снести произвольный каталог."""
+    import shutil
+    try:
+        p = (profile_dir or "").strip()
+        if not p:
+            return
+        base = os.path.basename(os.path.normpath(p))
+        if "google_profile" not in base:
+            log.warning("refusing to wipe non-profile dir: %s", p)
+            return
+        if os.path.isdir(p):
+            shutil.rmtree(p, ignore_errors=True)
+            log.info("wiped profile dir for replace: %s", p)
+    except Exception:
+        log.warning("_wipe_profile_dir failed for %s", profile_dir, exc_info=True)
+
+
 async def _drop_onboard_session(session_id: str) -> None:
     item = _onboard_sessions.pop(session_id, None)
     session = item.get("session") if item else None
@@ -979,6 +1000,9 @@ async def handle_account_onboard_start_post(request: web.Request) -> web.Respons
     profile_dir = str(body.get("profile_dir") or "").strip() or None
     mode = str(body.get("mode") or "add").strip().lower()
     relogin = mode == "relogin"
+    # «Пересоздать» существующий id/профиль: чистим старый профиль и логинимся
+    # заново, вместо того чтобы просто запретить добавление.
+    replace = body.get("confirm_replace") is True and not relogin
     try:
         timeout_sec = max(30, min(int(body.get("timeout_sec", 180)), 300))
     except (TypeError, ValueError):
@@ -1007,6 +1031,14 @@ async def handle_account_onboard_start_post(request: web.Request) -> web.Respons
     try:
         if relogin:
             await _close_runtime_account(account_id)
+        if replace:
+            # Чистим старый профиль и старую .env-запись → логин с нуля.
+            await _close_runtime_account(account_id)
+            _wipe_profile_dir(profile_dir or account_onboarding.default_profile_dir(account_id))
+            try:
+                account_onboarding.remove_flow_account_from_env(account_id)
+            except account_onboarding.AccountOnboardingError:
+                pass
         session, result = await account_onboarding.start_google_flow_login(
             account_id=account_id,
             email=email,
@@ -1014,8 +1046,8 @@ async def handle_account_onboard_start_post(request: web.Request) -> web.Respons
             proxy_url=proxy_url,
             profile_dir=profile_dir or account_onboarding.default_profile_dir(account_id),
             timeout_sec=timeout_sec,
-            allow_existing_profile=relogin,
-            skip_account_exists=relogin,
+            allow_existing_profile=relogin or replace,
+            skip_account_exists=relogin or replace,
         )
     except account_onboarding.AccountOnboardingError as exc:
         status = 409 if exc.code in {"account_exists", "profile_exists"} else 400
@@ -1023,6 +1055,9 @@ async def handle_account_onboard_start_post(request: web.Request) -> web.Respons
         payload = {"ok": False, "status": exc.code, "error": exc.code}
         if exc.code == "account_exists":
             payload["can_relogin"] = True
+        # Любой конфликт id/профиля можно разрешить пересозданием.
+        if exc.code in {"account_exists", "profile_exists"}:
+            payload["can_replace"] = True
         return _json(payload, status)
     except Exception as exc:  # noqa: BLE001 - admin endpoint must return JSON
         log.warning("account onboard start failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
