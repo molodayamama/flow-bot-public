@@ -269,6 +269,30 @@ class ReferralTests(MetricsTestBase):
         self.assertFalse(metrics.grant_milestone_if_joined(referred_user_id=99, reward_credits=50))
         self.assertEqual(self._count("referrals"), 0)
 
+    def test_first_generation_reward_is_once_per_referrer(self) -> None:
+        metrics.record_referral_join(referrer_user_id=1, referred_user_id=2)
+        metrics.record_referral_join(referrer_user_id=1, referred_user_id=3)
+
+        first = metrics.grant_first_generation_referral_reward(
+            referrer_user_id=1, referred_user_id=2, reward_credits=50
+        )
+        duplicate_same_referrer = metrics.grant_first_generation_referral_reward(
+            referrer_user_id=1, referred_user_id=3, reward_credits=50
+        )
+        duplicate_same_referred = metrics.grant_first_generation_referral_reward(
+            referrer_user_id=9, referred_user_id=2, reward_credits=50
+        )
+
+        self.assertTrue(first)
+        self.assertFalse(duplicate_same_referrer)
+        self.assertFalse(duplicate_same_referred)
+        self.assertEqual(self._count("referral_first_generation_rewards"), 1)
+        row = self._one(
+            "SELECT referrer_user_id, referred_user_id, reward_credits "
+            "FROM referral_first_generation_rewards"
+        )
+        self.assertEqual(tuple(row), (1, 2, 50))
+
     def test_referral_query_helpers(self) -> None:
         metrics.record_referral_join(referrer_user_id=1, referred_user_id=2)
         self.assertEqual(metrics.get_referrer_of(2), 1)

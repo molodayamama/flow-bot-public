@@ -1663,7 +1663,7 @@ _PRICE_META = {
     "veo_lite": {"group": "Видео", "label": "Veo Lite", "free_allowed": False},
     "veo_fast": {"group": "Видео", "label": "Veo Fast", "free_allowed": False},
     "veo_quality": {"group": "Видео", "label": "Veo Quality", "free_allowed": False},
-    "ingredients_extra": {"group": "Видео: reference modes", "label": "Надбавка: фото + текст", "free_allowed": False},
+    "ingredients_extra": {"group": "Видео: reference modes", "label": "Надбавка: фото + текст", "free_allowed": True},
     "frames_extra": {"group": "Видео: reference modes", "label": "Надбавка: старт/финиш кадры", "free_allowed": False},
     "extend_video": {"group": "Постпродакшн", "label": "Продлить видео", "free_allowed": False},
     "edit_video": {"group": "Постпродакшн", "label": "Изменить видео", "free_allowed": False},

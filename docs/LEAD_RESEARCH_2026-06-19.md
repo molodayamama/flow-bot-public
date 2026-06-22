@@ -18,7 +18,7 @@ Why this ICP is strongest now:
   `marketplace_white_bg`, `product_card`, and `ugc_creative`.
 - The public site already has a credible low-barrier offer: 30 starter credits,
   visible action prices, images at 10-15 credits, photo editing at 15 credits,
-  and photo animation through Veo Lite at 75 credits.
+  and photo animation from 50 credits.
 - Telegram evidence shows active demand and competitor supply around product
   cards, AI photoshoots, infographics, and product videos.
 

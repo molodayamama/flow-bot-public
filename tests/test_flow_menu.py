@@ -50,24 +50,26 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.video_price("veo-quality"), 450)
 
     def test_video_reference_mode_surcharges(self) -> None:
-        self.assertEqual(flow_core.video_price("veo-lite", mode="ingredients"), 75)
+        self.assertEqual(flow_core.video_price("omni-flash-4s", mode="ingredients"), 50)
+        self.assertEqual(flow_core.video_price("veo-lite", mode="ingredients"), 60)
         self.assertEqual(flow_core.video_price("veo-fast", mode="frames"), 145)
 
     def test_family_picker_min_prices(self) -> None:
         # Drives the "· от N кр" hint on the video family buttons (no hardcoding).
-        variants = ("veo-lite", "veo-fast", "veo-quality")
+        variants = tuple(flow_core.VIDEO_MODELS.keys())
         omni = min(flow_core.video_price(m, 1, "text") for m, _ in flow_core.video_models_in_family("omni-flash"))
         veo = min(flow_core.video_price(m, 1, "text") for m, _ in flow_core.video_models_in_family("veo"))
         ing = min(flow_core.video_price(m, 1, "ingredients") for m in variants)
-        frm = min(flow_core.video_price(m, 1, "frames") for m in variants)
-        self.assertEqual((omni, veo, ing, frm), (50, 60, 75, 85))
+        frm = min(flow_core.video_price(m, 1, "frames") for m in ("veo-lite", "veo-fast", "veo-quality"))
+        self.assertEqual((omni, veo, ing, frm), (50, 60, 50, 85))
+        self.assertEqual(flow_core.video_animate_min_price(), 50)
 
     def test_trial_plus_starter_can_animate_one_photo(self) -> None:
         trial = flow_core.STARS_PACKS["trial"]["credits"]
         starter = flow_core.STARTER_CREDITS
-        animate_price = flow_core.video_price("veo-lite", mode="ingredients")
-        self.assertEqual(animate_price, 75)
-        self.assertEqual(starter + trial, animate_price)
+        animate_price = flow_core.video_animate_min_price()
+        self.assertEqual(animate_price, 50)
+        self.assertGreaterEqual(starter + trial, animate_price)
 
     def test_referral_milestone_tiers(self) -> None:
         # Single highest applicable tier per first payment (no stacking).
@@ -424,6 +426,34 @@ class BotMenuWiringTests(unittest.TestCase):
         ):
             self.assertIn(needle, self.source, needle)
 
+    def test_main_menu_has_animate_under_video_with_source_price(self) -> None:
+        start = self.source.index("def main_menu_kb")
+        end = self.source.index("# ── Маркетплейс-меню", start)
+        block = self.source[start:end]
+        video_pos = block.index('"m:vid"')
+        animate_pos = block.index('callback_data="m:animate"')
+        ideas_pos = block.index('"m:ideas"')
+        self.assertLess(video_pos, animate_pos)
+        self.assertLess(animate_pos, ideas_pos)
+        self.assertIn("video_animate_min_price()", block)
+
+    def test_no_old_animate_75_credit_copy(self) -> None:
+        paths = [
+            "flow_bot.py",
+            "flow_copy.py",
+            "deploy/photozhab/index.html",
+            "deploy/photozhab/admin.html",
+            "docs/VIDEO_UX.md",
+            "docs/MONETIZATION.md",
+            "docs/SELLER_BOT_PLAN.md",
+            "docs/SELLER_BOT_AUDIT_2026-06-21.md",
+        ]
+        needles = ("Оживить фото · от 75 кр", "оживить фото → видео = от 75 кр", "Veo Lite, 9:16, 1 видео · 75 кр")
+        for rel in paths:
+            text = (PROJECT_ROOT / rel).read_text(encoding="utf-8")
+            for needle in needles:
+                self.assertNotIn(needle, text, rel)
+
     def test_single_screen_wizard_has_count_and_format_together(self) -> None:
         start = self.source.index("def wizard_kb")
         end = self.source.index("def reply_menu_kb")
@@ -665,10 +695,11 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("await _vid_rerender_settings(msg, user_id=user_id)", self.source)
 
     def test_model_picker_in_frames_and_ingredients(self) -> None:
-        # Veo Lite/Fast/Quality picker available in Frames + Ingredients.
+        # Ingredients supports Omni + Veo; Frames stays Veo-only.
         self.assertIn("def _vid_model_row", self.source)
-        self.assertIn('VID_REF_DEFAULT_MODEL = "veo-lite"', self.source)
-        self.assertIn('VID_REF_VARIANTS = ("veo-lite", "veo-fast", "veo-quality")', self.source)
+        self.assertIn('VID_REF_DEFAULT_MODEL = "omni-flash-4s"', self.source)
+        self.assertIn("VID_REF_VARIANTS = tuple(VIDEO_MODELS.keys())", self.source)
+        self.assertIn('VID_FRAMES_VARIANTS = ("veo-lite", "veo-fast", "veo-quality")', self.source)
         self.assertIn('data.startswith("v:vmod:")', self.source)
 
     def test_ingredients_generation_enabled(self) -> None:
@@ -1089,6 +1120,10 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("metrics.record_referral_join(", self.source)
         self.assertIn('"referral_joined"', self.source)
         self.assertIn("_maybe_apply_referral_rewards(", self.source)
+        self.assertIn("_maybe_apply_first_referral_generation_reward(", self.source)
+        self.assertIn("metrics.grant_first_generation_referral_reward(", self.source)
+        self.assertIn("REFERRAL_FIRST_GENERATION_BONUS", self.source)
+        self.assertIn("first_referral_cta", self.source)
         self.assertIn('"referral_reward_paid"', self.source)
         self.assertIn('data == "m:invite"', self.source)
         self.assertIn("_invite_button(", self.source)
@@ -1099,6 +1134,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # Milestone выдаётся через атомарный клейм joined→rewarded (без TOCTOU):
         # начисление кредитов реферу — только при выигранном UPDATE.
         self.assertIn("metrics.grant_milestone_if_joined(", self.source)
+        self.assertNotIn('"tier": "join"', self.source)
         start = self.source.index("def _maybe_apply_referral_rewards")
         block = self.source[start:start + 2200]
         self.assertLess(
@@ -1132,6 +1168,10 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('f"an:img:{token}"', kb)
         self.assertIn('@dp.callback_query(F.data.startswith("an:"))', self.source)
         self.assertIn('data == "m:animate"', self.source)
+        self.assertIn("async def show_animate_photo_input", self.source)
+        animate_menu = self.source[self.source.index('elif data == "m:animate"'):][:500]
+        self.assertIn("show_animate_photo_input", animate_menu)
+        self.assertIn('"vanimate_photo"', self.source)
         # Seeds the generated image into the new video wizard as vphoto reference.
         self.assertIn('st["vphoto"] = ref.source', self.source)
         self.assertIn('st["vmode"] = "ingredients"', self.source)
@@ -1709,6 +1749,11 @@ class BotImportSmokeTests(unittest.TestCase):
             fb._image_keyboard("abcd1234")
             fb.video_family_kb()           # family buttons now carry "· от N кр"
             fb.ingredients_kb(1, "land", 1, "veo-fast", has_caption=True)
+            main_rows = fb.main_menu_kb().inline_keyboard
+            animate_main = next(
+                b for row in main_rows for b in row if (b.callback_data or "") == "m:animate"
+            )
+            self.assertIn("50 кр", animate_main.text)
             # Family buttons show a min-price hint.
             fam_first = fb.video_family_kb().inline_keyboard[0][0].text
             self.assertIn("кр", fam_first)
@@ -1736,6 +1781,7 @@ class BotImportSmokeTests(unittest.TestCase):
                 if (b.callback_data or "").startswith("an:img:")
             )
             self.assertIn("кр", animate_btn.text)
+            self.assertIn("50 кр", animate_btn.text)
             # Extend gating: ANY veo-family source (lite/fast/quality) is
             # extendable — the extension itself runs on veo-lite. Omni is not.
             VR = fb.VideoRef

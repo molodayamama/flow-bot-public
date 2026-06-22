@@ -106,6 +106,7 @@ from flow_core import (
     REFERRAL_TIER1_BONUS,
     REFERRAL_TIER2_BONUS,
     REFERRAL_TIER3_BONUS,
+    REFERRAL_FIRST_GENERATION_BONUS,
     referral_milestone_bonus,
     referral_ongoing_bonus,
     CHANNEL_PARAM_PREFIX,
@@ -117,6 +118,7 @@ from flow_core import (
     video_model_meta,
     video_model_key,
     video_price,
+    video_animate_min_price,
     video_extend_price,
     clamp_num_videos,
     video_models_in_family,
@@ -3694,6 +3696,7 @@ async def _show_referral_screen(message: types.Message, *, user_id: int, edit: b
         "referral_screen",
         link=html.escape(_referral_link(user_id)),
         invited=stats["invited"], earned=stats["earned"],
+        first_gen=REFERRAL_FIRST_GENERATION_BONUS,
         t1=REFERRAL_TIER1_BONUS, t2=REFERRAL_TIER2_BONUS, t3=REFERRAL_TIER3_BONUS,
     )
     if edit:
@@ -3756,6 +3759,67 @@ def _maybe_apply_referral_rewards(
         log.warning("referral reward failed", exc_info=True)
 
 
+def _maybe_apply_first_referral_generation_reward(referred_user_id: int) -> None:
+    """Grant +50 to the referrer when their first invited user generates anything."""
+    try:
+        referrer_id = metrics.get_referrer_of(referred_user_id)
+        if not referrer_id or referrer_id == referred_user_id:
+            return
+        if not metrics.referral_is_active(referred_user_id, REFERRAL_REWARD_WINDOW_DAYS):
+            return
+        bonus = REFERRAL_FIRST_GENERATION_BONUS
+        if metrics.get_referral_credits_today(referrer_id) + bonus > REFERRAL_DAILY_CAP_CREDITS:
+            return
+        if metrics.grant_first_generation_referral_reward(
+            referrer_user_id=referrer_id,
+            referred_user_id=referred_user_id,
+            reward_credits=bonus,
+        ):
+            credit_store.add(referrer_id, bonus)
+            metrics.log_event(
+                "referral_reward_paid",
+                user_id=referrer_id,
+                payload={"tier": "first_generation", "bonus": bonus, "referred": referred_user_id},
+            )
+            _notify_referrer(
+                referrer_id,
+                bonus,
+                message_key="referral_first_generation_reward_got",
+            )
+    except Exception:
+        log.warning("first referral generation reward failed", exc_info=True)
+
+
+def _first_referral_cta_text(user_id: int) -> str | None:
+    """Invite CTA shown after every successful generation until user has referrals."""
+    try:
+        if int(metrics.referral_stats(user_id).get("invited") or 0) > 0:
+            return None
+    except Exception:
+        return None
+    return flow_copy.msg("first_referral_cta", bonus=REFERRAL_FIRST_GENERATION_BONUS)
+
+
+async def _post_generation_referral_hooks(
+    message: types.Message,
+    user_id: int,
+    *,
+    send_cta: bool = True,
+) -> None:
+    _maybe_apply_first_referral_generation_reward(user_id)
+    if not send_cta:
+        return
+    text = _first_referral_cta_text(user_id)
+    if not text:
+        return
+    try:
+        await message.answer(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [_invite_button(user_id)],
+        ]))
+    except Exception:
+        pass
+
+
 def _clawback_referral_rewards(referred_user_id: int, charge_id: str) -> None:
     """Откатить реферальные награды по возвращённому платежу (best-effort)."""
     try:
@@ -3778,12 +3842,12 @@ def _clawback_referral_rewards(referred_user_id: int, charge_id: str) -> None:
         log.warning("referral clawback failed", exc_info=True)
 
 
-def _notify_referrer(referrer_id: int, bonus: int) -> None:
+def _notify_referrer(referrer_id: int, bonus: int, *, message_key: str = "referral_reward_got") -> None:
     """Best-effort уведомление реферера о начислении (не блокирует оплату)."""
     async def _send():
         try:
             await bot.send_message(
-                referrer_id, flow_copy.msg("referral_reward_got", bonus=bonus),
+                referrer_id, flow_copy.msg(message_key, bonus=bonus),
                 parse_mode="HTML",
             )
         except TelegramForbiddenError:
@@ -4079,6 +4143,7 @@ def main_menu_kb(show_repeat: bool = False, credits: int | None = None) -> types
     rows = [
         [_menu_button("gen", "m:gen")],
         [_menu_button("vid_gen", "m:vid")],
+        [B(text=f"{L('animate')} · от {video_animate_min_price()} кр", callback_data="m:animate")],
         [_menu_button("ideas", "m:ideas")],
         [_menu_button("myphoto", "m:myphoto")],
         [B(text=balance_label, callback_data="m:balance")],
@@ -4433,12 +4498,13 @@ def _mp_photo_request_text(platform: str, job: str) -> str:
 
 def _mp_video_request_text(platform: str) -> str:
     platform_name = html.escape(_MP_PLAT_NAMES.get(platform, platform))
+    model_name = html.escape(L(f"vid_model_name:{VID_REF_DEFAULT_MODEL}"))
     price = video_price(VID_REF_DEFAULT_MODEL, 1, "ingredients")
     return (
         f"🎬 <b>{platform_name}</b> · оживить фото товара\n\n"
         "Пришли одно фото товара. Подпись к фото можно использовать как сценарий: "
         "например, «медленный поворот, мягкий свет, акцент на фактуре».\n\n"
-        f"По умолчанию: <b>Veo Lite</b>, 9:16, 1 видео · {price} кр."
+        f"По умолчанию: <b>{model_name}</b>, 9:16, 1 видео · {price} кр."
     )
 
 
@@ -5135,7 +5201,7 @@ async def show_prompt_picker(message: types.Message, *, user_id: int, edit: bool
 
 VID_DEFAULT_FMT = "land"
 VID_DEFAULT_COUNT = 1
-VID_REF_DEFAULT_MODEL = "veo-lite"
+VID_REF_DEFAULT_MODEL = "omni-flash-4s"
 # Frames (старт/финиш-кадр) дефолтится на veo-lite: единственный interpolation-
 # ключ, подтверждённый живым захватом (veo_3_1_interpolation_lite). Остальные
 # tiers — догадка по паттерну, пока не подтверждены живым прогоном.
@@ -5216,7 +5282,7 @@ def _vid_family_min_price(code: str) -> int:
     if code == "veo":
         return min(video_price(m, 1, "text") for m, _ in video_models_in_family("veo"))
     if code == "ing":
-        return min(video_price(m, 1, "ingredients") for m in VID_REF_VARIANTS)
+        return video_animate_min_price()
     if code == "frm":
         return min(video_price(m, 1, "frames") for m in VID_REF_VARIANTS)
     return 0
@@ -5332,19 +5398,21 @@ def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# Варианты модели, доступные в режимах Frames/Ingredients (тиры Veo).
-VID_REF_VARIANTS = ("veo-lite", "veo-fast", "veo-quality")
+# Варианты модели, доступные в reference-to-video. Ingredients умеет Omni и Veo;
+# Frames/interpolation остаётся Veo-only.
+VID_REF_VARIANTS = tuple(VIDEO_MODELS.keys())
+VID_FRAMES_VARIANTS = ("veo-lite", "veo-fast", "veo-quality")
 
 
 def _vid_model_row(mode: str, selected: str | None) -> list:
-    """Ряд выбора модели (Veo Lite/Fast/Quality) с ценой под режим."""
-    B = types.InlineKeyboardButton
-    row = []
-    for mid in VID_REF_VARIANTS:
+    """Rows for selecting a video model with the current mode price."""
+    variants = VID_REF_VARIANTS if mode == "ingredients" else VID_FRAMES_VARIANTS
+    rows = []
+    for mid in variants:
         price = video_price(mid, 1, mode)
         label = f"{L('vid_model_name:' + mid)} {price} кр"
-        row.append(_sel_btn(label, mid == selected, f"v:vmod:{mid}"))
-    return [row]
+        rows.append([_sel_btn(label, mid == selected, f"v:vmod:{mid}")])
+    return rows
 
 
 def _vid_fmt_count_rows(vfmt: str, vcount: int) -> list:
@@ -5651,6 +5719,28 @@ async def show_video_prompt_input(
         "Опишите, что должно происходить в видео. "
         "Можно приложить фото — тогда оживим его в движение 📎"
     )
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=L("cancel"), callback_data="v:cancel")]
+    ])
+    if edit:
+        await _vid_edit(message, text, kb, user_id, parse_mode="HTML")
+    else:
+        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        st["vmsg_id"] = sent.message_id
+
+
+async def show_animate_photo_input(message: types.Message, *, user_id: int, edit: bool):
+    """Entry point for "Оживить фото": require a photo, then use the new wizard."""
+    st = wizard_state[user_id]
+    _vid_clear(user_id)
+    st["vstep"] = "vprompt_input"
+    st["vawait"] = "vanimate_photo"
+    st["vmode"] = "ingredients"
+    st.setdefault("vfmt", VID_DEFAULT_FMT)
+    st.setdefault("vdur", 4)
+    st.setdefault("vquality", "lite")
+    st.setdefault("vstyle", "")
+    text = flow_copy.msg("animate_photo_screen", price=video_animate_min_price())
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text=L("cancel"), callback_data="v:cancel")]
     ])
@@ -6043,13 +6133,6 @@ async def cmd_start(message: types.Message):
                 metrics.log_event("referral_joined", user_id=user_id,
                                   payload={"referrer": referrer_id})
                 _referral_welcome_bonus = credit_store.balance(user_id)
-                # Реферер сразу получает +20 кр за факт регистрации друга
-                _JOIN_BONUS = 20
-                credit_store.add(referrer_id, _JOIN_BONUS)
-                metrics.log_event("referral_reward_paid", user_id=referrer_id,
-                                  payload={"tier": "join", "bonus": _JOIN_BONUS,
-                                           "referred": user_id})
-                _notify_referrer(referrer_id, _JOIN_BONUS)
     # Рекламный deep-link: /start seed_<канал> — first-touch атрибуция канала.
     channel = parse_channel_seed(payload)
     if channel and not getattr(message.from_user, "is_bot", False):
@@ -7094,6 +7177,7 @@ async def _seller_generate_and_send(
     _log_image_job(user_id, action, image_model, started, ok=ok, charged=charged,
                    account_id=_seller_acc_tag(backend_acc))
     if ok:
+        await _post_generation_referral_hooks(message, user_id)
         await _maybe_brandkit_nudge(message, user_id)
     return ok
 
@@ -7308,6 +7392,8 @@ async def _seller_video_generate_and_send(
         status="success" if ok else "fail",
         error_type=None if ok else "backend_failed",
     )
+    if ok:
+        await _post_generation_referral_hooks(message, user_id)
     return ok
 
 
@@ -7631,6 +7717,7 @@ def _days_word(n: int) -> str:
 
 async def _after_result(message: types.Message, user_id: int, *, streak_note: str | None = None):
     """Короткое меню после результата: создать ещё · видео · друг · меню."""
+    _maybe_apply_first_referral_generation_reward(user_id)
     B = types.InlineKeyboardButton
     kb = types.InlineKeyboardMarkup(
         inline_keyboard=[
@@ -7643,6 +7730,9 @@ async def _after_result(message: types.Message, user_id: int, *, streak_note: st
                                         credits=credit_store.balance(user_id))
     if streak_note:
         text = f"{streak_note}\n\n{flow_copy.msg('after_image_screen', credits=credit_store.balance(user_id))}"
+    cta = _first_referral_cta_text(user_id)
+    if cta:
+        text = f"{text}\n\n{cta}"
     try:
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
@@ -7938,6 +8028,8 @@ async def _edit_and_send(
         metrics.log_event("credits_charged", user_id=user_id, source="edit",
                           payload={"amount": charged, "action": "edit"})
     _log_image_job(user_id, "edit", image_model, started, ok=ok, charged=charged)
+    if ok:
+        await _post_generation_referral_hooks(message, user_id)
     return ok
 
 
@@ -8080,6 +8172,8 @@ async def _run_i2i(
         metrics.log_event("credits_charged", user_id=user_id, source=action,
                           payload={"amount": charged, "action": action})
     _log_image_job(user_id, action, None, started, ok=ok, charged=charged)
+    if ok:
+        await _post_generation_referral_hooks(message, user_id)
     return ok
 
 
@@ -8203,6 +8297,8 @@ async def _real_upscale_and_send(message: types.Message, ref: ImageRef):
         model=None, bot_credits_charged=charged, duration_ms=_ms_since(started),
         status="success" if ok else "fail", error_type=None if ok else "upscale_failed",
     )
+    if ok:
+        await _post_generation_referral_hooks(message, user_id)
 
 
 async def _do_real_upscale(message: types.Message, ref: ImageRef, media_id: str) -> bool:
@@ -9074,16 +9170,12 @@ async def on_menu_action(callback: types.CallbackQuery):
         pending_edits.pop(user_id, None)
         await show_video_prompt_input(msg, user_id=user_id, edit=True)
     elif data == "m:animate":
-        # «Оживить фото» из меню = видео из фото+текст (r2v): просим фото.
+        # «Оживить фото» из меню = фото -> новый video wizard (Omni/Veo).
         await callback.answer()
         pending_edits.pop(user_id, None)
-        _vid_clear(user_id)
         st = _ws(user_id)
         _clear_image_flow_keys(st)  # чтобы промпт из чата ушёл в видео, а не в картинки
-        st["vmode"] = "ingredients"
-        st["vmodel"] = VID_REF_DEFAULT_MODEL
-        st["vcount"] = 1
-        await show_video_ingredients(msg, user_id=user_id, edit=True)
+        await show_animate_photo_input(msg, user_id=user_id, edit=True)
     elif data == "m:mp":
         await callback.answer()
         _reset_image_flow(user_id)
@@ -11045,6 +11137,7 @@ async def _do_video_generate_and_send(
                 await status_msg.delete()
             except Exception:
                 pass
+            await _post_generation_referral_hooks(message, user_id)
         else:
             credit_store.refund(user_id, total_price)
             await status_msg.edit_text(flow_copy.msg("vid_gen_failed"))
@@ -12089,7 +12182,7 @@ async def handle_photo(message: types.Message):
             pass
         if source_nw:
             st["vphoto"] = source_nw
-            # Есть фото → переключаемся на Veo
+            # Есть фото → новый wizard сам даст выбор Быстро (Omni) / Качество (Veo).
             st["vmode"] = "ingredients"
             st["vmodel"] = _nwiz_model(st)
             await show_new_video_wizard(message, user_id=user_id, edit=(vstep == "vnewwiz"))
@@ -12354,6 +12447,13 @@ async def handle_plain_text(message: types.Message):
             await show_main_menu(message, user_id=user_id)
             return
         await _video_extend_and_send(message, ref, text, user_id=user_id)
+        return
+
+    # «Оживить фото» from the main menu requires a photo. Text is saved as the
+    # future scenario, but generation cannot proceed without an image reference.
+    if st.get("vawait") == "vanimate_photo":
+        st["vprompt"] = text
+        await message.answer(flow_copy.msg("animate_photo_need_photo"))
         return
 
     # Новый wizard: пользователь ввёл описание (шаг 1).

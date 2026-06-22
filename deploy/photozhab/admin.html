@@ -1078,6 +1078,7 @@ const DEMO = {
     rate_limited: "⏱️ Слишком много запросов. Подождите минуту и попробуйте снова.",
     busy: "Твой предыдущий запрос ещё выполняется — дождись результата 🙏",
     referral_reward_got: "🎉 Твой друг пополнил баланс — тебе начислено <b>{bonus} кр.</b>\nСпасибо, что зовёшь! 🤝",
+    referral_first_generation_reward_got: "🎉 Твой первый приглашённый друг сделал генерацию — тебе начислено <b>{bonus} кр.</b>\nЭтого хватит на «Оживить фото».",
     invite_share_text: "Попробуй этого бота — рисует картинки и снимает видео по тексту 🎨🎬 Новым пользователям — бесплатные кредиты на старте!",
     vid_upload_disabled: "Правка загруженного видео пока недоступна — чиним. А вот видео, созданное здесь, можно изменить кнопкой ✏️ под роликом.",
   },
@@ -1098,18 +1099,20 @@ const DEMO = {
     },
     'Видео': {
       omni_4s:     { label:'Omni Flash 4s',            cr:50  },
-      omni_6s:     { label:'Omni Flash 6s',            cr:75  },
-      omni_8s:     { label:'Omni Flash 8s',            cr:90  },
+      omni_6s:     { label:'Omni Flash 6s',            cr:70  },
+      omni_8s:     { label:'Omni Flash 8s',            cr:85  },
       omni_10s:    { label:'Omni Flash 10s',           cr:100 },
       veo_lite:    { label:'Veo Lite',                 cr:60  },
       veo_fast:    { label:'Veo Fast',                 cr:120 },
       veo_quality: { label:'Veo Quality',              cr:450 },
     },
+    'Видео: reference modes': {
+      ingredients_extra: { label:'Надбавка: фото + текст', cr:0 },
+      frames_extra:      { label:'Start→Finish надбавка', cr:25 },
+    },
     'Постпродакшн': {
-      animate:      { label:'Оживить фото (Veo Lite)',  cr:75  },
       extend_video: { label:'Продлить видео',           cr:60  },
       edit_video:   { label:'Изменить видео',           cr:150 },
-      frames_extra: { label:'Start→Finish надбавка',    cr:25  },
     },
   },
   flags: {

@@ -228,7 +228,7 @@ Confirmed exactly where this is enforced — **no change required here**:
 prices Omni cheaper than Veo and already applies the Ingredients surcharge
 uniformly:
 
-| Model | Base (text) | + Ingredients surcharge (+15) |
+| Model | Base (text) | + Ingredients surcharge (+0) |
 |---|---:|---:|
 | omni-flash-4s | 50 | 65 |
 | omni-flash-6s | 70 | 85 |

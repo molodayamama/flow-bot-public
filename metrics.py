@@ -48,6 +48,7 @@ __all__ = [
     "record_referral_join",
     "mark_referral_rewarded",
     "grant_milestone_if_joined",
+    "grant_first_generation_referral_reward",
     "record_acquisition",
     "report_today",
     "report_revenue",
@@ -194,6 +195,14 @@ CREATE TABLE IF NOT EXISTS referral_ongoing_rewards (
     created_at          TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS referral_first_generation_rewards (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    referrer_user_id    INTEGER NOT NULL UNIQUE,
+    referred_user_id    INTEGER NOT NULL UNIQUE,
+    reward_credits      INTEGER NOT NULL,
+    created_at          TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS acquisitions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id     INTEGER UNIQUE,
@@ -208,6 +217,7 @@ CREATE INDEX IF NOT EXISTS idx_flow_jobs_account   ON flow_jobs(account_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at);
 CREATE INDEX IF NOT EXISTS idx_referrals_referrer  ON referrals(referrer_user_id);
 CREATE INDEX IF NOT EXISTS idx_ror_referrer        ON referral_ongoing_rewards(referrer_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_rfgr_created        ON referral_first_generation_rewards(created_at);
 CREATE INDEX IF NOT EXISTS idx_acquisitions_channel ON acquisitions(channel);
 
 CREATE TABLE IF NOT EXISTS credits (
@@ -655,6 +665,42 @@ def grant_milestone_if_joined(
         return False
 
 
+def grant_first_generation_referral_reward(
+    *,
+    referrer_user_id: int,
+    referred_user_id: int,
+    reward_credits: int,
+) -> bool:
+    """Grant the one-time first-referral generation reward.
+
+    The UNIQUE constraint on ``referrer_user_id`` makes this "first referred
+    user only" even if several referred users generate at the same time.
+    Returns True only when a new reward row was inserted.
+    """
+    try:
+        if referrer_user_id == referred_user_id or reward_credits <= 0:
+            return False
+        with _LOCK:
+            conn = _conn()
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO referral_first_generation_rewards "
+                "(referrer_user_id, referred_user_id, reward_credits) "
+                "SELECT referrer_user_id, referred_user_id, ? FROM referrals "
+                "WHERE referrer_user_id=? AND referred_user_id=?",
+                (int(reward_credits), referrer_user_id, referred_user_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "grant_first_generation_referral_reward failed referrer=%r referred=%r",
+            referrer_user_id,
+            referred_user_id,
+            exc_info=True,
+        )
+        return False
+
+
 def mark_referral_rewarded(
     *,
     referred_user_id: int,
@@ -750,7 +796,12 @@ def get_referral_credits_today(referrer_user_id: int) -> int:
                 f"WHERE referrer_user_id=? AND {today}",
                 (referrer_user_id,),
             ).fetchone()[0] or 0
-            return int(milestone) + int(ongoing)
+            first_generation = conn.execute(
+                f"SELECT COALESCE(SUM(reward_credits),0) FROM referral_first_generation_rewards "
+                f"WHERE referrer_user_id=? AND {today}",
+                (referrer_user_id,),
+            ).fetchone()[0] or 0
+            return int(milestone) + int(ongoing) + int(first_generation)
     except Exception:  # noqa: BLE001
         log.warning("get_referral_credits_today failed", exc_info=True)
         return 0
@@ -849,7 +900,12 @@ def referral_stats(referrer_user_id: int) -> dict:
                 "WHERE referrer_user_id=?",
                 (referrer_user_id,),
             ).fetchone()[0] or 0
-            return {"invited": int(invited), "earned": int(earned_m) + int(earned_o)}
+            earned_g = conn.execute(
+                "SELECT COALESCE(SUM(reward_credits),0) FROM referral_first_generation_rewards "
+                "WHERE referrer_user_id=?",
+                (referrer_user_id,),
+            ).fetchone()[0] or 0
+            return {"invited": int(invited), "earned": int(earned_m) + int(earned_o) + int(earned_g)}
     except Exception:  # noqa: BLE001
         log.warning("referral_stats failed", exc_info=True)
         return {"invited": 0, "earned": 0}
@@ -1360,6 +1416,14 @@ def report_refs() -> dict:
             total_reward_credits = _scalar(
                 conn, "SELECT COALESCE(SUM(reward_credits),0) FROM referrals"
             ) or 0
+            total_first_generation_credits = _scalar(
+                conn, "SELECT COALESCE(SUM(reward_credits),0) "
+                "FROM referral_first_generation_rewards"
+            ) or 0
+            total_ongoing_credits = _scalar(
+                conn, "SELECT COALESCE(SUM(reward_credits),0) "
+                "FROM referral_ongoing_rewards"
+            ) or 0
             top_referrers = [
                 {"referrer_user_id": r["referrer_user_id"], "count": int(r["count"])}
                 for r in _rows(
@@ -1373,7 +1437,9 @@ def report_refs() -> dict:
                 "total_referrals": int(total_referrals),
                 "joined": int(joined),
                 "rewarded": int(rewarded),
-                "total_reward_credits": int(total_reward_credits),
+                "total_reward_credits": int(total_reward_credits)
+                + int(total_first_generation_credits)
+                + int(total_ongoing_credits),
                 "top_referrers": top_referrers,
             }
     except Exception:  # noqa: BLE001
@@ -2175,7 +2241,7 @@ def get_user_profile(user_id: int) -> dict:
                 (user_id,),
             ).fetchone()
 
-            # Reward credits (milestone + ongoing combined)
+            # Reward credits (milestone + ongoing + first-generation combined)
             reward_m = conn.execute(
                 "SELECT COALESCE(SUM(reward_credits),0) FROM referrals "
                 "WHERE referrer_user_id=? AND status='rewarded'",
@@ -2183,6 +2249,11 @@ def get_user_profile(user_id: int) -> dict:
             ).fetchone()
             reward_o = conn.execute(
                 "SELECT COALESCE(SUM(reward_credits),0) FROM referral_ongoing_rewards "
+                "WHERE referrer_user_id=?",
+                (user_id,),
+            ).fetchone()
+            reward_g = conn.execute(
+                "SELECT COALESCE(SUM(reward_credits),0) FROM referral_first_generation_rewards "
                 "WHERE referrer_user_id=?",
                 (user_id,),
             ).fetchone()
@@ -2222,8 +2293,8 @@ def get_user_profile(user_id: int) -> dict:
             "referred_revenue_rub":  float(ref_rev_row["referred_revenue_rub"]  or 0.0) if ref_rev_row else 0.0,
             "referred_revenue_stars": int(ref_rev_row["referred_revenue_stars"] or 0)   if ref_rev_row else 0,
             "reward_credits_earned": (
-                int(reward_m[0] or 0) + int(reward_o[0] or 0)
-            ) if reward_m and reward_o else 0,
+                int(reward_m[0] or 0) + int(reward_o[0] or 0) + int(reward_g[0] or 0)
+            ) if reward_m and reward_o and reward_g else 0,
         }
         return result
     except Exception:  # noqa: BLE001
@@ -2330,6 +2401,9 @@ def report_top_referrers(limit: int = 20) -> dict:
             "       ),0) + COALESCE(("
             "           SELECT SUM(ror.reward_credits) FROM referral_ongoing_rewards ror "
             "           WHERE ror.referrer_user_id = r.referrer_user_id"
+            "       ),0) + COALESCE(("
+            "           SELECT SUM(rfg.reward_credits) FROM referral_first_generation_rewards rfg "
+            "           WHERE rfg.referrer_user_id = r.referrer_user_id"
             "       ),0) AS reward_credits_earned "
             "FROM referrals r "
             "LEFT JOIN transactions t ON t.user_id = r.referred_user_id "

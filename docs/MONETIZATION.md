@@ -82,9 +82,9 @@ Reference and edit surcharges:
 
 | Mode | Bot credits |
 |---|---:|
-| Ingredients / reference-to-video | base video price + 15 |
+| Ingredients / reference-to-video | base video price + 0 |
 | Frames / start-end interpolation | base video price + 25 |
-| Photo animation via Veo Lite | 75 |
+| Photo animation via Omni Flash 4s | 50 |
 | Video prompt edit | 150 |
 | Extend video | 60 |
 
@@ -98,8 +98,8 @@ With blended net revenue near 0.65 RUB per bot credit, the current grid keeps
 images cheap, makes Veo Lite accessible, and leaves Veo Quality as a premium
 anchor. Reference-to-video now supports both engines via the ⚡ Быстро (Omni) /
 💎 Качество (Veo) toggle on the create-video screen, so photo animation starts at
-65 credits (Omni `abra_r2v_*`) with Veo Lite reference at 75; both fit the small
-pack. The Omni reference-to-video key is captured and enabled. Video Extend
+50 credits (Omni `abra_r2v_*`) with Veo Lite reference at 60. The Omni
+reference-to-video key is captured and enabled. Video Extend
 remains Veo-only (Omni results do not offer "Продлить").
 
 ## Packs

@@ -1061,7 +1061,7 @@ VIDEO_MODELS: "OrderedDict[str, dict]" = OrderedDict([
     ("veo-quality",    {"key": "veo_3_1_t2v_quality", "family": "veo", "duration": 8, "price": 450,  "confirmed": False}),
 ])
 
-VIDEO_INGREDIENTS_SURCHARGE = 15
+VIDEO_INGREDIENTS_SURCHARGE = 0
 VIDEO_FRAMES_SURCHARGE = 25
 VIDEO_PROMPT_EDIT_PRICE = 150
 
@@ -1116,6 +1116,12 @@ def video_price(model_id: str, num_videos: int = 1, mode: str = "text") -> int:
     elif mode == "frames":
         surcharge = _price_override("frames_extra", VIDEO_FRAMES_SURCHARGE)
     return (base + surcharge) * clamp_num_videos(num_videos)
+
+
+def video_animate_min_price() -> int:
+    """Cheapest one-photo animation price, used by all "Оживить фото" labels."""
+    prices = [video_price(mid, 1, "ingredients") for mid in VIDEO_MODELS]
+    return min(prices) if prices else video_price("omni-flash-4s", 1, "ingredients")
 
 
 def video_extend_price(model_id: str, extend_index: int) -> int:
@@ -2783,6 +2789,7 @@ REFERRAL_TIER2_BONUS = 30
 REFERRAL_TIER3_STARS = 450     # >500₽ ≈ large pack
 REFERRAL_TIER3_BONUS = 50
 REFERRAL_ONGOING_PCT = 0.05    # fraction of credits_issued (floor), every later top-up
+REFERRAL_FIRST_GENERATION_BONUS = 50  # first invited user who generates anything
 REFERRAL_DAILY_CAP_CREDITS = 500  # max referral credits to one referrer per day
 # Привязка реферала действует ограниченное время: спустя столько дней с момента
 # приглашения рефереру больше ничего не начисляется (ни разовый бонус, ни %).

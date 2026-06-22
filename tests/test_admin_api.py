@@ -719,9 +719,10 @@ class AdminApiValidationTests(unittest.TestCase):
             "edit_photo": -1,
             "unknown": 10,
             "veo_lite": 80,
+            "ingredients_extra": 0,
         })
 
-        self.assertEqual(prices, {"veo_lite": 80})
+        self.assertEqual(prices, {"veo_lite": 80, "ingredients_extra": 0})
         by_key = {e["key"]: e["error"] for e in errors}
         self.assertEqual(by_key["image_nano"], "zero_paid_price")
         self.assertEqual(by_key["edit_photo"], "negative_price")

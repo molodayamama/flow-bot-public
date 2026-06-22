@@ -172,9 +172,9 @@ Surcharges:
 
 | Mode | Extra bot credits |
 |---|---:|
-| Ingredients / reference-to-video | +15 |
+| Ingredients / reference-to-video | +0 |
 | Frames / start-end interpolation | +25 |
-| Photo animation via Veo Lite | 75 total |
+| Photo animation via Omni Flash 4s | 50 total |
 | Prompt edit | 150 total |
 | Extend | 60 total |
 
@@ -182,9 +182,9 @@ Rationale: entry video must fit the first-purchase ladder while still protecting
 scarce Flow quota. If monthly Flow quota load factor stays above 70% for a full
 month, raise video prices by 25-50%.
 
-Current reference-to-video variants are Veo-only because the captured
-`video_reference_model_key(...)` contract builds `veo_3_1_r2v_*` keys. Do not
-offer Omni-priced reference videos until that endpoint/key is verified.
+Current reference-to-video variants support both Omni and Veo. Omni uses
+`abra_r2v_*` keys; Veo uses `veo_3_1_r2v_*` keys. The entry "Оживить фото"
+price is the Omni Flash 4s reference-to-video price from `flow_core.py`.
 
 ## UI Rules
 
