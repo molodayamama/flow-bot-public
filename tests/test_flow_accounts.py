@@ -132,6 +132,22 @@ class AccountPoolTests(unittest.TestCase):
         self.clock_now += 601
         self.assertTrue(pool.is_available(acc))
 
+    def test_cooldown_blocks_both_image_and_video_routing(self) -> None:
+        # Один cooldown (напр. после провайдерского 429) должен убрать аккаунт
+        # из маршрутизации И картинок, И видео — пул держит общий cooldown.
+        pool = self._pool(2, max_failures=3, cooldown_sec=600)
+        acc = pool.pick_for(7)
+        self.assertTrue(pool.is_video_capable(acc))   # видео доступно до кулдауна
+        self.assertTrue(pool.mark_cooldown(acc))
+        self.assertFalse(pool.is_available(acc))       # картинки: недоступен
+        self.assertFalse(pool.is_video_capable(acc))   # видео: тоже недоступен
+        self.assertNotEqual(pool.pick_for_image(7), acc)
+        self.assertNotEqual(pool.pick_for_video(7), acc)
+        # По истечении кулдауна аккаунт снова в строю для обоих типов.
+        self.clock_now += 601
+        self.assertTrue(pool.is_available(acc))
+        self.assertTrue(pool.is_video_capable(acc))
+
     def test_single_account_never_blocked_by_cooldown(self) -> None:
         # Падения единственного аккаунта почти наверняка системные: лучше
         # попытаться, чем молча отказывать всем (см. docstring AccountPool).

@@ -623,6 +623,10 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn('(result or {}).get("account_risk") == "unusual_activity"', helper)
         self.assertIn("account_pool.mark_cooldown(account_id)", helper)
         self.assertIn("account_pool.mark_failure(account_id)", helper)
+        # Провайдерский 429 → аккаунт сразу в кулдаун (общий cooldown пула
+        # блокирует и картинки, и видео на нём).
+        self.assertIn("_is_rate_limit_error(result)", helper)
+        self.assertIn('"reason": "rate_limited", "op": "image"', helper)
 
         edit = self.source[
             self.source.index("async def _do_edit_and_send"):

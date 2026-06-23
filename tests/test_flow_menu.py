@@ -1018,6 +1018,9 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("account_pool.mark_cooldown(account_id)", helper)
         self.assertIn("account_pool.mark_failure(account_id)", helper)
         self.assertIn('risk == "video_recaptcha_403"', helper)
+        # Провайдерский 429 → аккаунт сразу в кулдаун (а не через счётчик fail).
+        self.assertIn("_is_rate_limit_error(result)", helper)
+        self.assertIn('"reason": "rate_limited", "op": "video"', helper)
 
         video = self.source[
             self.source.index("async def _do_video_generate_and_send"):

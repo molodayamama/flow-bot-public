@@ -7162,7 +7162,7 @@ async def _seller_generate_and_send(
                 )
                 charge.ok = ok
     except RateLimited:
-        _log_image_job(user_id, action, image_model, started, ok=False, error="rate_limited",
+        _log_image_job(user_id, action, image_model, started, ok=False, error="user_busy",
                        account_id=_seller_acc_tag(backend_acc))
         return False
     except NotEnoughCredits:
@@ -7474,7 +7474,7 @@ async def _generate_and_send(
                 )
                 charge.ok = ok
     except RateLimited:
-        _log_image_job(user_id, action, image_model, started, ok=False, error="rate_limited")
+        _log_image_job(user_id, action, image_model, started, ok=False, error="user_busy")
         return
     except NotEnoughCredits:
         metrics.log_event("image_failed", user_id=user_id, source=action,
@@ -7865,6 +7865,18 @@ def _mark_image_account_failure(account_id: str | None, result: dict | None = No
                 f"Причина: unusual_activity (image)"
             )
         return
+    if _is_rate_limit_error(result):
+        # Провайдер вернул 429 — сразу остужаем аккаунт. Кулдаун в пуле общий,
+        # поэтому он блокирует и картинки, и видео на этом аккаунте; роутер
+        # уводит трафик на здоровые аккаунты (owner-alert не шлём — при флоте
+        # 429 может быть частым, не спамим).
+        if account_pool.mark_cooldown(account_id):
+            log.warning("Image account %s cooled down after provider 429 (rate limit)", account_id)
+            metrics.log_event(
+                "account_cooldown",
+                payload={"account": account_id, "reason": "rate_limited", "op": "image"},
+            )
+        return
     if account_pool.mark_failure(account_id):
         _fire_owner_alert(
             f"⚠️ <b>Аккаунт кулдаун</b>\n"
@@ -7889,6 +7901,17 @@ def _mark_video_account_failure(account_id: str | None, result: dict | None = No
                 f"⚠️ <b>Аккаунт кулдаун</b>\n"
                 f"Аккаунт: <code>{account_id}</code>\n"
                 f"Причина: {risk} (video)"
+            )
+        return
+    if _is_rate_limit_error(result):
+        # Провайдер вернул 429 — сразу остужаем аккаунт (общий cooldown пула
+        # блокирует и видео, и картинки на нём). Без owner-alert, чтобы не
+        # спамить при частых лимитах на флоте.
+        if account_pool.mark_cooldown(account_id):
+            log.warning("Video account %s cooled down after provider 429 (rate limit)", account_id)
+            metrics.log_event(
+                "account_cooldown",
+                payload={"account": account_id, "reason": "rate_limited", "op": "video"},
             )
         return
     # video_recaptcha_403 (стохастичный score) и прочие ошибки — НЕ остужаем
@@ -8016,7 +8039,7 @@ async def _edit_and_send(
                 )
                 charge.ok = ok
     except RateLimited:
-        _log_image_job(user_id, "edit", image_model, started, ok=False, error="rate_limited")
+        _log_image_job(user_id, "edit", image_model, started, ok=False, error="user_busy")
         return False
     except NotEnoughCredits:
         metrics.log_event("image_failed", user_id=user_id, source="edit",
@@ -8159,7 +8182,7 @@ async def _run_i2i(
                 )
                 charge.ok = ok
     except RateLimited:
-        _log_image_job(user_id, action, None, started, ok=False, error="rate_limited")
+        _log_image_job(user_id, action, None, started, ok=False, error="user_busy")
         return False
     except NotEnoughCredits:
         metrics.log_event("image_failed", user_id=user_id, source=action,
@@ -8279,7 +8302,7 @@ async def _real_upscale_and_send(message: types.Message, ref: ImageRef):
                 ok = await _do_real_upscale(message, ref, media_id)
                 charge.ok = ok
     except RateLimited:
-        _log_image_job(user_id, "realup", None, started, ok=False, error="rate_limited")
+        _log_image_job(user_id, "realup", None, started, ok=False, error="user_busy")
         return
     except NotEnoughCredits:
         metrics.log_event("image_failed", user_id=user_id, source="realup",
