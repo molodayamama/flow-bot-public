@@ -942,9 +942,45 @@ tr:hover td{background:var(--pz-surface-2)}
         <div class="toolbar">
           <div>
             <div class="card-title">Аналитика</div>
-            <div class="card-sub">Сегодня · Выручка · Нагрузка · Каналы · Ошибки</div>
+            <div class="card-sub">Качество · Сегодня · Выручка · Нагрузка · Каналы · Ошибки</div>
           </div>
           <button class="btn btn-ghost btn-sm" onclick="loadAnalytics()">↻ Обновить</button>
+        </div>
+
+        <div class="analytics-section">
+          <div class="section-title">Качественные метрики</div>
+
+          <div style="font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-faint);margin:4px 0 8px">1 · Активация из холода (первый вау за 24ч)</div>
+          <div class="kpi-grid" id="kpi-activation" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">
+            <div class="kpi"><div class="kpi-label">Загрузка…</div></div>
+          </div>
+          <div class="table-wrap" style="margin-bottom:18px">
+            <table>
+              <thead><tr><th>Канал</th><th>Новых</th><th>Активир.</th><th>Конверсия</th></tr></thead>
+              <tbody id="activation-tbody"><tr><td colspan="4" style="color:var(--pz-faint);padding:16px;text-align:center">—</td></tr></tbody>
+            </table>
+          </div>
+
+          <div style="font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-faint);margin:4px 0 8px">2 · Повторная покупка (30 дней)</div>
+          <div class="kpi-grid" id="kpi-repeat" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr));margin-bottom:18px">
+            <div class="kpi"><div class="kpi-label">Загрузка…</div></div>
+          </div>
+
+          <div style="font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-faint);margin:4px 0 8px">3 · Реальная маржа (90 дней, COGS из flow_jobs)</div>
+          <div class="kpi-grid" id="kpi-margin" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">
+            <div class="kpi"><div class="kpi-label">Загрузка…</div></div>
+          </div>
+          <div class="table-wrap" style="margin-bottom:18px">
+            <table>
+              <thead><tr><th>Модель</th><th>Задач</th><th>G-кр (COGS)</th><th>Кр. бота</th><th>COGS ₽</th></tr></thead>
+              <tbody id="margin-tbody"><tr><td colspan="5" style="color:var(--pz-faint);padding:16px;text-align:center">—</td></tr></tbody>
+            </table>
+          </div>
+
+          <div style="font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pz-faint);margin:4px 0 8px">5 · Реферал (честный k и доля привлечения)</div>
+          <div class="kpi-grid" id="kpi-refq" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">
+            <div class="kpi"><div class="kpi-label">Загрузка…</div></div>
+          </div>
         </div>
 
         <div class="analytics-section">
@@ -2392,13 +2428,79 @@ async function loadReferrals() {
 
 /* ── Analytics ─────────────────────────────────────── */
 async function loadAnalytics() {
-  const [today, revenue, flow, channels, errors] = await Promise.all([
+  const [today, revenue, flow, channels, errors, activation, repeat, margin, refq] = await Promise.all([
     api('GET', '/analytics/today'),
     api('GET', '/analytics/revenue'),
     api('GET', '/analytics/flow'),
     api('GET', '/analytics/channels'),
     api('GET', '/analytics/errors'),
+    api('GET', '/analytics/activation'),
+    api('GET', '/analytics/repeat'),
+    api('GET', '/analytics/margin'),
+    api('GET', '/analytics/referral-quality'),
   ]);
+
+  // 1 · Cold-start activation (rate to first wow within 24h), by channel.
+  if (activation) {
+    const pct = v => (v!=null ? (v*100).toFixed(0)+'%' : '—');
+    const tone = r => r>=0.40 ? 'lime' : (r>=0.25 ? 'warn' : 'coral');
+    document.getElementById('kpi-activation').innerHTML = `
+      <div class="kpi ${tone(activation.rate)}"><div class="kpi-label">Активация</div><div class="kpi-value" style="font-size:22px">${pct(activation.rate)}</div><div class="kpi-sub">за ${fmt(activation.window_hours)}ч · цель &gt;40%</div></div>
+      <div class="kpi"><div class="kpi-label">Когорта</div><div class="kpi-value">${fmt(activation.cohort)}</div><div class="kpi-sub">прошли окно</div></div>
+      <div class="kpi"><div class="kpi-label">Дошли до вау</div><div class="kpi-value">${fmt(activation.activated)}</div><div class="kpi-sub">первый успех</div></div>`;
+    const ch = activation.by_channel||[];
+    document.getElementById('activation-tbody').innerHTML = ch.length
+      ? ch.map(c=>`<tr>
+          <td class="mono" style="color:var(--pz-cyan)">${esc(c.channel)}</td>
+          <td class="mono">${fmt(c.cohort)}</td>
+          <td class="mono">${fmt(c.activated)}</td>
+          <td class="mono" style="color:${c.rate>=0.40?'var(--pz-lime)':(c.rate>=0.25?'var(--pz-warn)':'var(--pz-coral)')}">${(c.rate*100).toFixed(0)}%</td>
+        </tr>`).join('')
+      : `<tr><td colspan="4" style="color:var(--pz-faint);padding:12px;text-align:center">Пока нет завершённых когорт</td></tr>`;
+  }
+
+  // 2 · Repeat PURCHASE (second paid tx within 30d of the first).
+  if (repeat) {
+    const rr = repeat.repeat_rate!=null ? (repeat.repeat_rate*100).toFixed(0)+'%' : '—';
+    const tone = repeat.repeat_rate>=0.20 ? 'lime' : (repeat.repeat_rate>=0.10 ? 'warn' : 'coral');
+    document.getElementById('kpi-repeat').innerHTML = `
+      <div class="kpi ${tone}"><div class="kpi-label">2-я покупка</div><div class="kpi-value" style="font-size:22px">${rr}</div><div class="kpi-sub">за ${fmt(repeat.days)}д · цель &gt;20%</div></div>
+      <div class="kpi"><div class="kpi-label">Медиана до 2-й</div><div class="kpi-value">${repeat.median_days_to_second!=null?repeat.median_days_to_second+'д':'—'}</div><div class="kpi-sub">дней</div></div>
+      <div class="kpi"><div class="kpi-label">База</div><div class="kpi-value">${fmt(repeat.eligible_first_payers)}</div><div class="kpi-sub">плательщиков с пройденным окном</div></div>
+      <div class="kpi"><div class="kpi-label">Повторили</div><div class="kpi-value">${fmt(repeat.repeated)}</div><div class="kpi-sub">из ${fmt(repeat.first_payers)} всего первых</div></div>`;
+  }
+
+  // 3 · Real margin: measured G-credit COGS vs revenue.
+  if (margin) {
+    const gmTone = margin.gross_margin_rub>0 ? 'lime' : 'coral';
+    const cmTone = margin.contribution_margin_per_payer_rub>0 ? 'lime' : 'coral';
+    document.getElementById('kpi-margin').innerHTML = `
+      <div class="kpi lime"><div class="kpi-label">Выручка</div><div class="kpi-value" style="font-size:20px">${(+margin.revenue_rub).toFixed(0)}₽</div><div class="kpi-sub">за ${fmt(margin.days)}д</div></div>
+      <div class="kpi coral"><div class="kpi-label">COGS</div><div class="kpi-value" style="font-size:20px">${(+margin.cogs_rub).toFixed(0)}₽</div><div class="kpi-sub">${fmt(margin.g_credits_consumed)} G-кр × ${margin.g_credit_cost_rub}₽</div></div>
+      <div class="kpi ${gmTone}"><div class="kpi-label">Валовая маржа</div><div class="kpi-value" style="font-size:20px">${(margin.gross_margin_pct*100).toFixed(0)}%</div><div class="kpi-sub">${(+margin.gross_margin_rub).toFixed(0)}₽</div></div>
+      <div class="kpi ${cmTone}"><div class="kpi-label">Маржа / платящего</div><div class="kpi-value" style="font-size:20px">${(+margin.contribution_margin_per_payer_rub).toFixed(0)}₽</div><div class="kpi-sub">гейт: &gt;0 до масштаба</div></div>
+      <div class="kpi"><div class="kpi-label">₽ / кр</div><div class="kpi-value" style="font-size:18px">${(+margin.rub_per_bot_credit).toFixed(2)}</div><div class="kpi-sub">COGS ${(+margin.cogs_rub_per_bot_credit).toFixed(3)}₽/кр</div></div>`;
+    const bm = margin.by_model||[];
+    document.getElementById('margin-tbody').innerHTML = bm.length
+      ? bm.map(m=>`<tr>
+          <td class="mono" style="color:var(--pz-cyan);font-size:12px">${esc(m.model||'—')}</td>
+          <td class="mono">${fmt(m.jobs)}</td>
+          <td class="mono" style="color:var(--pz-coral)">${fmt(m.g_credits)}</td>
+          <td class="mono" style="color:var(--pz-lime)">${fmt(m.bot_credits)}</td>
+          <td class="mono" style="color:var(--pz-coral)">${(+m.cogs_rub).toFixed(1)}₽</td>
+        </tr>`).join('')
+      : `<tr><td colspan="5" style="color:var(--pz-faint);padding:12px;text-align:center">—</td></tr>`;
+  }
+
+  // 5 · Referral quality: honest k + referral-share of activations.
+  if (refq) {
+    const shareTone = refq.referral_share>=0.15 ? 'lime' : (refq.referral_share>=0.07 ? 'warn' : 'coral');
+    document.getElementById('kpi-refq').innerHTML = `
+      <div class="kpi"><div class="kpi-label">k (честный)</div><div class="kpi-value" style="font-size:22px">${(+refq.k).toFixed(2)}</div><div class="kpi-sub">сгенер. рефералов / пригласивших</div></div>
+      <div class="kpi ${shareTone}"><div class="kpi-label">Доля реферала</div><div class="kpi-value" style="font-size:22px">${(refq.referral_share*100).toFixed(0)}%</div><div class="kpi-sub">активаций · цель 15–30%</div></div>
+      <div class="kpi"><div class="kpi-label">Пригласившие</div><div class="kpi-value">${fmt(refq.referrers)}</div><div class="kpi-sub">${fmt(refq.invited_generated)}/${fmt(refq.invited)} рефералов сгенерили</div></div>
+      <div class="kpi"><div class="kpi-label">Бонусов за 1-го</div><div class="kpi-value">${fmt(refq.first_generation_rewards)}</div><div class="kpi-sub">+50 кр выдано</div></div>`;
+  }
 
   // Today KPIs
   if (today) {

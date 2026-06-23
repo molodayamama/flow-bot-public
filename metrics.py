@@ -61,6 +61,10 @@ __all__ = [
     "report_ops_health",
     "report_video_health",
     "report_video_account_scores",
+    "report_activation_cold",
+    "report_payment_repeat",
+    "report_margin",
+    "report_referral_quality",
     # credits store
     "credits_balance",
     "credits_charge",
@@ -3632,6 +3636,287 @@ def report_cohort_retention(
     except Exception:  # noqa: BLE001
         log.warning("report_cohort_retention failed", exc_info=True)
     return rows_out
+
+
+# ── qualitative analytics (activation / repeat-purchase / margin / k) ──────
+#
+# These four are the "is the business working" reports, separate from the
+# operational dashboards above. See docs/METRICS_ANALYTICS.md for what each
+# number means and what threshold is healthy.
+
+# First-year blended provider cost per G-credit (docs/MONETIZATION.md → Provider
+# Economics). Used to convert measured G-credit consumption into RUB COGS.
+G_CREDIT_COST_RUB = 0.053
+
+
+def report_activation_cold(window_hours: int = 24) -> dict:
+    """Cold-start activation: share of new users who reached their first
+    image/video success within ``window_hours`` of their first ``user_started``,
+    segmented by acquisition channel.
+
+    Only users whose full window has already elapsed are counted, so the rate is
+    not dragged down by users who just signed up. Source events are subject to
+    the events-retention purge (default 90 days), so this looks back ≤90 days.
+    """
+    window_hours = max(1, int(window_hours))
+    empty = {
+        "window_hours": window_hours, "cohort": 0, "activated": 0,
+        "rate": 0.0, "by_channel": [],
+    }
+    try:
+        with _LOCK:
+            conn = _conn()
+            sql = """
+            WITH starts AS (
+                SELECT user_id, MIN(created_at) AS started_at
+                FROM   events
+                WHERE  event_name='user_started' AND user_id IS NOT NULL
+                GROUP  BY user_id
+            ),
+            eligible AS (
+                SELECT user_id, started_at FROM starts
+                WHERE  started_at <= datetime('now', ?)
+            ),
+            firstwow AS (
+                SELECT user_id, MIN(created_at) AS wow_at
+                FROM   events
+                WHERE  event_name IN ('image_success','video_success')
+                  AND  user_id IS NOT NULL
+                GROUP  BY user_id
+            )
+            SELECT
+                COALESCE(a.channel, u.acq_channel, 'unknown') AS channel,
+                COUNT(*) AS cohort,
+                SUM(CASE WHEN f.wow_at IS NOT NULL
+                          AND f.wow_at <= datetime(e.started_at, ?)
+                         THEN 1 ELSE 0 END) AS activated
+            FROM eligible e
+            LEFT JOIN firstwow f     ON f.user_id = e.user_id
+            LEFT JOIN acquisitions a ON a.user_id = e.user_id
+            LEFT JOIN users u        ON u.user_id = e.user_id
+            GROUP BY channel
+            ORDER BY cohort DESC, channel
+            """
+            rows = _rows(conn, sql, (f"-{window_hours} hours", f"+{window_hours} hours"))
+            by_channel = []
+            tot_cohort = tot_act = 0
+            for r in rows:
+                c = int(r["cohort"] or 0)
+                a = int(r["activated"] or 0)
+                tot_cohort += c
+                tot_act += a
+                by_channel.append({
+                    "channel": r["channel"] or "unknown",
+                    "cohort": c, "activated": a,
+                    "rate": round(a / c, 3) if c else 0.0,
+                })
+            return {
+                "window_hours": window_hours,
+                "cohort": tot_cohort,
+                "activated": tot_act,
+                "rate": round(tot_act / tot_cohort, 3) if tot_cohort else 0.0,
+                "by_channel": by_channel,
+            }
+    except Exception:  # noqa: BLE001
+        log.warning("report_activation_cold failed", exc_info=True)
+        return empty
+
+
+def report_payment_repeat(days: int = 30) -> dict:
+    """Repeat-PURCHASE cohort over ``days`` — distinct from return-activity.
+
+    Among users whose FIRST paid transaction is at least ``days`` old (so the
+    repeat window has fully elapsed), the share who made a SECOND paid
+    transaction within ``days`` of the first, plus the median days-to-second for
+    those who did. Payment time uses ``paid_at`` with a ``created_at`` fallback.
+    """
+    days = max(1, int(days))
+    empty = {
+        "days": days, "first_payers": 0, "eligible_first_payers": 0,
+        "repeated": 0, "repeat_rate": 0.0, "median_days_to_second": None,
+    }
+    try:
+        with _LOCK:
+            conn = _conn()
+            sql = """
+            WITH firstpay AS (
+                SELECT user_id, MIN(COALESCE(paid_at, created_at)) AS first_at
+                FROM   transactions
+                WHERE  status='paid' AND user_id IS NOT NULL
+                GROUP  BY user_id
+            ),
+            secondpay AS (
+                SELECT t.user_id, MIN(COALESCE(t.paid_at, t.created_at)) AS second_at
+                FROM   transactions t
+                JOIN   firstpay f ON t.user_id = f.user_id
+                WHERE  t.status='paid'
+                  AND  COALESCE(t.paid_at, t.created_at) > f.first_at
+                GROUP  BY t.user_id
+            )
+            SELECT f.user_id, f.first_at, s.second_at,
+                   CASE WHEN s.second_at IS NOT NULL
+                        THEN julianday(s.second_at) - julianday(f.first_at)
+                   END AS days_to_second
+            FROM firstpay f
+            LEFT JOIN secondpay s ON s.user_id = f.user_id
+            """
+            rows = _rows(conn, sql)
+            cutoff = _scalar(conn, "SELECT datetime('now', ?)", (f"-{days} days",))
+            cutoff = str(cutoff or "")
+            first_payers = len(rows)
+            eligible = 0
+            repeated = 0
+            deltas: list[float] = []
+            for r in rows:
+                first_at = r["first_at"]
+                # Only count first-payers whose repeat window has fully elapsed.
+                if first_at is None or str(first_at) > cutoff:
+                    continue
+                eligible += 1
+                d = r["days_to_second"]
+                if d is not None and d <= days:
+                    repeated += 1
+                    deltas.append(float(d))
+            median = None
+            if deltas:
+                deltas.sort()
+                n = len(deltas)
+                median = deltas[n // 2] if n % 2 else (deltas[n // 2 - 1] + deltas[n // 2]) / 2
+                median = round(median, 1)
+            return {
+                "days": days,
+                "first_payers": first_payers,
+                "eligible_first_payers": eligible,
+                "repeated": repeated,
+                "repeat_rate": round(repeated / eligible, 3) if eligible else 0.0,
+                "median_days_to_second": median,
+            }
+    except Exception:  # noqa: BLE001
+        log.warning("report_payment_repeat failed", exc_info=True)
+        return empty
+
+
+def report_margin(days: int = 90, g_credit_cost_rub: float | None = None) -> dict:
+    """Unit economics over ``days``: real provider COGS vs revenue.
+
+    COGS is measured (not guessed): ``flow_jobs.flow_credits_delta`` is the
+    provider balance change per job (``after - before``); consumption is the
+    negative part, summed as G-credits. RUB COGS = G-credits × ``g_credit_cost_rub``
+    (default :data:`G_CREDIT_COST_RUB`). Revenue is paid transactions in the same
+    window. Credits can be bought and spent in different windows, so treat the
+    margin as directional over 30–90 days, not to-the-ruble.
+    """
+    days = max(1, int(days))
+    cost = G_CREDIT_COST_RUB if g_credit_cost_rub is None else max(0.0, float(g_credit_cost_rub))
+    window = f"-{days} days"
+    empty = {
+        "days": days, "g_credit_cost_rub": cost,
+        "revenue_rub": 0.0, "credits_sold": 0, "paying_users": 0,
+        "g_credits_consumed": 0, "bot_credits_charged": 0,
+        "cogs_rub": 0.0, "gross_margin_rub": 0.0, "gross_margin_pct": 0.0,
+        "rub_per_bot_credit": 0.0, "cogs_rub_per_bot_credit": 0.0,
+        "contribution_margin_per_payer_rub": 0.0, "by_model": [],
+    }
+    try:
+        with _LOCK:
+            conn = _conn()
+            tx_since = "status='paid' AND created_at >= datetime('now', ?)"
+            revenue_rub = float(_scalar(conn, f"SELECT COALESCE(SUM(amount_rub),0) FROM transactions WHERE {tx_since}", (window,)) or 0)
+            credits_sold = int(_scalar(conn, f"SELECT COALESCE(SUM(credits_issued),0) FROM transactions WHERE {tx_since}", (window,)) or 0)
+            paying_users = int(_scalar(conn, f"SELECT COUNT(DISTINCT user_id) FROM transactions WHERE {tx_since}", (window,)) or 0)
+
+            fj_since = "created_at >= datetime('now', ?)"
+            consumed_expr = "CASE WHEN flow_credits_delta < 0 THEN -flow_credits_delta ELSE 0 END"
+            g_consumed = int(_scalar(conn, f"SELECT COALESCE(SUM({consumed_expr}),0) FROM flow_jobs WHERE {fj_since}", (window,)) or 0)
+            bot_charged = int(_scalar(conn, f"SELECT COALESCE(SUM(bot_credits_charged),0) FROM flow_jobs WHERE {fj_since}", (window,)) or 0)
+
+            by_model = [
+                {
+                    "model": r["model"] or "—",
+                    "jobs": int(r["jobs"]),
+                    "g_credits": int(r["g"] or 0),
+                    "bot_credits": int(r["bot"] or 0),
+                    "cogs_rub": round(int(r["g"] or 0) * cost, 2),
+                }
+                for r in _rows(
+                    conn,
+                    f"SELECT model, COUNT(*) AS jobs, "
+                    f"COALESCE(SUM({consumed_expr}),0) AS g, "
+                    f"COALESCE(SUM(bot_credits_charged),0) AS bot "
+                    f"FROM flow_jobs WHERE {fj_since} GROUP BY model ORDER BY g DESC",
+                    (window,),
+                )
+            ]
+
+            cogs_rub = round(g_consumed * cost, 2)
+            gross_margin_rub = round(revenue_rub - cogs_rub, 2)
+            return {
+                "days": days,
+                "g_credit_cost_rub": cost,
+                "revenue_rub": round(revenue_rub, 2),
+                "credits_sold": credits_sold,
+                "paying_users": paying_users,
+                "g_credits_consumed": g_consumed,
+                "bot_credits_charged": bot_charged,
+                "cogs_rub": cogs_rub,
+                "gross_margin_rub": gross_margin_rub,
+                "gross_margin_pct": round(gross_margin_rub / revenue_rub, 3) if revenue_rub else 0.0,
+                "rub_per_bot_credit": round(revenue_rub / credits_sold, 4) if credits_sold else 0.0,
+                "cogs_rub_per_bot_credit": round(cogs_rub / bot_charged, 4) if bot_charged else 0.0,
+                "contribution_margin_per_payer_rub": round(gross_margin_rub / paying_users, 2) if paying_users else 0.0,
+                "by_model": by_model,
+            }
+    except Exception:  # noqa: BLE001
+        log.warning("report_margin failed", exc_info=True)
+        return empty
+
+
+def report_referral_quality() -> dict:
+    """Honest referral virality (k) and referral-share of activations.
+
+    "Generated something" uses successful ``flow_jobs`` rows (durable; not
+    purged like events). ``k`` is invited users who generated divided by distinct
+    referrers — not the exponential viral coefficient, just activations produced
+    per referrer. ``referral_share`` is the fraction of all activated users that
+    came in through a referral; 15–30%+ meaningfully lowers blended CAC.
+    """
+    empty = {
+        "referrers": 0, "invited": 0, "invited_generated": 0, "k": 0.0,
+        "activated_total": 0, "activated_referred": 0, "referral_share": 0.0,
+        "first_generation_rewards": 0,
+    }
+    try:
+        with _LOCK:
+            conn = _conn()
+            referrers = int(_scalar(conn, "SELECT COUNT(DISTINCT referrer_user_id) FROM referrals WHERE referrer_user_id IS NOT NULL") or 0)
+            invited = int(_scalar(conn, "SELECT COUNT(DISTINCT referred_user_id) FROM referrals WHERE referred_user_id IS NOT NULL") or 0)
+            generated_users = "SELECT user_id FROM flow_jobs WHERE status='success' AND user_id IS NOT NULL"
+            invited_generated = int(_scalar(
+                conn,
+                f"SELECT COUNT(DISTINCT referred_user_id) FROM referrals "
+                f"WHERE referred_user_id IN ({generated_users})",
+            ) or 0)
+            activated_total = int(_scalar(conn, f"SELECT COUNT(DISTINCT user_id) FROM ({generated_users})") or 0)
+            activated_referred = int(_scalar(
+                conn,
+                f"SELECT COUNT(DISTINCT user_id) FROM flow_jobs "
+                f"WHERE status='success' AND user_id IS NOT NULL "
+                f"AND user_id IN (SELECT referred_user_id FROM referrals WHERE referred_user_id IS NOT NULL)",
+            ) or 0)
+            first_gen = int(_scalar(conn, "SELECT COUNT(*) FROM referral_first_generation_rewards") or 0)
+            return {
+                "referrers": referrers,
+                "invited": invited,
+                "invited_generated": invited_generated,
+                "k": round(invited_generated / referrers, 3) if referrers else 0.0,
+                "activated_total": activated_total,
+                "activated_referred": activated_referred,
+                "referral_share": round(activated_referred / activated_total, 3) if activated_total else 0.0,
+                "first_generation_rewards": first_gen,
+            }
+    except Exception:  # noqa: BLE001
+        log.warning("report_referral_quality failed", exc_info=True)
+        return empty
 
 
 def get_users_for_digest(min_days: int = 3, max_days: int = 7, limit: int = 100) -> list[dict]:

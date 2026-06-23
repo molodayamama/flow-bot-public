@@ -2158,6 +2158,41 @@ async def handle_analytics_active(request: web.Request) -> web.Response:
     return _json({**dau_wau_mau, "top_users": top_users.get("users", [])})
 
 
+async def handle_analytics_activation(request: web.Request) -> web.Response:
+    try:
+        hours = min(max(int(request.rel_url.query.get("hours", "24")), 1), 720)
+    except (TypeError, ValueError):
+        hours = 24
+    return _json(metrics.report_activation_cold(window_hours=hours))
+
+
+async def handle_analytics_repeat(request: web.Request) -> web.Response:
+    try:
+        days = min(max(int(request.rel_url.query.get("days", "30")), 1), 365)
+    except (TypeError, ValueError):
+        days = 30
+    return _json(metrics.report_payment_repeat(days=days))
+
+
+async def handle_analytics_margin(request: web.Request) -> web.Response:
+    try:
+        days = min(max(int(request.rel_url.query.get("days", "90")), 1), 365)
+    except (TypeError, ValueError):
+        days = 90
+    gcost = None
+    raw = request.rel_url.query.get("gcost")
+    if raw is not None:
+        try:
+            gcost = max(0.0, float(raw))
+        except (TypeError, ValueError):
+            gcost = None
+    return _json(metrics.report_margin(days=days, g_credit_cost_rub=gcost))
+
+
+async def handle_analytics_referral_quality(request: web.Request) -> web.Response:
+    return _json(metrics.report_referral_quality())
+
+
 # ── registration ───────────────────────────────────────────────────────
 
 def register_admin_routes(
@@ -2231,4 +2266,8 @@ def register_admin_routes(
     r.add_get ("/api/admin/analytics/channels",        handle_analytics_channels)
     r.add_get ("/api/admin/analytics/errors",          handle_analytics_errors)
     r.add_get ("/api/admin/analytics/active",          handle_analytics_active)
-    log.info("Admin API registered on /api/admin/* (%d routes)", 43)
+    r.add_get ("/api/admin/analytics/activation",      handle_analytics_activation)
+    r.add_get ("/api/admin/analytics/repeat",          handle_analytics_repeat)
+    r.add_get ("/api/admin/analytics/margin",          handle_analytics_margin)
+    r.add_get ("/api/admin/analytics/referral-quality", handle_analytics_referral_quality)
+    log.info("Admin API registered on /api/admin/* (%d routes)", 47)

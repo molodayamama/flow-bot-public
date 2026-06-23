@@ -821,5 +821,159 @@ class VideoHealthReportTests(MetricsTestBase):
         self.assertEqual(rep["windows"]["24h"], [])
 
 
+class QualitativeAnalyticsTests(MetricsTestBase):
+    """report_activation_cold / payment_repeat / margin / referral_quality."""
+
+    def _ev_at(self, name: str, user_id: int, offset: str) -> None:
+        conn = metrics._conn()
+        with conn:
+            conn.execute(
+                "INSERT INTO events (event_name, user_id, created_at) "
+                "VALUES (?, ?, datetime('now', ?))",
+                (name, user_id, offset),
+            )
+
+    # ── 1 · cold-start activation ───────────────────────────────────────
+    def test_activation_cold_by_channel_and_window(self) -> None:
+        # u1: started 3d ago, first success within 24h → activated (ads)
+        self._ev_at("user_started", 1, "-3 days")
+        self._ev_at("image_success", 1, "-3 days")
+        metrics.record_acquisition(user_id=1, channel="ads")
+        # u2: started 3d ago, never generated → not activated (ads)
+        self._ev_at("user_started", 2, "-3 days")
+        metrics.record_acquisition(user_id=2, channel="ads")
+        # u3: started 3d ago, success only after 24h (≈2d later) → not activated (organic)
+        self._ev_at("user_started", 3, "-3 days")
+        self._ev_at("video_success", 3, "-1 days")
+        metrics.record_acquisition(user_id=3, channel="organic")
+        # u4: started 1h ago → window not elapsed → excluded from cohort entirely
+        self._ev_at("user_started", 4, "-1 hours")
+        self._ev_at("image_success", 4, "-1 hours")
+
+        rep = metrics.report_activation_cold(window_hours=24)
+        self.assertEqual(rep["window_hours"], 24)
+        self.assertEqual(rep["cohort"], 3)        # u1,u2,u3 (u4 excluded)
+        self.assertEqual(rep["activated"], 1)     # only u1
+        self.assertAlmostEqual(rep["rate"], round(1 / 3, 3))
+        by = {c["channel"]: c for c in rep["by_channel"]}
+        self.assertEqual(by["ads"]["cohort"], 2)
+        self.assertEqual(by["ads"]["activated"], 1)
+        self.assertEqual(by["ads"]["rate"], 0.5)
+        self.assertEqual(by["organic"]["cohort"], 1)
+        self.assertEqual(by["organic"]["activated"], 0)
+
+    def test_activation_cold_empty(self) -> None:
+        rep = metrics.report_activation_cold()
+        self.assertEqual(rep["cohort"], 0)
+        self.assertEqual(rep["rate"], 0.0)
+        self.assertEqual(rep["by_channel"], [])
+
+    # ── 2 · repeat purchase ─────────────────────────────────────────────
+    def _pay(self, user_id: int, pid: str, offset: str, rub: float = 100.0) -> None:
+        conn = metrics._conn()
+        with conn:
+            conn.execute(
+                "INSERT INTO transactions "
+                "(provider, provider_payment_id, user_id, status, amount_rub, "
+                " credits_issued, created_at, paid_at) "
+                "VALUES ('test', ?, ?, 'paid', ?, 100, datetime('now', ?), datetime('now', ?))",
+                (pid, user_id, rub, offset, offset),
+            )
+
+    def test_payment_repeat_cohort(self) -> None:
+        # u1: first 40d ago, second 10d later (30d ago) → repeated within window
+        self._pay(1, "u1a", "-40 days")
+        self._pay(1, "u1b", "-30 days")
+        # u2: first 40d ago, no second → eligible, not repeated
+        self._pay(2, "u2a", "-40 days")
+        # u3: first 40d ago, second 35d later (5d ago) → eligible, NOT within 30d
+        self._pay(3, "u3a", "-40 days")
+        self._pay(3, "u3b", "-5 days")
+        # u4: first 5d ago → window not yet elapsed → excluded from eligible
+        self._pay(4, "u4a", "-5 days")
+
+        rep = metrics.report_payment_repeat(days=30)
+        self.assertEqual(rep["days"], 30)
+        self.assertEqual(rep["first_payers"], 4)
+        self.assertEqual(rep["eligible_first_payers"], 3)  # u1,u2,u3
+        self.assertEqual(rep["repeated"], 1)               # only u1
+        self.assertAlmostEqual(rep["repeat_rate"], round(1 / 3, 3))
+        self.assertIsNotNone(rep["median_days_to_second"])
+        self.assertAlmostEqual(rep["median_days_to_second"], 10.0, delta=0.5)
+
+    def test_payment_repeat_empty(self) -> None:
+        rep = metrics.report_payment_repeat()
+        self.assertEqual(rep["eligible_first_payers"], 0)
+        self.assertEqual(rep["repeat_rate"], 0.0)
+        self.assertIsNone(rep["median_days_to_second"])
+
+    # ── 3 · real margin ─────────────────────────────────────────────────
+    def test_margin_from_measured_cogs(self) -> None:
+        metrics.record_transaction(provider="t", provider_payment_id="m1",
+                                   user_id=1, amount_rub=300.0, credits_issued=500)
+        metrics.record_transaction(provider="t", provider_payment_id="m2",
+                                   user_id=2, amount_rub=300.0, credits_issued=500)
+        # Consumption jobs: negative provider delta = COGS in G-credits.
+        metrics.log_flow_job(user_id=1, operation_type="video", model="omni-flash-4s",
+                             bot_credits_charged=50, flow_credits_before=1000,
+                             flow_credits_after=993, status="success")
+        metrics.log_flow_job(user_id=2, operation_type="video", model="veo-lite",
+                             bot_credits_charged=60, flow_credits_before=993,
+                             flow_credits_after=983, status="success")
+        # Provider top-up (positive delta) must NOT count as consumption.
+        metrics.log_flow_job(user_id=None, operation_type="topup", model="—",
+                             bot_credits_charged=0, flow_credits_before=100,
+                             flow_credits_after=1100, status="success")
+
+        rep = metrics.report_margin(days=90)
+        self.assertEqual(rep["revenue_rub"], 600.0)
+        self.assertEqual(rep["credits_sold"], 1000)
+        self.assertEqual(rep["paying_users"], 2)
+        self.assertEqual(rep["g_credits_consumed"], 17)       # 7 + 10, top-up excluded
+        self.assertEqual(rep["bot_credits_charged"], 110)     # 50 + 60
+        self.assertEqual(rep["g_credit_cost_rub"], 0.053)
+        self.assertEqual(rep["cogs_rub"], round(17 * 0.053, 2))
+        self.assertEqual(rep["rub_per_bot_credit"], 0.6)
+        self.assertGreater(rep["gross_margin_rub"], 0)
+        self.assertGreater(rep["contribution_margin_per_payer_rub"], 0)
+        # Override cost feeds straight through to COGS.
+        rep2 = metrics.report_margin(days=90, g_credit_cost_rub=1.0)
+        self.assertEqual(rep2["cogs_rub"], 17.0)
+        self.assertEqual(rep2["gross_margin_rub"], 583.0)
+
+    def test_margin_empty(self) -> None:
+        rep = metrics.report_margin()
+        self.assertEqual(rep["revenue_rub"], 0.0)
+        self.assertEqual(rep["gross_margin_pct"], 0.0)
+        self.assertEqual(rep["by_model"], [])
+
+    # ── 5 · referral quality (honest k + share) ─────────────────────────
+    def test_referral_quality_k_and_share(self) -> None:
+        metrics.record_referral_join(referrer_user_id=1, referred_user_id=2)
+        metrics.record_referral_join(referrer_user_id=1, referred_user_id=3)
+        metrics.record_referral_join(referrer_user_id=9, referred_user_id=4)
+        # Generations (durable signal): u2,u4 referred + u5 non-referred; u3 none.
+        for uid in (2, 4, 5):
+            metrics.log_flow_job(user_id=uid, operation_type="image", status="success")
+        metrics.grant_first_generation_referral_reward(
+            referrer_user_id=1, referred_user_id=2, reward_credits=50)
+
+        rep = metrics.report_referral_quality()
+        self.assertEqual(rep["referrers"], 2)            # {1, 9}
+        self.assertEqual(rep["invited"], 3)              # {2, 3, 4}
+        self.assertEqual(rep["invited_generated"], 2)    # {2, 4}
+        self.assertEqual(rep["k"], round(2 / 2, 3))      # 1.0
+        self.assertEqual(rep["activated_total"], 3)      # {2, 4, 5}
+        self.assertEqual(rep["activated_referred"], 2)   # {2, 4}
+        self.assertAlmostEqual(rep["referral_share"], round(2 / 3, 3))
+        self.assertEqual(rep["first_generation_rewards"], 1)
+
+    def test_referral_quality_empty(self) -> None:
+        rep = metrics.report_referral_quality()
+        self.assertEqual(rep["referrers"], 0)
+        self.assertEqual(rep["k"], 0.0)
+        self.assertEqual(rep["referral_share"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
