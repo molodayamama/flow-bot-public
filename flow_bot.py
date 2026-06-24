@@ -1453,6 +1453,10 @@ class SessionKeeper:
                             "get_g_credits non-200 for %s: status=%s body=%s",
                             self.account_id, resp.status, body,
                         )
+                        if resp.status == 401:
+                            # 401 = протух Google-логин аккаунта. Выводим из
+                            # ротации и подсвечиваем в админке (нужен релогин).
+                            self._flag_needs_relogin(True)
                         return self._gcredits_cache or {
                             "error": "auth_401" if resp.status == 401 else f"http_{resp.status}",
                             "status": resp.status,
@@ -1467,12 +1471,31 @@ class SessionKeeper:
         if parsed:
             self._gcredits_cache = parsed
             self._gcredits_cache_ts = time.time()
+            # Баланс получен с валидным логином → снимаем флаг релогина, если был.
+            self._flag_needs_relogin(False)
         else:
             log.warning(
                 "get_g_credits unparseable response for %s: %s",
                 self.account_id, str(data)[:200],
             )
         return parsed or self._gcredits_cache or {"error": "unparseable"}
+
+    def _flag_needs_relogin(self, value: bool) -> None:
+        """Пометить аккаунт как требующий релогина (или снять пометку) в пуле.
+
+        Безопасно вызывается из методов кейпера: ссылается на модульный
+        ``account_pool`` лениво и молча игнорирует, если пул ещё не создан
+        (импорт-время) или аккаунт не из пула (одиночный/тестовый кейпер).
+        """
+        if not self.account_id:
+            return
+        pool = globals().get("account_pool")
+        if pool is None:
+            return
+        try:
+            pool.mark_needs_relogin(self.account_id, bool(value))
+        except Exception:
+            log.debug("mark_needs_relogin failed for %s", self.account_id, exc_info=True)
 
     async def get_capmonster_balance(self) -> str:
         """Возвращает баланс CapMonster в виде строки."""
@@ -2610,6 +2633,9 @@ class FlowHttpClient:
         project_id = project_id or session["project_id"]
         if not project_id:
             log.warning("project_id не получен — использую браузерный режим")
+            # Нет проекта у сессии аккаунта = логин протух → пометить на релогин
+            # и вывести из ротации (см. AccountPool.is_available).
+            self.keeper._flag_needs_relogin(True)
             if allow_browser_fallback:
                 return await self.keeper.generate_via_browser(prompt)
             return {"error": "Не удалось определить проект. Попробуйте позже."}

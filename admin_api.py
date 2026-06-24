@@ -617,7 +617,8 @@ async def handle_ops_get(request: web.Request) -> web.Response:
         accounts = _pool.status()
     active_accounts = [
         a for a in accounts
-        if not a.get("disabled") and int(a.get("cooldown_left") or 0) <= 0
+        if not a.get("disabled") and not a.get("needs_relogin")
+        and int(a.get("cooldown_left") or 0) <= 0
     ]
     cooldown_accounts = [
         a for a in accounts
@@ -703,6 +704,8 @@ async def handle_accounts_get(request: web.Request) -> web.Response:
             acc["health"] = "disabled"
         elif startup and startup.get("status") in {"pending", "running"}:
             acc["health"] = "warming"
+        elif acc.get("needs_relogin"):
+            acc["health"] = "needs_relogin"
         elif int(acc.get("cooldown_left") or 0) > 0:
             acc["health"] = "cooldown"
         elif int(acc.get("fails") or 0) > 0 or int(acc.get("jobs_fail") or 0) > 0:

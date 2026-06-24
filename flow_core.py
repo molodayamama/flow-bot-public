@@ -2110,7 +2110,7 @@ class AccountPool:
         self._assign: dict[str, str] = {}
         self._health: dict[str, dict] = {
             a.id: {"fails": 0, "cooldown_until": 0.0, "disabled": False,
-                   "video_allowed": True}
+                   "video_allowed": True, "needs_relogin": False}
             for a in accounts
         }
         self._runtime_ready: dict[str, bool] = {a.id: True for a in accounts}
@@ -2147,6 +2147,7 @@ class AccountPool:
             "cooldown_until": 0.0,
             "disabled": False,
             "video_allowed": True,
+            "needs_relogin": False,
         }
         self._runtime_ready[account.id] = False
         self._runtime_status[account.id] = runtime_status or "warming"
@@ -2187,6 +2188,8 @@ class AccountPool:
             return False
         if h["disabled"]:
             return False
+        if h.get("needs_relogin"):
+            return False
         return self._clock() >= h["cooldown_until"]
 
     def mark_success(self, account_id: str) -> None:
@@ -2194,6 +2197,8 @@ class AccountPool:
         if h is not None:
             h["fails"] = 0
             h["cooldown_until"] = 0.0
+            # Успешная джоба = логин жив → снимаем флаг релогина, если был.
+            h["needs_relogin"] = False
 
     def mark_failure(self, account_id: str) -> bool:
         """Учесть сбой; вернуть True, если аккаунт ушёл в кулдаун."""
@@ -2237,7 +2242,21 @@ class AccountPool:
         if not disabled:
             h["fails"] = 0
             h["cooldown_until"] = 0.0
+            # Ручное включение подразумевает, что логин починили (релогин/онбординг).
+            h["needs_relogin"] = False
         self._save()
+        return True
+
+    def mark_needs_relogin(self, account_id: str, value: bool = True) -> bool:
+        """Пометить, что у аккаунта протух Google-логин (credits отдал 401 /
+        нет project_id). Рантайм-флаг (не персистится): выводит аккаунт из
+        ротации в :meth:`is_available`, пока успешная джоба/включение его
+        не снимут, либо до перезапуска (там прогрев перепроверит заново).
+        True — если id известен."""
+        h = self._health.get(account_id)
+        if h is None:
+            return False
+        h["needs_relogin"] = bool(value)
         return True
 
     def set_video_allowed(self, account_id: str, allowed: bool) -> bool:
@@ -2504,6 +2523,7 @@ class AccountPool:
                 "id": aid,
                 "profile_dir": self._accounts[aid].profile_dir,
                 "disabled": h["disabled"],
+                "needs_relogin": h.get("needs_relogin", False),
                 "runtime_ready": self._runtime_ready.get(aid, True),
                 "runtime_status": self._runtime_status.get(aid, "ready"),
                 "video_allowed": h.get("video_allowed", True),

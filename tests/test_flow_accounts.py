@@ -173,6 +173,30 @@ class AccountPoolTests(unittest.TestCase):
         self.assertTrue(pool.is_available(a1))
         self.assertFalse(pool.set_disabled("nope", True))
 
+    def test_needs_relogin_pulls_from_rotation_and_recovers(self) -> None:
+        pool = self._pool(2)
+        a1, a2 = pool.account_ids()
+
+        # 401 от credits / нет project_id → флаг релогина выводит из ротации.
+        self.assertTrue(pool.mark_needs_relogin(a1, True))
+        self.assertFalse(pool.is_available(a1))
+        self.assertEqual(pool.pick_for(7), a2)  # маршрутизация уходит на здоровый
+        by_id = {row["id"]: row for row in pool.status()}
+        self.assertTrue(by_id[a1]["needs_relogin"])
+
+        # Успешная джоба = логин жив → флаг снимается автоматически.
+        pool.mark_success(a1)
+        self.assertTrue(pool.is_available(a1))
+        self.assertFalse({r["id"]: r for r in pool.status()}[a1]["needs_relogin"])
+
+        # Ручное включение тоже снимает флаг (релогин/онбординг починили).
+        pool.mark_needs_relogin(a1, True)
+        self.assertFalse(pool.is_available(a1))
+        pool.set_disabled(a1, False)
+        self.assertTrue(pool.is_available(a1))
+
+        self.assertFalse(pool.mark_needs_relogin("nope", True))
+
     def test_video_allowed_filters_video_picker(self) -> None:
         pool = self._pool(3)
         a1, a2, a3 = pool.account_ids()
