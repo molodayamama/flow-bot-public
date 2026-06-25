@@ -206,6 +206,93 @@ class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body[0]["startup"]["ready"], False)
 
 
+class _FakeProxySup:
+    def __init__(self):
+        self.raised = []
+        self.tore_down = []
+
+    def ports_view(self):
+        return {"used_ports": [8118, 8129], "managed": [], "suggested_free": 8130,
+                "range": {"lo": 8129, "hi": 8199}}
+
+    def list_status(self):
+        return [{"port": 8129, "local_url": "http://127.0.0.1:8129",
+                 "label": "http://1.2.3.4:10000", "alive": True, "created_at": 1.0}]
+
+    async def check_upstream(self, raw):
+        if "bad" in raw:
+            return {"ok": False, "error": "upstream_unreachable"}
+        return {"ok": True, "egress_ip": "1.2.3.4", "latency_ms": 120,
+                "label": "http://1.2.3.4:10000"}
+
+    async def raise_proxy(self, raw):
+        import proxy_supervisor
+        if "bad" in raw:
+            raise proxy_supervisor.ProxyError("upstream_unreachable")
+        self.raised.append(raw)
+        return {"port": 8130, "local_url": "http://127.0.0.1:8130",
+                "label": "http://1.2.3.4:10000", "egress_ip": "1.2.3.4", "reused": False}
+
+    def teardown(self, port):
+        self.tore_down.append(port)
+        return port == 8129
+
+
+class ProxyEndpointTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.addCleanup(self._reset)
+        admin_api._proxy_sup = _FakeProxySup()
+
+    def _reset(self):
+        admin_api._proxy_sup = None
+
+    async def test_ports_503_when_disabled(self):
+        admin_api._proxy_sup = None
+        resp = await admin_api.handle_proxy_ports_get(None)
+        self.assertEqual(resp.status, 503)
+
+    async def test_ports_view(self):
+        resp = await admin_api.handle_proxy_ports_get(None)
+        body = json.loads(resp.body)
+        self.assertIn(8129, body["used_ports"])
+        self.assertEqual(body["suggested_free"], 8130)
+
+    async def test_check_ok_and_no_credentials_in_response(self):
+        resp = await admin_api.handle_proxy_verify_post(
+            _JsonReq({"proxy": "user:pass@1.2.3.4:10000"}))
+        body = json.loads(resp.body)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["egress_ip"], "1.2.3.4")
+        self.assertNotIn("pass", resp.body.decode())
+
+    async def test_check_empty_proxy_400(self):
+        resp = await admin_api.handle_proxy_verify_post(_JsonReq({"proxy": "  "}))
+        self.assertEqual(resp.status, 400)
+
+    async def test_raise_ok(self):
+        resp = await admin_api.handle_proxy_raise_post(
+            _JsonReq({"proxy": "user:pass@1.2.3.4:10000"}))
+        body = json.loads(resp.body)
+        self.assertEqual(body["local_url"], "http://127.0.0.1:8130")
+        self.assertEqual(admin_api._proxy_sup.raised, ["user:pass@1.2.3.4:10000"])
+
+    async def test_raise_proxy_error_400(self):
+        resp = await admin_api.handle_proxy_raise_post(
+            _JsonReq({"proxy": "user:pass@bad:10000"}))
+        self.assertEqual(resp.status, 400)
+        self.assertEqual(json.loads(resp.body)["error"], "upstream_unreachable")
+
+    async def test_teardown_ok_and_not_found(self):
+        ok = await admin_api.handle_proxy_teardown_post(_JsonReq({"port": 8129}))
+        self.assertEqual(ok.status, 200)
+        missing = await admin_api.handle_proxy_teardown_post(_JsonReq({"port": 9999}))
+        self.assertEqual(missing.status, 404)
+
+    async def test_teardown_invalid_port_400(self):
+        resp = await admin_api.handle_proxy_teardown_post(_JsonReq({"port": "abc"}))
+        self.assertEqual(resp.status, 400)
+
+
 class VideoAbEndpointTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.addCleanup(self._reset_globals)

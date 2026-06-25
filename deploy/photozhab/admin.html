@@ -538,6 +538,33 @@ tr:hover td{background:var(--pz-surface-2)}
         <div class="card">
           <div class="toolbar" style="margin-bottom:12px">
             <div>
+              <div class="card-title">ISP proxy → локальный порт</div>
+              <div class="card-sub">Вставь прокси (login:pass@ip:port), проверь, подними локальный gost — URL подставится в онбординг.</div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="loadProxyPorts()">↻ Порты</button>
+          </div>
+          <div class="account-onboard-grid">
+            <div class="form-row wide">
+              <label class="form-label">ISP proxy (login:password@ip:port)</label>
+              <input class="form-input" id="proxy-raw" placeholder="user:password@proxy.example.com:8080" autocomplete="off" oninput="onProxyRawInput()">
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:4px">
+            <button class="btn btn-ghost" id="proxy-check-btn" onclick="checkProxy()">Проверить</button>
+            <button class="btn btn-primary" id="proxy-raise-btn" onclick="raiseProxy()" disabled>Поднять локальный порт</button>
+            <span id="proxy-status" style="font-size:12px;color:var(--pz-faint)">Сначала «Проверить» — кнопка подъёма включится после успеха.</span>
+          </div>
+          <div id="proxy-ports" style="font-size:12px;color:var(--pz-faint);margin-top:10px">Порты: загрузка…</div>
+          <div class="table-wrap" id="proxy-managed-wrap" style="margin-top:10px;display:none">
+            <table id="proxy-managed-table">
+              <thead><tr><th>Локальный URL</th><th>Апстрим</th><th>Жив</th><th></th></tr></thead>
+              <tbody id="proxy-managed-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="toolbar" style="margin-bottom:12px">
+            <div>
               <div class="card-title">Добавить Google Flow аккаунт</div>
               <div class="card-sub">Логин создаёт Chrome-профиль на сервере и дописывает аккаунт в FLOW_ACCOUNTS</div>
             </div>
@@ -1790,6 +1817,7 @@ async function loadVideoHealth() {
 }
 
 async function loadAccounts() {
+  loadProxyPorts();
   const accs = await api('GET','/accounts');
   if (!Array.isArray(accs)) {
     lastAccounts = [];
@@ -1822,6 +1850,123 @@ async function loadAccounts() {
     </tr>
   `).join('');
   await loadVideoHealth();
+}
+
+// ── ISP proxy → local gost ───────────────────────────────
+let proxyCheckedRaw = '';   // raw value that last passed «Проверить»
+
+function setProxyStatus(text, kind='info') {
+  const el = document.getElementById('proxy-status');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = kind === 'ok' ? 'var(--pz-lime)' : (kind === 'fail' ? 'var(--pz-coral)' : 'var(--pz-faint)');
+}
+
+function onProxyRawInput() {
+  // Editing the proxy invalidates a previous check → require re-verify.
+  const raw = document.getElementById('proxy-raw').value.trim();
+  if (raw !== proxyCheckedRaw) {
+    proxyCheckedRaw = '';
+    const btn = document.getElementById('proxy-raise-btn');
+    if (btn) btn.disabled = true;
+  }
+}
+
+async function loadProxyPorts() {
+  const el = document.getElementById('proxy-ports');
+  const data = await api('GET','/proxy/ports');
+  if (!data) { if (el) el.textContent = 'Порты: недоступно'; return; }
+  const used = (data.used_ports||[]).join(', ') || '—';
+  const free = data.suggested_free!=null ? data.suggested_free : '—';
+  if (el) el.innerHTML = `Заняты: <span class="mono">${esc(used)}</span> · Следующий свободный: <span class="mono" style="color:var(--pz-lime)">${esc(String(free))}</span>`;
+  renderProxyManaged(data.managed||[]);
+}
+
+function renderProxyManaged(rows) {
+  const wrap = document.getElementById('proxy-managed-wrap');
+  const tb = document.getElementById('proxy-managed-tbody');
+  if (!wrap || !tb) return;
+  if (!rows.length) { wrap.style.display='none'; tb.innerHTML=''; return; }
+  wrap.style.display='';
+  tb.innerHTML = rows.map(r=>`
+    <tr>
+      <td class="mono" style="color:var(--pz-cyan)">${esc(r.local_url)}
+        <button class="btn btn-ghost btn-sm" style="margin-left:6px" onclick="copyText('${esc(r.local_url)}')">копировать</button>
+      </td>
+      <td class="mono" style="font-size:11px">${esc(r.label)}</td>
+      <td>${r.alive?'<span style="color:var(--pz-lime)">да</span>':'<span style="color:var(--pz-coral)">нет</span>'}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="teardownProxy(${r.port})">снять</button></td>
+    </tr>
+  `).join('');
+}
+
+function copyText(t) {
+  try { navigator.clipboard.writeText(t); toast('success','Скопировано'); }
+  catch { toast('error','Не удалось скопировать'); }
+}
+
+async function checkProxy() {
+  const raw = document.getElementById('proxy-raw').value.trim();
+  if (!raw) { setProxyStatus('Вставь прокси login:password@ip:port', 'fail'); return; }
+  setProxyStatus('Проверяю egress…');
+  const btn = document.getElementById('proxy-raise-btn');
+  if (btn) btn.disabled = true;
+  const res = await apiSave('/proxy/check', {proxy: raw}, 15000);
+  if (res.offline) { setProxyStatus('Бот оффлайн', 'fail'); return; }
+  const d = res.data || {};
+  if (d.ok) {
+    proxyCheckedRaw = raw;
+    if (btn) btn.disabled = false;
+    setProxyStatus(`✓ Работает: egress ${d.egress_ip||'?'} · ${d.latency_ms||'?'} мс · ${d.label||''}`, 'ok');
+  } else {
+    setProxyStatus(`✗ Не отвечает: ${proxyErr(d.error)}`, 'fail');
+  }
+}
+
+async function raiseProxy() {
+  const raw = document.getElementById('proxy-raw').value.trim();
+  if (!raw || raw !== proxyCheckedRaw) { setProxyStatus('Сначала «Проверить» этот прокси', 'fail'); return; }
+  setProxyStatus('Поднимаю локальный gost…');
+  const res = await apiSave('/proxy/raise', {proxy: raw}, 20000);
+  if (res.offline) { setProxyStatus('Бот оффлайн', 'fail'); return; }
+  const d = res.data || {};
+  if (res.ok && d.local_url) {
+    const reused = d.reused ? ' (уже был поднят)' : '';
+    setProxyStatus(`✓ ${d.local_url}${reused} → подставлен в онбординг. egress ${d.egress_ip||'?'}`, 'ok');
+    // Make the new local proxy usable from the onboarding form immediately.
+    addOnboardProxyOption(d.local_url, d.label || `:${d.port}`);
+    const op = document.getElementById('onboard-proxy');
+    if (op) op.value = d.local_url;
+    loadProxyPorts();
+  } else {
+    setProxyStatus(`✗ Не удалось поднять: ${proxyErr(d.error)}`, 'fail');
+  }
+}
+
+async function teardownProxy(port) {
+  if (!confirm(`Снять локальный прокси на порту ${port}?`)) return;
+  const res = await apiSave('/proxy/teardown', {port}, 10000);
+  (res.ok ? toast('success',`Порт ${port} снят`) : toast('error','Не удалось снять'));
+  loadProxyPorts();
+}
+
+function addOnboardProxyOption(url, label) {
+  const dl = document.getElementById('onboard-proxy-presets');
+  if (!dl) return;
+  if ([...dl.options].some(o=>o.value===url)) return;
+  const opt = document.createElement('option');
+  opt.value = url; opt.textContent = label;
+  dl.appendChild(opt);
+}
+
+function proxyErr(code) {
+  const map = {
+    empty_proxy:'пустой прокси', invalid_proxy_url:'неверный формат (нужно login:pass@ip:port)',
+    invalid_proxy_scheme:'схема: http/https/socks4/socks5', no_free_port:'нет свободных портов',
+    upstream_unreachable:'прокси не отвечает', local_proxy_failed:'локальный gost не поднялся',
+    local_timeout:'локальный порт не ответил', no_response:'нет ответа', unparsed_ip:'не удалось определить IP',
+  };
+  return map[code] || code || 'ошибка';
 }
 
 async function toggleVideo(id, allowed) {

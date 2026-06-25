@@ -39,6 +39,9 @@ _pool: "AccountPool | None" = None
 _keepers: dict | None = None
 _video_clients: dict | None = None
 _startup_state: dict | None = None
+# Optional: LocalProxySupervisor for operator-raised gost proxies. Injected by
+# register_admin_routes(); None means the /api/admin/proxy/* routes return 503.
+_proxy_sup = None
 GCREDITS_LOOKUP_TIMEOUT_SEC = 3.0
 ONBOARD_SESSION_TTL_SEC = 10 * 60
 _onboard_sessions: dict[str, dict] = {}
@@ -335,6 +338,81 @@ async def handle_proxy_check(request: web.Request) -> web.Response:
         except Exception:
             log.warning("proxy_check metrics log failed for %s", aid, exc_info=True)
     return _json({"accounts": out})
+
+
+# ── ISP proxy onboarding (operator-raised local gost proxies) ──────────
+
+async def handle_proxy_ports_get(request: web.Request) -> web.Response:
+    """Which local ports are taken and what is the next free one to raise."""
+    if _proxy_sup is None:
+        return _json({"error": "proxy supervisor not available"}, 503)
+    return _json(_proxy_sup.ports_view())
+
+
+async def handle_proxy_list_get(request: web.Request) -> web.Response:
+    if _proxy_sup is None:
+        return _json({"error": "proxy supervisor not available"}, 503)
+    return _json({"managed": _proxy_sup.list_status()})
+
+
+async def handle_proxy_verify_post(request: web.Request) -> web.Response:
+    """Check that a pasted upstream proxy actually egresses (no port raised)."""
+    if _proxy_sup is None:
+        return _json({"error": "proxy supervisor not available"}, 503)
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    proxy = str(body.get("proxy") or "").strip()
+    if not proxy:
+        return _json({"error": "empty_proxy"}, 400)
+    result = await _proxy_sup.check_upstream(proxy)
+    # Audit with label only — never the pasted credentials.
+    _audit(request, "proxy.check",
+           new={"label": result.get("label"), "ok": result.get("ok")},
+           result="ok" if result.get("ok") else "fail")
+    return _json(result)
+
+
+async def handle_proxy_raise_post(request: web.Request) -> web.Response:
+    """Verify the upstream, raise a local gost on a free port, return its URL."""
+    if _proxy_sup is None:
+        return _json({"error": "proxy supervisor not available"}, 503)
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    proxy = str(body.get("proxy") or "").strip()
+    if not proxy:
+        return _json({"error": "empty_proxy"}, 400)
+    import proxy_supervisor
+    try:
+        result = await _proxy_sup.raise_proxy(proxy)
+    except proxy_supervisor.ProxyError as exc:
+        _audit(request, "proxy.raise", new={"error": str(exc)}, result="fail")
+        return _json({"error": str(exc)}, 400)
+    except Exception:
+        log.warning("proxy raise failed", exc_info=True)
+        _audit(request, "proxy.raise", result="fail")
+        return _json({"error": "internal_error"}, 500)
+    _audit(request, "proxy.raise",
+           new={"port": result.get("port"), "label": result.get("label"),
+                "reused": result.get("reused")})
+    return _json(result)
+
+
+async def handle_proxy_teardown_post(request: web.Request) -> web.Response:
+    """Stop and forget a previously raised local proxy."""
+    if _proxy_sup is None:
+        return _json({"error": "proxy supervisor not available"}, 503)
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    try:
+        port = int(body.get("port"))
+    except (TypeError, ValueError):
+        return _json({"error": "invalid_port"}, 400)
+    ok = _proxy_sup.teardown(port)
+    _audit(request, "proxy.teardown", new={"port": port}, result="ok" if ok else "not_found")
+    return _json({"ok": ok}, 200 if ok else 404)
 
 
 def _pick_video_ab_account() -> str | None:
@@ -2204,17 +2282,20 @@ def register_admin_routes(
     keepers: dict | None = None,
     video_clients: dict | None = None,
     startup_state: dict | None = None,
+    proxy_supervisor=None,
 ) -> None:
     """Register all /api/admin/* routes into an existing aiohttp Application.
 
     ``keepers`` (account_id -> SessionKeeper) is optional and used by live
     account diagnostics. ``video_clients`` enables costly admin-only video A/B.
+    ``proxy_supervisor`` enables the ISP-proxy onboarding routes.
     """
-    global _pool, _keepers, _video_clients, _startup_state
+    global _pool, _keepers, _video_clients, _startup_state, _proxy_sup
     _pool = pool
     _keepers = keepers
     _video_clients = video_clients
     _startup_state = startup_state
+    _proxy_sup = proxy_supervisor
     r = app.router
     r.add_get ("/api/admin/ping",                      handle_ping)
     r.add_get ("/api/admin/ops",                       handle_ops_get)
@@ -2256,6 +2337,12 @@ def register_admin_routes(
     r.add_post("/api/admin/agent-capture",             handle_agent_capture_post)
     r.add_post("/api/admin/agent-sessions",            handle_agent_sessions_post)
     r.add_get ("/api/admin/proxy-check",               handle_proxy_check)
+    # ISP proxy onboarding (operator-raised local gost proxies)
+    r.add_get ("/api/admin/proxy/ports",               handle_proxy_ports_get)
+    r.add_get ("/api/admin/proxy/list",                handle_proxy_list_get)
+    r.add_post("/api/admin/proxy/check",               handle_proxy_verify_post)
+    r.add_post("/api/admin/proxy/raise",               handle_proxy_raise_post)
+    r.add_post("/api/admin/proxy/teardown",            handle_proxy_teardown_post)
     # Support
     r.add_get ("/api/admin/support",                   handle_support_get)
     r.add_get ("/api/admin/support/{id}",              handle_support_detail_get)

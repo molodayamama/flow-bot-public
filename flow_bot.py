@@ -3521,6 +3521,17 @@ DEFAULT_ACCOUNT_ID = FLOW_ACCOUNTS[0].id
 keeper = keepers[DEFAULT_ACCOUNT_ID]
 client = clients[DEFAULT_ACCOUNT_ID]
 
+# Operator-raised local gost proxies (admin ISP-proxy onboarding). Consumer-only:
+# the seller bot has no account pool / admin panel. None disables the routes.
+local_proxy_sup = None
+if not IS_SELLER:
+    try:
+        from proxy_supervisor import LocalProxySupervisor
+        local_proxy_sup = LocalProxySupervisor()
+    except Exception:
+        log.warning("LocalProxySupervisor init failed; ISP-proxy routes disabled",
+                    exc_info=True)
+
 startup_state: dict = {
     "phase": "init",
     "polling": False,
@@ -11843,7 +11854,16 @@ async def _start_web_server() -> web.AppRunner:
     except (TypeError, ValueError):
         client_max_size = 32 * 1024 * 1024
     app = web.Application(client_max_size=client_max_size)
-    _admin_api.register_admin_routes(app, account_pool, keepers, clients, startup_state=startup_state)
+    _admin_api.register_admin_routes(app, account_pool, keepers, clients,
+                                     startup_state=startup_state,
+                                     proxy_supervisor=local_proxy_sup)
+    if local_proxy_sup is not None:
+        # Re-spawn persisted local proxies and keep them alive across crashes.
+        try:
+            await local_proxy_sup.ensure_all_running()
+            asyncio.create_task(local_proxy_sup.supervise_loop())
+        except Exception:
+            log.warning("local proxy supervisor startup failed", exc_info=True)
     if not IS_SELLER:
         # Только consumer (с пулом) отдаёт генерацию для seller-бота (§A).
         try:
