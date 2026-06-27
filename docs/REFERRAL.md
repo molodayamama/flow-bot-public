@@ -1,19 +1,26 @@
 # REFERRAL.md — Referral Program Design
 
-Last updated: 2026-06-19.
+Last updated: 2026-06-27.
 
-> **Update 2026-06-19 — economics tightened (ground truth, overrides older
-> sections below).** Two changes shipped to curb self-referral abuse (two
-> accounts → permanent discount) and protect margin:
-> - **Ongoing revenue share: 10% → 5%** (`REFERRAL_ONGOING_PCT = 0.05`).
-> - **Attribution now expires after ~3 months.** A referral only earns while the
->   join is within `REFERRAL_REWARD_WINDOW_DAYS = 90`; after that **neither** the
->   one-time tier bonus **nor** the ongoing % is paid. Gated by
->   `metrics.referral_is_active(referred_user_id, window_days)` in
->   `_maybe_apply_referral_rewards`.
->
-> The §1/§2 tables below still read "10% forever" — treat them as historical;
-> the live values are 5% and a 90-day window.
+> **Update 2026-06-27 — friend-focused model (ground truth, overrides older
+> sections below).**
+> - **Friend gift on join:** the *invited* user gets **+15 credits**
+>   (`REFERRAL_REFERRED_BONUS = 15`), once, the moment the referral row is created
+>   in `record_referral_join` (deep-link `/start ref_<id>`). It goes through
+>   `credit_store.add` outside the payments pipeline, so it does **not** trigger
+>   any reward to the referrer (free-action farming stays closed).
+> - **Referrer tiers (unchanged):** +20 / +30 / +50 on the friend's **first
+>   payment** (`stars >= 200 / 450`), once, via `mark_referral_rewarded`
+>   (`joined → rewarded`).
+> - **Ongoing revenue share: 10%** (`REFERRAL_ONGOING_PCT = 0.10`) of credits
+>   issued on every later top-up.
+> - **Attribution expires after ~3 months** (`REFERRAL_REWARD_WINDOW_DAYS = 90`);
+>   after that neither the tier bonus nor the ongoing % is paid. Gated by
+>   `metrics.referral_is_active(...)` in `_maybe_apply_referral_rewards`.
+> - **REMOVED: the "+50 for the first invited user's generation" reward.** All
+>   referrer rewards now fire **only** in `on_successful_payment` (anti-farm, §3).
+>   The `referral_first_generation_rewards` table is kept read-only for historical
+>   analytics; nothing writes to it.
 
 ---
 

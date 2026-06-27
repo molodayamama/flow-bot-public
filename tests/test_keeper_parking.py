@@ -16,12 +16,21 @@ class FakePage:
         self.goto_calls = []
         self._closed = False
 
+        self.reload_calls = 0
+
     async def goto(self, url, **kw):
         self.goto_calls.append(url)
         self.url = url
 
+    async def reload(self, **kw):
+        self.reload_calls += 1
+
     def is_closed(self):
         return self._closed
+
+
+async def _noop_sleep(*a, **kw):
+    return None
 
 
 def _keeper(parked=False, url="https://labs.google/fx/tools/flow/project/pid123"):
@@ -50,6 +59,32 @@ class WakeTests(unittest.IsolatedAsyncioTestCase):
         await k._wake_locked()
         self.assertEqual(k._page.goto_calls, [])   # no navigation
         self.assertFalse(k._parked)
+
+
+class RefreshBearerTests(unittest.IsolatedAsyncioTestCase):
+    """Regression: _refresh_bearer must navigate back to Flow when the tab is
+    parked (a plain reload of about:blank never re-captures the Bearer)."""
+
+    async def asyncSetUp(self):
+        import unittest.mock as mock
+        self._p = mock.patch("flow_bot.asyncio.sleep", new=_noop_sleep)
+        self._p.start()
+
+    async def asyncTearDown(self):
+        self._p.stop()
+
+    async def test_refresh_navigates_to_flow_when_parked(self):
+        k = _keeper(parked=True, url="about:blank")
+        await k._refresh_bearer()
+        self.assertFalse(k._parked)
+        self.assertTrue(any("pid123" in u for u in k._page.goto_calls))
+        self.assertEqual(k._page.reload_calls, 0)  # no blank reload
+
+    async def test_refresh_reloads_when_on_flow(self):
+        k = _keeper(parked=False)
+        await k._refresh_bearer()
+        self.assertEqual(k._page.reload_calls, 1)
+        self.assertEqual(k._page.goto_calls, [])
 
 
 class ParkDecisionTests(unittest.IsolatedAsyncioTestCase):

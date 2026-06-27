@@ -2808,8 +2808,11 @@ REFERRAL_TIER2_STARS = 200     # >100₽ ≈ medium pack
 REFERRAL_TIER2_BONUS = 30
 REFERRAL_TIER3_STARS = 450     # >500₽ ≈ large pack
 REFERRAL_TIER3_BONUS = 50
-REFERRAL_ONGOING_PCT = 0.05    # fraction of credits_issued (floor), every later top-up
-REFERRAL_FIRST_GENERATION_BONUS = 50  # first invited user who generates anything
+REFERRAL_ONGOING_PCT = 0.10    # fraction of credits_issued (floor), every later top-up
+# Подарок приглашённому другу: разово начисляется в момент join (deep-link
+# /start ref_<id>), мимо payments-pipeline, поэтому сам по себе НЕ триггерит
+# реферальную награду пригласившему (farming через бесплатные действия закрыт).
+REFERRAL_REFERRED_BONUS = 15   # credits to the *invited* friend, once, on join
 REFERRAL_DAILY_CAP_CREDITS = 500  # max referral credits to one referrer per day
 # Привязка реферала действует ограниченное время: спустя столько дней с момента
 # приглашения рефереру больше ничего не начисляется (ни разовый бонус, ни %).

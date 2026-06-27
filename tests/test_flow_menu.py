@@ -80,11 +80,11 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.referral_milestone_bonus(900), 50)  # xl
         self.assertEqual(flow_core.referral_milestone_bonus(0), 0)
 
-    def test_referral_ongoing_is_floored_five_percent(self) -> None:
-        self.assertEqual(flow_core.REFERRAL_ONGOING_PCT, 0.05)
-        self.assertEqual(flow_core.referral_ongoing_bonus(300), 15)
-        self.assertEqual(flow_core.referral_ongoing_bonus(1500), 75)
-        self.assertEqual(flow_core.referral_ongoing_bonus(15), 0)  # floor < 1 → 0
+    def test_referral_ongoing_is_floored_ten_percent(self) -> None:
+        self.assertEqual(flow_core.REFERRAL_ONGOING_PCT, 0.10)
+        self.assertEqual(flow_core.referral_ongoing_bonus(300), 30)
+        self.assertEqual(flow_core.referral_ongoing_bonus(1500), 150)
+        self.assertEqual(flow_core.referral_ongoing_bonus(9), 0)  # floor < 1 → 0
 
     def test_referral_reward_window_is_three_months(self) -> None:
         self.assertEqual(flow_core.REFERRAL_REWARD_WINDOW_DAYS, 90)
@@ -1096,7 +1096,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('"acquired_from_channel"', self.source)
         # Атрибуция стоит внутри cmd_start (рядом с рефералкой), не где попало.
         start = self.source.index("async def cmd_start")
-        block = self.source[start:start + 2400]
+        block = self.source[start:start + 3000]
         self.assertIn("channel = parse_channel_seed(payload)", block)
         self.assertIn("metrics.record_acquisition(user_id=user_id, channel=channel)", block)
         # Админ-отчёт по каналам читает report_channels и умеет выдавать ссылку.
@@ -1123,9 +1123,14 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("metrics.record_referral_join(", self.source)
         self.assertIn('"referral_joined"', self.source)
         self.assertIn("_maybe_apply_referral_rewards(", self.source)
-        self.assertIn("_maybe_apply_first_referral_generation_reward(", self.source)
-        self.assertIn("metrics.grant_first_generation_referral_reward(", self.source)
-        self.assertIn("REFERRAL_FIRST_GENERATION_BONUS", self.source)
+        # Подарок приглашённому другу (+15) при join, мимо payments-pipeline.
+        self.assertIn("REFERRAL_REFERRED_BONUS", self.source)
+        self.assertIn('"referral_referred_bonus"', self.source)
+        # «+50 за генерацию» удалено целиком — награда рефереру только на оплате
+        # (anti-farm, REFERRAL.md §3). Второго пути быть не должно.
+        self.assertNotIn("_maybe_apply_first_referral_generation_reward", self.source)
+        self.assertNotIn("grant_first_generation_referral_reward", self.source)
+        self.assertNotIn("REFERRAL_FIRST_GENERATION_BONUS", self.source)
         self.assertIn("first_referral_cta", self.source)
         self.assertIn('"referral_reward_paid"', self.source)
         self.assertIn('data == "m:invite"', self.source)

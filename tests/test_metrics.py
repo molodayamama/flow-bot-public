@@ -269,29 +269,13 @@ class ReferralTests(MetricsTestBase):
         self.assertFalse(metrics.grant_milestone_if_joined(referred_user_id=99, reward_credits=50))
         self.assertEqual(self._count("referrals"), 0)
 
-    def test_first_generation_reward_is_once_per_referrer(self) -> None:
-        metrics.record_referral_join(referrer_user_id=1, referred_user_id=2)
-        metrics.record_referral_join(referrer_user_id=1, referred_user_id=3)
-
-        first = metrics.grant_first_generation_referral_reward(
-            referrer_user_id=1, referred_user_id=2, reward_credits=50
-        )
-        duplicate_same_referrer = metrics.grant_first_generation_referral_reward(
-            referrer_user_id=1, referred_user_id=3, reward_credits=50
-        )
-        duplicate_same_referred = metrics.grant_first_generation_referral_reward(
-            referrer_user_id=9, referred_user_id=2, reward_credits=50
-        )
-
-        self.assertTrue(first)
-        self.assertFalse(duplicate_same_referrer)
-        self.assertFalse(duplicate_same_referred)
-        self.assertEqual(self._count("referral_first_generation_rewards"), 1)
-        row = self._one(
-            "SELECT referrer_user_id, referred_user_id, reward_credits "
-            "FROM referral_first_generation_rewards"
-        )
-        self.assertEqual(tuple(row), (1, 2, 50))
+    def test_record_referral_join_is_idempotent(self) -> None:
+        # record_referral_join returns True only on the first (new) row — this is
+        # what gates the one-time +REFERRAL_REFERRED_BONUS gift to the friend.
+        self.assertTrue(metrics.record_referral_join(referrer_user_id=1, referred_user_id=2))
+        self.assertFalse(metrics.record_referral_join(referrer_user_id=1, referred_user_id=2))
+        self.assertFalse(metrics.record_referral_join(referrer_user_id=2, referred_user_id=2))  # self
+        self.assertEqual(self._count("referrals"), 1)
 
     def test_referral_query_helpers(self) -> None:
         metrics.record_referral_join(referrer_user_id=1, referred_user_id=2)
@@ -955,8 +939,14 @@ class QualitativeAnalyticsTests(MetricsTestBase):
         # Generations (durable signal): u2,u4 referred + u5 non-referred; u3 none.
         for uid in (2, 4, 5):
             metrics.log_flow_job(user_id=uid, operation_type="image", status="success")
-        metrics.grant_first_generation_referral_reward(
-            referrer_user_id=1, referred_user_id=2, reward_credits=50)
+        # The "+50 for first generation" writer was removed; the table is kept
+        # read-only for historical analytics. Seed one legacy row directly.
+        with metrics._LOCK:
+            conn = metrics._conn()
+            conn.execute(
+                "INSERT INTO referral_first_generation_rewards "
+                "(referrer_user_id, referred_user_id, reward_credits) VALUES (1, 2, 50)")
+            conn.commit()
 
         rep = metrics.report_referral_quality()
         self.assertEqual(rep["referrers"], 2)            # {1, 9}

@@ -48,7 +48,6 @@ __all__ = [
     "record_referral_join",
     "mark_referral_rewarded",
     "grant_milestone_if_joined",
-    "grant_first_generation_referral_reward",
     "record_acquisition",
     "report_today",
     "report_revenue",
@@ -669,40 +668,10 @@ def grant_milestone_if_joined(
         return False
 
 
-def grant_first_generation_referral_reward(
-    *,
-    referrer_user_id: int,
-    referred_user_id: int,
-    reward_credits: int,
-) -> bool:
-    """Grant the one-time first-referral generation reward.
-
-    The UNIQUE constraint on ``referrer_user_id`` makes this "first referred
-    user only" even if several referred users generate at the same time.
-    Returns True only when a new reward row was inserted.
-    """
-    try:
-        if referrer_user_id == referred_user_id or reward_credits <= 0:
-            return False
-        with _LOCK:
-            conn = _conn()
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO referral_first_generation_rewards "
-                "(referrer_user_id, referred_user_id, reward_credits) "
-                "SELECT referrer_user_id, referred_user_id, ? FROM referrals "
-                "WHERE referrer_user_id=? AND referred_user_id=?",
-                (int(reward_credits), referrer_user_id, referred_user_id),
-            )
-            conn.commit()
-            return cur.rowcount > 0
-    except Exception:  # noqa: BLE001
-        log.warning(
-            "grant_first_generation_referral_reward failed referrer=%r referred=%r",
-            referrer_user_id,
-            referred_user_id,
-            exc_info=True,
-        )
-        return False
+# NB: the per-referral "+50 for first generation" reward was removed (referral
+# rewards to the referrer now fire only in on_successful_payment — anti-farm,
+# REFERRAL.md §3). The referral_first_generation_rewards table is kept read-only
+# for historical analytics; nothing writes to it anymore.
 
 
 def mark_referral_rewarded(

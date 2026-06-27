@@ -106,7 +106,8 @@ from flow_core import (
     REFERRAL_TIER1_BONUS,
     REFERRAL_TIER2_BONUS,
     REFERRAL_TIER3_BONUS,
-    REFERRAL_FIRST_GENERATION_BONUS,
+    REFERRAL_REFERRED_BONUS,
+    REFERRAL_ONGOING_PCT,
     referral_milestone_bonus,
     referral_ongoing_bonus,
     CHANNEL_PARAM_PREFIX,
@@ -665,6 +666,12 @@ class SessionKeeper:
 
     def _mark_use(self) -> None:
         self._last_use = time.time()
+
+    def _on_flow_page(self) -> bool:
+        try:
+            return "labs.google" in (self._page.url or "")
+        except Exception:
+            return False
 
     async def _navigate_to_flow_locked(self) -> None:
         """Open this account's Flow project page and wait until the SPA issues an
@@ -1790,8 +1797,15 @@ class SessionKeeper:
         """
         log.info("🔄 Обновляю Bearer токен через браузер...")
         try:
-            # Просто перезагружаем страницу проекта — браузер сам пойдёт к API
-            await self._page.reload(timeout=30_000)
+            # Если вкладка запаркована (about:blank) или ушла с Flow — reload не
+            # попадёт в API и токен не перехватится. Возвращаемся на Flow.
+            if self._parked or not self._on_flow_page():
+                await self._navigate_to_flow_locked()
+                self._parked = False
+            else:
+                # Просто перезагружаем страницу проекта — браузер сам пойдёт к API
+                await self._page.reload(timeout=30_000)
+            self._mark_use()
             await asyncio.sleep(3)
 
             # Если токен всё ещё не появился — кликаем в textarea
@@ -2079,6 +2093,7 @@ class SessionKeeper:
         await self._ready.wait()
         async with self._lock:
             await self._ensure_browser_locked()
+            await self._wake_locked()  # un-park: upload needs the live Flow page (file input + Bearer)
             tmp_path = None
             captured: dict = {}
             seen_schemas: list = []
@@ -3830,8 +3845,9 @@ async def _show_referral_screen(message: types.Message, *, user_id: int, edit: b
         "referral_screen",
         link=html.escape(_referral_link(user_id)),
         invited=stats["invited"], earned=stats["earned"],
-        first_gen=REFERRAL_FIRST_GENERATION_BONUS,
+        referred=REFERRAL_REFERRED_BONUS,
         t1=REFERRAL_TIER1_BONUS, t2=REFERRAL_TIER2_BONUS, t3=REFERRAL_TIER3_BONUS,
+        pct=int(round(REFERRAL_ONGOING_PCT * 100)),
     )
     if edit:
         await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -3893,45 +3909,18 @@ def _maybe_apply_referral_rewards(
         log.warning("referral reward failed", exc_info=True)
 
 
-def _maybe_apply_first_referral_generation_reward(referred_user_id: int) -> None:
-    """Grant +50 to the referrer when their first invited user generates anything."""
-    try:
-        referrer_id = metrics.get_referrer_of(referred_user_id)
-        if not referrer_id or referrer_id == referred_user_id:
-            return
-        if not metrics.referral_is_active(referred_user_id, REFERRAL_REWARD_WINDOW_DAYS):
-            return
-        bonus = REFERRAL_FIRST_GENERATION_BONUS
-        if metrics.get_referral_credits_today(referrer_id) + bonus > REFERRAL_DAILY_CAP_CREDITS:
-            return
-        if metrics.grant_first_generation_referral_reward(
-            referrer_user_id=referrer_id,
-            referred_user_id=referred_user_id,
-            reward_credits=bonus,
-        ):
-            credit_store.add(referrer_id, bonus)
-            metrics.log_event(
-                "referral_reward_paid",
-                user_id=referrer_id,
-                payload={"tier": "first_generation", "bonus": bonus, "referred": referred_user_id},
-            )
-            _notify_referrer(
-                referrer_id,
-                bonus,
-                message_key="referral_first_generation_reward_got",
-            )
-    except Exception:
-        log.warning("first referral generation reward failed", exc_info=True)
-
-
 def _first_referral_cta_text(user_id: int) -> str | None:
-    """Invite CTA shown after every successful generation until user has referrals."""
+    """Invite CTA shown after every successful generation until user has referrals.
+
+    Реферальные награды пригласившему начисляются ТОЛЬКО в on_successful_payment
+    (anti-farm, REFERRAL.md §3) — здесь лишь зовём пригласить друга.
+    """
     try:
         if int(metrics.referral_stats(user_id).get("invited") or 0) > 0:
             return None
     except Exception:
         return None
-    return flow_copy.msg("first_referral_cta", bonus=REFERRAL_FIRST_GENERATION_BONUS)
+    return flow_copy.msg("first_referral_cta", referred=REFERRAL_REFERRED_BONUS)
 
 
 async def _post_generation_referral_hooks(
@@ -3940,7 +3929,6 @@ async def _post_generation_referral_hooks(
     *,
     send_cta: bool = True,
 ) -> None:
-    _maybe_apply_first_referral_generation_reward(user_id)
     if not send_cta:
         return
     text = _first_referral_cta_text(user_id)
@@ -6264,6 +6252,14 @@ async def cmd_start(message: types.Message):
             if referrer_id != user_id and is_new and metrics.record_referral_join(
                 referrer_user_id=referrer_id, referred_user_id=user_id
             ):
+                # Подарок приглашённому другу — разово, ровно при создании строки
+                # реферала (record_referral_join вернул True). Идёт мимо
+                # payments-pipeline, поэтому НЕ триггерит награду пригласившему.
+                if REFERRAL_REFERRED_BONUS > 0:
+                    credit_store.add(user_id, REFERRAL_REFERRED_BONUS)
+                    metrics.log_event("referral_referred_bonus", user_id=user_id,
+                                      payload={"referrer": referrer_id,
+                                               "bonus": REFERRAL_REFERRED_BONUS})
                 metrics.log_event("referral_joined", user_id=user_id,
                                   payload={"referrer": referrer_id})
                 _referral_welcome_bonus = credit_store.balance(user_id)
@@ -7851,7 +7847,6 @@ def _days_word(n: int) -> str:
 
 async def _after_result(message: types.Message, user_id: int, *, streak_note: str | None = None):
     """Короткое меню после результата: создать ещё · видео · друг · меню."""
-    _maybe_apply_first_referral_generation_reward(user_id)
     B = types.InlineKeyboardButton
     kb = types.InlineKeyboardMarkup(
         inline_keyboard=[
