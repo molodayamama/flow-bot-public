@@ -2316,7 +2316,14 @@ async def handle_tgstat_channel_get(request: web.Request) -> web.Response:
         log.warning("tgstat channel lookup failed for %s: %s", channel_id, exc)
         return _json({"error": "tgstat_unavailable"}, 502)
     except Exception as exc:
-        log.warning("tgstat channel lookup rejected for %s: %s", channel_id, exc)
+        reason = str(exc)
+        # `quota_foreign_channel` и т.п. — это лимит тарифа TGStat (токен не может
+        # смотреть чужие каналы), а не сбой. Отдаём отдельный код, чтобы UI показал
+        # понятное объяснение вместо «недоступен».
+        if "quota" in reason.lower():
+            log.warning("tgstat channel lookup quota-limited for %s: %s", channel_id, reason)
+            return _json({"error": "tgstat_quota", "detail": reason}, 502)
+        log.warning("tgstat channel lookup rejected for %s: %s", channel_id, reason)
         return _json({"error": "tgstat_error"}, 502)
 
     _tgstat_cache[channel_id] = (now, data)

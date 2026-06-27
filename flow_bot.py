@@ -4269,8 +4269,8 @@ def main_menu_kb(show_repeat: bool = False, credits: int | None = None) -> types
         [_menu_button("gen", "m:gen")],
         [_menu_button("vid_gen", "m:vid")],
         [B(text=f"{L('animate')} · от {video_animate_min_price()} кр", callback_data="m:animate")],
-        [_menu_button("ideas", "m:ideas")],
         [_menu_button("myphoto", "m:myphoto")],
+        [_menu_button("ideas", "m:ideas")],
         [B(text=balance_label, callback_data="m:balance")],
         [_menu_button("profile", "m:profile"), _menu_button("invite", "m:invite")],
     ]
@@ -5083,9 +5083,10 @@ def wizard_kb(
         ],
         *_fmt_rows(fmt, "w:fmt"),
         [_imodel_toggle_btn(imodel, "w:imodel")],
-        [B(text=go_label, callback_data="w:go")],
     ]
     # AI-агент: улучшить промпт (3 варианта). Заменяет старый бесплатный boost.
+    # «Улучшить промпт» стоит выше «Сгенерировать», чтобы сначала предложить
+    # доработку запроса, и только потом — финальный запуск.
     if show_improve:
         rows.append([B(
             text=f"✨ Улучшить промпт · {action_price('prompt_improve')} кр",
@@ -5093,6 +5094,7 @@ def wizard_kb(
         )])
     elif show_boost:
         rows.append([B(text=L("boost_prompt"), callback_data="w:boost_prompt")])
+    rows.append([B(text=go_label, callback_data="w:go")])
     rows.append([
         B(text=L("change_prompt"), callback_data="w:change_prompt"),
         _menu_button("cancel", "w:cancel"),
@@ -5116,13 +5118,16 @@ def edit_settings_kb(fmt: str, imodel: str) -> types.InlineKeyboardMarkup:
 
 
 def edit_confirm_kb(fmt: str, imodel: str) -> types.InlineKeyboardMarkup:
-    """Подтверждение правки фото: настройки + применить/улучшить запрос."""
+    """Подтверждение правки фото: настройки + сгенерировать/улучшить запрос."""
     B = types.InlineKeyboardButton
+    # Цена = базовая + надбавка модели (как в _edit_and_send), чтобы менялась при
+    # переключении модели.
+    edit_price = action_price("edit") + image_model_extra(imodel)
     return types.InlineKeyboardMarkup(inline_keyboard=[
         *_fmt_rows(fmt, "es:fmt"),
         [_imodel_toggle_btn(imodel, "es:imodel")],
         [B(text=f"✨ Улучшить запрос · {action_price('prompt_improve')} кр", callback_data="ag:eimprove")],
-        [B(text=f"✅ Применить · {action_price('edit')} кр", callback_data="es:apply")],
+        [B(text=f"✅ Сгенерировать · {edit_price} кр", callback_data="es:apply")],
         [B(text="✏️ Изменить запрос", callback_data="es:change"),
          _menu_button("cancel", "es:cancel")],
     ])
@@ -8204,6 +8209,16 @@ async def _edit_and_send(
                           payload={"amount": charged, "action": "edit"})
     _log_image_job(user_id, "edit", image_model, started, ok=ok, charged=charged)
     if ok:
+        # Запоминаем правку для «🔁 Повторить» под результатом. Без этого «Изменить
+        # моё фото» сбрасывает last (keep_last=False), и повтор выдавал «Нет
+        # предыдущей генерации». kind="edit" → повтор переприменяет ту же правку.
+        _ws(user_id)["last"] = {
+            "kind": "edit",
+            "ref": ref,
+            "instruction": instruction,
+            "aspect": aspect,
+            "imodel": image_model,
+        }
         await _post_generation_referral_hooks(message, user_id)
     return ok
 
@@ -10910,6 +10925,21 @@ async def _repeat_last(callback: types.CallbackQuery, user_id: int):
     last = _ws(user_id).get("last")
     if not last:
         await callback.message.answer("Нет предыдущей генерации.")
+        return
+    # Повтор правки фото: переприменяем ту же инструкцию к тому же исходнику.
+    if last.get("kind") == "edit":
+        ref = last.get("ref")
+        if ref is None:
+            await callback.message.answer("Нет предыдущей генерации.")
+            return
+        await _edit_and_send(
+            callback.message,
+            ref,
+            last.get("instruction", ""),
+            actor_id=user_id,
+            aspect_ratio=last.get("aspect"),
+            image_model=last.get("imodel", DEFAULT_IMAGE_MODEL),
+        )
         return
     await _generate_and_send(
         callback.message,

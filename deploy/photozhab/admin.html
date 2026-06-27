@@ -1226,6 +1226,12 @@ tr:hover td{background:var(--pz-surface-2)}
               </tbody>
             </table>
           </div>
+          <div class="form-help" style="margin-top:8px">
+            <b>CTR</b> — доля просмотров поста, дошедших до старта бота (клики/охват).
+            <b>CAC</b> — цена привлечения одного платящего: цена поста ÷ платящих.
+            <b>ROAS</b> — возврат на рекламу: выручка с канала ÷ цена поста (≥1 — окупается).
+            <b>Max пост</b> — максимальная цена поста, при которой канал ещё в плюсе.
+          </div>
         </div>
       </div>
 
@@ -2593,10 +2599,12 @@ async function adFetchChannel(index=null) {
   }
   if (status) status.textContent = 'Запрашиваю TGStat…';
   const res = await adFetchJson(`/tgstat/channel?url=${encodeURIComponent(url)}`);
-  if (!res.ok || !res.data) {
-    const msg = res.status === 503
-      ? 'TGStat token не настроен на сервере.'
-      : (res.status === 400 ? 'TGStat не понял ссылку на канал.' : 'TGStat сейчас недоступен или канал не найден.');
+  if (!res.ok || !res.data || res.data.error) {
+    let msg;
+    if (res.status === 503) msg = 'TGStat token не настроен на сервере.';
+    else if (res.status === 400) msg = 'TGStat не понял ссылку на канал.';
+    else if (res.data?.error === 'tgstat_quota') msg = 'Тариф TGStat не позволяет смотреть чужие каналы — нужен платный тариф (или канал, привязанный к вашему аккаунту). Введите охват вручную.';
+    else msg = 'TGStat сейчас недоступен или канал не найден.';
     if (status) status.textContent = msg;
     return;
   }
@@ -2644,8 +2652,8 @@ function adRecalc() {
   document.getElementById('ad-results').innerHTML = rows || `<tr><td colspan="7" style="color:var(--pz-faint);padding:16px;text-align:center">Добавьте канал</td></tr>`;
   const quotaLoad = quota > 0 ? totalG / quota * 100 : 0;
   document.getElementById('ad-summary').innerHTML = `
-    <div class="adcalc-pill"><div class="kpi-label">CAC green</div><b>${money(econ.firstCm)}</b><div class="kpi-sub">окупается с 1-й оплаты</div></div>
-    <div class="adcalc-pill"><div class="kpi-label">CAC yellow</div><b>${money(econ.ltvCm)}</b><div class="kpi-sub">с учётом повтора</div></div>
+    <div class="adcalc-pill"><div class="kpi-label">CAC green</div><b>${money(econ.firstCm)}</b><div class="kpi-sub">потолок цены клиента: окупается уже с 1-й оплаты. CAC ниже — берём канал</div></div>
+    <div class="adcalc-pill"><div class="kpi-label">CAC yellow</div><b>${money(econ.ltvCm)}</b><div class="kpi-sub">потолок с учётом повторных покупок (LTV). Между green и yellow — тест/торг, выше — стоп</div></div>
     <div class="adcalc-pill"><div class="kpi-label">Max пост</div><b>${money(bestMax)}</b><div class="kpi-sub">лучший канал по LTV</div></div>
     <div class="adcalc-pill"><div class="kpi-label">Платящих</div><b>${totalPayers.toFixed(1)}</b><div class="kpi-sub">по всем строкам</div></div>
     <div class="adcalc-pill"><div class="kpi-label">Flow quota</div><b>${quotaLoad.toFixed(1)}%</b><div class="kpi-sub">${fmt(Math.round(totalG))} / ${fmt(quota)} G-кр</div></div>
