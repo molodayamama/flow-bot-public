@@ -527,6 +527,8 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         # the real user, so helpers derive the actor from ref.user_id.
         self.assertIn("user_id = ref.user_id", self.source)
         self.assertIn("actor_id=ref.user_id", self.source)
+        self.assertIn("actor_id: int | None = None", self.source)
+        self.assertIn("user_id = actor_id if actor_id is not None else message.from_user.id", self.source)
 
     def test_result_regen_button_generates_one_image(self) -> None:
         # The result button is labeled with the default one-image regen price,
@@ -574,7 +576,8 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         # Edit must target the project the upload actually landed in.
         self.assertIn('source.pop("_project_id", None)', self.source)
         self.assertIn("upload_project", self.source)
-        self.assertIn('source.setdefault("_tg_file_id", photo.file_id)', self.source)
+        self.assertIn("async def _upload_image_ref_from_file_id", self.source)
+        self.assertIn('source.setdefault("_tg_file_id", file_id)', self.source)
 
     def test_pending_edit_routing_in_plain_text_handler(self) -> None:
         self.assertIn("pending_edits", self.source)

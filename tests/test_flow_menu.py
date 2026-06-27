@@ -377,6 +377,15 @@ class CopyTests(unittest.TestCase):
         self.assertIn("1", cap)
         self.assertIn("4", cap)
 
+    def test_updated_balance_and_video_audio_copy(self) -> None:
+        self.assertNotIn("Скачивание оригинала", flow_copy.MESSAGES["balance_screen"])
+        self.assertEqual(
+            flow_copy.msg("video_audio_filtered"),
+            "🔇 Модель не смогла сгенерировать звук для этого видео, поэтому оно не сохранилось. "
+            "Кредиты возвращены. Нажмите «Попробовать снова», с 1-2 попыток помогает.",
+        )
+        self.assertIn("photo_route_choice", flow_copy.MESSAGES)
+
     def test_labels_fit_telegram_button_width(self) -> None:
         # Keep labels short and scannable (generous cap incl. emoji).
         for key, value in flow_copy.LABELS.items():
@@ -475,7 +484,15 @@ class BotMenuWiringTests(unittest.TestCase):
         start = self.source.index("def edit_settings_kb")
         block = self.source[start:start + 500]
         self.assertIn('_fmt_rows(fmt, "es:fmt")', block)
-        self.assertIn('_imodel_row(imodel, "es:imodel", base_price=action_price("edit"))', block)
+        self.assertIn('_imodel_toggle_btn(imodel, "es:imodel")', block)
+
+    def test_edit_confirm_kb_keeps_format_and_model_toggles(self) -> None:
+        start = self.source.index("def edit_confirm_kb")
+        block = self.source[start:start + 700]
+        self.assertIn("def edit_confirm_kb(fmt: str, imodel: str)", block)
+        self.assertIn('_fmt_rows(fmt, "es:fmt")', block)
+        self.assertIn('_imodel_toggle_btn(imodel, "es:imodel")', block)
+        self.assertIn('callback_data="es:apply"', block)
 
     def test_edit_settings_prefix_does_not_collide_with_edit_button(self) -> None:
         # The image "Изменить" button uses the "edit:" callback prefix; the edit
@@ -488,11 +505,20 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("def reply_menu_kb", self.source)
         self.assertIn("ReplyKeyboardMarkup", self.source)
         self.assertIn("is_persistent=True", self.source)
+        start = self.source.index("def reply_menu_kb")
+        end = self.source.index("async def _show_help_screen", start)
+        block = self.source[start:end]
         # Reply-button taps are handled as plain text before prompt routing.
         self.assertIn('text == L("kb_gen")', self.source)
-        self.assertIn('text == L("kb_balance")', self.source)
+        self.assertIn("_is_balance_reply_text(text)", self.source)
+        self.assertIn("def _balance_reply_label", self.source)
+        self.assertIn('B(text=L("kb_gen"))', block)
+        self.assertIn('B(text=L("kb_vid"))', block)
+        self.assertIn('B(text=L("kb_menu"))', block)
+        self.assertIn("B(text=_balance_reply_label(user_id))", block)
         for key in ("ideas", "myphoto", "invite", "help"):
-            self.assertIn(f'B(text=L("{key}"))', self.source)
+            self.assertNotIn(f'B(text=L("{key}"))', block)
+        for key in ("ideas", "myphoto", "invite", "help"):
             self.assertIn(f'text == L("{key}")', self.source)
 
     def test_public_help_ideas_referral_commands_wired(self) -> None:
@@ -821,6 +847,35 @@ class BotMenuWiringTests(unittest.TestCase):
         block = self.source[support_guard:support_guard + 320]
         self.assertIn("текстовый бриф", block)
         self.assertIn("return", block)
+
+    def test_captioned_photo_without_mode_asks_image_or_video(self) -> None:
+        self.assertIn("pending_photo_routes", self.source)
+        self.assertIn('F.data.startswith("pr:")', self.source)
+        self.assertIn('"pr:img"', self.source)
+        self.assertIn('"pr:vid"', self.source)
+        start = self.source.index("async def handle_photo")
+        block = self.source[start:start + 13000]
+        self.assertIn("await _offer_photo_route_choice(message, user_id=user_id, caption=caption)", block)
+        self.assertIn("await _prepare_photo_edit_from_file_id(", block)
+        self.assertIn("_prepare_photo_video_from_file_id(", self.source)
+        # The old fallback edited immediately when a caption was attached.
+        self.assertNotIn("await _edit_and_send(message, ref, caption", block)
+
+    def test_create_image_photo_caption_stops_at_edit_confirm(self) -> None:
+        start = self.source.index("async def handle_photo")
+        block = self.source[start:start + 4500]
+        self.assertIn('st.get("step") in ("prompt_picker", "wizard")', block)
+        self.assertIn('or st.get("await") == "prompt"', block)
+        self.assertIn('or st.get("pending_prompt")', block)
+        self.assertIn('st["await"] = "edit_confirm" if caption else "edit"', self.source)
+        self.assertIn("await show_edit_confirm(message, user_id=user_id, edit=False)", self.source)
+
+    def test_edit_and_send_can_use_callback_actor_id(self) -> None:
+        start = self.source.index("async def _edit_and_send")
+        block = self.source[start:start + 1200]
+        self.assertIn("actor_id: int | None = None", block)
+        self.assertIn("user_id = actor_id if actor_id is not None else message.from_user.id", block)
+        self.assertIn("actor_id=user_id", self.source)
 
     def test_video_plain_text_ready_is_narrow(self) -> None:
         start = self.source.index("def _video_plain_text_ready")
@@ -1439,6 +1494,22 @@ class LandingStaticContentTests(unittest.TestCase):
         self.assertIn("setTicketStatus(${t.id},'in_work')", self.admin)
         self.assertIn("setTicketStatus(${t.id},'done')", self.admin)
 
+    def test_admin_has_ad_cac_calculator(self) -> None:
+        for needle in (
+            'id="ad-segment"',
+            'id="ad-channels"',
+            'function adRecalc()',
+            'function adApplyLiveDefaults',
+            'adApplyLiveDefaults({activation, repeat, margin});',
+            'CAC green',
+            'Flow quota',
+        ):
+            self.assertIn(needle, self.admin)
+
+    def test_admin_demo_copy_matches_current_bot_copy(self) -> None:
+        self.assertNotIn("удобным способом", self.admin)
+        self.assertNotIn("referral_first_generation_reward_got", self.admin)
+
 
 class CaptureVideoToolTests(unittest.TestCase):
     @classmethod
@@ -1862,7 +1933,7 @@ class BotImportSmokeTests(unittest.TestCase):
         self.assertIn("ag:improve", img_datas)
         self.assertNotIn("ag:improve", [b.callback_data for row in fb.wizard_kb(1, "land").inline_keyboard for b in row])
         # Edit-my-photo confirm screen exposes agent improve + apply.
-        ec = [b.callback_data for row in fb.edit_confirm_kb().inline_keyboard for b in row]
+        ec = [b.callback_data for row in fb.edit_confirm_kb("land", "nb2").inline_keyboard for b in row]
         self.assertIn("ag:eimprove", ec)
         self.assertIn("es:apply", ec)
         fb.wizard_state[424242]["vengine"] = "veo"

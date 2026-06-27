@@ -3769,6 +3769,8 @@ image_registry = ImageRegistry()
 video_registry = ImageRegistry(max_entries=2000)
 # user_id -> token: пользователь нажал «Редактировать» и мы ждём его текст-правку.
 pending_edits: dict[int, str] = {}
+# user_id -> transient photo+caption route choice (Telegram file_id + prompt).
+pending_photo_routes: dict[int, dict[str, str]] = {}
 # user_id -> список картинок-«ингредиентов», выбранных кнопкой «➕ В микс».
 mix_baskets: dict[int, list[dict]] = defaultdict(list)
 MIX_MAX = 4
@@ -4003,6 +4005,7 @@ def _reset_image_flow(user_id: int, *, keep_last: bool = True) -> None:
     last = st.get("last") if keep_last else None
     st.clear()
     pending_edits.pop(user_id, None)
+    pending_photo_routes.pop(user_id, None)
     if last:
         st["last"] = last
         st["count"] = last.get("count", DEFAULT_COUNT)
@@ -5106,16 +5109,18 @@ def edit_settings_kb(fmt: str, imodel: str) -> types.InlineKeyboardMarkup:
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
             *_fmt_rows(fmt, "es:fmt"),
-            _imodel_row(imodel, "es:imodel", base_price=action_price("edit")),
+            [_imodel_toggle_btn(imodel, "es:imodel")],
             [_menu_button("cancel", "es:cancel")],
         ]
     )
 
 
-def edit_confirm_kb() -> types.InlineKeyboardMarkup:
-    """Подтверждение правки фото: применить как есть или улучшить запрос (агент)."""
+def edit_confirm_kb(fmt: str, imodel: str) -> types.InlineKeyboardMarkup:
+    """Подтверждение правки фото: настройки + применить/улучшить запрос."""
     B = types.InlineKeyboardButton
     return types.InlineKeyboardMarkup(inline_keyboard=[
+        *_fmt_rows(fmt, "es:fmt"),
+        [_imodel_toggle_btn(imodel, "es:imodel")],
         [B(text=f"✨ Улучшить запрос · {action_price('prompt_improve')} кр", callback_data="ag:eimprove")],
         [B(text=f"✅ Применить · {action_price('edit')} кр", callback_data="es:apply")],
         [B(text="✏️ Изменить запрос", callback_data="es:change"),
@@ -5132,28 +5137,45 @@ async def show_edit_confirm(message: types.Message, *, user_id: int, edit: bool)
         f"<blockquote>{html.escape(instr[:300])}</blockquote>\n"
         "Применить как есть — или улучшить запрос (3 варианта)?"
     )
+    kb = edit_confirm_kb(
+        st.get("edit_fmt", DEFAULT_FMT),
+        st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
+    )
     if edit:
-        await _edit_or_answer(message, text, edit_confirm_kb(), parse_mode="HTML")
+        await _edit_or_answer(message, text, kb, parse_mode="HTML")
     else:
-        await message.answer(text, reply_markup=edit_confirm_kb(), parse_mode="HTML")
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
-def reply_menu_kb() -> types.ReplyKeyboardMarkup:
+def _balance_reply_label(user_id: int | None = None) -> str:
+    label = L("kb_balance")
+    if user_id is None:
+        return label
+    try:
+        return f"{label} · {credit_store.balance(user_id)}кр"
+    except Exception:
+        return label
+
+
+def _is_balance_reply_text(text: str) -> bool:
+    label = L("kb_balance")
+    return text == label or text.startswith(f"{label} ·")
+
+
+def reply_menu_kb(user_id: int | None = None) -> types.ReplyKeyboardMarkup:
     """Постоянная клавиатура внизу чата — всегда под рукой."""
     B = types.KeyboardButton
     if IS_SELLER:
         # Селлер-бот: минимальная нижняя клавиатура (меню = карточки, баланс).
         return types.ReplyKeyboardMarkup(
-            keyboard=[[B(text=L("kb_menu")), B(text=L("kb_balance"))]],
+            keyboard=[[B(text=L("kb_menu")), B(text=_balance_reply_label(user_id))]],
             resize_keyboard=True,
             is_persistent=True,
         )
     return types.ReplyKeyboardMarkup(
         keyboard=[
             [B(text=L("kb_gen")), B(text=L("kb_vid"))],
-            [B(text=L("ideas")), B(text=L("myphoto"))],
-            [B(text=L("invite")), B(text=L("help"))],
-            [B(text=L("kb_menu")), B(text=L("kb_balance"))],
+            [B(text=L("kb_menu")), B(text=_balance_reply_label(user_id))],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -6116,7 +6138,7 @@ async def show_main_menu(
     if ensure_kb:
         # Гарантируем постоянную нижнюю клавиатуру (если её сбросили).
         try:
-            await message.answer("Меню открыто 👇", reply_markup=reply_menu_kb())
+            await message.answer("Меню открыто 👇", reply_markup=reply_menu_kb(user_id))
         except Exception:
             pass
     last = _ws(user_id).get("last")
@@ -6270,7 +6292,7 @@ async def cmd_start(message: types.Message):
             metrics.log_event("acquired_from_channel", user_id=user_id,
                               username=_username(message), payload={"channel": channel})
     # Постоянная нижняя клавиатура всегда показывается при /start
-    await message.answer("👇", reply_markup=reply_menu_kb())
+    await message.answer("👇", reply_markup=reply_menu_kb(user_id))
 
     if IS_SELLER:
         # Селлер-бот: сразу показываем выбор задачи, без промежуточного hub-экрана.
@@ -8127,6 +8149,7 @@ async def _edit_and_send(
     ref: ImageRef,
     instruction: str,
     *,
+    actor_id: int | None = None,
     aspect_ratio: str | None = None,
     image_model: str = DEFAULT_IMAGE_MODEL,
 ) -> bool:
@@ -8138,7 +8161,7 @@ async def _edit_and_send(
     сменить формат и модель прямо при редактировании (по умолчанию — как у
     исходной картинки и базовая модель).
     """
-    user_id = message.from_user.id
+    user_id = actor_id if actor_id is not None else message.from_user.id
 
     if not instruction or len(instruction) < 3:
         await message.answer("❌ Опишите правку (минимум 3 символа)")
@@ -9320,6 +9343,7 @@ async def on_menu_action(callback: types.CallbackQuery):
     elif data == "m:vid":
         await callback.answer()
         pending_edits.pop(user_id, None)
+        pending_photo_routes.pop(user_id, None)
         await show_video_prompt_input(msg, user_id=user_id, edit=True)
     elif data == "m:animate":
         # «Оживить фото» из меню = фото -> новый video wizard (Omni/Veo).
@@ -9388,6 +9412,7 @@ async def on_menu_action(callback: types.CallbackQuery):
     elif data == "m:menu":
         await callback.answer()
         pending_edits.pop(user_id, None)
+        pending_photo_routes.pop(user_id, None)
         _ws(user_id)["await"] = None
         await show_main_menu(msg, user_id=user_id, edit=True)
     elif data == "m:profile":
@@ -9465,6 +9490,151 @@ async def on_onboarding_action(callback: types.CallbackQuery):
         return
 
     await callback.answer()
+
+
+def _photo_route_kb() -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [B(text="🎨 Создать изображение", callback_data="pr:img")],
+        [B(text="🎬 Создать видео", callback_data="pr:vid")],
+        [_menu_button("cancel", "pr:cancel")],
+    ])
+
+
+def _store_pending_photo_route(user_id: int, *, file_id: str, caption: str) -> None:
+    pending_photo_routes[user_id] = {
+        "file_id": file_id,
+        "caption": caption.strip()[:2000],
+    }
+
+
+async def _offer_photo_route_choice(message: types.Message, *, user_id: int, caption: str) -> None:
+    _store_pending_photo_route(
+        user_id, file_id=message.photo[-1].file_id, caption=caption
+    )
+    await message.answer(
+        flow_copy.msg("photo_route_choice", prompt=html.escape(_short_prompt(caption, 300))),
+        reply_markup=_photo_route_kb(),
+        parse_mode="HTML",
+    )
+
+
+async def _prepare_photo_edit_from_file_id(
+    message: types.Message,
+    *,
+    user_id: int,
+    file_id: str,
+    caption: str,
+    aspect_fmt: str = DEFAULT_FMT,
+    image_model: str | None = None,
+) -> bool:
+    status_msg = await message.answer(flow_copy.msg("uploading_photo"))
+    ref = await _upload_image_ref_from_file_id(
+        message,
+        user_id=user_id,
+        status_msg=status_msg,
+        file_id=file_id,
+        prompt=caption or "uploaded image",
+        aspect_ratio=_fmt_to_aspect(aspect_fmt),
+    )
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+    if not ref:
+        return False
+
+    token = image_registry.add(ref)
+    pending_edits[user_id] = token
+    st = _ws(user_id)
+    st["await"] = "edit_confirm" if caption else "edit"
+    st["step"] = None
+    st.pop("pending_prompt", None)
+    st["edit_fmt"] = aspect_fmt
+    st["edit_imodel"] = image_model or st.get("edit_imodel", DEFAULT_IMAGE_MODEL)
+    st.pop("ag_variants", None)
+    st.pop("edit_instruction", None)
+    if caption:
+        st["edit_instruction"] = caption
+        await show_edit_confirm(message, user_id=user_id, edit=False)
+    else:
+        await message.answer(
+            flow_copy.msg("photo_uploaded_ask_prompt"),
+            reply_markup=edit_settings_kb(st["edit_fmt"], st["edit_imodel"]),
+        )
+    return True
+
+
+async def _prepare_photo_video_from_file_id(
+    message: types.Message,
+    *,
+    user_id: int,
+    file_id: str,
+    caption: str,
+) -> bool:
+    _vid_clear(user_id)
+    st = _ws(user_id)
+    _clear_image_flow_keys(st)
+    status_msg = await message.answer(flow_copy.msg("uploading_photo"))
+    source = await _upload_photo_source_from_file_id(
+        message, user_id=user_id, status_msg=status_msg, file_id=file_id
+    )
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+    if not source:
+        return False
+    st["vphoto"] = source
+    st["vprompt"] = caption
+    st["vstep"] = "vnewwiz"
+    st["vmode"] = "ingredients"
+    st.setdefault("vfmt", VID_DEFAULT_FMT)
+    st.setdefault("vdur", 4)
+    st.setdefault("vquality", "lite")
+    st.setdefault("vstyle", "")
+    st["vmodel"] = _nwiz_model(st)
+    await show_new_video_wizard(message, user_id=user_id, edit=False)
+    return True
+
+
+@dp.callback_query(F.data.startswith("pr:"))
+async def on_photo_route_choice(callback: types.CallbackQuery):
+    """Фото+подпись без выбранного режима: выбрать image/video before upload."""
+    user_id = callback.from_user.id
+    data = callback.data or ""
+    snap = pending_photo_routes.get(user_id)
+    if data == "pr:cancel":
+        pending_photo_routes.pop(user_id, None)
+        await callback.answer("Отменено")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+    if not snap or not snap.get("file_id") or not snap.get("caption"):
+        await callback.answer("Запрос устарел — пришлите фото ещё раз.", show_alert=True)
+        return
+    file_id = snap["file_id"]
+    caption = snap["caption"]
+    pending_photo_routes.pop(user_id, None)
+    await callback.answer()
+    if data == "pr:img":
+        await _prepare_photo_edit_from_file_id(
+            callback.message,
+            user_id=user_id,
+            file_id=file_id,
+            caption=caption,
+        )
+        return
+    if data == "pr:vid":
+        await _prepare_photo_video_from_file_id(
+            callback.message,
+            user_id=user_id,
+            file_id=file_id,
+            caption=caption,
+        )
+        return
 
 
 @dp.callback_query(F.data.startswith("an:"))
@@ -9569,7 +9739,7 @@ async def _render_template_step(message: types.Message, *, user_id: int):
                 prompt=prompt or "uploaded image", aspect_ratio="landscape",
                 account_id=tp_photo_acc,
             )
-            await _edit_and_send(message, ref, prompt or "high quality image")
+            await _edit_and_send(message, ref, prompt or "high quality image", actor_id=user_id)
         else:
             st["pending_prompt"] = prompt or "high quality image"
             await show_wizard(message, user_id=user_id, edit=True)
@@ -10180,6 +10350,7 @@ async def on_edit_settings(callback: types.CallbackQuery):
         await callback.answer()
         ok = await _edit_and_send(
             callback.message, ref, instr,
+            actor_id=user_id,
             aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", _aspect_to_fmt(ref.aspect_ratio))),
             image_model=st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
         )
@@ -10201,13 +10372,19 @@ async def on_edit_settings(callback: types.CallbackQuery):
             changed = True
     await callback.answer()
     if changed:
-        try:
-            await callback.message.edit_reply_markup(
-                reply_markup=edit_settings_kb(
-                    st.get("edit_fmt", DEFAULT_FMT),
-                    st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
-                )
+        kb = (
+            edit_confirm_kb(
+                st.get("edit_fmt", DEFAULT_FMT),
+                st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
             )
+            if st.get("await") == "edit_confirm"
+            else edit_settings_kb(
+                st.get("edit_fmt", DEFAULT_FMT),
+                st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
+            )
+        )
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
         except Exception:
             pass
 
@@ -12099,9 +12276,21 @@ async def _upload_photo_source_from_message(
     user_id: int,
     status_msg: types.Message,
 ) -> dict | None:
+    photo = message.photo[-1]
+    return await _upload_photo_source_from_file_id(
+        message, user_id=user_id, status_msg=status_msg, file_id=photo.file_id
+    )
+
+
+async def _upload_photo_source_from_file_id(
+    message: types.Message,
+    *,
+    user_id: int,
+    status_msg: types.Message,
+    file_id: str,
+) -> dict | None:
     try:
-        photo = message.photo[-1]
-        buf = await bot.download(photo.file_id)
+        buf = await bot.download(file_id)
         data = buf.read() if hasattr(buf, "read") else bytes(buf)
     except Exception:
         log.exception("download user photo failed")
@@ -12132,7 +12321,7 @@ async def _upload_photo_source_from_message(
     )
     source.setdefault("_project_id", project_id)
     source.setdefault("_account_id", acc_id)
-    source.setdefault("_tg_file_id", photo.file_id)  # для бесшовного ре-аплоада
+    source.setdefault("_tg_file_id", file_id)  # для бесшовного ре-аплоада
     return source
 
 
@@ -12204,9 +12393,28 @@ async def _upload_image_ref_from_photo_message(
     prompt: str,
     aspect_ratio: str,
 ) -> ImageRef | None:
+    photo = message.photo[-1]
+    return await _upload_image_ref_from_file_id(
+        message,
+        user_id=user_id,
+        status_msg=status_msg,
+        file_id=photo.file_id,
+        prompt=prompt,
+        aspect_ratio=aspect_ratio,
+    )
+
+
+async def _upload_image_ref_from_file_id(
+    message: types.Message,
+    *,
+    user_id: int,
+    status_msg: types.Message,
+    file_id: str,
+    prompt: str,
+    aspect_ratio: str,
+) -> ImageRef | None:
     try:
-        photo = message.photo[-1]
-        buf = await bot.download(photo.file_id)
+        buf = await bot.download(file_id)
         data = buf.read() if hasattr(buf, "read") else bytes(buf)
     except Exception:
         log.exception("download user photo failed")
@@ -12228,7 +12436,7 @@ async def _upload_image_ref_from_photo_message(
         await status_msg.edit_text(flow_copy.msg("upload_failed"))
         return None
 
-    source.setdefault("_tg_file_id", photo.file_id)
+    source.setdefault("_tg_file_id", file_id)
     upload_project = source.pop("_project_id", None) or project_id
     return ImageRef(
         user_id=user_id,
@@ -12242,14 +12450,15 @@ async def _upload_image_ref_from_photo_message(
 
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
-    """Пользователь прислал фото (+ опц. подпись) — загружаем его в Flow и правим.
+    """Пользователь прислал фото (+ опц. подпись).
 
-    С подписью — сразу применяем её как правку к загруженной картинке.
-    Без подписи — запоминаем и просим прислать текст правки следующим сообщением.
+    В явных режимах сохраняем контекст и показываем настройки/подтверждение;
+    без выбранного режима фото+подпись сначала просит выбрать картинку или видео.
     """
     user_id = message.from_user.id
     st = _ws(user_id)
     vawait = st.get("vawait")
+    caption = (message.caption or "").strip()
 
     # Альбом в видео-режимах: буферизуем и обрабатываем пачкой (см. _flush_album).
     mgid = message.media_group_id
@@ -12268,6 +12477,36 @@ async def handle_photo(message: types.Message):
         )
         return
 
+    # Явный режим «Изменить моё фото»: фото+подпись не генерит сразу, а открывает
+    # подтверждение с настройками формата/модели.
+    if st.get("await") == "photo":
+        await _prepare_photo_edit_from_file_id(
+            message,
+            user_id=user_id,
+            file_id=message.photo[-1].file_id,
+            caption=caption,
+            aspect_fmt=st.get("edit_fmt", DEFAULT_FMT),
+            image_model=st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
+        )
+        return
+
+    # В «Создать картинку» фото с подписью тоже не должно обходить настройки.
+    # Используем фото как основу правки и показываем confirm/settings.
+    if caption and (
+        st.get("step") in ("prompt_picker", "wizard")
+        or st.get("await") == "prompt"
+        or st.get("pending_prompt")
+    ):
+        await _prepare_photo_edit_from_file_id(
+            message,
+            user_id=user_id,
+            file_id=message.photo[-1].file_id,
+            caption=caption,
+            aspect_fmt=st.get("fmt", DEFAULT_FMT),
+            image_model=st.get("imodel", DEFAULT_IMAGE_MODEL),
+        )
+        return
+
     # Ingredients: upload and store Flow sources; generation stays blocked until API capture.
     if vawait == "ving_photo":
         photos: list = st.setdefault("ving_photos", [])
@@ -12279,7 +12518,6 @@ async def handle_photo(message: types.Message):
             if not source:
                 return
             photos.append(source)
-            caption = _vid_caption(message)
             if caption:
                 st["vcaption_prompt"] = caption
             try:
@@ -12299,7 +12537,6 @@ async def handle_photo(message: types.Message):
             return
         st["vfrm_start"] = source
         st["vawait"] = "vfrm_end"
-        caption = _vid_caption(message)
         if caption:
             st["vcaption_prompt"] = caption
         try:
@@ -12317,7 +12554,6 @@ async def handle_photo(message: types.Message):
             return
         st["vfrm_end"] = source
         st["vawait"] = None
-        caption = _vid_caption(message)
         if caption:
             st["vcaption_prompt"] = caption
         try:
@@ -12330,9 +12566,8 @@ async def handle_photo(message: types.Message):
     # Новый wizard: фото на шаге ввода промпта или на экране настроек.
     vstep = st.get("vstep")
     if vstep in ("vprompt_input", "vnewwiz"):
-        caption_txt = (message.caption or "").strip()
-        if caption_txt:
-            st["vprompt"] = caption_txt
+        if caption:
+            st["vprompt"] = caption
         status_msg_nw = await message.answer(flow_copy.msg("uploading_photo"))
         source_nw = await _upload_photo_source_from_message(
             message, user_id=user_id, status_msg=status_msg_nw
@@ -12365,16 +12600,15 @@ async def handle_photo(message: types.Message):
     # Текстовый видео-визард (omni/veo без референсов) — юзер прислал фото вместо текста.
     # Если есть подпись — берём её как промпт и стартуем видео. Без подписи — напоминаем.
     if _video_plain_text_ready(st):
-        caption_text = (message.caption or "").strip()
-        if caption_text:
-            await _video_generate_and_send(message, caption_text, user_id=user_id)
+        if caption:
+            await _video_generate_and_send(message, caption, user_id=user_id)
         else:
             await message.answer(flow_copy.msg("vid_text_only_hint"))
         return
 
     if st.get("await") == "mp_video_photo":
         plat = st.get("mp_platform", "wb")
-        caption_text = (message.caption or "").strip()
+        caption_text = caption
         prompt = _mp_video_prompt(
             plat,
             caption_text,
@@ -12400,7 +12634,7 @@ async def handle_photo(message: types.Message):
             count = 3
         if count not in _MP_SERIES_COUNTS:
             count = 3
-        caption_text = (message.caption or "").strip()
+        caption_text = caption
         prompt = _mp_series_prompt(
             plat,
             count,
@@ -12451,7 +12685,7 @@ async def handle_photo(message: types.Message):
     if st.get("await") == "mp_photo":
         plat = st.get("mp_platform", "wb")
         job = st.get("mp_preset", "whitebg")
-        caption_text = (message.caption or "").strip()
+        caption_text = caption
         instruction = _mp_job_instruction(
             job,
             plat,
@@ -12501,29 +12735,17 @@ async def handle_photo(message: types.Message):
             pending_edits.pop(user_id, None)
         return
 
-    caption = (message.caption or "").strip()
-
-    status_msg = await message.answer(flow_copy.msg("uploading_photo"))
-    ref = await _upload_image_ref_from_photo_message(
-        message,
-        user_id=user_id,
-        status_msg=status_msg,
-        prompt=caption or "uploaded image",
-        aspect_ratio="landscape",
-    )
-    if not ref:
-        return
-    await status_msg.delete()
-
     if caption:
-        await _edit_and_send(message, ref, caption)
+        await _offer_photo_route_choice(message, user_id=user_id, caption=caption)
         return
 
     # Без подписи — запоминаем как «текущую картинку для правки».
-    token = image_registry.add(ref)
-    pending_edits[user_id] = token
-    _ws(user_id)["await"] = "edit"
-    await message.answer(flow_copy.msg("photo_uploaded_ask_prompt"))
+    await _prepare_photo_edit_from_file_id(
+        message,
+        user_id=user_id,
+        file_id=message.photo[-1].file_id,
+        caption="",
+    )
 
 
 @dp.message(F.text & ~F.text.startswith("/"))
@@ -12542,10 +12764,11 @@ async def handle_plain_text(message: types.Message):
         return
     if text == L("kb_menu"):
         pending_edits.pop(user_id, None)
+        pending_photo_routes.pop(user_id, None)
         st["await"] = None
         await show_main_menu(message, user_id=user_id, ensure_kb=True)
         return
-    if text == L("kb_balance"):
+    if _is_balance_reply_text(text):
         await show_balance(message, user_id=user_id, edit=False)
         return
     if text == L("ideas"):
@@ -12568,6 +12791,7 @@ async def handle_plain_text(message: types.Message):
         vlast = st.get("vlast")
         _vid_clear(user_id)
         pending_edits.pop(user_id, None)  # бросаем залипшее фото-правку при переходе в видео
+        pending_photo_routes.pop(user_id, None)
         if vlast:
             st["vlast"] = vlast
         await show_video_prompt_input(message, user_id=user_id, edit=False)

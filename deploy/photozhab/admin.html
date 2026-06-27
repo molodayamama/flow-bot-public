@@ -330,6 +330,21 @@ tr:hover td{background:var(--pz-surface-2)}
 /* ── Analytics layout ──────────────────────────────── */
 .analytics-section{margin-bottom:28px}
 .analytics-section .section-title{margin-bottom:12px}
+.adcalc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.adcalc-grid .form-row{margin-bottom:0}
+.adcalc-input{font-family:var(--font-mono);font-size:13px}
+.adcalc-channels{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.adcalc-channel{
+  display:grid;grid-template-columns:1.2fr repeat(4,minmax(86px,.8fr)) 36px;
+  gap:8px;align-items:end;padding:10px;border:1px solid var(--pz-line-faint);
+  border-radius:var(--r-md);background:var(--pz-surface-2);
+}
+.adcalc-out{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;margin-top:12px}
+.adcalc-pill{border:1px solid var(--pz-line-faint);border-radius:var(--r-md);padding:10px;background:var(--pz-surface)}
+.adcalc-pill .kpi-label{margin-bottom:3px}
+.adcalc-pill b{font-family:var(--font-mono);font-size:18px}
+.adcalc-verdict{font-weight:800}
+@media(max-width:900px){.adcalc-channel{grid-template-columns:1fr 1fr}.adcalc-channel .remove-cell{align-self:stretch}}
 .kpi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:16px}
 .kpi{
   background:var(--pz-surface);border:1px solid var(--pz-line-faint);
@@ -1011,6 +1026,79 @@ tr:hover td{background:var(--pz-surface-2)}
         </div>
 
         <div class="analytics-section">
+          <div class="section-title">Реклама / CAC-калькулятор</div>
+          <div class="card">
+            <div class="card-title">Стоит ли брать размещение</div>
+            <div class="card-sub">Локальный расчёт по воронке, марже и Flow-квоте. Данные не сохраняются.</div>
+
+            <div class="adcalc-grid" style="margin-top:14px">
+              <div class="form-row">
+                <label class="form-label">Сегмент</label>
+                <select class="form-input adcalc-input" id="ad-segment">
+                  <option value="image">Consumer · картинки</option>
+                  <option value="video">Consumer · видео</option>
+                  <option value="seller">Seller · карточки</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label class="form-label">Первый чек ₽</label>
+                <input class="form-input adcalc-input" id="ad-check" type="number" value="90" min="0">
+              </div>
+              <div class="form-row">
+                <label class="form-label">Фрикция %</label>
+                <input class="form-input adcalc-input" id="ad-friction" type="number" value="32" min="0" max="95">
+              </div>
+              <div class="form-row">
+                <label class="form-label">Повтор %</label>
+                <input class="form-input adcalc-input" id="ad-repeat" type="number" value="25" min="0" max="95">
+              </div>
+              <div class="form-row">
+                <label class="form-label">Refund/fail %</label>
+                <input class="form-input adcalc-input" id="ad-refund" type="number" value="3" min="0" max="95">
+              </div>
+              <div class="form-row">
+                <label class="form-label">G-кредит ₽</label>
+                <input class="form-input adcalc-input" id="ad-gcost" type="number" value="0.053" min="0" step="0.001">
+              </div>
+              <div class="form-row">
+                <label class="form-label">Видео/плательщика</label>
+                <input class="form-input adcalc-input" id="ad-video-jobs" type="number" value="0.2" min="0" step="0.1">
+              </div>
+              <div class="form-row">
+                <label class="form-label">G-кр/видео</label>
+                <input class="form-input adcalc-input" id="ad-video-g" type="number" value="8.5" min="0" step="0.1">
+              </div>
+              <div class="form-row">
+                <label class="form-label">Flow аккаунтов</label>
+                <input class="form-input adcalc-input" id="ad-accounts" type="number" value="5" min="1">
+              </div>
+            </div>
+
+            <div class="adcalc-out" id="ad-summary">
+              <div class="adcalc-pill"><div class="kpi-label">CAC green</div><b>—</b></div>
+            </div>
+
+            <div class="toolbar" style="margin:16px 0 8px">
+              <div class="card-sub">Каналы: цена поста + просмотры + прогноз CTR/конверсии.</div>
+              <button class="btn btn-ghost btn-sm" onclick="adAddChannel()">+ Канал</button>
+            </div>
+            <div id="ad-channels" class="adcalc-channels"></div>
+            <div class="table-wrap" style="margin-top:12px">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Канал</th><th>Старты</th><th>Платящие</th><th>CAC</th><th>ROAS</th><th>Max пост</th><th>Вердикт</th>
+                  </tr>
+                </thead>
+                <tbody id="ad-results">
+                  <tr><td colspan="7" style="color:var(--pz-faint);padding:16px;text-align:center">Заполните каналы</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="analytics-section">
           <div class="section-title">Сегодня</div>
           <div class="kpi-grid" id="kpi-today">
             <div class="kpi"><div class="kpi-label">Загрузка…</div></div>
@@ -1132,7 +1220,7 @@ const DEMO = {
   messages: {
     welcome: "👋 Привет! Я делаю картинки и видео по описанию — просто скажи словами, что хочешь увидеть.\n\n🎨 <b>Картинка по тексту.</b> Опиши идею — пришлю готовое изображение.\n🎬 <b>Видео.</b> Сниму ролик по тексту, оживлю твоё фото в движение.\n💡 <b>Не знаешь, с чего начать?</b> Нажми «Идеи и шаблоны».\n🤝 <b>Зови друзей.</b> За каждое их пополнение начислю тебе кредиты.\n\nЖми кнопку ниже — и поехали!",
     menu_title: "Главное меню. Выбери, что сделать:",
-    low_balance: "Не хватает кредитов: нужно <b>{needed} кр.</b>, а у тебя {have} кр.\nПополни баланс удобным способом — и продолжим!",
+    low_balance: "Не хватает кредитов: нужно <b>{needed} кр.</b>, а у тебя {have} кр.\nПополни баланс — и продолжим!",
     topup_done: "✅ Баланс пополнен на {credits} кр. Теперь у тебя {balance} кр.",
     gen_failed: "Что-то пошло не так при создании. Кредиты не списаны, попробуй ещё раз!",
     generating: "🎨 Создаю изображение… займёт несколько секунд.",
@@ -1141,7 +1229,6 @@ const DEMO = {
     rate_limited: "⏱️ Слишком много запросов. Подождите минуту и попробуйте снова.",
     busy: "Твой предыдущий запрос ещё выполняется — дождись результата 🙏",
     referral_reward_got: "🎉 Твой друг пополнил баланс — тебе начислено <b>{bonus} кр.</b>\nСпасибо, что зовёшь! 🤝",
-    referral_first_generation_reward_got: "🎉 Твой первый приглашённый друг сделал генерацию — тебе начислено <b>{bonus} кр.</b>\nЭтого хватит на «Оживить фото».",
     invite_share_text: "Попробуй этого бота — рисует картинки и снимает видео по тексту 🎨🎬 Новым пользователям — бесплатные кредиты на старте!",
     vid_upload_disabled: "Правка загруженного видео пока недоступна — чиним. А вот видео, созданное здесь, можно изменить кнопкой ✏️ под роликом.",
   },
@@ -2334,6 +2421,146 @@ function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
 function fmt(n){ return Number(n??0).toLocaleString('ru'); }
 function chipColor(c){ return {lime:'200,242,95',cyan:'84,215,214',coral:'255,123,109',warn:'255,194,75'}[c]||'183,180,170'; }
 
+/* CAC calculator */
+const AD_SEGMENTS = {
+  image:  {check:90,  friction:32, repeat:25, refund:3, videoJobs:0.15, videoG:7.0, title:'Consumer · картинки'},
+  video:  {check:235, friction:28, repeat:28, refund:4, videoJobs:1.00, videoG:8.5, title:'Consumer · видео'},
+  seller: {check:240, friction:24, repeat:35, refund:3, videoJobs:0.10, videoG:7.0, title:'Seller · карточки'},
+};
+let adChannels = [
+  {name:'Канал A', cost:5000, views:30000, ctr:1.2, pay:6.0},
+  {name:'Тестовый посев', cost:1500, views:12000, ctr:0.9, pay:5.0},
+];
+let adLiveDefaults = {};
+
+function money(n) {
+  const v = Number.isFinite(+n) ? +n : 0;
+  return `${Math.round(v).toLocaleString('ru')} ₽`;
+}
+function numInput(id, fallback=0) {
+  const el = document.getElementById(id);
+  const n = Number(el?.value);
+  return Number.isFinite(n) ? n : fallback;
+}
+function adSetSegmentDefaults(seg) {
+  const d = AD_SEGMENTS[seg] || AD_SEGMENTS.image;
+  document.getElementById('ad-check').value = d.check;
+  document.getElementById('ad-friction').value = d.friction;
+  document.getElementById('ad-repeat').value = adLiveDefaults.repeat ?? d.repeat;
+  document.getElementById('ad-refund').value = d.refund;
+  document.getElementById('ad-video-jobs').value = d.videoJobs;
+  document.getElementById('ad-video-g').value = d.videoG;
+  if (adLiveDefaults.gcost != null) document.getElementById('ad-gcost').value = adLiveDefaults.gcost;
+}
+function adReadEcon() {
+  const check = numInput('ad-check');
+  const friction = Math.min(95, Math.max(0, numInput('ad-friction'))) / 100;
+  const repeat = Math.min(95, Math.max(0, numInput('ad-repeat'))) / 100;
+  const refund = Math.min(95, Math.max(0, numInput('ad-refund'))) / 100;
+  const gcost = Math.max(0, numInput('ad-gcost', 0.053));
+  const videoJobs = Math.max(0, numInput('ad-video-jobs'));
+  const videoG = Math.max(0, numInput('ad-video-g'));
+  const net = check * (1 - friction) * (1 - refund);
+  const cogs = videoJobs * videoG * gcost;
+  const firstCm = Math.max(0, net - cogs);
+  return {check, friction, repeat, refund, gcost, videoJobs, videoG, cogs, firstCm, ltvCm:firstCm * (1 + repeat)};
+}
+function adRenderChannels() {
+  const root = document.getElementById('ad-channels');
+  if (!root) return;
+  root.innerHTML = adChannels.map((ch, i) => `
+    <div class="adcalc-channel">
+      <div class="form-row"><label class="form-label">Канал</label><input class="form-input adcalc-input" data-ad-i="${i}" data-ad-k="name" value="${esc(ch.name)}"></div>
+      <div class="form-row"><label class="form-label">Пост ₽</label><input class="form-input adcalc-input" type="number" min="0" data-ad-i="${i}" data-ad-k="cost" value="${ch.cost}"></div>
+      <div class="form-row"><label class="form-label">Просмотры</label><input class="form-input adcalc-input" type="number" min="0" data-ad-i="${i}" data-ad-k="views" value="${ch.views}"></div>
+      <div class="form-row"><label class="form-label">CTR %</label><input class="form-input adcalc-input" type="number" min="0" step="0.1" data-ad-i="${i}" data-ad-k="ctr" value="${ch.ctr}"></div>
+      <div class="form-row"><label class="form-label">Pay %</label><input class="form-input adcalc-input" type="number" min="0" step="0.1" data-ad-i="${i}" data-ad-k="pay" value="${ch.pay}"></div>
+      <button class="btn btn-ghost btn-sm remove-cell" title="Удалить" onclick="adRemoveChannel(${i})">×</button>
+    </div>
+  `).join('');
+}
+function adVerdict(cac, firstCm, ltvCm, payers, views) {
+  if (views < 1000 || payers < 5) return {text:'Мало данных', color:'var(--pz-warn)'};
+  if (cac <= firstCm) return {text:'Брать', color:'var(--pz-lime)'};
+  if (cac <= ltvCm) return {text:'Тест / торг', color:'var(--pz-warn)'};
+  return {text:'Стоп', color:'var(--pz-coral)'};
+}
+function adRecalc() {
+  const econ = adReadEcon();
+  const accounts = Math.max(1, numInput('ad-accounts', 1));
+  const quota = accounts * 1000;
+  let totalPayers = 0, totalG = 0, bestMax = 0;
+  const rows = adChannels.map(ch => {
+    const cost = Math.max(0, Number(ch.cost)||0);
+    const views = Math.max(0, Number(ch.views)||0);
+    const starts = views * Math.max(0, Number(ch.ctr)||0) / 100;
+    const payers = starts * Math.max(0, Number(ch.pay)||0) / 100;
+    const cac = payers > 0 ? cost / payers : 0;
+    const firstProfit = payers * econ.firstCm - cost;
+    const ltvProfit = payers * econ.ltvCm - cost;
+    const roas = cost > 0 ? (payers * econ.ltvCm / cost) : 0;
+    const maxPost = payers * econ.ltvCm;
+    const verdict = adVerdict(cac, econ.firstCm, econ.ltvCm, payers, views);
+    totalPayers += payers;
+    totalG += payers * econ.videoJobs * econ.videoG;
+    bestMax = Math.max(bestMax, maxPost);
+    return `<tr>
+      <td>${esc(ch.name || 'Канал')}</td>
+      <td class="mono">${fmt(Math.round(starts))}</td>
+      <td class="mono">${payers.toFixed(1)}</td>
+      <td class="mono">${payers>0 ? money(cac) : '—'}</td>
+      <td class="mono" style="color:${ltvProfit>=0?'var(--pz-lime)':'var(--pz-coral)'}">${roas.toFixed(2)}×</td>
+      <td class="mono">${money(maxPost)}</td>
+      <td class="adcalc-verdict" style="color:${verdict.color}" title="1-я маржа: ${money(firstProfit)} · LTV маржа: ${money(ltvProfit)}">${verdict.text}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('ad-results').innerHTML = rows || `<tr><td colspan="7" style="color:var(--pz-faint);padding:16px;text-align:center">Добавьте канал</td></tr>`;
+  const quotaLoad = quota > 0 ? totalG / quota * 100 : 0;
+  document.getElementById('ad-summary').innerHTML = `
+    <div class="adcalc-pill"><div class="kpi-label">CAC green</div><b>${money(econ.firstCm)}</b><div class="kpi-sub">окупается с 1-й оплаты</div></div>
+    <div class="adcalc-pill"><div class="kpi-label">CAC yellow</div><b>${money(econ.ltvCm)}</b><div class="kpi-sub">с учётом повтора</div></div>
+    <div class="adcalc-pill"><div class="kpi-label">Max пост</div><b>${money(bestMax)}</b><div class="kpi-sub">лучший канал по LTV</div></div>
+    <div class="adcalc-pill"><div class="kpi-label">Платящих</div><b>${totalPayers.toFixed(1)}</b><div class="kpi-sub">по всем строкам</div></div>
+    <div class="adcalc-pill"><div class="kpi-label">Flow quota</div><b>${quotaLoad.toFixed(1)}%</b><div class="kpi-sub">${fmt(Math.round(totalG))} / ${fmt(quota)} G-кр</div></div>
+  `;
+}
+function adAddChannel() {
+  adChannels.push({name:`Канал ${adChannels.length+1}`, cost:0, views:10000, ctr:1.0, pay:5.0});
+  adRenderChannels();
+  adRecalc();
+}
+function adRemoveChannel(i) {
+  adChannels.splice(i, 1);
+  adRenderChannels();
+  adRecalc();
+}
+function adApplyLiveDefaults({activation, repeat, margin}={}) {
+  if (repeat?.repeat_rate != null && repeat.repeat_rate > 0) adLiveDefaults.repeat = Math.round(repeat.repeat_rate * 100);
+  if (margin?.g_credit_cost_rub != null) adLiveDefaults.gcost = margin.g_credit_cost_rub;
+  const segment = document.getElementById('ad-segment')?.value || 'image';
+  adSetSegmentDefaults(segment);
+  adRecalc();
+}
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t?.dataset?.adI != null) {
+    const i = Number(t.dataset.adI);
+    const k = t.dataset.adK;
+    if (adChannels[i]) adChannels[i][k] = k === 'name' ? t.value : Number(t.value);
+    adRecalc();
+  } else if (t?.id?.startsWith('ad-')) {
+    adRecalc();
+  }
+});
+document.addEventListener('change', e => {
+  if (e.target?.id === 'ad-segment') {
+    adSetSegmentDefaults(e.target.value);
+    adRecalc();
+  }
+});
+adRenderChannels();
+adRecalc();
+
 /* ── Users ─────────────────────────────────────────── */
 let _usersPage = 1;
 let _usersQ    = '';
@@ -2584,6 +2811,7 @@ async function loadAnalytics() {
     api('GET', '/analytics/margin'),
     api('GET', '/analytics/referral-quality'),
   ]);
+  adApplyLiveDefaults({activation, repeat, margin});
 
   // 1 · Cold-start activation (rate to first wow within 24h), by channel.
   if (activation) {
