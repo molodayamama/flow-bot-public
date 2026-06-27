@@ -301,6 +301,18 @@ ADMIN_IDS = _parse_ids(os.getenv("ADMIN_IDS", "")) | OWNER_IDS
 # button is hidden from the image wizard settings screen.
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 FLOW_URL = "https://labs.google/fx/tools/flow"
+# Idle tab parking: the Flow SPA burns ~0.3 CPU core per open tab even when idle.
+# After IDLE_PARK_SEC with no page op, the keeper navigates its tab to about:blank
+# (SPA stops → CPU drops); the next page op wakes it (navigates back to Flow).
+# Set IDLE_PARK_SEC<=0 to disable (legacy always-on-Flow behaviour).
+try:
+    IDLE_PARK_SEC = float(os.getenv("IDLE_PARK_SEC", "90"))
+except (TypeError, ValueError):
+    IDLE_PARK_SEC = 90.0
+try:
+    PARK_CHECK_SEC = float(os.getenv("PARK_CHECK_SEC", "20"))
+except (TypeError, ValueError):
+    PARK_CHECK_SEC = 20.0
 FLOW_PROJECT_CTA_RE = re.compile(r"^\s*(new project|create project|new flow)\s*$", re.I)
 FLOW_NEW_PROJECT_RE = re.compile(r"^\s*new project\s*$", re.I)
 
@@ -510,6 +522,11 @@ class SessionKeeper:
         self._recaptcha_sitekey = ""
         self._lock = asyncio.Lock()
         self._ready = asyncio.Event()
+        # Idle-tab parking state (see IDLE_PARK_SEC). All page access is serialized
+        # through self._lock, so the parker can never navigate mid-operation.
+        self._parked = False
+        self._last_use = 0.0
+        self._park_task = None
         # Кэш баланса G-кредитов (см. get_g_credits) — не дёргаем Google на
         # каждый /admin_accounts, обновляем не чаще GCREDITS_CACHE_SEC.
         self._gcredits_cache: dict | None = None
@@ -583,6 +600,8 @@ class SessionKeeper:
             self._recaptcha_sitekey = await self._extract_sitekey()
 
             self._ready.set()
+            self._mark_use()
+            self._start_park_loop()
             log.info("✅ Браузер готов!")
 
         except Exception as e:
@@ -591,6 +610,10 @@ class SessionKeeper:
             raise
 
     async def _close_browser_locked(self):
+        if self._park_task is not None:
+            self._park_task.cancel()
+            self._park_task = None
+        self._parked = False
         for obj in (self._context, self._pw):
             if obj is None:
                 continue
@@ -637,6 +660,75 @@ class SessionKeeper:
     async def ensure_browser(self):
         async with self._lock:
             await self._ensure_browser_locked()
+
+    # ── idle-tab parking ───────────────────
+
+    def _mark_use(self) -> None:
+        self._last_use = time.time()
+
+    async def _navigate_to_flow_locked(self) -> None:
+        """Open this account's Flow project page and wait until the SPA issues an
+        API call (so ``_on_request`` captures a fresh Bearer). Call under _lock."""
+        url = (
+            f"https://labs.google/fx/tools/flow/project/{self._project_id}"
+            if self._project_id else FLOW_URL
+        )
+        await self._page.goto(url, timeout=60_000, wait_until="domcontentloaded")
+        for _ in range(20):  # ~10s: wait for a fresh Bearer from the loaded SPA
+            await asyncio.sleep(0.5)
+            if self._bearer and (time.time() - self._bearer_ts) < 30:
+                break
+
+    async def _wake_locked(self) -> None:
+        """Navigate back to Flow if the tab is parked. Call under _lock."""
+        self._mark_use()
+        if not self._parked:
+            return
+        try:
+            await self._navigate_to_flow_locked()
+            self._parked = False
+            log.info("▶️ %s: вкладка разбужена", self.account_id or "acc")
+        except Exception as e:
+            log.warning("⚠️ wake failed for %s: %s", self.account_id or "acc", e)
+
+    def _start_park_loop(self) -> None:
+        if IDLE_PARK_SEC <= 0:
+            return
+        if self._park_task is not None and not self._park_task.done():
+            return
+        try:
+            self._park_task = asyncio.create_task(self._park_idle_loop())
+        except RuntimeError:
+            self._park_task = None
+
+    def _should_park(self) -> bool:
+        """True if the tab is on Flow, idle past IDLE_PARK_SEC, and can be parked."""
+        if IDLE_PARK_SEC <= 0 or self._parked or not self._browser_alive():
+            return False
+        return (time.time() - self._last_use) >= IDLE_PARK_SEC
+
+    async def _park_locked(self) -> None:
+        """Navigate the tab to about:blank to stop the SPA. Call under _lock."""
+        await self._page.goto("about:blank", timeout=15_000)
+        self._parked = True
+        log.info("⏸️ %s: вкладка запаркована (экономия CPU)", self.account_id or "acc")
+
+    async def _park_idle_loop(self) -> None:
+        """Park the tab on about:blank after IDLE_PARK_SEC of no page op.
+
+        Takes self._lock to park, so it can never collide with a captcha solve /
+        bearer refresh (all of which also hold the lock)."""
+        while True:
+            await asyncio.sleep(PARK_CHECK_SEC)
+            try:
+                if not self._should_park():
+                    continue
+                async with self._lock:
+                    if not self._should_park():
+                        continue
+                    await self._park_locked()
+            except Exception as e:
+                log.warning("⚠️ park failed for %s: %s", self.account_id or "acc", e)
 
     async def _open_project(self):
         """Открывает существующий проект или создаёт новый."""
@@ -867,9 +959,11 @@ class SessionKeeper:
         Если JS-капча не дала токен → возвращаем '', поколение падает на фейловер
         аккаунта, что быстрее любого платного решателя.
         """
-        await self.ensure_browser()
-        await self._ensure_flow_page_loaded()
-        return await self._solve_via_browser_js(action)
+        async with self._lock:
+            await self._ensure_browser_locked()
+            await self._wake_locked()  # un-park tab if idle-parked
+            await self._ensure_flow_page_loaded()
+            return await self._solve_via_browser_js(action)
 
     async def _ensure_flow_page_loaded(self) -> None:
         """Ждём готовности grecaptcha на странице перед решением капчи.
@@ -1453,10 +1547,11 @@ class SessionKeeper:
                             "get_g_credits non-200 for %s: status=%s body=%s",
                             self.account_id, resp.status, body,
                         )
-                        if resp.status == 401:
-                            # 401 = протух Google-логин аккаунта. Выводим из
-                            # ротации и подсвечиваем в админке (нужен релогин).
-                            self._flag_needs_relogin(True)
+                        # NB: с idle-парковкой вкладок Bearer штатно протухает
+                        # между задачами, поэтому 401 здесь НЕ значит «мёртвый
+                        # логин» — не флагаем needs_relogin из админ-опроса (иначе
+                        # ложно выкидывали бы живые аккаунты). Реальный мёртвый
+                        # логин ловится на пути генерации (нет project_id).
                         return self._gcredits_cache or {
                             "error": "auth_401" if resp.status == 401 else f"http_{resp.status}",
                             "status": resp.status,
@@ -1785,6 +1880,7 @@ class SessionKeeper:
         await self._ready.wait()
         async with self._lock:
             await self._ensure_browser_locked()
+            await self._wake_locked()  # un-park tab if idle-parked (also refreshes Bearer)
             age = time.time() - self._bearer_ts
             if not self._bearer or age > TOKEN_TTL_SEC:
                 await self._refresh_bearer()
@@ -1817,6 +1913,7 @@ class SessionKeeper:
         await self._ready.wait()
         async with self._lock:
             await self._ensure_browser_locked()
+            await self._wake_locked()  # un-park tab if idle-parked
             try:
                 ta = self._page.locator("#PINHOLE_TEXT_AREA_ELEMENT_ID")
                 try:
