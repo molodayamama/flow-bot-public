@@ -1501,7 +1501,7 @@ class LandingStaticContentTests(unittest.TestCase):
             'id="ad-segment"',
             'id="ad-channels"',
             'id="ad-tgstat-url"',
-            '/tgstat/channel?url=',
+            '/telemetr/channel?url=',
             'function adFetchChannel',
             'function loadAdCalc',
             'function adRecalc()',

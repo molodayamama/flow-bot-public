@@ -1129,19 +1129,19 @@ tr:hover td{background:var(--pz-surface-2)}
         <div class="toolbar">
           <div>
             <div class="card-title">Реклама / CAC-калькулятор</div>
-            <div class="card-sub">Оценка посевов в Telegram-каналах: TGStat → охват, вручную → цена и конверсия.</div>
+            <div class="card-sub">Оценка посевов в Telegram-каналах: Telemetr → охват, вручную → цена и конверсия.</div>
           </div>
           <button class="btn btn-ghost btn-sm" onclick="loadAdCalc()">↻ Обновить</button>
         </div>
 
         <div class="card">
-          <div class="card-title">TGStat lookup</div>
+          <div class="card-title">Telemetr lookup</div>
           <div class="card-sub">Вставьте @username или ссылку t.me. Запрос делается только по кнопке и кэшируется на сервере.</div>
           <div class="adcalc-grid" style="grid-template-columns:minmax(220px,1.5fr) auto;align-items:end;margin-top:14px">
             <div class="form-row">
               <label class="form-label">Ссылка на канал</label>
               <input class="form-input adcalc-input" id="ad-tgstat-url" placeholder="https://t.me/channel или @channel" autocomplete="off">
-              <div class="form-help">TGStat отдаёт подписчиков, рекламный охват 12/24/48ч и ERR. Токен хранится только на сервере.</div>
+              <div class="form-help">Telemetr отдаёт подписчиков, средний охват поста, рекламный охват и ERR. Токен хранится только на сервере.</div>
             </div>
             <button class="btn btn-primary" id="ad-tgstat-btn" onclick="adFetchChannel()">Получить</button>
           </div>
@@ -1210,7 +1210,7 @@ tr:hover td{background:var(--pz-surface-2)}
           </div>
 
           <div class="toolbar" style="margin:16px 0 8px">
-            <div class="card-sub">Каналы: цена поста + охват из TGStat или вручную + прогноз CTR/конверсии в оплату.</div>
+            <div class="card-sub">Каналы: цена поста + охват из Telemetr или вручную + прогноз CTR/конверсии в оплату.</div>
             <button class="btn btn-ghost btn-sm" onclick="adAddChannel()">+ Канал</button>
           </div>
           <div id="ad-channels" class="adcalc-channels"></div>
@@ -1403,7 +1403,7 @@ const tabMeta = {
   sellers:   ['Селлеры',         'Маркетплейс-задачи, заявки под ключ и платежи'],
   referrals: ['Рефералки',       'Приглашения, вознаграждения, топ рефереров'],
   analytics: ['Аналитика',       'Сегодня · Выручка · Нагрузка · Каналы · Ошибки'],
-  adcalc:    ['Реклама',          'CAC-калькулятор, TGStat-охват и решение по посевам'],
+  adcalc:    ['Реклама',          'CAC-калькулятор, Telemetr-охват и решение по посевам'],
 };
 const tabLoaders = {
   overview:loadOverview, accounts:loadAccounts, support:loadSupport,
@@ -2514,14 +2514,14 @@ function adRenderChannels() {
   if (!root) return;
   root.innerHTML = adChannels.map((ch, i) => `
     <div class="adcalc-channel">
-      <div class="form-row"><label class="form-label">Канал</label><input class="form-input adcalc-input" data-ad-i="${i}" data-ad-k="name" value="${esc(ch.name||'')}"><div class="form-help">Название для себя. TGStat подставит title, если он есть.</div></div>
-      <div class="form-row"><label class="form-label">Ссылка</label><input class="form-input adcalc-input" data-ad-i="${i}" data-ad-k="link" value="${esc(ch.link||'')}" placeholder="@channel"><div class="form-help">Для TGStat: @username или t.me/link. Запрос только по кнопке.</div></div>
+      <div class="form-row"><label class="form-label">Канал</label><input class="form-input adcalc-input" data-ad-i="${i}" data-ad-k="name" value="${esc(ch.name||'')}"><div class="form-help">Название для себя. Telemetr подставит title, если он есть.</div></div>
+      <div class="form-row"><label class="form-label">Ссылка</label><input class="form-input adcalc-input" data-ad-i="${i}" data-ad-k="link" value="${esc(ch.link||'')}" placeholder="@channel"><div class="form-help">Для Telemetr: @username или t.me/link. Запрос только по кнопке.</div></div>
       <div class="form-row"><label class="form-label">Пост ₽</label><input class="form-input adcalc-input" type="number" min="0" data-ad-i="${i}" data-ad-k="cost" value="${ch.cost}"><div class="form-help">Цена размещения у админа канала.</div></div>
-      <div class="form-row"><label class="form-label">Просмотры</label><input class="form-input adcalc-input" type="number" min="0" data-ad-i="${i}" data-ad-k="views" value="${ch.views}"><div class="form-help">Охват поста. TGStat подставляет рекламный охват 24ч.</div></div>
+      <div class="form-row"><label class="form-label">Просмотры</label><input class="form-input adcalc-input" type="number" min="0" data-ad-i="${i}" data-ad-k="views" value="${ch.views}"><div class="form-help">Охват поста. Telemetr подставляет рекламный охват 24ч (или средний охват поста).</div></div>
       <div class="form-row"><label class="form-label">CTR %</label><input class="form-input adcalc-input" type="number" min="0" step="0.1" data-ad-i="${i}" data-ad-k="ctr" value="${ch.ctr}"><div class="form-help">Клики/старты бота из просмотров. Брать из UTM/seed после теста.</div></div>
       <div class="form-row"><label class="form-label">Pay %</label><input class="form-input adcalc-input" type="number" min="0" step="0.1" data-ad-i="${i}" data-ad-k="pay" value="${ch.pay}"><div class="form-help">Доля стартов, дошедших до оплаты. Брать из аналитики канала.</div></div>
       <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
-        <button class="btn btn-ghost btn-sm" title="Получить из TGStat" onclick="adFetchChannel(${i})">TG</button>
+        <button class="btn btn-ghost btn-sm" title="Получить из Telemetr" onclick="adFetchChannel(${i})">TM</button>
         <button class="btn btn-ghost btn-sm remove-cell" title="Удалить" onclick="adRemoveChannel(${i})">×</button>
       </div>
     </div>
@@ -2554,14 +2554,14 @@ function adShowTgstat(data) {
   el.style.display = 'grid';
   el.innerHTML = `
     <div class="adcalc-pill"><div class="kpi-label">Подписчики</div><b>${fmt(data.participants_count||0)}</b></div>
+    <div class="adcalc-pill"><div class="kpi-label">Avg reach</div><b>${fmt(data.avg_post_reach||0)}</b><div class="kpi-sub">средний охват поста</div></div>
     <div class="adcalc-pill"><div class="kpi-label">Охват 24ч</div><b>${fmt(data.adv_post_reach_24h||0)}</b><div class="kpi-sub">рекламный пост</div></div>
-    <div class="adcalc-pill"><div class="kpi-label">Avg reach</div><b>${fmt(data.avg_post_reach||0)}</b></div>
-    <div class="adcalc-pill"><div class="kpi-label">ERR24</div><b>${data.err24_percent ?? '—'}%</b></div>
-    <div class="adcalc-pill"><div class="kpi-label">ER</div><b>${data.er_percent ?? '—'}%</b></div>
+    <div class="adcalc-pill"><div class="kpi-label">ERR</div><b>${data.err_percent ?? '—'}%</b><div class="kpi-sub">вовлечённость</div></div>
+    <div class="adcalc-pill"><div class="kpi-label">Premium</div><b>${data.participants_premium_percent ?? '—'}%</b><div class="kpi-sub">подписчиков</div></div>
   `;
 }
 function adApplyTgstat(data, index=null) {
-  const title = data.title || data.username || data.channel_id || 'TGStat канал';
+  const title = data.title || data.username || data.channel_id || 'Telemetr канал';
   const link = data.link || (data.username ? `@${data.username}` : data.channel_id);
   const views = adBestReach(data);
   const row = {
@@ -2597,21 +2597,22 @@ async function adFetchChannel(index=null) {
     if (status) status.textContent = 'Вставьте ссылку на канал или заполните поле «Ссылка» в строке.';
     return;
   }
-  if (status) status.textContent = 'Запрашиваю TGStat…';
-  const res = await adFetchJson(`/tgstat/channel?url=${encodeURIComponent(url)}`);
+  if (status) status.textContent = 'Запрашиваю Telemetr…';
+  const res = await adFetchJson(`/telemetr/channel?url=${encodeURIComponent(url)}`);
   if (!res.ok || !res.data || res.data.error) {
     let msg;
-    if (res.status === 503) msg = 'TGStat token не настроен на сервере.';
-    else if (res.status === 400) msg = 'TGStat не понял ссылку на канал.';
-    else if (res.data?.error === 'tgstat_quota') msg = 'Тариф TGStat не позволяет смотреть чужие каналы — нужен платный тариф (или канал, привязанный к вашему аккаунту). Введите охват вручную.';
-    else msg = 'TGStat сейчас недоступен или канал не найден.';
+    if (res.status === 503) msg = 'Telemetr token не настроен на сервере.';
+    else if (res.status === 400) msg = 'Telemetr не понял ссылку на канал.';
+    else if (res.data?.error === 'telemetr_quota') msg = 'Лимит Telemetr исчерпан (запросы или каналы за период). Проверьте тариф или введите охват вручную.';
+    else msg = 'Telemetr сейчас недоступен или канал не найден.';
     if (status) status.textContent = msg;
     return;
   }
   adApplyTgstat(res.data, index);
   if (status) {
     const cache = res.data.cached ? 'из кэша' : 'новый запрос';
-    status.textContent = `TGStat: ${res.data.title || res.data.channel_id} · ${cache} · охват 24ч ${fmt(res.data.adv_post_reach_24h||0)}`;
+    const reach = res.data.adv_post_reach_24h || res.data.avg_post_reach || 0;
+    status.textContent = `Telemetr: ${res.data.title || res.data.channel_id} · ${cache} · охват ${fmt(reach)}`;
   }
 }
 function adVerdict(cac, firstCm, ltvCm, payers, views) {

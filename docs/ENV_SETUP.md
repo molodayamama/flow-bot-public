@@ -165,14 +165,16 @@ to the wrong local process, that process forwards the callback to the configured
 localhost result URL for the target scope before credits are issued. Old invoices
 without `Shp_bot` remain consumer-only for retry compatibility.
 
-## TGStat
+## Telemetr.me
 
-The admin advertising calculator can fetch Telegram channel reach via TGStat.
-Keep the real token only in production `.env` files.
+The admin advertising calculator fetches Telegram channel reach via the
+Telemetr.me user API (`https://api.telemetr.me`, Bearer token in the
+`Authorization` header). Keep the real token only in production `.env` files.
+`TGSTAT_API_TOKEN` is still read as a fallback during migration.
 
 ```dotenv
-TGSTAT_API_TOKEN=replace_me
-TGSTAT_CACHE_TTL_SEC=21600
+TELEMETR_API_TOKEN=replace_me
+TELEMETR_CACHE_TTL_SEC=21600
 ```
 
 Robokassa cabinet URLs:

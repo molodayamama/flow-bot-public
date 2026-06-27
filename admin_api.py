@@ -47,12 +47,12 @@ GCREDITS_LOOKUP_TIMEOUT_SEC = 3.0
 ONBOARD_SESSION_TTL_SEC = 10 * 60
 _onboard_sessions: dict[str, dict] = {}
 ACCOUNT_METADATA_FILE = Path(os.getenv("ACCOUNT_METADATA_FILE", "account_metadata.json"))
-TGSTAT_CHANNEL_STAT_URL = "https://api.tgstat.ru/channels/stat"
+TELEMETR_CHANNEL_STAT_URL = "https://api.telemetr.me/channels/stat"
 try:
-    TGSTAT_CACHE_TTL_SEC = max(60, int(os.getenv("TGSTAT_CACHE_TTL_SEC", "21600")))
+    TELEMETR_CACHE_TTL_SEC = max(60, int(os.getenv("TELEMETR_CACHE_TTL_SEC", "21600")))
 except (TypeError, ValueError):
-    TGSTAT_CACHE_TTL_SEC = 21600
-_tgstat_cache: dict[str, tuple[float, dict]] = {}
+    TELEMETR_CACHE_TTL_SEC = 21600
+_telemetr_cache: dict[str, tuple[float, dict]] = {}
 
 
 # ── helpers ────────────────────────────────────────────────────────────
@@ -2210,13 +2210,23 @@ async def handle_referrals_get(request: web.Request) -> web.Response:
         return _json({"error": "db error"}, 500)
 
 
-# ── TGStat ───────────────────────────────────────────────────────────
+# ── Telemetr.me ──────────────────────────────────────────────────────
+# Аналитика Telegram-каналов для рекламного калькулятора. Заменила TGStat:
+# Bearer-токен в заголовке (а не token в query), и тариф позволяет смотреть
+# любые каналы (channels-лимит в /v1/limits), без foreign-channel ограничения.
 
-def _tgstat_token() -> str:
-    return (os.getenv("TGSTAT_API_TOKEN") or "").strip()
+def _telemetr_token() -> str:
+    # TELEMETR_API_TOKEN — основной; TGSTAT_API_TOKEN остаётся как fallback,
+    # чтобы старые .env не падали до миграции.
+    return (os.getenv("TELEMETR_API_TOKEN") or os.getenv("TGSTAT_API_TOKEN") or "").strip()
 
 
-def _normalize_tgstat_channel(value: str | None) -> tuple[str | None, str | None]:
+def _normalize_telemetr_channel(value: str | None) -> tuple[str | None, str | None]:
+    """Привести ссылку/@username/username к голому username для Telemetr.
+
+    Telemetr принимает channelId без ведущего ``@`` (например ``telemetr_me``),
+    а также числовые peer_id. Возвращаем нормализованный идентификатор.
+    """
     raw = (value or "").strip()
     if not raw:
         return None, "empty_channel"
@@ -2230,55 +2240,66 @@ def _normalize_tgstat_channel(value: str | None) -> tuple[str | None, str | None
     if parsed.netloc.lower() in {"t.me", "telegram.me", "www.t.me"}:
         path = parsed.path.strip("/")
         if path and not path.startswith(("+", "joinchat/")) and "/" not in path:
-            return "@" + path.lower().lstrip("@"), None
+            return path.lower().lstrip("@"), None
         return raw, None
 
     if raw.startswith("@"):
         username = raw[1:].strip()
         if re.fullmatch(r"[A-Za-z0-9_]{4,64}", username):
-            return "@" + username.lower(), None
+            return username.lower(), None
         return None, "bad_username"
 
     if re.fullmatch(r"[A-Za-z0-9_]{4,64}", raw):
-        return "@" + raw.lower(), None
+        return raw.lower(), None
 
-    # TGStat also accepts its internal ids and invite links; keep those as-is.
+    # Числовой peer_id или иной идентификатор — отдаём как есть.
     if re.fullmatch(r"[-A-Za-z0-9_:+/]{4,180}", raw):
         return raw, None
     return None, "bad_channel"
 
 
-def _clean_tgstat_payload(channel_id: str, data: dict) -> dict:
+def _clean_telemetr_payload(channel_id: str, data: dict) -> dict:
     resp = data.get("response") if isinstance(data.get("response"), dict) else data
+    username = resp.get("username") or ""
+    link = resp.get("link") or resp.get("public_link") or ""
+    if not link and username:
+        link = f"https://t.me/{username}"
     return {
         "status": "ok",
         "channel_id": channel_id,
         "peer_type": resp.get("peer_type"),
         "title": resp.get("title") or resp.get("name") or "",
-        "username": resp.get("username") or "",
-        "link": resp.get("link") or resp.get("public_link") or "",
+        "username": username,
+        "link": link,
         "participants_count": resp.get("participants_count"),
+        "participants_premium_percent": resp.get("participants_premium_percent"),
         "avg_post_reach": resp.get("avg_post_reach"),
         "adv_post_reach_12h": resp.get("adv_post_reach_12h"),
         "adv_post_reach_24h": resp.get("adv_post_reach_24h"),
         "adv_post_reach_48h": resp.get("adv_post_reach_48h"),
-        "err_percent": resp.get("err_percent"),
-        "err24_percent": resp.get("err24_percent"),
-        "er_percent": resp.get("er_percent"),
         "daily_reach": resp.get("daily_reach"),
+        # Telemetr отдаёт единый err_percent (вовлечённость). Дублируем в
+        # err24_percent/er_percent для обратной совместимости с UI.
+        "err_percent": resp.get("err_percent"),
+        "err24_percent": resp.get("err_percent"),
+        "er_percent": resp.get("err_percent"),
         "ci_index": resp.get("ci_index"),
+        "scoring_rate": resp.get("scoring_rate"),
         "mentions_count": resp.get("mentions_count"),
         "forwards_count": resp.get("forwards_count"),
+        "posts_count": resp.get("posts_count"),
         "fetched_at": int(time.time()),
     }
 
 
-async def _fetch_tgstat_channel(channel_id: str, token: str) -> dict:
+async def _fetch_telemetr_channel(channel_id: str, token: str) -> dict:
     timeout = ClientTimeout(total=12)
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     async with ClientSession(timeout=timeout) as session:
         async with session.get(
-            TGSTAT_CHANNEL_STAT_URL,
-            params={"token": token, "channelId": channel_id},
+            TELEMETR_CHANNEL_STAT_URL,
+            params={"channelId": channel_id},
+            headers=headers,
         ) as resp:
             text = await resp.text()
             try:
@@ -2286,18 +2307,22 @@ async def _fetch_tgstat_channel(channel_id: str, token: str) -> dict:
             except json.JSONDecodeError as exc:
                 raise RuntimeError("bad_json") from exc
             if resp.status >= 400:
-                raise RuntimeError(f"tgstat_http_{resp.status}")
-            if data.get("status") != "ok":
-                raise RuntimeError(str(data.get("error") or data.get("message") or "tgstat_error"))
-            return _clean_tgstat_payload(channel_id, data)
+                # Тело часто содержит code/message с причиной (лимиты и т.п.).
+                reason = ""
+                if isinstance(data, dict):
+                    reason = str(data.get("error") or data.get("message") or data.get("code") or "")
+                raise RuntimeError(reason or f"telemetr_http_{resp.status}")
+            if data.get("status") not in ("ok", None) and "response" not in data:
+                raise RuntimeError(str(data.get("error") or data.get("message") or "telemetr_error"))
+            return _clean_telemetr_payload(channel_id, data)
 
 
-async def handle_tgstat_channel_get(request: web.Request) -> web.Response:
-    token = _tgstat_token()
+async def handle_telemetr_channel_get(request: web.Request) -> web.Response:
+    token = _telemetr_token()
     if not token:
-        return _json({"error": "tgstat_not_configured"}, 503)
+        return _json({"error": "telemetr_not_configured"}, 503)
 
-    channel_id, err = _normalize_tgstat_channel(
+    channel_id, err = _normalize_telemetr_channel(
         request.rel_url.query.get("url") or request.rel_url.query.get("channel")
     )
     if err or not channel_id:
@@ -2305,29 +2330,28 @@ async def handle_tgstat_channel_get(request: web.Request) -> web.Response:
 
     now = time.time()
     force = str(request.rel_url.query.get("force", "")).lower() in {"1", "true", "yes"}
-    cached = _tgstat_cache.get(channel_id)
-    if not force and cached and now - cached[0] < TGSTAT_CACHE_TTL_SEC:
-        ttl = max(0, int(TGSTAT_CACHE_TTL_SEC - (now - cached[0])))
+    cached = _telemetr_cache.get(channel_id)
+    if not force and cached and now - cached[0] < TELEMETR_CACHE_TTL_SEC:
+        ttl = max(0, int(TELEMETR_CACHE_TTL_SEC - (now - cached[0])))
         return _json({**cached[1], "cached": True, "cache_ttl_sec": ttl})
 
     try:
-        data = await _fetch_tgstat_channel(channel_id, token)
+        data = await _fetch_telemetr_channel(channel_id, token)
     except (ClientError, asyncio.TimeoutError) as exc:
-        log.warning("tgstat channel lookup failed for %s: %s", channel_id, exc)
-        return _json({"error": "tgstat_unavailable"}, 502)
+        log.warning("telemetr channel lookup failed for %s: %s", channel_id, exc)
+        return _json({"error": "telemetr_unavailable"}, 502)
     except Exception as exc:
         reason = str(exc)
-        # `quota_foreign_channel` и т.п. — это лимит тарифа TGStat (токен не может
-        # смотреть чужие каналы), а не сбой. Отдаём отдельный код, чтобы UI показал
-        # понятное объяснение вместо «недоступен».
-        if "quota" in reason.lower():
-            log.warning("tgstat channel lookup quota-limited for %s: %s", channel_id, reason)
-            return _json({"error": "tgstat_quota", "detail": reason}, 502)
-        log.warning("tgstat channel lookup rejected for %s: %s", channel_id, reason)
-        return _json({"error": "tgstat_error"}, 502)
+        # Превышение тарифных лимитов (requests/channels) — не сбой; отдаём
+        # отдельный код, чтобы UI показал понятное объяснение.
+        if "limit" in reason.lower() or "quota" in reason.lower():
+            log.warning("telemetr channel lookup limit-reached for %s: %s", channel_id, reason)
+            return _json({"error": "telemetr_quota", "detail": reason}, 502)
+        log.warning("telemetr channel lookup rejected for %s: %s", channel_id, reason)
+        return _json({"error": "telemetr_error"}, 502)
 
-    _tgstat_cache[channel_id] = (now, data)
-    return _json({**data, "cached": False, "cache_ttl_sec": TGSTAT_CACHE_TTL_SEC})
+    _telemetr_cache[channel_id] = (now, data)
+    return _json({**data, "cached": False, "cache_ttl_sec": TELEMETR_CACHE_TTL_SEC})
 
 
 # ── analytics ──────────────────────────────────────────────────────────
@@ -2487,5 +2511,7 @@ def register_admin_routes(
     r.add_get ("/api/admin/analytics/repeat",          handle_analytics_repeat)
     r.add_get ("/api/admin/analytics/margin",          handle_analytics_margin)
     r.add_get ("/api/admin/analytics/referral-quality", handle_analytics_referral_quality)
-    r.add_get ("/api/admin/tgstat/channel",            handle_tgstat_channel_get)
-    log.info("Admin API registered on /api/admin/* (%d routes)", 48)
+    r.add_get ("/api/admin/telemetr/channel",          handle_telemetr_channel_get)
+    # Backward-compat alias for older cached admin.html builds.
+    r.add_get ("/api/admin/tgstat/channel",            handle_telemetr_channel_get)
+    log.info("Admin API registered on /api/admin/* (%d routes)", 49)
