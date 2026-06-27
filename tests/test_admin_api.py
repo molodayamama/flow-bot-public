@@ -794,6 +794,50 @@ class AdminApiValidationTests(unittest.TestCase):
         self.assertEqual(calls, [100])
         self.assertEqual(body["sellers"], [])
 
+    def test_tgstat_channel_requires_server_token(self) -> None:
+        old = admin_api.os.environ.pop("TGSTAT_API_TOKEN", None)
+        self.addCleanup(lambda: admin_api.os.environ.__setitem__("TGSTAT_API_TOKEN", old) if old is not None else None)
+        req = SimpleNamespace(rel_url=SimpleNamespace(query={"url": "@channel"}))
+
+        resp = asyncio.run(admin_api.handle_tgstat_channel_get(req))
+        body = json.loads(resp.body)
+
+        self.assertEqual(resp.status, 503)
+        self.assertEqual(body["error"], "tgstat_not_configured")
+
+    def test_tgstat_channel_lookup_uses_cache_and_hides_token(self) -> None:
+        admin_api.os.environ["TGSTAT_API_TOKEN"] = "test-token"
+        self.addCleanup(admin_api.os.environ.pop, "TGSTAT_API_TOKEN", None)
+        admin_api._tgstat_cache.clear()
+        self.addCleanup(admin_api._tgstat_cache.clear)
+        calls = []
+
+        async def fake_fetch(channel_id, token):
+            calls.append((channel_id, token))
+            return {
+                "status": "ok",
+                "channel_id": channel_id,
+                "title": "My Channel",
+                "adv_post_reach_24h": 12345,
+            }
+
+        old_fetch = admin_api._fetch_tgstat_channel
+        admin_api._fetch_tgstat_channel = fake_fetch
+        self.addCleanup(setattr, admin_api, "_fetch_tgstat_channel", old_fetch)
+        req = SimpleNamespace(rel_url=SimpleNamespace(query={"url": "https://t.me/MyChannel"}))
+
+        first = asyncio.run(admin_api.handle_tgstat_channel_get(req))
+        second = asyncio.run(admin_api.handle_tgstat_channel_get(req))
+        first_body = json.loads(first.body)
+        second_body = json.loads(second.body)
+
+        self.assertEqual(calls, [("@mychannel", "test-token")])
+        self.assertFalse(first_body["cached"])
+        self.assertTrue(second_body["cached"])
+        self.assertEqual(second_body["adv_post_reach_24h"], 12345)
+        self.assertNotIn("test-token", first.text)
+        self.assertNotIn("test-token", second.text)
+
     def test_video_ab_route_is_post_only(self) -> None:
         from pathlib import Path
         source = Path(admin_api.__file__).read_text(encoding="utf-8")

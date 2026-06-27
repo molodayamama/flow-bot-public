@@ -1496,15 +1496,28 @@ class LandingStaticContentTests(unittest.TestCase):
 
     def test_admin_has_ad_cac_calculator(self) -> None:
         for needle in (
+            'data-tab="adcalc"',
+            'id="tab-adcalc"',
             'id="ad-segment"',
             'id="ad-channels"',
+            'id="ad-tgstat-url"',
+            '/tgstat/channel?url=',
+            'function adFetchChannel',
+            'function loadAdCalc',
             'function adRecalc()',
             'function adApplyLiveDefaults',
-            'adApplyLiveDefaults({activation, repeat, margin});',
+            'adApplyLiveDefaults({repeat, margin});',
+            'class="form-help"',
+            'Фрикция %',
             'CAC green',
             'Flow quota',
         ):
             self.assertIn(needle, self.admin)
+        analytics = self.admin[
+            self.admin.index('id="tab-analytics"'):
+            self.admin.index('id="tab-adcalc"')
+        ]
+        self.assertNotIn("CAC-калькулятор", analytics)
 
     def test_admin_demo_copy_matches_current_bot_copy(self) -> None:
         self.assertNotIn("удобным способом", self.admin)

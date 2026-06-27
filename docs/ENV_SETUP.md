@@ -165,6 +165,16 @@ to the wrong local process, that process forwards the callback to the configured
 localhost result URL for the target scope before credits are issued. Old invoices
 without `Shp_bot` remain consumer-only for retry compatibility.
 
+## TGStat
+
+The admin advertising calculator can fetch Telegram channel reach via TGStat.
+Keep the real token only in production `.env` files.
+
+```dotenv
+TGSTAT_API_TOKEN=replace_me
+TGSTAT_CACHE_TTL_SEC=21600
+```
+
 Robokassa cabinet URLs:
 
 ```text

@@ -332,10 +332,11 @@ tr:hover td{background:var(--pz-surface-2)}
 .analytics-section .section-title{margin-bottom:12px}
 .adcalc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 .adcalc-grid .form-row{margin-bottom:0}
+.form-help{font-size:11px;line-height:1.35;color:var(--pz-faint);margin-top:5px}
 .adcalc-input{font-family:var(--font-mono);font-size:13px}
 .adcalc-channels{display:flex;flex-direction:column;gap:8px;margin-top:12px}
 .adcalc-channel{
-  display:grid;grid-template-columns:1.2fr repeat(4,minmax(86px,.8fr)) 36px;
+  display:grid;grid-template-columns:1.05fr 1.15fr repeat(4,minmax(82px,.72fr)) 72px;
   gap:8px;align-items:end;padding:10px;border:1px solid var(--pz-line-faint);
   border-radius:var(--r-md);background:var(--pz-surface-2);
 }
@@ -446,6 +447,9 @@ tr:hover td{background:var(--pz-surface-2)}
       </button>
       <button class="sb-item" data-tab="analytics">
         <span class="sb-icon">📈</span> Аналитика
+      </button>
+      <button class="sb-item" data-tab="adcalc">
+        <span class="sb-icon">📣</span> Реклама
       </button>
     </nav>
     <div class="sb-footer">
@@ -1026,79 +1030,6 @@ tr:hover td{background:var(--pz-surface-2)}
         </div>
 
         <div class="analytics-section">
-          <div class="section-title">Реклама / CAC-калькулятор</div>
-          <div class="card">
-            <div class="card-title">Стоит ли брать размещение</div>
-            <div class="card-sub">Локальный расчёт по воронке, марже и Flow-квоте. Данные не сохраняются.</div>
-
-            <div class="adcalc-grid" style="margin-top:14px">
-              <div class="form-row">
-                <label class="form-label">Сегмент</label>
-                <select class="form-input adcalc-input" id="ad-segment">
-                  <option value="image">Consumer · картинки</option>
-                  <option value="video">Consumer · видео</option>
-                  <option value="seller">Seller · карточки</option>
-                </select>
-              </div>
-              <div class="form-row">
-                <label class="form-label">Первый чек ₽</label>
-                <input class="form-input adcalc-input" id="ad-check" type="number" value="90" min="0">
-              </div>
-              <div class="form-row">
-                <label class="form-label">Фрикция %</label>
-                <input class="form-input adcalc-input" id="ad-friction" type="number" value="32" min="0" max="95">
-              </div>
-              <div class="form-row">
-                <label class="form-label">Повтор %</label>
-                <input class="form-input adcalc-input" id="ad-repeat" type="number" value="25" min="0" max="95">
-              </div>
-              <div class="form-row">
-                <label class="form-label">Refund/fail %</label>
-                <input class="form-input adcalc-input" id="ad-refund" type="number" value="3" min="0" max="95">
-              </div>
-              <div class="form-row">
-                <label class="form-label">G-кредит ₽</label>
-                <input class="form-input adcalc-input" id="ad-gcost" type="number" value="0.053" min="0" step="0.001">
-              </div>
-              <div class="form-row">
-                <label class="form-label">Видео/плательщика</label>
-                <input class="form-input adcalc-input" id="ad-video-jobs" type="number" value="0.2" min="0" step="0.1">
-              </div>
-              <div class="form-row">
-                <label class="form-label">G-кр/видео</label>
-                <input class="form-input adcalc-input" id="ad-video-g" type="number" value="8.5" min="0" step="0.1">
-              </div>
-              <div class="form-row">
-                <label class="form-label">Flow аккаунтов</label>
-                <input class="form-input adcalc-input" id="ad-accounts" type="number" value="5" min="1">
-              </div>
-            </div>
-
-            <div class="adcalc-out" id="ad-summary">
-              <div class="adcalc-pill"><div class="kpi-label">CAC green</div><b>—</b></div>
-            </div>
-
-            <div class="toolbar" style="margin:16px 0 8px">
-              <div class="card-sub">Каналы: цена поста + просмотры + прогноз CTR/конверсии.</div>
-              <button class="btn btn-ghost btn-sm" onclick="adAddChannel()">+ Канал</button>
-            </div>
-            <div id="ad-channels" class="adcalc-channels"></div>
-            <div class="table-wrap" style="margin-top:12px">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Канал</th><th>Старты</th><th>Платящие</th><th>CAC</th><th>ROAS</th><th>Max пост</th><th>Вердикт</th>
-                  </tr>
-                </thead>
-                <tbody id="ad-results">
-                  <tr><td colspan="7" style="color:var(--pz-faint);padding:16px;text-align:center">Заполните каналы</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <div class="analytics-section">
           <div class="section-title">Сегодня</div>
           <div class="kpi-grid" id="kpi-today">
             <div class="kpi"><div class="kpi-label">Загрузка…</div></div>
@@ -1189,6 +1120,111 @@ tr:hover td{background:var(--pz-surface-2)}
                 </table>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Tab: Ad CAC Calculator ─────────────────────── -->
+      <div id="tab-adcalc" class="tab-panel">
+        <div class="toolbar">
+          <div>
+            <div class="card-title">Реклама / CAC-калькулятор</div>
+            <div class="card-sub">Оценка посевов в Telegram-каналах: TGStat → охват, вручную → цена и конверсия.</div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="loadAdCalc()">↻ Обновить</button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">TGStat lookup</div>
+          <div class="card-sub">Вставьте @username или ссылку t.me. Запрос делается только по кнопке и кэшируется на сервере.</div>
+          <div class="adcalc-grid" style="grid-template-columns:minmax(220px,1.5fr) auto;align-items:end;margin-top:14px">
+            <div class="form-row">
+              <label class="form-label">Ссылка на канал</label>
+              <input class="form-input adcalc-input" id="ad-tgstat-url" placeholder="https://t.me/channel или @channel" autocomplete="off">
+              <div class="form-help">TGStat отдаёт подписчиков, рекламный охват 12/24/48ч и ERR. Токен хранится только на сервере.</div>
+            </div>
+            <button class="btn btn-primary" id="ad-tgstat-btn" onclick="adFetchChannel()">Получить</button>
+          </div>
+          <div id="ad-tgstat-status" class="card-sub" style="margin-top:10px">Запросов ещё не было.</div>
+          <div class="adcalc-out" id="ad-tgstat-preview" style="display:none"></div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">Стоит ли брать размещение</div>
+          <div class="card-sub">Локальный расчёт по воронке, марже и Flow-квоте. Данные не сохраняются.</div>
+
+          <div class="adcalc-grid" style="margin-top:14px">
+            <div class="form-row">
+              <label class="form-label">Сегмент</label>
+              <select class="form-input adcalc-input" id="ad-segment">
+                <option value="image">Consumer · картинки</option>
+                <option value="video">Consumer · видео</option>
+                <option value="seller">Seller · карточки</option>
+              </select>
+              <div class="form-help">Шаблон экономики: чек, повторы и расход видео отличаются для обычных и seller-пользователей.</div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Первый чек ₽</label>
+              <input class="form-input adcalc-input" id="ad-check" type="number" value="90" min="0">
+              <div class="form-help">Средняя первая оплата. Брать из Robokassa/Stars отчёта или медианы пакетов.</div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Фрикция %</label>
+              <input class="form-input adcalc-input" id="ad-friction" type="number" value="32" min="0" max="95">
+              <div class="form-help">Потери на комиссиях, скидках, неидеальной оплате и округлениях. Обычно 25–35%.</div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Повтор %</label>
+              <input class="form-input adcalc-input" id="ad-repeat" type="number" value="25" min="0" max="95">
+              <div class="form-help">Доля платящих, кто покупает второй раз. Автоподставляется из аналитики повторной покупки.</div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Refund/fail %</label>
+              <input class="form-input adcalc-input" id="ad-refund" type="number" value="3" min="0" max="95">
+              <div class="form-help">Возвраты, фейлы и спорные списания. Если нет статистики, держите 2–5%.</div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">G-кредит ₽</label>
+              <input class="form-input adcalc-input" id="ad-gcost" type="number" value="0.053" min="0" step="0.001">
+              <div class="form-help">Себестоимость Google Flow кредита. Подтягивается из margin-аналитики, можно поправить вручную.</div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Видео/плательщика</label>
+              <input class="form-input adcalc-input" id="ad-video-jobs" type="number" value="0.2" min="0" step="0.1">
+              <div class="form-help">Сколько видео в среднем делает один новый плательщик. Для image-трафика можно ставить 0.1–0.2.</div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">G-кр/видео</label>
+              <input class="form-input adcalc-input" id="ad-video-g" type="number" value="8.5" min="0" step="0.1">
+              <div class="form-help">Средний расход Flow-кредитов на видео. Брать из модели/flow_jobs или оставить 7–9.</div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Flow аккаунтов</label>
+              <input class="form-input adcalc-input" id="ad-accounts" type="number" value="5" min="1">
+              <div class="form-help">Сколько Google Flow аккаунтов готовы принять трафик. Лимит считается грубо: 1000 G-кр на аккаунт.</div>
+            </div>
+          </div>
+
+          <div class="adcalc-out" id="ad-summary">
+            <div class="adcalc-pill"><div class="kpi-label">CAC green</div><b>—</b></div>
+          </div>
+
+          <div class="toolbar" style="margin:16px 0 8px">
+            <div class="card-sub">Каналы: цена поста + охват из TGStat или вручную + прогноз CTR/конверсии в оплату.</div>
+            <button class="btn btn-ghost btn-sm" onclick="adAddChannel()">+ Канал</button>
+          </div>
+          <div id="ad-channels" class="adcalc-channels"></div>
+          <div class="table-wrap" style="margin-top:12px">
+            <table>
+              <thead>
+                <tr>
+                  <th>Канал</th><th>Старты</th><th>Платящие</th><th>CAC</th><th>ROAS</th><th>Max пост</th><th>Вердикт</th>
+                </tr>
+              </thead>
+              <tbody id="ad-results">
+                <tr><td colspan="7" style="color:var(--pz-faint);padding:16px;text-align:center">Заполните каналы</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -1361,12 +1397,14 @@ const tabMeta = {
   sellers:   ['Селлеры',         'Маркетплейс-задачи, заявки под ключ и платежи'],
   referrals: ['Рефералки',       'Приглашения, вознаграждения, топ рефереров'],
   analytics: ['Аналитика',       'Сегодня · Выручка · Нагрузка · Каналы · Ошибки'],
+  adcalc:    ['Реклама',          'CAC-калькулятор, TGStat-охват и решение по посевам'],
 };
 const tabLoaders = {
   overview:loadOverview, accounts:loadAccounts, support:loadSupport,
   messages:loadMessages, labels:loadLabels, prices:loadPrices,
   settings:loadSettings, users:()=>loadUsers(1),
   sellers:loadSellers, referrals:loadReferrals, analytics:loadAnalytics,
+  adcalc:loadAdCalc,
 };
 let currentTab = 'overview';
 
@@ -2428,8 +2466,8 @@ const AD_SEGMENTS = {
   seller: {check:240, friction:24, repeat:35, refund:3, videoJobs:0.10, videoG:7.0, title:'Seller · карточки'},
 };
 let adChannels = [
-  {name:'Канал A', cost:5000, views:30000, ctr:1.2, pay:6.0},
-  {name:'Тестовый посев', cost:1500, views:12000, ctr:0.9, pay:5.0},
+  {name:'Канал A', link:'', cost:5000, views:30000, ctr:1.2, pay:6.0},
+  {name:'Тестовый посев', link:'', cost:1500, views:12000, ctr:0.9, pay:5.0},
 ];
 let adLiveDefaults = {};
 
@@ -2470,14 +2508,103 @@ function adRenderChannels() {
   if (!root) return;
   root.innerHTML = adChannels.map((ch, i) => `
     <div class="adcalc-channel">
-      <div class="form-row"><label class="form-label">Канал</label><input class="form-input adcalc-input" data-ad-i="${i}" data-ad-k="name" value="${esc(ch.name)}"></div>
-      <div class="form-row"><label class="form-label">Пост ₽</label><input class="form-input adcalc-input" type="number" min="0" data-ad-i="${i}" data-ad-k="cost" value="${ch.cost}"></div>
-      <div class="form-row"><label class="form-label">Просмотры</label><input class="form-input adcalc-input" type="number" min="0" data-ad-i="${i}" data-ad-k="views" value="${ch.views}"></div>
-      <div class="form-row"><label class="form-label">CTR %</label><input class="form-input adcalc-input" type="number" min="0" step="0.1" data-ad-i="${i}" data-ad-k="ctr" value="${ch.ctr}"></div>
-      <div class="form-row"><label class="form-label">Pay %</label><input class="form-input adcalc-input" type="number" min="0" step="0.1" data-ad-i="${i}" data-ad-k="pay" value="${ch.pay}"></div>
-      <button class="btn btn-ghost btn-sm remove-cell" title="Удалить" onclick="adRemoveChannel(${i})">×</button>
+      <div class="form-row"><label class="form-label">Канал</label><input class="form-input adcalc-input" data-ad-i="${i}" data-ad-k="name" value="${esc(ch.name||'')}"><div class="form-help">Название для себя. TGStat подставит title, если он есть.</div></div>
+      <div class="form-row"><label class="form-label">Ссылка</label><input class="form-input adcalc-input" data-ad-i="${i}" data-ad-k="link" value="${esc(ch.link||'')}" placeholder="@channel"><div class="form-help">Для TGStat: @username или t.me/link. Запрос только по кнопке.</div></div>
+      <div class="form-row"><label class="form-label">Пост ₽</label><input class="form-input adcalc-input" type="number" min="0" data-ad-i="${i}" data-ad-k="cost" value="${ch.cost}"><div class="form-help">Цена размещения у админа канала.</div></div>
+      <div class="form-row"><label class="form-label">Просмотры</label><input class="form-input adcalc-input" type="number" min="0" data-ad-i="${i}" data-ad-k="views" value="${ch.views}"><div class="form-help">Охват поста. TGStat подставляет рекламный охват 24ч.</div></div>
+      <div class="form-row"><label class="form-label">CTR %</label><input class="form-input adcalc-input" type="number" min="0" step="0.1" data-ad-i="${i}" data-ad-k="ctr" value="${ch.ctr}"><div class="form-help">Клики/старты бота из просмотров. Брать из UTM/seed после теста.</div></div>
+      <div class="form-row"><label class="form-label">Pay %</label><input class="form-input adcalc-input" type="number" min="0" step="0.1" data-ad-i="${i}" data-ad-k="pay" value="${ch.pay}"><div class="form-help">Доля стартов, дошедших до оплаты. Брать из аналитики канала.</div></div>
+      <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
+        <button class="btn btn-ghost btn-sm" title="Получить из TGStat" onclick="adFetchChannel(${i})">TG</button>
+        <button class="btn btn-ghost btn-sm remove-cell" title="Удалить" onclick="adRemoveChannel(${i})">×</button>
+      </div>
     </div>
   `).join('');
+}
+function adMetric(data, key) {
+  const v = Number(data?.[key]);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+function adBestReach(data) {
+  return adMetric(data, 'adv_post_reach_24h')
+      || adMetric(data, 'avg_post_reach')
+      || adMetric(data, 'adv_post_reach_48h')
+      || adMetric(data, 'adv_post_reach_12h')
+      || adMetric(data, 'participants_count');
+}
+async function adFetchJson(path, timeoutMs=15000) {
+  try {
+    const r = await fetch(API_BASE + path, {signal: AbortSignal.timeout(timeoutMs)});
+    let data = null;
+    try { data = await r.json(); } catch {}
+    return {ok:r.ok, status:r.status, data};
+  } catch {
+    return {ok:false, status:0, data:null, offline:true};
+  }
+}
+function adShowTgstat(data) {
+  const el = document.getElementById('ad-tgstat-preview');
+  if (!el) return;
+  el.style.display = 'grid';
+  el.innerHTML = `
+    <div class="adcalc-pill"><div class="kpi-label">Подписчики</div><b>${fmt(data.participants_count||0)}</b></div>
+    <div class="adcalc-pill"><div class="kpi-label">Охват 24ч</div><b>${fmt(data.adv_post_reach_24h||0)}</b><div class="kpi-sub">рекламный пост</div></div>
+    <div class="adcalc-pill"><div class="kpi-label">Avg reach</div><b>${fmt(data.avg_post_reach||0)}</b></div>
+    <div class="adcalc-pill"><div class="kpi-label">ERR24</div><b>${data.err24_percent ?? '—'}%</b></div>
+    <div class="adcalc-pill"><div class="kpi-label">ER</div><b>${data.er_percent ?? '—'}%</b></div>
+  `;
+}
+function adApplyTgstat(data, index=null) {
+  const title = data.title || data.username || data.channel_id || 'TGStat канал';
+  const link = data.link || (data.username ? `@${data.username}` : data.channel_id);
+  const views = adBestReach(data);
+  const row = {
+    name: title,
+    link,
+    cost: 0,
+    views: Math.round(views),
+    ctr: 1.0,
+    pay: 5.0,
+    _tgstat: data,
+  };
+  if (index == null || !adChannels[index]) {
+    adChannels.push(row);
+  } else {
+    adChannels[index] = {
+      ...adChannels[index],
+      name: title,
+      link,
+      views: Math.round(views),
+      _tgstat: data,
+    };
+  }
+  adRenderChannels();
+  adRecalc();
+  adShowTgstat(data);
+}
+async function adFetchChannel(index=null) {
+  const status = document.getElementById('ad-tgstat-status');
+  const topInput = document.getElementById('ad-tgstat-url');
+  const fromRow = index != null && adChannels[index] ? adChannels[index].link : '';
+  const url = (fromRow || topInput?.value || '').trim();
+  if (!url) {
+    if (status) status.textContent = 'Вставьте ссылку на канал или заполните поле «Ссылка» в строке.';
+    return;
+  }
+  if (status) status.textContent = 'Запрашиваю TGStat…';
+  const res = await adFetchJson(`/tgstat/channel?url=${encodeURIComponent(url)}`);
+  if (!res.ok || !res.data) {
+    const msg = res.status === 503
+      ? 'TGStat token не настроен на сервере.'
+      : (res.status === 400 ? 'TGStat не понял ссылку на канал.' : 'TGStat сейчас недоступен или канал не найден.');
+    if (status) status.textContent = msg;
+    return;
+  }
+  adApplyTgstat(res.data, index);
+  if (status) {
+    const cache = res.data.cached ? 'из кэша' : 'новый запрос';
+    status.textContent = `TGStat: ${res.data.title || res.data.channel_id} · ${cache} · охват 24ч ${fmt(res.data.adv_post_reach_24h||0)}`;
+  }
 }
 function adVerdict(cac, firstCm, ltvCm, payers, views) {
   if (views < 1000 || payers < 5) return {text:'Мало данных', color:'var(--pz-warn)'};
@@ -2525,7 +2652,7 @@ function adRecalc() {
   `;
 }
 function adAddChannel() {
-  adChannels.push({name:`Канал ${adChannels.length+1}`, cost:0, views:10000, ctr:1.0, pay:5.0});
+  adChannels.push({name:`Канал ${adChannels.length+1}`, link:'', cost:0, views:10000, ctr:1.0, pay:5.0});
   adRenderChannels();
   adRecalc();
 }
@@ -2541,12 +2668,21 @@ function adApplyLiveDefaults({activation, repeat, margin}={}) {
   adSetSegmentDefaults(segment);
   adRecalc();
 }
+async function loadAdCalc() {
+  const [repeat, margin] = await Promise.all([
+    api('GET', '/analytics/repeat'),
+    api('GET', '/analytics/margin'),
+  ]);
+  adApplyLiveDefaults({repeat, margin});
+  adRenderChannels();
+  adRecalc();
+}
 document.addEventListener('input', e => {
   const t = e.target;
   if (t?.dataset?.adI != null) {
     const i = Number(t.dataset.adI);
     const k = t.dataset.adK;
-    if (adChannels[i]) adChannels[i][k] = k === 'name' ? t.value : Number(t.value);
+    if (adChannels[i]) adChannels[i][k] = (k === 'name' || k === 'link') ? t.value : Number(t.value);
     adRecalc();
   } else if (t?.id?.startsWith('ad-')) {
     adRecalc();
@@ -2811,7 +2947,6 @@ async function loadAnalytics() {
     api('GET', '/analytics/margin'),
     api('GET', '/analytics/referral-quality'),
   ]);
-  adApplyLiveDefaults({activation, repeat, margin});
 
   // 1 · Cold-start activation (rate to first wow within 24h), by channel.
   if (activation) {
