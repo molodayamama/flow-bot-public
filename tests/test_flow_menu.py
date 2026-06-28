@@ -927,19 +927,26 @@ class BotMenuWiringTests(unittest.TestCase):
         # «Изменить моё фото» — оно становится основой, к которой применяется
         # собранный промпт шаблона как правка (запрос оператора).
         self.assertIn("async def _template_photo_received", self.source)
-        # handle_photo перехватывает фото для НЕ-видео шаблона.
+        self.assertIn('_IDEAS_PHOTO_KEYS = ("ideas_photo_file_id", "ideas_photo_caption", "ideas_extra_prompt")', self.source)
+        # handle_photo перехватывает фото внутри любой ветки «Идей».
         self.assertIn(
-            'if tp_tpl and prompts_lib.template_target(tp_tpl) != "video":',
+            'if st.get("tp_tpl") or "gp_step" in st or st.get("ideas_mode") in ("root", "templates", "guided"):',
             self.source,
         )
         self.assertIn("await _template_photo_received(message, user_id=user_id)", self.source)
-        # При завершении шаблона с фото — идём через _edit_and_send, а не show_wizard.
+        receive = self.source[
+            self.source.index("async def _template_photo_received"):
+            self.source.index('@dp.callback_query(F.data.startswith("ih:"))')
+        ]
+        self.assertIn('st["ideas_photo_file_id"] = message.photo[-1].file_id', receive)
+        self.assertNotIn("upload_image(", receive)
+        # При завершении шаблона с фото — идём в штатные экраны настроек image/video.
         start = self.source.index("async def _render_template_step")
         block = self.source[start:start + 3000]
-        self.assertIn("elif tp_photo:", block)
-        self.assertIn("await _edit_and_send(message, ref, prompt", block)
-        # Видео-шаблоны фото-основу не используют (upload идёт в видео-визарде).
-        self.assertIn("tp_photo для видео не используем", block)
+        self.assertIn('ideas_photo_file_id = st.get("ideas_photo_file_id")', block)
+        self.assertIn("await _prepare_photo_video_from_file_id(", block)
+        self.assertIn("elif ideas_photo_file_id:", block)
+        self.assertIn("await _prepare_photo_edit_from_file_id(", block)
 
     def test_guided_video_carries_format_and_style(self) -> None:
         # «Подбор по шагам» → видео: выбранный формат (9:16) и стиль должны
@@ -953,8 +960,10 @@ class BotMenuWiringTests(unittest.TestCase):
         apply_at = block.index('st["vfmt"] = vfmt')
         self.assertLess(clear_at, apply_at)  # применяем после очистки
         # Guided-ветка передаёт формат и стиль.
-        self.assertIn('gv_fmt = "port" if answers.get("format") in ("story", "avatar") else "land"', self.source)
-        self.assertIn("vfmt=gv_fmt, vstyle=gv_style", self.source)
+        self.assertIn("gv_fmt = _guided_video_fmt(answers)", self.source)
+        self.assertIn("image_fmt = _guided_image_fmt(answers)", self.source)
+        self.assertIn("vfmt=gv_fmt", self.source)
+        self.assertIn("vstyle=gv_style", self.source)
 
     def test_video_result_edit_and_extend_wiring(self) -> None:
         self.assertIn("def _video_can_edit", self.source)
@@ -1304,6 +1313,21 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('"template_used"', self.source)
         # Free-text Q&A answers are captured in the text handler.
         self.assertIn('st.get("tp_await") == "text"', self.source)
+        self.assertIn('flow_copy.msg("ideas_text_attached_template")', self.source)
+        self.assertIn('flow_copy.msg("ideas_text_attached_guided")', self.source)
+        self.assertIn('flow_copy.msg("ideas_text_attached_root")', self.source)
+        self.assertIn('flow_copy.msg("ideas_choice_hint")', self.source)
+        self.assertIn('flow_copy.msg("ideas_guided_hint")', self.source)
+        self.assertIn("_ideas_prompt_with_extra(prompt, st)", self.source)
+        self.assertIn("await _prepare_photo_edit_from_file_id(", self.source)
+        self.assertIn("await _prepare_photo_video_from_file_id(", self.source)
+        for key in (
+            "ideas_choice_hint",
+            "ideas_guided_hint",
+            "ideas_photo_attached_guided",
+            "ideas_text_attached_guided",
+        ):
+            self.assertIn(key, flow_copy.MESSAGES)
         # New prefixes register before the catch-all image handler.
         for pfx in ('startswith("ih:")', 'startswith("tp:")', 'startswith("gp:")'):
             self.assertLess(self.source.index(pfx),

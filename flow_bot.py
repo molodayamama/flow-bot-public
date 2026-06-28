@@ -9586,6 +9586,8 @@ async def _prepare_photo_video_from_file_id(
     user_id: int,
     file_id: str,
     caption: str,
+    vfmt: str | None = None,
+    vstyle: str | None = None,
 ) -> bool:
     _vid_clear(user_id)
     st = _ws(user_id)
@@ -9604,10 +9606,10 @@ async def _prepare_photo_video_from_file_id(
     st["vprompt"] = caption
     st["vstep"] = "vnewwiz"
     st["vmode"] = "ingredients"
-    st.setdefault("vfmt", VID_DEFAULT_FMT)
+    st["vfmt"] = vfmt or st.get("vfmt") or VID_DEFAULT_FMT
     st.setdefault("vdur", 4)
     st.setdefault("vquality", "lite")
-    st.setdefault("vstyle", "")
+    st["vstyle"] = vstyle if vstyle is not None else st.get("vstyle", "")
     st["vmodel"] = _nwiz_model(st)
     await show_new_video_wizard(message, user_id=user_id, edit=False)
     return True
@@ -9694,9 +9696,49 @@ async def on_animate_action(callback: types.CallbackQuery):
 
 # ── «Идеи и шаблоны»: готовые шаблоны (tp:) + подбор по шагам (gp:) ────
 
+_IDEAS_PHOTO_KEYS = ("ideas_photo_file_id", "ideas_photo_caption", "ideas_extra_prompt")
+_TP_STATE_KEYS = ("tp_tpl", "tp_step", "tp_answers", "tp_await")
+_GP_STATE_KEYS = ("gp_step", "gp_answers", "gp_extra_prompt")
+
+
+def _ideas_clear(st: dict, *, clear_photo: bool = False) -> None:
+    for k in (*_TP_STATE_KEYS, *_GP_STATE_KEYS):
+        st.pop(k, None)
+    if clear_photo:
+        for k in _IDEAS_PHOTO_KEYS:
+            st.pop(k, None)
+    st.pop("ideas_mode", None)
+
+
+def _ideas_has_photo(st: dict) -> bool:
+    return bool(st.get("ideas_photo_file_id"))
+
+
+def _ideas_prompt_with_extra(prompt: str, st: dict) -> str:
+    extra = (st.get("gp_extra_prompt") or st.get("ideas_extra_prompt") or "").strip()
+    if not extra:
+        return prompt
+    base = (prompt or "high quality image").strip()
+    return f"{base}. User note for the attached photo/reference: {extra}"
+
+
+def _guided_image_fmt(answers: dict) -> str:
+    fmt = (answers or {}).get("format")
+    if fmt == "story":
+        return "port"
+    if fmt in ("square", "avatar"):
+        return "sq"
+    return "land"
+
+
+def _guided_video_fmt(answers: dict) -> str:
+    return "port" if (answers or {}).get("format") in ("story", "avatar") else "land"
+
+
 async def _show_ideas_root(message: types.Message, *, user_id: int, edit: bool):
-    _ws(user_id).pop("tp_tpl", None)
-    _ws(user_id).pop("gp_step", None)
+    st = _ws(user_id)
+    _ideas_clear(st, clear_photo=False)
+    st["ideas_mode"] = "root"
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [_menu_button("ideas_templates", "ih:templates")],
         [_menu_button("ideas_guided", "ih:guided")],
@@ -9704,9 +9746,9 @@ async def _show_ideas_root(message: types.Message, *, user_id: int, edit: bool):
     ])
     text = flow_copy.msg("ideas_root")
     if edit:
-        await _edit_or_answer(message, text, kb)
+        await _edit_or_answer(message, text, kb, parse_mode="HTML")
     else:
-        await message.answer(text, reply_markup=kb)
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 def _templates_picker_kb() -> types.InlineKeyboardMarkup:
@@ -9726,18 +9768,24 @@ async def _render_template_step(message: types.Message, *, user_id: int):
     if not tid or step >= len(questions):
         # Все ответы собраны → компонуем промпт и открываем экран генерации.
         prompt = prompts_lib.compose_template_prompt(tid, st.get("tp_answers", {}))
+        prompt = _ideas_prompt_with_extra(prompt, st)
         target = prompts_lib.template_target(tid)
         metrics.log_event("template_used", user_id=user_id, source="ideas",
                           payload={"template": tid, "target": target})
-        tp_photo = st.get("tp_photo")
-        tp_photo_project = st.get("tp_photo_project")
-        tp_photo_acc = st.get("tp_photo_acc")
-        for k in ("tp_tpl", "tp_step", "tp_answers", "tp_await", *_TP_PHOTO_KEYS):
+        ideas_photo_file_id = st.get("ideas_photo_file_id")
+        for k in (*_TP_STATE_KEYS, *_IDEAS_PHOTO_KEYS):
             st.pop(k, None)
+        st.pop("ideas_mode", None)
         if target == "video":
-            # Шаблон-видео: идём в новый video wizard с предзаполненным промптом.
-            # (Фото для видео-шаблонов собирается уже в видео-визарде — там корректный
-            # upload на видео-аккаунт; раннее tp_photo для видео не используем.)
+            if ideas_photo_file_id:
+                await _prepare_photo_video_from_file_id(
+                    message,
+                    user_id=user_id,
+                    file_id=ideas_photo_file_id,
+                    caption=prompt or "high quality video",
+                )
+                return
+            # Шаблон-видео без фото: идём в новый video wizard с предзаполненным промптом.
             _vid_clear(user_id)
             _clear_image_flow_keys(st)
             st["vprompt"] = prompt or ""
@@ -9746,15 +9794,15 @@ async def _render_template_step(message: types.Message, *, user_id: int):
             st.setdefault("vquality", "lite")
             st.setdefault("vstyle", "")
             await show_new_video_wizard(message, user_id=user_id, edit=True)
-        elif tp_photo:
+        elif ideas_photo_file_id:
             # «Фото = основа»: применяем собранный промпт шаблона как правку к
             # загруженному пользователем фото (тот же пайплайн, что «Изменить фото»).
-            ref = ImageRef(
-                user_id=user_id, project_id=tp_photo_project, source=tp_photo,
-                prompt=prompt or "uploaded image", aspect_ratio="landscape",
-                account_id=tp_photo_acc,
+            await _prepare_photo_edit_from_file_id(
+                message,
+                user_id=user_id,
+                file_id=ideas_photo_file_id,
+                caption=prompt or "high quality image",
             )
-            await _edit_and_send(message, ref, prompt or "high quality image", actor_id=user_id)
         else:
             st["pending_prompt"] = prompt or "high quality image"
             await show_wizard(message, user_id=user_id, edit=True)
@@ -9777,6 +9825,10 @@ async def _render_template_step(message: types.Message, *, user_id: int):
     text = flow_copy.msg("ideas_qa_step", n=step + 1, total=len(questions), q=q["text"])
     if q["type"] == "text":
         text += "\n\n" + flow_copy.msg("ideas_type_hint")
+    else:
+        text += "\n\n" + flow_copy.msg("ideas_choice_hint")
+    if _ideas_has_photo(st):
+        text += "\n\n" + flow_copy.msg("ideas_photo_context_hint")
     await _edit_or_answer(message, text, kb)
 
 
@@ -9790,56 +9842,42 @@ def _tp_store_answer(st: dict, value: str):
     st["tp_await"] = None
 
 
-_TP_PHOTO_KEYS = ("tp_photo", "tp_photo_project", "tp_photo_acc")
-
-
 async def _template_photo_received(message: types.Message, *, user_id: int) -> None:
-    """Фото внутри Q&A готового шаблона (Идеи): становится основой, к которой
-    при завершении шаблона применится собранный промпт как правка («фото = основа»).
-
-    Без этого фото перехватывал бы общий хендлер «Изменить моё фото» и присылал
-    бы картинку с чужой правкой вместо продолжения шаблона.
-    """
+    """Фото внутри «Идеи и шаблоны»: сохраняем как основу/референс до финального экрана."""
     st = _ws(user_id)
     caption = (message.caption or "").strip()
-    status_msg = await message.answer(flow_copy.msg("uploading_photo"))
-    try:
-        photo = message.photo[-1]
-        buf = await bot.download(photo.file_id)
-        data = buf.read() if hasattr(buf, "read") else bytes(buf)
-    except Exception:
-        log.exception("download template photo failed")
-        await status_msg.edit_text("❌ Не удалось получить ваше фото.")
+    st["ideas_photo_file_id"] = message.photo[-1].file_id
+    if caption:
+        st["ideas_photo_caption"] = caption
+
+    if st.get("tp_tpl"):
+        if caption and st.get("tp_await") == "text":
+            _tp_store_answer(st, caption)
+        elif caption:
+            st["ideas_extra_prompt"] = caption
+        await message.answer(flow_copy.msg("ideas_photo_attached_template"))
+        await _render_template_step(message, user_id=user_id)
         return
 
-    acc_id = _account_for_image(user_id, prefer_image_only=True)
-    if acc_id is None:
-        await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
-        return
-    project_id = await ensure_user_project(user_id, account_id=acc_id)
-    try:
-        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png", project_id=project_id)
-    except Exception:
-        log.exception("template upload_image failed")
-        source = None
-    if not source or not source.get("mediaId"):
-        await status_msg.edit_text(flow_copy.msg("upload_failed"))
+    if "gp_step" in st:
+        if caption:
+            st["gp_extra_prompt"] = caption
+        await message.answer(flow_copy.msg("ideas_photo_attached_guided"))
+        await _render_guided_step(message, user_id=user_id)
         return
 
-    source.setdefault("_tg_file_id", photo.file_id)
-    st["tp_photo"] = source
-    st["tp_photo_project"] = source.pop("_project_id", None) or project_id
-    st["tp_photo_acc"] = acc_id
-    try:
-        await status_msg.delete()
-    except Exception:
-        pass
-
-    # Подпись на текстовом шаге = ответ на текущий вопрос → двигаемся дальше.
-    if caption and st.get("tp_await") == "text":
-        _tp_store_answer(st, caption)
-    await message.answer(flow_copy.msg("ideas_photo_attached"))
-    await _render_template_step(message, user_id=user_id)
+    if caption:
+        st["ideas_extra_prompt"] = caption
+    await message.answer(flow_copy.msg("ideas_photo_attached_root"))
+    mode = st.get("ideas_mode")
+    if mode == "templates":
+        await message.answer(
+            flow_copy.msg("ideas_templates_title"),
+            reply_markup=_templates_picker_kb(),
+            parse_mode="HTML",
+        )
+    else:
+        await _show_ideas_root(message, user_id=user_id, edit=False)
 
 
 @dp.callback_query(F.data.startswith("ih:"))
@@ -9851,10 +9889,16 @@ async def on_ideas_hub_action(callback: types.CallbackQuery):
     if data == "ih:root":
         await _show_ideas_root(msg, user_id=user_id, edit=True)
     elif data == "ih:templates":
-        await _edit_or_answer(msg, flow_copy.msg("ideas_templates_title"), _templates_picker_kb())
+        _ws(user_id)["ideas_mode"] = "templates"
+        await _edit_or_answer(
+            msg, flow_copy.msg("ideas_templates_title"), _templates_picker_kb(),
+            parse_mode="HTML",
+        )
     elif data == "ih:guided":
-        _ws(user_id)["gp_step"] = 0
-        _ws(user_id)["gp_answers"] = {}
+        st = _ws(user_id)
+        st["ideas_mode"] = "guided"
+        st["gp_step"] = 0
+        st["gp_answers"] = {}
         await _render_guided_step(msg, user_id=user_id)
 
 
@@ -9872,6 +9916,7 @@ async def on_template_action(callback: types.CallbackQuery):
         st["tp_tpl"] = tid
         st["tp_step"] = 0
         st["tp_answers"] = {}
+        st["ideas_mode"] = "templates"
         metrics.log_event("template_opened", user_id=user_id, source="ideas",
                           payload={"template": tid})
         await callback.answer()
@@ -9900,8 +9945,7 @@ async def on_template_action(callback: types.CallbackQuery):
         await callback.answer()
         await _render_template_step(msg, user_id=user_id)
     elif data == "tp:cancel":
-        for k in ("tp_tpl", "tp_step", "tp_answers", "tp_await", *_TP_PHOTO_KEYS):
-            st.pop(k, None)
+        _ideas_clear(st, clear_photo=True)
         await callback.answer("Отменено")
         await _show_ideas_root(msg, user_id=user_id, edit=True)
     else:
@@ -9925,26 +9969,54 @@ async def _render_guided_step(message: types.Message, *, user_id: int):
     step = st.get("gp_step", 0)
     if step >= len(steps):
         answers = st.get("gp_answers", {})
+        prompt = prompts_lib.compose_guided_prompt(answers)
+        prompt = _ideas_prompt_with_extra(prompt, st)
+        ideas_photo_file_id = st.get("ideas_photo_file_id")
         # Ветка «видео» уводит в видео-визард, остальное — в генерацию картинки.
         if answers.get("what") == "video":
             # Переносим формат и стиль из guided в видео-визард.
-            gv_fmt = "port" if answers.get("format") in ("story", "avatar") else "land"
+            gv_fmt = _guided_video_fmt(answers)
             gv_style = _GUIDED_TO_VID_STYLE.get(answers.get("style", ""), "")
-            for k in ("gp_step", "gp_answers"):
+            for k in (*_GP_STATE_KEYS, *_IDEAS_PHOTO_KEYS):
                 st.pop(k, None)
+            st.pop("ideas_mode", None)
+            if ideas_photo_file_id:
+                await _prepare_photo_video_from_file_id(
+                    message,
+                    user_id=user_id,
+                    file_id=ideas_photo_file_id,
+                    caption=prompt or "high quality video",
+                    vfmt=gv_fmt,
+                    vstyle=gv_style,
+                )
+                return
             await show_video_prompt_input(
                 message, user_id=user_id, edit=True, vfmt=gv_fmt, vstyle=gv_style
             )
             return
-        prompt = prompts_lib.compose_guided_prompt(answers)
         metrics.log_event("guided_completed", user_id=user_id, source="ideas")
-        for k in ("gp_step", "gp_answers"):
+        image_fmt = _guided_image_fmt(answers)
+        for k in (*_GP_STATE_KEYS, *_IDEAS_PHOTO_KEYS):
             st.pop(k, None)
+        st.pop("ideas_mode", None)
+        if ideas_photo_file_id:
+            await _prepare_photo_edit_from_file_id(
+                message,
+                user_id=user_id,
+                file_id=ideas_photo_file_id,
+                caption=prompt or "high quality image",
+                aspect_fmt=image_fmt,
+            )
+            return
         st["pending_prompt"] = prompt or "high quality image"
+        st["fmt"] = image_fmt
         await show_wizard(message, user_id=user_id, edit=True)
         return
     s = steps[step]
     text = flow_copy.msg("ideas_qa_step", n=step + 1, total=len(steps), q=s["text"])
+    text += "\n\n" + flow_copy.msg("ideas_guided_hint")
+    if _ideas_has_photo(st):
+        text += "\n\n" + flow_copy.msg("ideas_photo_context_hint")
     await _edit_or_answer(message, text, _guided_step_kb(step))
 
 
@@ -10173,8 +10245,7 @@ async def on_guided_picker_action(callback: types.CallbackQuery):
         await callback.answer()
         await _render_guided_step(msg, user_id=user_id)
     elif data == "gp:cancel":
-        for k in ("gp_step", "gp_answers"):
-            st.pop(k, None)
+        _ideas_clear(st, clear_photo=True)
         await callback.answer("Отменено")
         await _show_ideas_root(msg, user_id=user_id, edit=True)
     else:
@@ -12614,11 +12685,9 @@ async def handle_photo(message: types.Message):
             await show_new_video_wizard(message, user_id=user_id, edit=(vstep == "vnewwiz"))
         return
 
-    # Активен Q&A готового шаблона (Идеи) для картинки: фото становится основой,
-    # а собранный промпт шаблона применится к нему как правка. Видео-шаблоны не
-    # трогаем — там фото собирается уже в видео-визарде.
-    tp_tpl = st.get("tp_tpl")
-    if tp_tpl and prompts_lib.template_target(tp_tpl) != "video":
+    # Активны «Идеи и шаблоны»: фото остаётся внутри этой ветки (основа для
+    # image/edit или референс для video), а не уходит в общий выбор image/video.
+    if st.get("tp_tpl") or "gp_step" in st or st.get("ideas_mode") in ("root", "templates", "guided"):
         await _template_photo_received(message, user_id=user_id)
         return
 
@@ -12831,6 +12900,31 @@ async def handle_plain_text(message: types.Message):
     if st.get("tp_await") == "text" and st.get("tp_tpl"):
         _tp_store_answer(st, text)
         await _render_template_step(message, user_id=user_id)
+        return
+
+    if st.get("tp_tpl"):
+        st["ideas_extra_prompt"] = text
+        await message.answer(flow_copy.msg("ideas_text_attached_template"))
+        await _render_template_step(message, user_id=user_id)
+        return
+
+    if "gp_step" in st:
+        st["gp_extra_prompt"] = text
+        await message.answer(flow_copy.msg("ideas_text_attached_guided"))
+        await _render_guided_step(message, user_id=user_id)
+        return
+
+    if st.get("ideas_mode") in ("root", "templates", "guided"):
+        st["ideas_extra_prompt"] = text
+        await message.answer(flow_copy.msg("ideas_text_attached_root"))
+        if st.get("ideas_mode") == "templates":
+            await message.answer(
+                flow_copy.msg("ideas_templates_title"),
+                reply_markup=_templates_picker_kb(),
+                parse_mode="HTML",
+            )
+        else:
+            await _show_ideas_root(message, user_id=user_id, edit=False)
         return
 
     # Промпт-правка для загруженного пользователем видео.
