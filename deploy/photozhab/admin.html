@@ -2552,6 +2552,16 @@ function adShowTgstat(data) {
   const el = document.getElementById('ad-tgstat-preview');
   if (!el) return;
   el.style.display = 'grid';
+  if (data.source === 'posts') {
+    // Канал без подключённого бота Telemetr: охват оценён по просмотрам постов.
+    el.innerHTML = `
+      <div class="adcalc-pill"><div class="kpi-label">Подписчики</div><b>${fmt(data.participants_count||0)}</b></div>
+      <div class="adcalc-pill"><div class="kpi-label">Avg reach</div><b>${fmt(data.avg_post_reach||0)}</b><div class="kpi-sub">оценка по ${fmt(data.posts_sampled||0)} постам</div></div>
+      <div class="adcalc-pill"><div class="kpi-label">Reach rate</div><b>${data.reach_rate_percent ?? '—'}%</b><div class="kpi-sub">охват/подписчики · &lt;5% = мёртвый</div></div>
+      <div class="adcalc-pill" style="grid-column:1/-1"><div class="kpi-sub">⚠️ Детальной статистики нет (бот Telemetr не подключён владельцем). Охват — оценка по последним постам; ERR/премиум недоступны.</div></div>
+    `;
+    return;
+  }
   el.innerHTML = `
     <div class="adcalc-pill"><div class="kpi-label">Подписчики</div><b>${fmt(data.participants_count||0)}</b></div>
     <div class="adcalc-pill"><div class="kpi-label">Avg reach</div><b>${fmt(data.avg_post_reach||0)}</b><div class="kpi-sub">средний охват поста</div></div>
@@ -2612,7 +2622,8 @@ async function adFetchChannel(index=null) {
   if (status) {
     const cache = res.data.cached ? 'из кэша' : 'новый запрос';
     const reach = res.data.adv_post_reach_24h || res.data.avg_post_reach || 0;
-    status.textContent = `Telemetr: ${res.data.title || res.data.channel_id} · ${cache} · охват ${fmt(reach)}`;
+    const est = res.data.source === 'posts' ? ' (оценка по постам)' : '';
+    status.textContent = `Telemetr: ${res.data.title || res.data.channel_id} · ${cache} · охват ${fmt(reach)}${est}`;
   }
 }
 function adVerdict(cac, firstCm, ltvCm, payers, views) {

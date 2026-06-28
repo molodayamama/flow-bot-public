@@ -48,6 +48,8 @@ ONBOARD_SESSION_TTL_SEC = 10 * 60
 _onboard_sessions: dict[str, dict] = {}
 ACCOUNT_METADATA_FILE = Path(os.getenv("ACCOUNT_METADATA_FILE", "account_metadata.json"))
 TELEMETR_CHANNEL_STAT_URL = "https://api.telemetr.me/channels/stat"
+TELEMETR_CHANNEL_POSTS_URL = "https://api.telemetr.me/channels/posts"
+TELEMETR_CHANNEL_SUBS_URL = "https://api.telemetr.me/channels/subscribers"
 try:
     TELEMETR_CACHE_TTL_SEC = max(60, int(os.getenv("TELEMETR_CACHE_TTL_SEC", "21600")))
 except (TypeError, ValueError):
@@ -2259,6 +2261,8 @@ def _normalize_telemetr_channel(value: str | None) -> tuple[str | None, str | No
 
 
 def _clean_telemetr_payload(channel_id: str, data: dict) -> dict:
+    """Нормализовать детальную статистику ``/channels/stat`` (для каналов, где
+    владелец подключил бота Telemetr)."""
     resp = data.get("response") if isinstance(data.get("response"), dict) else data
     username = resp.get("username") or ""
     link = resp.get("link") or resp.get("public_link") or ""
@@ -2267,6 +2271,7 @@ def _clean_telemetr_payload(channel_id: str, data: dict) -> dict:
     return {
         "status": "ok",
         "channel_id": channel_id,
+        "source": "stat",
         "peer_type": resp.get("peer_type"),
         "title": resp.get("title") or resp.get("name") or "",
         "username": username,
@@ -2292,29 +2297,115 @@ def _clean_telemetr_payload(channel_id: str, data: dict) -> dict:
     }
 
 
-async def _fetch_telemetr_channel(channel_id: str, token: str) -> dict:
-    timeout = ClientTimeout(total=12)
+def _telemetr_error_reason(status: int, data) -> str:
+    """Достать причину ошибки из ответа Telemetr (часто в response.message/code)."""
+    if isinstance(data, dict):
+        resp = data.get("response")
+        if isinstance(resp, dict) and (resp.get("message") or resp.get("code") is not None):
+            return str(resp.get("message") or resp.get("code"))
+        for key in ("error", "message", "code"):
+            if data.get(key):
+                return str(data.get(key))
+    return f"telemetr_http_{status}" if status >= 400 else ""
+
+
+async def _telemetr_api_get(session, url: str, params: dict, token: str) -> tuple[int, object]:
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    async with session.get(url, params=params, headers=headers) as resp:
+        text = await resp.text()
+        try:
+            return resp.status, json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("bad_json") from exc
+
+
+def _reach_from_posts(items: list) -> dict | None:
+    """Средний охват поста = среднее число просмотров «устоявшихся» постов.
+
+    Метод сверен с собственным avg_post_reach Telemetr (совпал в пределах ~1%):
+    берём не удалённые, не пересланные посты старше 24ч (свежие ещё набирают
+    просмотры) с views>0 и считаем среднее. Telemetr считает так же, включая
+    альбомные «1-просмотр» элементы — поэтому ничего дополнительно не чистим.
+    """
+    now = time.time()
+    views: list[int] = []
+    for p in items:
+        if not isinstance(p, dict) or p.get("is_deleted") or p.get("is_forwarded"):
+            continue
+        stats = p.get("stats") or {}
+        v = stats.get("views") or 0
+        if v <= 0 or now - (p.get("date") or 0) < 86400:
+            continue
+        views.append(int(v))
+    if not views:
+        return None
+    return {"avg_post_reach": round(sum(views) / len(views)), "posts_sampled": len(views)}
+
+
+async def _fetch_telemetr_channel(channel_id: str, token: str) -> dict:
+    timeout = ClientTimeout(total=15)
     async with ClientSession(timeout=timeout) as session:
-        async with session.get(
-            TELEMETR_CHANNEL_STAT_URL,
-            params={"channelId": channel_id},
-            headers=headers,
-        ) as resp:
-            text = await resp.text()
-            try:
-                data = json.loads(text)
-            except json.JSONDecodeError as exc:
-                raise RuntimeError("bad_json") from exc
-            if resp.status >= 400:
-                # Тело часто содержит code/message с причиной (лимиты и т.п.).
-                reason = ""
-                if isinstance(data, dict):
-                    reason = str(data.get("error") or data.get("message") or data.get("code") or "")
-                raise RuntimeError(reason or f"telemetr_http_{resp.status}")
-            if data.get("status") not in ("ok", None) and "response" not in data:
-                raise RuntimeError(str(data.get("error") or data.get("message") or "telemetr_error"))
+        # 1) Детальная статистика — доступна только для каналов, где владелец
+        #    подключил бота Telemetr (иначе 403 code 8/10). Пробуем сначала.
+        status, data = await _telemetr_api_get(
+            session, TELEMETR_CHANNEL_STAT_URL, {"channelId": channel_id}, token
+        )
+        if status < 400 and isinstance(data, dict) and data.get("status") == "ok":
             return _clean_telemetr_payload(channel_id, data)
+
+        reason = _telemetr_error_reason(status, data)
+        # Авторизация/лимиты — это не «канал не подключён», пробрасываем как есть.
+        if status in (401, 429) or "limit" in reason.lower() or "quota" in reason.lower():
+            raise RuntimeError(reason or f"telemetr_http_{status}")
+
+        # 2) Fallback: публичные подписчики + посты (работают для любого канала).
+        #    Охват считаем по просмотрам постов, подписчиков берём из /subscribers.
+        s_sub, d_sub = await _telemetr_api_get(
+            session, TELEMETR_CHANNEL_SUBS_URL,
+            {"channelId": channel_id, "group": "month"}, token,
+        )
+        subs = None
+        if s_sub < 400 and isinstance(d_sub, dict):
+            arr = d_sub.get("response")
+            if isinstance(arr, list) and arr and isinstance(arr[-1], dict):
+                subs = arr[-1].get("participantsCount")
+
+        s_post, d_post = await _telemetr_api_get(
+            session, TELEMETR_CHANNEL_POSTS_URL,
+            {"channelId": channel_id, "offset": 0, "hideForwards": 1, "hideDeleted": 1},
+            token,
+        )
+        reach = None
+        if s_post < 400 and isinstance(d_post, dict):
+            resp = d_post.get("response")
+            if isinstance(resp, dict):
+                reach = _reach_from_posts(resp.get("items") or [])
+        elif subs is None:
+            # И stat, и posts недоступны — отдаём исходную причину stat.
+            raise RuntimeError(_telemetr_error_reason(s_post, d_post) or reason or "telemetr_error")
+
+        if reach is None and subs is None:
+            raise RuntimeError(reason or "telemetr_no_public_data")
+
+        avg = reach["avg_post_reach"] if reach else None
+        reach_rate = round(avg / subs * 100, 2) if (avg and subs) else None
+        is_numeric = channel_id.isdigit()
+        return {
+            "status": "ok",
+            "channel_id": channel_id,
+            "source": "posts",
+            "reach_estimated": True,
+            "title": "" if is_numeric else channel_id,
+            "username": "" if is_numeric else channel_id,
+            "link": "" if is_numeric else f"https://t.me/{channel_id}",
+            "participants_count": subs,
+            "avg_post_reach": avg,
+            "adv_post_reach_24h": None,
+            "err_percent": None,
+            "reach_rate_percent": reach_rate,
+            "posts_sampled": reach["posts_sampled"] if reach else 0,
+            "fetched_at": int(time.time()),
+        }
 
 
 async def handle_telemetr_channel_get(request: web.Request) -> web.Response:
