@@ -488,11 +488,38 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_edit_confirm_kb_keeps_format_and_model_toggles(self) -> None:
         start = self.source.index("def edit_confirm_kb")
-        block = self.source[start:start + 700]
-        self.assertIn("def edit_confirm_kb(fmt: str, imodel: str)", block)
+        block = self.source[start:start + 1200]
+        self.assertIn("def edit_confirm_kb(fmt: str, imodel: str", block)
         self.assertIn('_fmt_rows(fmt, "es:fmt")', block)
         self.assertIn('_imodel_toggle_btn(imodel, "es:imodel")', block)
         self.assertIn('callback_data="es:apply"', block)
+
+    def test_photo_reference_in_create_is_priced_as_generation(self) -> None:
+        """Фото-референс из «Создать картинку» = тариф генерации (10/15), не правки.
+
+        edit_confirm_kb(as_generation=True) должен показывать цену генерации, а
+        обычная правка — цену правки; генерация дешевле.
+        """
+        import flow_bot as fb
+        import flow_core as fc
+        model = fb.DEFAULT_IMAGE_MODEL
+
+        def apply_label(kb):
+            for row in kb.inline_keyboard:
+                for b in row:
+                    if b.callback_data == "es:apply":
+                        return b.text
+            return ""
+
+        edit_lbl = apply_label(fb.edit_confirm_kb("land", model))
+        gen_lbl = apply_label(fb.edit_confirm_kb("land", model, as_generation=True))
+        extra = fc.image_model_extra(model)
+        self.assertIn(str(fc.action_price("edit") + extra), edit_lbl)
+        self.assertIn(str(fc.price_gen(1) + extra), gen_lbl)
+        self.assertLess(fc.price_gen(1), fc.action_price("edit"))
+        # pr:img и инлайн «Создать картинку» помечают фото как генерацию.
+        self.assertIn("as_generation=True", self.source)
+        self.assertIn('price_action="gen" if st.get("edit_as_gen") else "edit"', self.source)
 
     def test_edit_settings_prefix_does_not_collide_with_edit_button(self) -> None:
         # The image "Изменить" button uses the "edit:" callback prefix; the edit

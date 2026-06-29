@@ -5117,12 +5117,17 @@ def edit_settings_kb(fmt: str, imodel: str) -> types.InlineKeyboardMarkup:
     )
 
 
-def edit_confirm_kb(fmt: str, imodel: str) -> types.InlineKeyboardMarkup:
-    """Подтверждение правки фото: настройки + сгенерировать/улучшить запрос."""
+def edit_confirm_kb(fmt: str, imodel: str, *, as_generation: bool = False) -> types.InlineKeyboardMarkup:
+    """Подтверждение правки фото: настройки + сгенерировать/улучшить запрос.
+
+    ``as_generation`` — фото пришло из «Создать картинку» (референс к новому
+    изображению), поэтому цена как у генерации (10/15), а не как у правки (15/20).
+    """
     B = types.InlineKeyboardButton
     # Цена = базовая + надбавка модели (как в _edit_and_send), чтобы менялась при
     # переключении модели.
-    edit_price = action_price("edit") + image_model_extra(imodel)
+    base = price_gen(1) if as_generation else action_price("edit")
+    edit_price = base + image_model_extra(imodel)
     return types.InlineKeyboardMarkup(inline_keyboard=[
         *_fmt_rows(fmt, "es:fmt"),
         [_imodel_toggle_btn(imodel, "es:imodel")],
@@ -5137,14 +5142,22 @@ async def show_edit_confirm(message: types.Message, *, user_id: int, edit: bool)
     """Экран подтверждения правки фото с кнопками «Улучшить запрос» / «Применить»."""
     st = _ws(user_id)
     instr = (st.get("edit_instruction") or "").strip()
+    as_gen = bool(st.get("edit_as_gen"))
+    if as_gen:
+        header = "🎨 <b>Создать изображение</b>"
+        tail = "Сгенерировать по фото и запросу — или улучшить запрос (3 варианта)?"
+    else:
+        header = "✏️ <b>Правка фото</b>"
+        tail = "Применить как есть — или улучшить запрос (3 варианта)?"
     text = (
-        "✏️ <b>Правка фото</b>\n\n"
+        f"{header}\n\n"
         f"<blockquote>{html.escape(instr[:300])}</blockquote>\n"
-        "Применить как есть — или улучшить запрос (3 варианта)?"
+        f"{tail}"
     )
     kb = edit_confirm_kb(
         st.get("edit_fmt", DEFAULT_FMT),
         st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
+        as_generation=as_gen,
     )
     if edit:
         await _edit_or_answer(message, text, kb, parse_mode="HTML")
@@ -8157,6 +8170,7 @@ async def _edit_and_send(
     actor_id: int | None = None,
     aspect_ratio: str | None = None,
     image_model: str = DEFAULT_IMAGE_MODEL,
+    price_action: str = "edit",
 ) -> bool:
     """Применить правку ``instruction`` к конкретной картинке ``ref``.
 
@@ -8164,7 +8178,8 @@ async def _edit_and_send(
     того же пользователя. Браузерный фолбэк отключён, чтобы вместо правки не
     прислать несвязанную картинку. ``aspect_ratio`` / ``image_model`` позволяют
     сменить формат и модель прямо при редактировании (по умолчанию — как у
-    исходной картинки и базовая модель).
+    исходной картинки и базовая модель). ``price_action`` задаёт тариф: ``edit``
+    (правка, 15/20) или ``gen`` (фото-референс в «Создать картинку», 10/15).
     """
     user_id = actor_id if actor_id is not None else message.from_user.id
 
@@ -8189,7 +8204,7 @@ async def _edit_and_send(
     ok = False
     try:
         async with user_slot(user_id, message):
-            async with credit_gate(user_id, "edit", message, 1, surcharge=surcharge) as charge:
+            async with credit_gate(user_id, price_action, message, 1, surcharge=surcharge) as charge:
                 ok = await _do_edit_and_send(
                     message, ref, instruction, image_inputs, user_id,
                     aspect_ratio=aspect, image_model=image_model,
@@ -8202,11 +8217,11 @@ async def _edit_and_send(
         metrics.log_event("image_failed", user_id=user_id, source="edit",
                           payload={"reason": "insufficient_credits"})
         return False
-    charged = (action_price("edit", 1) + surcharge) if ok else 0
+    charged = (action_price(price_action, 1) + surcharge) if ok else 0
     metrics.log_event("image_success" if ok else "image_failed", user_id=user_id, source="edit")
     if ok:
         metrics.log_event("credits_charged", user_id=user_id, source="edit",
-                          payload={"amount": charged, "action": "edit"})
+                          payload={"amount": charged, "action": price_action})
     _log_image_job(user_id, "edit", image_model, started, ok=ok, charged=charged)
     if ok:
         # Запоминаем правку для «🔁 Повторить» под результатом. Без этого «Изменить
@@ -8218,6 +8233,7 @@ async def _edit_and_send(
             "instruction": instruction,
             "aspect": aspect,
             "imodel": image_model,
+            "price_action": price_action,
         }
         await _post_generation_referral_hooks(message, user_id)
     return ok
@@ -9542,6 +9558,7 @@ async def _prepare_photo_edit_from_file_id(
     caption: str,
     aspect_fmt: str = DEFAULT_FMT,
     image_model: str | None = None,
+    as_generation: bool = False,
 ) -> bool:
     status_msg = await message.answer(flow_copy.msg("uploading_photo"))
     ref = await _upload_image_ref_from_file_id(
@@ -9562,6 +9579,9 @@ async def _prepare_photo_edit_from_file_id(
     token = image_registry.add(ref)
     pending_edits[user_id] = token
     st = _ws(user_id)
+    # Фото-референс из «Создать картинку» тарифицируется как генерация (10/15),
+    # а не как правка (15/20). Флаг читают edit_confirm_kb/show_edit_confirm/es:apply.
+    st["edit_as_gen"] = bool(as_generation)
     st["await"] = "edit_confirm" if caption else "edit"
     st["step"] = None
     st.pop("pending_prompt", None)
@@ -9642,6 +9662,7 @@ async def on_photo_route_choice(callback: types.CallbackQuery):
             user_id=user_id,
             file_id=file_id,
             caption=caption,
+            as_generation=True,  # «Создать изображение» по фото = тариф генерации
         )
         return
     if data == "pr:vid":
@@ -10439,6 +10460,7 @@ async def on_edit_settings(callback: types.CallbackQuery):
             actor_id=user_id,
             aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", _aspect_to_fmt(ref.aspect_ratio))),
             image_model=st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
+            price_action="gen" if st.get("edit_as_gen") else "edit",
         )
         if ok:
             st["await"] = None
@@ -10462,6 +10484,7 @@ async def on_edit_settings(callback: types.CallbackQuery):
             edit_confirm_kb(
                 st.get("edit_fmt", DEFAULT_FMT),
                 st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
+                as_generation=bool(st.get("edit_as_gen")),
             )
             if st.get("await") == "edit_confirm"
             else edit_settings_kb(
@@ -11010,6 +11033,7 @@ async def _repeat_last(callback: types.CallbackQuery, user_id: int):
             actor_id=user_id,
             aspect_ratio=last.get("aspect"),
             image_model=last.get("imodel", DEFAULT_IMAGE_MODEL),
+            price_action=last.get("price_action", "edit"),
         )
         return
     await _generate_and_send(
@@ -12301,6 +12325,7 @@ async def on_image_action(callback: types.CallbackQuery):
         pending_edits[user_id] = token
         st = _ws(user_id)
         st["await"] = "edit"
+        st.pop("edit_as_gen", None)  # правка готовой картинки = тариф правки (15/20)
         # Формат по умолчанию = формат исходной картинки; модель — последняя выбранная.
         st["edit_fmt"] = _aspect_to_fmt(ref.aspect_ratio)
         st.setdefault("edit_imodel", DEFAULT_IMAGE_MODEL)
@@ -12592,7 +12617,7 @@ async def handle_photo(message: types.Message):
         return
 
     # В «Создать картинку» фото с подписью тоже не должно обходить настройки.
-    # Используем фото как основу правки и показываем confirm/settings.
+    # Фото = референс к новому изображению → тариф генерации (10/15), не правки.
     if caption and (
         st.get("step") in ("prompt_picker", "wizard")
         or st.get("await") == "prompt"
@@ -12605,6 +12630,7 @@ async def handle_photo(message: types.Message):
             caption=caption,
             aspect_fmt=st.get("fmt", DEFAULT_FMT),
             image_model=st.get("imodel", DEFAULT_IMAGE_MODEL),
+            as_generation=True,
         )
         return
 
