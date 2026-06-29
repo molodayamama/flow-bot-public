@@ -1049,6 +1049,24 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('if st.get("vawait") == "vretry_prompt":', self.source)
         self.assertIn("vid_retry_edit", (PROJECT_ROOT / "flow_copy.py").read_text(encoding="utf-8"))
 
+    def test_moderation_fail_excluded_from_account_stats(self) -> None:
+        # Модерация (кривой промпт) — не вина аккаунта: video_outcome (routing
+        # score) и flow_jobs (admin per-account fail) НЕ пишутся при danger_filter.
+        # Продуктовый video_failed и возврат кредитов остаются.
+        start = self.source.index("async def _fail_retry")
+        block = self.source[start:start + 2200]
+        self.assertIn('content_moderation = error_type == "danger_filter"', block)
+        # both account-attributing writes are guarded by `if not content_moderation:`
+        self.assertEqual(block.count("if not content_moderation:"), 2)
+        # the two guarded writes are the routing score and the per-account ledger
+        om = block.index('"video_outcome"')
+        fj = block.index("metrics.log_flow_job(")
+        for pos in (om, fj):
+            guard = block.rfind("if not content_moderation:", 0, pos)
+            self.assertNotEqual(guard, -1)
+        # product-level failure event stays unconditional
+        self.assertIn('metrics.log_event("video_failed"', block)
+
     def test_video_403_refreshes_session_before_next_action(self) -> None:
         start = self.source.index("async def generate_video")
         end = self.source.index("if not solved_any:", start)

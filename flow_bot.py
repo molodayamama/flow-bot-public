@@ -11393,30 +11393,38 @@ async def _do_video_generate_and_send(
         refunded_units += vcount - i
         _stash_retry()
         _res = result if isinstance(result, dict) else {}
-        metrics.log_event(
-            "video_outcome", user_id=user_id, source=acc_id,
-            payload={"ok": False, "mode": vmode, "reason": error_type,
-                     "model": model_id,
-                     "model_key": _res.get("model_key") or model_key,
-                     "model_family": _res.get("model_family") or meta.get("family"),
-                     "endpoint": _res.get("endpoint") or vmode,
-                     "transport": _res.get("transport") or "direct_http",
-                     "attempts": int(_res.get("attempts") or 1),
-                     "had_403": bool(_res.get("had_403")),
-                     "unusual_403": bool(_res.get("unusual_403")),
-                     "success_after_retry": False,
-                     "browser_fallback": bool(_res.get("browser_fallback"))},
-        )
+        # Модерация (danger_filter) = кривой промпт/картинка юзера, НЕ вина
+        # аккаунта. Не пишем это в статистику аккаунта: ни в routing-score
+        # (video_outcome), ни в flow_jobs как fail — иначе здоровый аккаунт
+        # штрафуется за чужой промпт и проседает в выборе. Продуктовый счётчик
+        # (video_failed) и возврат кредитов оставляем.
+        content_moderation = error_type == "danger_filter"
+        if not content_moderation:
+            metrics.log_event(
+                "video_outcome", user_id=user_id, source=acc_id,
+                payload={"ok": False, "mode": vmode, "reason": error_type,
+                         "model": model_id,
+                         "model_key": _res.get("model_key") or model_key,
+                         "model_family": _res.get("model_family") or meta.get("family"),
+                         "endpoint": _res.get("endpoint") or vmode,
+                         "transport": _res.get("transport") or "direct_http",
+                         "attempts": int(_res.get("attempts") or 1),
+                         "had_403": bool(_res.get("had_403")),
+                         "unusual_403": bool(_res.get("unusual_403")),
+                         "success_after_retry": False,
+                         "browser_fallback": bool(_res.get("browser_fallback"))},
+            )
         metrics.log_event("video_failed", user_id=user_id, source=vmode,
                           payload={"model": model_id, "reason": error_type})
         metrics.log_event("credits_refunded", user_id=user_id, source=vmode,
                           payload={"amount": refund_amt})
-        metrics.log_flow_job(
-            user_id=user_id, account_id=acc_id,
-            operation_type=f"video_{vmode}", model=model_id,
-            bot_credits_charged=0, refund_amount=refund_amt,
-            duration_ms=_ms_since(_vid_started), status="fail", error_type=error_type,
-        )
+        if not content_moderation:
+            metrics.log_flow_job(
+                user_id=user_id, account_id=acc_id,
+                operation_type=f"video_{vmode}", model=model_id,
+                bot_credits_charged=0, refund_amount=refund_amt,
+                duration_ms=_ms_since(_vid_started), status="fail", error_type=error_type,
+            )
         # Модерация: повтор того же промпта бессмыслен — даём «изменить промпт».
         # Прочие сбои (в т.ч. audio_filtered, где помогает повтор) — обычный ретрай.
         retry_btn = (
