@@ -601,7 +601,7 @@ class CapacityBotWiringTests(unittest.TestCase):
 
     def test_video_generation_wrapped_in_video_slot(self):
         start = self.source.index("async def _do_video_generate_and_send")
-        block = self.source[start:start + 9000]
+        block = self.source[start:start + 10000]
         self.assertIn("account_pool.video_slot(acc_id)", block)
         self.assertIn("async with account_pool.video_slot(acc_id):", block)
 

@@ -1038,6 +1038,17 @@ class BotMenuWiringTests(unittest.TestCase):
         clear = self.source[self.source.index("def _vid_clear"):][:400]
         self.assertIn('"vretry"', clear)  # snapshot survives the finally-clear
 
+    def test_moderation_block_offers_change_prompt_retry(self) -> None:
+        # На модерации повтор того же промпта бессмыслен → отдельная кнопка
+        # «Изменить промпт и снова» (v:retrynew), которая ждёт новый промпт и
+        # генерит с сохранёнными фото/настройками. Прочие сбои — обычный v:retry.
+        self.assertIn('if error_type == "danger_filter"', self.source)
+        self.assertIn('_menu_button("vid_retry_edit", "v:retrynew")', self.source)
+        self.assertIn('if data == "v:retrynew":', self.source)
+        self.assertIn('st["vawait"] = "vretry_prompt"', self.source)
+        self.assertIn('if st.get("vawait") == "vretry_prompt":', self.source)
+        self.assertIn("vid_retry_edit", (PROJECT_ROOT / "flow_copy.py").read_text(encoding="utf-8"))
+
     def test_video_403_refreshes_session_before_next_action(self) -> None:
         start = self.source.index("async def generate_video")
         end = self.source.index("if not solved_any:", start)

@@ -10970,6 +10970,29 @@ async def on_video_action(callback: types.CallbackQuery):
         await _video_generate_and_send(msg, snap["prompt"], user_id=user_id)
         return
 
+    if data == "v:retrynew":
+        # «Изменить промпт и снова» (после модерации): восстанавливаем настройки и
+        # фото из снимка, но НЕ генерим сразу — ждём новый промпт от пользователя.
+        snap = st.get("vretry")
+        if not snap or not snap.get("vmodel"):
+            await callback.answer(flow_copy.msg("vid_expired_wizard"), show_alert=True)
+            await show_main_menu(msg, user_id=user_id, edit=True)
+            return
+        for k, v in snap.items():
+            if k != "prompt" and v is not None:
+                st[k] = v
+        st["vawait"] = "vretry_prompt"
+        await callback.answer()
+        has_ref = bool(st.get("ving_photos") or st.get("vfrm_start") or st.get("vfrm_end"))
+        text = (
+            "✏️ <b>Изменить запрос</b>\n\n"
+            "Опиши по-другому, что должно происходить в видео"
+            + (" — фото и настройки сохранены 📎." if has_ref else ".")
+        )
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[[_menu_button("menu", "m:menu")]])
+        await _vid_edit(msg, text, kb, user_id, parse_mode="HTML")
+        return
+
     # Подтверждение → промпт или сразу генерация (если промпт уже есть).
     if data == "v:go":
         model_id = st.get("vmodel")
@@ -11394,8 +11417,15 @@ async def _do_video_generate_and_send(
             bot_credits_charged=0, refund_amount=refund_amt,
             duration_ms=_ms_since(_vid_started), status="fail", error_type=error_type,
         )
+        # Модерация: повтор того же промпта бессмыслен — даём «изменить промпт».
+        # Прочие сбои (в т.ч. audio_filtered, где помогает повтор) — обычный ретрай.
+        retry_btn = (
+            _menu_button("vid_retry_edit", "v:retrynew")
+            if error_type == "danger_filter"
+            else _menu_button("vid_retry", "v:retry")
+        )
         fail_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [_menu_button("vid_retry", "v:retry")],
+            [retry_btn],
             [_menu_button("menu", "m:menu")],
         ])
         try:
@@ -13007,6 +13037,13 @@ async def handle_plain_text(message: types.Message):
             await show_main_menu(message, user_id=user_id)
             return
         await _video_extend_and_send(message, ref, text, user_id=user_id)
+        return
+
+    # Ретрай после модерации: пользователь прислал новый промпт — генерим с теми
+    # же настройками/фото, восстановленными из снимка кнопкой «Изменить промпт».
+    if st.get("vawait") == "vretry_prompt":
+        st["vawait"] = None
+        await _video_generate_and_send(message, text, user_id=user_id)
         return
 
     # «Оживить фото» from the main menu requires a photo. Text is saved as the
