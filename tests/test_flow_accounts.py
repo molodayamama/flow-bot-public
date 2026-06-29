@@ -362,6 +362,16 @@ class BotPoolWiringTests(unittest.TestCase):
         self.assertIn("account_id=ref.account_id", self.source)
         self.assertIn("account_id: str | None = None", (PROJECT_ROOT / "flow_core.py").read_text(encoding="utf-8"))
 
+    def test_animate_from_image_pins_reference_account(self) -> None:
+        # «Оживить фото» под сгенерированной картинкой должно унести r2v на тот же
+        # аккаунт/проект, где живёт медиа; иначе reference media → 404 на другом
+        # аккаунте пула. Источник обогащается _account_id/_project_id из ImageRef.
+        start = self.source.index('if data.startswith("an:img:")')
+        block = self.source[start:start + 1200]
+        self.assertIn('vsrc.setdefault("_account_id", ref.account_id)', block)
+        self.assertIn('vsrc.setdefault("_project_id", ref.project_id)', block)
+        self.assertIn('st["vphoto"] = vsrc', block)
+
     def test_main_starts_all_keepers_and_disables_failed(self) -> None:
         start = self.source.index("async def _main_impl")
         block = self.source[start:start + 7000]

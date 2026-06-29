@@ -1271,8 +1271,9 @@ class BotMenuWiringTests(unittest.TestCase):
         animate_menu = self.source[self.source.index('elif data == "m:animate"'):][:500]
         self.assertIn("show_animate_photo_input", animate_menu)
         self.assertIn('"vanimate_photo"', self.source)
-        # Seeds the generated image into the new video wizard as vphoto reference.
-        self.assertIn('st["vphoto"] = ref.source', self.source)
+        # Seeds the generated image into the new video wizard as vphoto reference,
+        # carrying the image's account/project so r2v doesn't 404 on another acc.
+        self.assertIn('st["vphoto"] = vsrc', self.source)
         self.assertIn('st["vmode"] = "ingredients"', self.source)
         # The animate prefix handler is registered before the catch-all image one.
         self.assertLess(

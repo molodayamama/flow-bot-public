@@ -9693,7 +9693,15 @@ async def on_animate_action(callback: types.CallbackQuery):
         st = _ws(user_id)
         _clear_image_flow_keys(st)  # чтобы промпт из чата ушёл в видео, а не в картинки
         # Новый wizard: фото предзаполнено, ждём описание сцены от пользователя.
-        st["vphoto"] = ref.source
+        # Привязываем reference-медиа к аккаунту/проекту, где живёт картинка:
+        # без _account_id/_project_id r2v уходил на другой аккаунт пула и падал в
+        # 404 (Requested entity was not found) — медиа там просто нет.
+        vsrc = dict(ref.source) if isinstance(ref.source, dict) else {}
+        if ref.account_id:
+            vsrc.setdefault("_account_id", ref.account_id)
+        if ref.project_id:
+            vsrc.setdefault("_project_id", ref.project_id)
+        st["vphoto"] = vsrc
         st["vstep"] = "vprompt_input"
         st["vmode"] = "ingredients"
         st["vmodel"] = _nwiz_model(st)
