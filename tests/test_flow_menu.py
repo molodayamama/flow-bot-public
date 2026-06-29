@@ -1275,6 +1275,17 @@ class BotMenuWiringTests(unittest.TestCase):
         # carrying the image's account/project so r2v doesn't 404 on another acc.
         self.assertIn('st["vphoto"] = vsrc', self.source)
         self.assertIn('st["vmode"] = "ingredients"', self.source)
+        # "✏️ Изменить" (v:nchange) must NOT call show_video_prompt_input, which
+        # does _vid_clear and would drop the attached photo — it must keep state
+        # and wait for a new prompt via vnchange instead.
+        nchange = self.source[self.source.index('if data == "v:nchange":'):][:700]
+        self.assertNotIn("show_video_prompt_input", nchange)
+        self.assertIn('st["vawait"] = "vnchange"', nchange)
+        # The vnchange text handler re-renders the wizard (keeps vphoto/vmode).
+        self.assertIn(
+            'if st.get("vstep") == "vnewwiz" and st.get("vawait") == "vnchange":',
+            self.source,
+        )
         # The animate prefix handler is registered before the catch-all image one.
         self.assertLess(
             self.source.index('startswith("an:")'),

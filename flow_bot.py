@@ -10735,11 +10735,28 @@ async def on_video_action(callback: types.CallbackQuery):
             await show_new_video_wizard(msg, user_id=user_id, edit=True)
             return
 
-        # Изменить промпт — вернуться к вводу описания
+        # Изменить промпт — вернуться к вводу описания БЕЗ сброса состояния.
+        # show_video_prompt_input делает _vid_clear (стирает vphoto и ставит
+        # vmode="text"), из-за чего «Оживить фото» теряло приложенное фото и
+        # генерировало видео без него. Вместо этого помечаем ожидание нового
+        # промпта (vstep остаётся "vnewwiz") — следующий текст ловит хендлер
+        # vnewwiz+vnchange и перерисовывает визард, сохраняя vphoto.
         if data == "v:nchange":
-            # Сохраним текущий промпт чтобы показать его в подсказке
             await callback.answer()
-            await show_video_prompt_input(msg, user_id=user_id, edit=True)
+            st["vawait"] = "vnchange"
+            has_photo = bool(st.get("vphoto"))
+            text = (
+                "🎬 <b>Оживить фото</b>\n\n"
+                "📎 Фото сохранено. Опишите заново, что должно происходить в видео."
+            ) if has_photo else (
+                "🎬 <b>Создать видео</b>\n\n"
+                "Опишите, что должно происходить в видео. "
+                "Можно приложить фото — тогда оживим его в движение 📎"
+            )
+            kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text=L("cancel"), callback_data="v:cancel")]
+            ])
+            await _vid_edit(msg, text, kb, user_id, parse_mode="HTML")
             return
 
         # Создать видео
