@@ -9,12 +9,20 @@ import unittest
 from pathlib import Path
 
 import flow_core
+from accounts import AccountPool as AccountsPool
+from accounts import FlowAccount as AccountsFlowAccount
+from accounts import parse_flow_accounts as accounts_parse_flow_accounts
 from flow_core import AccountPool, FlowAccount, parse_flow_accounts
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ParseFlowAccountsTests(unittest.TestCase):
+    def test_accounts_package_is_canonical_export(self) -> None:
+        self.assertIs(AccountsPool, AccountPool)
+        self.assertIs(AccountsFlowAccount, FlowAccount)
+        self.assertIs(accounts_parse_flow_accounts, parse_flow_accounts)
+
     def test_empty_env_gives_single_default_account(self) -> None:
         accs = parse_flow_accounts("", default_id="main", default_dir="./google_profile")
         self.assertEqual(accs, [FlowAccount(id="main", profile_dir="./google_profile")])
