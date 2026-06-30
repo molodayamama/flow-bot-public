@@ -176,6 +176,7 @@ from flow_core import (
 import flow_copy
 from generation import backend_service
 import metrics
+from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScenario
 import prompts_lib
 
 # ───────────────────────────────────────────
@@ -5893,26 +5894,93 @@ async def show_video_prompt_input(
         st["vmsg_id"] = sent.message_id
 
 
+def _animate_photo_scenario() -> AnimatePhotoScenario:
+    return AnimatePhotoScenario(
+        AnimatePhotoConfig(
+            default_fmt=VID_DEFAULT_FMT,
+            min_price=video_animate_min_price(),
+        )
+    )
+
+
+class _TelegramAnimatePhotoContext:
+    """Telegram adapter for the platform-independent animate-photo scenario."""
+
+    def __init__(self, message: types.Message, user_id: int):
+        self.message = message
+        self.user_id = user_id
+
+    @property
+    def state(self) -> dict:
+        return _ws(self.user_id)
+
+    def clear_pending_edit(self) -> None:
+        pending_edits.pop(self.user_id, None)
+
+    def clear_video_flow(self) -> None:
+        _vid_clear(self.user_id)
+
+    def clear_image_flow(self) -> None:
+        _clear_image_flow_keys(self.state)
+
+    def current_video_model(self) -> str:
+        return _nwiz_model(self.state)
+
+    def log_event(self, name: str, *, source: str) -> None:
+        metrics.log_event(name, user_id=self.user_id, source=source)
+
+    async def show_photo_input(self, *, edit: bool, price: int):
+        text = flow_copy.msg("animate_photo_screen", price=price)
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text=L("cancel"), callback_data="v:cancel")]
+        ])
+        if edit:
+            await _vid_edit(self.message, text, kb, self.user_id, parse_mode="HTML")
+        else:
+            sent = await self.message.answer(text, reply_markup=kb, parse_mode="HTML")
+            self.state["vmsg_id"] = sent.message_id
+
+    async def show_selected_photo_prompt(self):
+        text = (
+            "рџЋ¬ <b>РћР¶РёРІРёС‚СЊ С„РѕС‚Рѕ</b>\n\n"
+            "рџ“Ћ <b>Р¤РѕС‚Рѕ РґРѕР±Р°РІР»РµРЅРѕ.</b> РћРїРёС€РёС‚Рµ, С‡С‚Рѕ РґРѕР»Р¶РЅРѕ РїСЂРѕРёСЃС…РѕРґРёС‚СЊ РІ РІРёРґРµРѕ."
+        )
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text=L("cancel"), callback_data="v:cancel")]
+        ])
+        sent = await self.message.answer(text, reply_markup=kb, parse_mode="HTML")
+        self.state["vmsg_id"] = sent.message_id
+
+    async def show_need_photo(self):
+        await self.message.answer(flow_copy.msg("animate_photo_need_photo"))
+
+    async def upload_photo_source(self, file_id: str) -> dict | None:
+        status_msg = await self.message.answer(flow_copy.msg("uploading_photo"))
+        source = await _upload_photo_source_from_file_id(
+            self.message,
+            user_id=self.user_id,
+            status_msg=status_msg,
+            file_id=file_id,
+        )
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        return source
+
+    async def show_video_wizard(self, *, edit: bool):
+        await show_new_video_wizard(self.message, user_id=self.user_id, edit=edit)
+
+    async def generate_video(self, prompt: str):
+        await _video_generate_and_send(self.message, prompt, user_id=self.user_id)
+
+
 async def show_animate_photo_input(message: types.Message, *, user_id: int, edit: bool):
     """Entry point for "Оживить фото": require a photo, then use the new wizard."""
-    st = wizard_state[user_id]
-    _vid_clear(user_id)
-    st["vstep"] = "vprompt_input"
-    st["vawait"] = "vanimate_photo"
-    st["vmode"] = "ingredients"
-    st.setdefault("vfmt", VID_DEFAULT_FMT)
-    st.setdefault("vdur", 4)
-    st.setdefault("vquality", "lite")
-    st.setdefault("vstyle", "")
-    text = flow_copy.msg("animate_photo_screen", price=video_animate_min_price())
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=L("cancel"), callback_data="v:cancel")]
-    ])
-    if edit:
-        await _vid_edit(message, text, kb, user_id, parse_mode="HTML")
-    else:
-        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
-        st["vmsg_id"] = sent.message_id
+    await _animate_photo_scenario().start_from_menu(
+        _TelegramAnimatePhotoContext(message, user_id),
+        edit=edit,
+    )
 
 
 async def show_new_video_wizard(message: types.Message, *, user_id: int, edit: bool):
@@ -9523,37 +9591,12 @@ async def on_animate_action(callback: types.CallbackQuery):
             await callback.answer(flow_copy.msg("expired"), show_alert=True)
             return
         await callback.answer()
-        pending_edits.pop(user_id, None)
-        _vid_clear(user_id)
-        st = _ws(user_id)
-        _clear_image_flow_keys(st)  # чтобы промпт из чата ушёл в видео, а не в картинки
-        # Новый wizard: фото предзаполнено, ждём описание сцены от пользователя.
-        # Привязываем reference-медиа к аккаунту/проекту, где живёт картинка:
-        # без _account_id/_project_id r2v уходил на другой аккаунт пула и падал в
-        # 404 (Requested entity was not found) — медиа там просто нет.
-        vsrc = dict(ref.source) if isinstance(ref.source, dict) else {}
-        if ref.account_id:
-            vsrc.setdefault("_account_id", ref.account_id)
-        if ref.project_id:
-            vsrc.setdefault("_project_id", ref.project_id)
-        st["vphoto"] = vsrc
-        st["vstep"] = "vprompt_input"
-        st["vmode"] = "ingredients"
-        st["vmodel"] = _nwiz_model(st)
-        st.setdefault("vfmt", VID_DEFAULT_FMT)
-        st.setdefault("vdur", 4)
-        st.setdefault("vquality", "lite")
-        st.setdefault("vstyle", "")
-        metrics.log_event("animate_started", user_id=user_id, source="image")
-        text = (
-            "🎬 <b>Оживить фото</b>\n\n"
-            "📎 <b>Фото добавлено.</b> Опишите, что должно происходить в видео."
+        await _animate_photo_scenario().start_from_generated_image(
+            _TelegramAnimatePhotoContext(msg, user_id),
+            source=ref.source if isinstance(ref.source, dict) else {},
+            account_id=ref.account_id,
+            project_id=ref.project_id,
         )
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text=L("cancel"), callback_data="v:cancel")]
-        ])
-        sent = await msg.answer(text, reply_markup=kb, parse_mode="HTML")
-        st["vmsg_id"] = sent.message_id
         return
     await callback.answer()
 
@@ -12591,23 +12634,13 @@ async def handle_photo(message: types.Message):
     # Новый wizard: фото на шаге ввода промпта или на экране настроек.
     vstep = st.get("vstep")
     if vstep in ("vprompt_input", "vnewwiz"):
-        if caption:
-            st["vprompt"] = caption
-        status_msg_nw = await message.answer(flow_copy.msg("uploading_photo"))
-        source_nw = await _upload_photo_source_from_message(
-            message, user_id=user_id, status_msg=status_msg_nw
+        await _animate_photo_scenario().attach_uploaded_photo(
+            _TelegramAnimatePhotoContext(message, user_id),
+            file_id=message.photo[-1].file_id,
+            caption=caption,
         )
-        try:
-            await status_msg_nw.delete()
-        except Exception:
-            pass
-        if source_nw:
-            st["vphoto"] = source_nw
-            # Есть фото → новый wizard сам даст выбор Быстро (Omni) / Качество (Veo).
-            st["vmode"] = "ingredients"
-            st["vmodel"] = _nwiz_model(st)
-            await show_new_video_wizard(message, user_id=user_id, edit=(vstep == "vnewwiz"))
         return
+
 
     # Активны «Идеи и шаблоны»: фото остаётся внутри этой ветки (основа для
     # image/edit или референс для video), а не уходит в общий выбор image/video.
@@ -12892,8 +12925,10 @@ async def handle_plain_text(message: types.Message):
     # «Оживить фото» from the main menu requires a photo. Text is saved as the
     # future scenario, but generation cannot proceed without an image reference.
     if st.get("vawait") == "vanimate_photo":
-        st["vprompt"] = text
-        await message.answer(flow_copy.msg("animate_photo_need_photo"))
+        await _animate_photo_scenario().remember_prompt_until_photo(
+            _TelegramAnimatePhotoContext(message, user_id),
+            text,
+        )
         return
 
     # Новый wizard: пользователь ввёл описание (шаг 1).
@@ -12926,8 +12961,10 @@ async def handle_plain_text(message: types.Message):
     # show_video_ingredients (которая всегда выставляет vawait=ving_photo) блокирует
     # текстовый промпт даже когда фото уже добавлены («Оживить фото» не работает).
     if st.get("vmode") == "ingredients" and (st.get("ving_photos") or []):
-        st["vawait"] = None
-        await _video_generate_and_send(message, text, user_id=user_id)
+        await _animate_photo_scenario().generate_from_ready_references(
+            _TelegramAnimatePhotoContext(message, user_id),
+            text,
+        )
         return
 
     if st.get("vawait") == "ving_photo":

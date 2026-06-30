@@ -1300,10 +1300,13 @@ class BotMenuWiringTests(unittest.TestCase):
         animate_menu = self.source[self.source.index('elif data == "m:animate"'):][:500]
         self.assertIn("show_animate_photo_input", animate_menu)
         self.assertIn('"vanimate_photo"', self.source)
-        # Seeds the generated image into the new video wizard as vphoto reference,
-        # carrying the image's account/project so r2v doesn't 404 on another acc.
-        self.assertIn('st["vphoto"] = vsrc', self.source)
-        self.assertIn('st["vmode"] = "ingredients"', self.source)
+        # Seeds the generated image into the new scenario layer as a vphoto
+        # reference, carrying the image's account/project so r2v doesn't 404 on
+        # another acc.
+        self.assertIn("start_from_generated_image", self.source)
+        self.assertIn("source=ref.source if isinstance(ref.source, dict) else {}", self.source)
+        self.assertIn("account_id=ref.account_id", self.source)
+        self.assertIn("project_id=ref.project_id", self.source)
         # "✏️ Изменить" (v:nchange) must NOT call show_video_prompt_input, which
         # does _vid_clear and would drop the attached photo — it must keep state
         # and wait for a new prompt via vnchange instead.

@@ -1,0 +1,2 @@
+"""Platform-independent product scenarios."""
+
