@@ -40,6 +40,7 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote, unquote, urlencode, urlparse
 
 import aiohttp
@@ -173,6 +174,7 @@ from flow_core import (
     AccountPool,
 )
 import flow_copy
+from generation import backend_service
 import metrics
 import prompts_lib
 
@@ -7029,216 +7031,49 @@ def _backend_client():
     return _backend_client_cache
 
 
-async def _backend_generate_images(req: dict) -> dict:
-    """Consumer-side: run a text→image generation on the pool, return URLs.
+def _backend_generation_deps():
+    """Runtime dependencies for generation.backend_service.
 
-    No Telegram coupling — used by the internal endpoint for the seller bot.
-    Mirrors the routing/failover of _do_generate_and_send but returns data.
+    Kept here because the consumer process still owns the Flow account pool,
+    keepers, clients, and capture files. The service itself stays Telegram-free.
     """
-    prompt = str(req.get("prompt") or "").strip()
-    if len(prompt) < 3:
-        return {"error": "empty prompt"}
-    num_images = max(1, min(int(req.get("num_images") or 1), 4))
-    aspect_ratio = str(req.get("aspect_ratio") or "portrait")
-    image_model = str(req.get("image_model") or DEFAULT_IMAGE_MODEL)
-    user_id = int(req.get("user_id") or 0)
+    return SimpleNamespace(
+        default_image_model=DEFAULT_IMAGE_MODEL,
+        edit_capture_file=EDIT_CAPTURE_FILE,
+        vid_ref_default_model=VID_REF_DEFAULT_MODEL,
+        account_pool=account_pool,
+        account_for_image=_account_for_image,
+        account_for_video=_account_for_video,
+        ensure_user_project=ensure_user_project,
+        client_for_acc=_client_for_acc,
+        keeper_for_acc=_keeper_for_acc,
+        mark_image_account_failure=_mark_image_account_failure,
+        mark_video_account_failure=_mark_video_account_failure,
+        build_image_inputs=build_image_inputs,
+        load_edit_capture=load_edit_capture,
+        result_pairs=result_pairs,
+        video_model_meta=video_model_meta,
+        log=log,
+    )
 
-    tried: set[str] = set()
-    for attempt in range(2):
-        acc_id = _account_for_image(user_id, exclude=tried if tried else None)
-        if acc_id is None:
-            return {"error": "accounts_unavailable"}
-        tried.add(acc_id)
-        project_id = await ensure_user_project(user_id, account_id=acc_id)
-        try:
-            async with account_pool.image_slot(acc_id):
-                result = await _client_for_acc(acc_id).generate_images(
-                    prompt, aspect_ratio=aspect_ratio, num_images=num_images,
-                    project_id=project_id, image_model=image_model,
-                )
-        except Exception:
-            log.exception("backend gen failed (account %s, attempt %d)", acc_id, attempt)
-            account_pool.mark_failure(acc_id)
-            if attempt == 0:
-                continue
-            return {"error": "generation failed"}
-        if "error" in result:
-            _mark_image_account_failure(acc_id, result)
-            if attempt == 0 and result.get("error_type") != "prompt_rejected":
-                continue
-            return {"error": str(result.get("error"))[:300]}
-        pairs = result_pairs(result)
-        if not pairs:
-            if attempt == 0:
-                continue
-            return {"error": "nothing_returned"}
-        account_pool.mark_success(acc_id)
-        return {
-            "images": [{"url": url, "img": img} for url, img in pairs],
-            "account_id": acc_id,
-            "project_id": project_id,
-        }
-    return {"error": "generation failed"}
+
+async def _backend_generate_images(req: dict) -> dict:
+    """Compatibility wrapper for the internal text-to-image backend."""
+    return await backend_service.generate_images(_backend_generation_deps(), req)
 
 
 async def _backend_generate_i2i(req: dict) -> dict:
-    """Consumer-side: image→image on the user's uploaded photo, return URLs.
-
-    The seller sends the product photo as base64; we upload it to an account and
-    run image-to-image (same core as _do_edit_and_send), then return URLs.
-    """
-    prompt = str(req.get("prompt") or "").strip()
-    if len(prompt) < 3:
-        return {"error": "empty prompt"}
-    image_b64 = req.get("image_b64")
-    if not image_b64:
-        return {"error": "missing image"}
-    try:
-        data = base64.b64decode(image_b64)
-    except Exception:
-        return {"error": "bad image"}
-    num_images = max(1, min(int(req.get("num_images") or 1), 8))
-    aspect_ratio = str(req.get("aspect_ratio") or "portrait")
-    image_model = str(req.get("image_model") or DEFAULT_IMAGE_MODEL)
-    user_id = int(req.get("user_id") or 0)
-
-    tried: set[str] = set()
-    last_error = "generation failed"
-    for attempt in range(2):
-        acc_id = _account_for_image(
-            user_id, prefer_image_only=True, exclude=tried if tried else None,
-        )
-        if acc_id is None:
-            return {"error": "accounts_unavailable" if not tried else last_error}
-        tried.add(acc_id)
-        project_id = await ensure_user_project(user_id, account_id=acc_id)
-        try:
-            source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png", project_id=project_id)
-        except Exception:
-            log.exception("backend upload_image failed (account %s, attempt %d)", acc_id, attempt)
-            account_pool.mark_failure(acc_id)
-            last_error = "upload failed"
-            continue
-        if not source:
-            last_error = "upload failed"
-            continue
-        upload_project = source.pop("_project_id", None) or project_id
-        inputs = build_image_inputs(source, load_edit_capture(EDIT_CAPTURE_FILE))
-        if not inputs:
-            last_error = "no image inputs"
-            continue
-        try:
-            async with account_pool.image_slot(acc_id):
-                result = await _client_for_acc(acc_id).generate_images(
-                    prompt, aspect_ratio=aspect_ratio, num_images=num_images,
-                    project_id=upload_project, image_inputs=inputs,
-                    allow_browser_fallback=False, image_model=image_model,
-                )
-        except Exception:
-            log.exception("backend i2i failed (account %s, attempt %d)", acc_id, attempt)
-            account_pool.mark_failure(acc_id)
-            last_error = "generation failed"
-            continue
-        if "error" in result:
-            _mark_image_account_failure(acc_id, result)
-            last_error = str(result.get("error"))[:300]
-            if result.get("error_type") == "prompt_rejected":
-                return {"error": last_error}
-            continue
-        pairs = result_pairs(result)
-        if not pairs:
-            last_error = "nothing_returned"
-            continue
-        account_pool.mark_success(acc_id)
-        return {
-            "images": [{"url": url, "img": img} for url, img in pairs],
-            "account_id": acc_id,
-            "project_id": upload_project,
-        }
-    return {"error": last_error}
+    """Compatibility wrapper for the internal image-to-image backend."""
+    return await backend_service.generate_i2i(_backend_generation_deps(), req)
 
 
 async def _backend_generate_video_ingredients(req: dict) -> dict:
-    """Consumer-side: photo+prompt -> video for the seller bot, return mp4 bytes.
-
-    Seller has no browser/session pool, so the consumer uploads the seller's
-    product photo to a video-capable account, runs reference-to-video, fetches
-    the resulting mp4 with Flow cookies, and returns base64 bytes over localhost.
-    """
-    prompt = str(req.get("prompt") or "").strip()
-    if len(prompt) < 3:
-        return {"error": "empty prompt"}
-    image_b64 = req.get("image_b64")
-    if not image_b64:
-        return {"error": "missing image"}
-    try:
-        data = base64.b64decode(image_b64)
-    except Exception:
-        return {"error": "bad image"}
-
-    model_id = str(req.get("video_model") or VID_REF_DEFAULT_MODEL)
-    meta = video_model_meta(model_id)
-    if not meta:
-        return {"error": "bad video model"}
-    aspect = str(req.get("aspect_ratio") or "portrait")
-    if aspect not in {"portrait", "landscape"}:
-        aspect = "portrait"
-    user_id = int(req.get("user_id") or 0)
-
-    acc_id = _account_for_video(user_id)
-    if acc_id is None:
-        return {"error": "accounts_unavailable"}
-    project_id = await ensure_user_project(user_id, account_id=acc_id)
-    try:
-        source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_video_{user_id}.png", project_id=project_id)
-    except Exception:
-        log.exception("backend video upload_image failed (account %s)", acc_id)
-        return {"error": "upload failed"}
-    if not source or not source.get("mediaId"):
-        return {"error": "upload failed"}
-    video_project_id = source.pop("_project_id", None) or project_id
-
-    try:
-        async with account_pool.video_slot(acc_id):
-            result = await _client_for_acc(acc_id).generate_video(
-                prompt,
-                model_key=meta["key"],
-                aspect=aspect,
-                project_id=video_project_id,
-                reference_sources=[source],
-                operation="generate",
-            )
-    except Exception:
-        log.exception("backend video generation failed (account %s)", acc_id)
-        _mark_video_account_failure(acc_id)
-        return {"error": "generation failed"}
-    if "error" in result:
-        _mark_video_account_failure(acc_id, result)
-        return {"error": str(result.get("error"))[:300]}
-
-    media_id = result.get("media_id")
-    if not media_id:
-        return {"error": "media_id missing"}
-    video_bytes = await _client_for_acc(acc_id).fetch_video_bytes(media_id)
-    if not video_bytes:
-        return {"error": "download failed"}
-    account_pool.mark_success(acc_id)
-    return {
-        "videos": [{
-            "video_b64": base64.b64encode(video_bytes).decode("ascii"),
-            "media_id": media_id,
-            "model_id": model_id,
-            "aspect_ratio": aspect,
-            "workflow_id": result.get("workflow_id"),
-            "scene_id": result.get("scene_id"),
-        }],
-        "account_id": acc_id,
-        "project_id": result.get("project_id") or video_project_id,
-    }
+    """Compatibility wrapper for the internal photo-to-video backend."""
+    return await backend_service.generate_video_ingredients(_backend_generation_deps(), req)
 
 
 async def _backend_generate(req: dict) -> dict:
-    """Internal endpoint dispatcher by ``kind`` (image | i2i)."""
+    """Internal endpoint dispatcher by ``kind`` (image | i2i | video_ingredients)."""
     if req.get("kind") == "i2i":
         return await _backend_generate_i2i(req)
     if req.get("kind") == "video_ingredients":

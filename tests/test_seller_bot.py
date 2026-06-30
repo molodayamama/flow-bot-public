@@ -7,6 +7,7 @@ import unittest
 
 import flow_core
 import flow_bot
+from generation import backend_service
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -195,21 +196,31 @@ class SellerMenuTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_backend_service_is_platform_neutral(self) -> None:
+        src = inspect.getsource(backend_service)
+        self.assertNotIn("aiogram", src)
+        self.assertNotIn("types.Message", src)
+        self.assertNotIn("telegram.", src.lower())
+        self.assertIn("async def generate_images", src)
+        self.assertIn("async def generate_i2i", src)
+        self.assertIn("async def generate_video_ingredients", src)
+
     def test_backend_i2i_uses_account_failover(self) -> None:
-        src = inspect.getsource(flow_bot._backend_generate_i2i)
+        src = inspect.getsource(backend_service.generate_i2i)
         self.assertIn("for attempt in range(2):", src)
         self.assertIn("prefer_image_only=True", src)
         self.assertIn("exclude=tried if tried else None", src)
-        self.assertIn("upload_image(data", src)
+        self.assertIn("upload_image(", src)
+        self.assertIn("data, filename=", src)
         self.assertIn("allow_browser_fallback=False", src)
 
     def test_backend_video_ingredients_returns_video_bytes(self) -> None:
-        src = inspect.getsource(flow_bot._backend_generate_video_ingredients)
+        src = inspect.getsource(backend_service.generate_video_ingredients)
         self.assertIn('"video_ingredients"', inspect.getsource(flow_bot._backend_generate))
         self.assertIn("video_b64", src)
         self.assertIn("fetch_video_bytes(media_id)", src)
         self.assertIn("reference_sources=[source]", src)
-        self.assertIn("_account_for_video(user_id)", src)
+        self.assertIn("deps.account_for_video(user_id)", src)
 
     def test_web_server_allows_large_internal_media_payloads(self) -> None:
         src = inspect.getsource(flow_bot._start_web_server)
