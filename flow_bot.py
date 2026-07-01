@@ -179,6 +179,32 @@ import metrics
 from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScenario
 import prompts_lib
 
+# App/payment config extracted to config/settings.py (Phase 5 wave 2);
+# re-exported so flow_bot keeps its references unchanged.
+from config.settings import (
+    STARS_TO_RUB,
+    ROBOKASSA_CARD_DISCOUNT_PCT,
+    _env_any,
+    ROBOKASSA_MERCHANT_LOGIN,
+    ROBOKASSA_TEST,
+    ROBOKASSA_PASSWORD1,
+    ROBOKASSA_PASSWORD2,
+    ROBOKASSA_ENABLED,
+    ROBOKASSA_PAY_URL,
+    ROBOKASSA_PUBLIC_BASE_URL,
+    ROBOKASSA_INC_CURR_LABEL,
+    ROBOKASSA_WEB_HOST,
+    ROBOKASSA_WEB_PORT,
+    _robokassa_clean_scope,
+    BOT_USERNAME,
+    BOT_MODE,
+    IS_SELLER,
+    ROBOKASSA_SCOPE,
+    STARS_PAYMENT_ENABLED,
+    SBP_PAYMENT_ENABLED,
+)
+
+
 # Telegram keyboard builders extracted to channels/telegram/keyboards.py
 # (Phase 5); re-exported so flow_bot handlers keep working.
 from channels.telegram.keyboards import (
@@ -253,74 +279,18 @@ FLOW_ACCOUNT_ID = os.getenv("FLOW_ACCOUNT_ID", "default")
 # раньше). Второй аккаунт = вторая запись в env, код менять не нужно.
 FLOW_ACCOUNTS_RAW = os.getenv("FLOW_ACCOUNTS", "")
 FLOW_ACCOUNTS_STATE_FILE = os.getenv("FLOW_ACCOUNTS_STATE_FILE", "flow_accounts_state.json")
-try:
-    STARS_TO_RUB = float(os.getenv("STARS_TO_RUB", "1.3"))  # ~₽ за 1 Star, best-effort
-except (TypeError, ValueError):
-    STARS_TO_RUB = 1.3
-try:
-    ROBOKASSA_CARD_DISCOUNT_PCT = float(os.getenv("ROBOKASSA_CARD_DISCOUNT_PCT", "10"))
-except (TypeError, ValueError):
-    ROBOKASSA_CARD_DISCOUNT_PCT = 10.0
 
 
-def _env_any(*names: str, default: str = "") -> str:
-    for name in names:
-        value = os.getenv(name)
-        if value not in (None, ""):
-            return value
-    return default
 
 
-ROBOKASSA_MERCHANT_LOGIN = _env_any("ROBOKASSA_MERCHANT_LOGIN", "ROBOKASSA_LOGIN")
 ROBOKASSA_HASH_ALGO = _env_any("ROBOKASSA_HASH_ALGO", "ROBOKASSA_HASH_ALGORITHM", default="md5")
-ROBOKASSA_TEST = _env_any("ROBOKASSA_TEST", "ROBOKASSA_TEST_MODE", default="0").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-ROBOKASSA_PASSWORD1 = (
-    _env_any("ROBOKASSA_TEST_PASSWORD1", "ROBOKASSA_TEST_PASS1")
-    if ROBOKASSA_TEST
-    else ""
-) or _env_any("ROBOKASSA_PASSWORD1", "ROBOKASSA_PASS1", "ROBOKASSA_PASSWORD_1")
-ROBOKASSA_PASSWORD2 = (
-    _env_any("ROBOKASSA_TEST_PASSWORD2", "ROBOKASSA_TEST_PASS2")
-    if ROBOKASSA_TEST
-    else ""
-) or _env_any("ROBOKASSA_PASSWORD2", "ROBOKASSA_PASS2", "ROBOKASSA_PASSWORD_2")
-ROBOKASSA_ENABLED = _env_any(
-    "ROBOKASSA_ENABLED",
-    default="1" if ROBOKASSA_MERCHANT_LOGIN and ROBOKASSA_PASSWORD1 and ROBOKASSA_PASSWORD2 else "0",
-).strip().lower() not in ("0", "false", "no", "off")
-ROBOKASSA_PAY_URL = _env_any(
-    "ROBOKASSA_PAY_URL",
-    default="https://auth.robokassa.ru/Merchant/Index.aspx",
-)
-ROBOKASSA_PUBLIC_BASE_URL = _env_any(
-    "ROBOKASSA_PUBLIC_BASE_URL",
-    default="https://pay.photozhab.ru",
-).rstrip("/")
-ROBOKASSA_INC_CURR_LABEL = _env_any("ROBOKASSA_INC_CURR_LABEL", default="SBP")
-ROBOKASSA_WEB_HOST = _env_any("ROBOKASSA_WEB_HOST", default="127.0.0.1")
-try:
-    ROBOKASSA_WEB_PORT = int(_env_any("ROBOKASSA_WEB_PORT", default="8081"))
-except ValueError:
-    ROBOKASSA_WEB_PORT = 8081
 
 
-def _robokassa_clean_scope(value: str) -> str:
-    value = (value or "").strip().lower()
-    return value if value in ("consumer", "seller") else "consumer"
 # Имя бота для реферальных ссылок (берётся из get_me() на старте; env — фолбэк).
-BOT_USERNAME = os.getenv("BOT_USERNAME", "")
 # Режим бота: "consumer" (как сейчас) или "seller" (@photozhab_wb_bot, меню
 # «Маркетплейсы», селлерские пакеты). Один и тот же код, флаг на процесс;
 # у каждого процесса свой TELEGRAM_TOKEN/BOT_USERNAME/USER_CREDITS_FILE.
 # См. docs/SELLER_BOT_PLAN.md.
-BOT_MODE = (os.getenv("BOT_MODE", "consumer") or "consumer").strip().lower()
-IS_SELLER = BOT_MODE == "seller"
-ROBOKASSA_SCOPE = _robokassa_clean_scope(os.getenv("ROBOKASSA_SCOPE") or ("seller" if IS_SELLER else "consumer"))
 ROBOKASSA_CONSUMER_RESULT_URL = _env_any(
     "ROBOKASSA_CONSUMER_RESULT_URL",
     default="http://127.0.0.1:8081/robokassa/result",
@@ -2072,8 +2042,6 @@ UPLOAD_VIDEO_EDIT_ENABLED = False
 
 # Payment method toggles — can be hot-patched via admin panel (config_store flags).
 # topup_method_kb() reads config_store at call-time so changes survive restarts.
-STARS_PAYMENT_ENABLED: bool = True
-SBP_PAYMENT_ENABLED: bool = True
 TOPUP_TEST_PACKS_ENABLED: bool = _env_any(
     "TOPUP_TEST_PACKS_ENABLED", "PAYMENT_TEST_PACKS_ENABLED", default="0"
 ).strip().lower() in ("1", "true", "yes", "on")
