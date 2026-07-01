@@ -47,13 +47,14 @@ class RefactorBaselineTests(unittest.TestCase):
         self.assertIn("def parse_action_callback", self.flow_core)
 
     def test_credit_refund_invariant_is_baselined(self) -> None:
-        start = self.flow_bot.index("async def credit_gate")
-        end = self.flow_bot.index("def _project_key", start)
-        block = self.flow_bot[start:end]
-        self.assertLess(block.index("credit_store.charge(user_id, price)"), block.index("yield charge"))
-        self.assertIn("finally:", block)
-        self.assertIn("if not charge.ok:", block)
-        self.assertIn("credit_store.refund(user_id, price)", block)
+        # flow_bot still owns the credit_gate entry point; the charge-on-success /
+        # refund-on-failure rule now lives in billing/credit_gate.py (PR-7a).
+        self.assertIn("async def credit_gate", self.flow_bot)
+        gate = (PROJECT_ROOT / "billing" / "credit_gate.py").read_text(encoding="utf-8")
+        self.assertLess(gate.index("store.charge(user_id, price)"), gate.index("yield charge"))
+        self.assertIn("finally:", gate)
+        self.assertIn("if not charge.ok:", gate)
+        self.assertIn("store.refund(user_id, price)", gate)
 
         video_start = self.flow_bot.index("async def _do_video_generate_and_send")
         video_block = self.flow_bot[video_start:video_start + 7000]

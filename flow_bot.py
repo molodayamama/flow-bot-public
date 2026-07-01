@@ -899,17 +899,13 @@ async def user_slot(user_id: int, message: types.Message):
         user_last_request[user_id] = time.time()
 
 
-class NotEnoughCredits(Exception):
-    """У пользователя недостаточно кредитов для действия."""
-
-
-class _Charge:
-    """Контейнер результата платного действия: ставим .ok=True при успехе."""
-
-    __slots__ = ("ok",)
-
-    def __init__(self) -> None:
-        self.ok = False
+# Credit-gate primitives now live in billing/credit_gate.py (PR-7a). Re-exported
+# here so the rest of flow_bot and its callers keep working unchanged.
+from billing.credit_gate import (  # noqa: E402
+    Charge as _Charge,
+    NotEnoughCredits,
+    open_credit_gate,
+)
 
 
 @asynccontextmanager
@@ -924,12 +920,9 @@ async def credit_gate(
     ``surcharge`` — доплата сверх базовой цены (например, премиум-модель картинки).
     """
     price = action_price(action, num_images) + max(0, int(surcharge))
-    if price <= 0:
-        yield _Charge()  # бесплатно — без списания
-        return
 
-    have = credit_store.balance(user_id)
-    if have < price:
+    async def _on_insufficient(have: int, needed: int) -> None:
+        # Telegram-specific balance UI; the charge/refund rule lives in billing/.
         if have == 0:
             await message.answer(
                 flow_copy.msg("zero_balance"),
@@ -941,18 +934,14 @@ async def credit_gate(
                 inline_keyboard=[[_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]]
             )
             await message.answer(
-                flow_copy.msg("low_balance", needed=price, have=have), reply_markup=kb,
+                flow_copy.msg("low_balance", needed=needed, have=have), reply_markup=kb,
                 parse_mode="HTML",
             )
-        raise NotEnoughCredits
 
-    credit_store.charge(user_id, price)
-    charge = _Charge()
-    try:
+    async with open_credit_gate(
+        credit_store, user_id, price, on_insufficient=_on_insufficient
+    ) as charge:
         yield charge
-    finally:
-        if not charge.ok:
-            credit_store.refund(user_id, price)
 
 
 def _project_key(account_id: str, user_id: int) -> str:

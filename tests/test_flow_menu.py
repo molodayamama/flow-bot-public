@@ -657,10 +657,14 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("_install_shutdown_exception_filter()", self.source)
 
     def test_credits_charged_with_refund_on_failure(self) -> None:
+        # flow_bot wires the gate and callers flag success; the charge/refund
+        # rule itself lives in billing/credit_gate.py (PR-7a).
         self.assertIn("credit_gate", self.source)
-        self.assertIn("class NotEnoughCredits", self.source)
-        self.assertIn("credit_store.refund", self.source)
         self.assertIn("charge.ok =", self.source)
+        billing_src = (PROJECT_ROOT / "billing" / "credit_gate.py").read_text(encoding="utf-8")
+        self.assertIn("class NotEnoughCredits", billing_src)
+        self.assertIn("store.refund", billing_src)
+        self.assertIn("if not charge.ok:", billing_src)
 
     def test_stars_payment_wired(self) -> None:
         self.assertIn("currency=\"XTR\"", self.source)
