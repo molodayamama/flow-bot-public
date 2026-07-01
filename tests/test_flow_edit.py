@@ -33,6 +33,12 @@ from flow_core import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+_PR2A_PROVIDER_SOURCE = (
+    (PROJECT_ROOT / "flow_provider" / "client.py").read_text(encoding="utf-8")
+    + "\n"
+    + (PROJECT_ROOT / "flow_provider" / "runtime_config.py").read_text(encoding="utf-8")
+)
+
 
 class ResultParsingTests(unittest.TestCase):
     def test_parse_result_matches_both_response_shapes(self) -> None:
@@ -550,6 +556,7 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertEqual(self.source.count("COOLDOWN_SEC = 10"), 1)
 
     def test_photo_upload_and_edit_wired(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         self.assertIn("@dp.message(F.photo)", self.source)
         self.assertIn("async def handle_photo", self.source)
         # Загрузка идёт через keeper аккаунта юзера (multi-account роутинг).
@@ -560,6 +567,7 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("media_source_from_response", self.source)
 
     def test_upload_is_robust_not_host_or_field_guessed(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         # Regression: do NOT filter responses to one host or require an exact
         # field; parse XSSI, dedupe vs baseline DOM ids, dump schema on failure.
         self.assertIn("loads_xssi", self.source)
@@ -598,6 +606,7 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("1–3 минуты", flow_copy.msg("image_edit_rate_limited"))
 
     def test_no_fallback_image_403_classified_as_rate_limited(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         start = self.source.index("async def generate_images")
         end = self.source.index("async def run_captured_request", start)
         block = self.source[start:end]
@@ -639,6 +648,7 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("_mark_image_account_failure(failover_ref.account_id, result)", edit)
 
     def test_per_user_project_creation_wired(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         self.assertIn("async def ensure_user_project", self.source)
         self.assertIn("async def create_new_project", self.source)
         self.assertIn("project_store = UserProjectStore", self.source)
@@ -651,6 +661,7 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("ref.user_id != user_id", self.source)
 
     def test_project_creation_uses_separate_tab_not_main_page(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         # Регрессия: создание проекта НЕ должно делать goto на главной странице
         # (self._page) — иначе ломается живая сессия и поле ввода.
         self.assertIn("tab = await self._context.new_page()", self.source)
@@ -665,6 +676,7 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("PER_USER_PROJECTS", self.source)
 
     def test_edit_shape_is_captured_not_guessed(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         # Edit must replay a captured real request, never a hardcoded guess.
         self.assertIn("def _maybe_capture_edit", self.source)
         self.assertIn("def note_image", self.source)
@@ -673,6 +685,7 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("build_image_inputs(ref.source, capture)", self.source)
 
     def test_edit_capture_is_guarded_against_breaking_requests(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         # The interceptor must swallow its own errors so generation never breaks.
         idx = self.source.index("def _maybe_capture_edit")
         end = self.source.index("# ── обновление Bearer", idx)

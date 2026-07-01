@@ -6,10 +6,16 @@ import unittest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+_PR2A_PROVIDER_SOURCE = (
+    (PROJECT_ROOT / "flow_provider" / "client.py").read_text(encoding="utf-8")
+    + "\n"
+    + (PROJECT_ROOT / "flow_provider" / "runtime_config.py").read_text(encoding="utf-8")
+)
+
 
 class FlowBotRecoveryStaticTests(unittest.TestCase):
     def test_session_keeper_has_browser_recovery_hooks(self) -> None:
-        source = (PROJECT_ROOT / "flow_bot.py").read_text(encoding="utf-8")
+        source = _PR2A_PROVIDER_SOURCE + "\n" + (PROJECT_ROOT / "flow_bot.py").read_text(encoding="utf-8")
 
         self.assertIn("async def _ensure_browser_locked", source)
         self.assertIn("def _browser_alive", source)

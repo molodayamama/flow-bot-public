@@ -16,6 +16,12 @@ from flow_core import AccountPool, FlowAccount, parse_flow_accounts
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+_PR2A_PROVIDER_SOURCE = (
+    (PROJECT_ROOT / "flow_provider" / "client.py").read_text(encoding="utf-8")
+    + "\n"
+    + (PROJECT_ROOT / "flow_provider" / "runtime_config.py").read_text(encoding="utf-8")
+)
+
 
 class ParseFlowAccountsTests(unittest.TestCase):
     def test_accounts_package_is_canonical_export(self) -> None:
@@ -329,6 +335,7 @@ class BotPoolWiringTests(unittest.TestCase):
         self.assertIn("client = clients[DEFAULT_ACCOUNT_ID]", self.source)
 
     def test_keeper_takes_per_account_profile(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         self.assertIn("browser_proxy_url: str | None = None", self.source)
         self.assertIn("api_proxy_url: str | None = None", self.source)
         self.assertIn("user_data_dir=self._profile_dir or USER_DATA_DIR", self.source)

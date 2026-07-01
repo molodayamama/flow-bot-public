@@ -14,6 +14,12 @@ import config_store
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+_PR2A_PROVIDER_SOURCE = (
+    (PROJECT_ROOT / "flow_provider" / "client.py").read_text(encoding="utf-8")
+    + "\n"
+    + (PROJECT_ROOT / "flow_provider" / "runtime_config.py").read_text(encoding="utf-8")
+)
+
 
 class PricingTests(unittest.TestCase):
     def test_price_per_image_and_gen_totals(self) -> None:
@@ -600,6 +606,7 @@ class BotMenuWiringTests(unittest.TestCase):
         )
 
     def test_session_keeper_has_locked_shutdown_close(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         start = self.source.index("class SessionKeeper:")
         end = self.source.index("async def _start_locked", start)
         block = self.source[start:end]
@@ -608,6 +615,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("await self._close_browser_locked()", block)
 
     def test_g_credits_lookup_does_not_refresh_bearer(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         start = self.source.index("async def get_g_credits")
         end = self.source.index("async def get_capmonster_balance", start)
         block = self.source[start:end]
@@ -668,6 +676,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("async def _send_original_file", self.source)
 
     def test_real_upscale_wired(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         # The real upscale uses the verified flow/upsampleImage contract (sync POST
         # returning base64 encodedImage), NOT a prompt-based image-to-image enhance.
         self.assertIn("async def upsample_image", self.source)
@@ -1068,6 +1077,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('metrics.log_event("video_failed"', block)
 
     def test_video_403_refreshes_session_before_next_action(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         start = self.source.index("async def generate_video")
         end = self.source.index("if not solved_any:", start)
         block = self.source[start:end]
@@ -1078,6 +1088,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("headers = self._build_headers(session)", block)
 
     def test_video_403_does_not_auto_browser_fallback_in_production(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         start = self.source.index("async def generate_video")
         block = self.source[start:self.source.index("if gen_status != 200:", start)]
         self.assertIn("for _attempt in range(SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS):", block)
@@ -1085,6 +1096,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('"browser_fallback": browser_fallback_used', block)
 
     def test_video_browser_fallback_uses_browser_safe_headers(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         helper = self.source[
             self.source.index("def _browser_fetch_headers"):
             self.source.index("def _playwright_proxy_config")
@@ -1097,6 +1109,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertNotIn('"Sec-Fetch",', helper)
 
     def test_video_ab_compares_submit_transports_without_polling(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         start = self.source.index("async def video_transport_ab_test")
         end = self.source.index("async def generate_images", start)
         block = self.source[start:end]
@@ -1109,6 +1122,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertNotIn("fetch_video_bytes", block)
 
     def test_video_401_retries_after_refresh(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         start = self.source.index("async def generate_video")
         end = self.source.index("if not solved_any:", start)
         block = self.source[start:end]
@@ -1122,6 +1136,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertNotIn("await self.keeper._refresh_bearer()", tail)
 
     def test_video_account_risk_cools_down_account(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         start = self.source.index("async def generate_video")
         end = self.source.index("if gen_status != 200:", start)
         block = self.source[start:end]
@@ -1164,6 +1179,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("html.escape(caption", self.source)
 
     def test_ingredients_diagnostic_logging_present(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         # Temporary capture-driven logging to diagnose the фото+текст gen failure.
         self.assertIn("🎬 r2v req", self.source)
         self.assertIn("effective_model_key=%s", self.source)
@@ -1417,6 +1433,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertEqual(prompts_lib.compose_template_prompt("nope", {}), "")
 
     def test_video_upload_edit_wired(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         # Загрузка/правка СВОЕГО видео временно отключена флагом: сервис отдаёт
         # «Oops…» / недогруз. Реализация сохранена целиком, но спрятана за
         # UPLOAD_VIDEO_EDIT_ENABLED (вернуть фичу = поставить True).
@@ -1492,6 +1509,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("source_scene_id=scene_id", block)
 
     def test_video_extend_delivery_uses_service_concat(self) -> None:
+        self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         # No local ffmpeg merge anywhere.
         self.assertNotIn("async def _concat_video_bytes", self.source)
         self.assertNotIn("asyncio.create_subprocess_exec", self.source)
