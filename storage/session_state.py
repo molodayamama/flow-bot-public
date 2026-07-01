@@ -20,3 +20,8 @@ pending_photo_routes: dict[int, dict[str, str]] = {}
 mix_baskets: dict[int, list[dict]] = defaultdict(list)
 # uid -> button-wizard state {"step","count","fmt","msg_id","await",...}.
 wizard_state: dict[int, dict] = defaultdict(dict)
+
+
+def _ws(user_id: int) -> dict:
+    """Per-user wizard state bucket (created on first access)."""
+    return wizard_state[user_id]

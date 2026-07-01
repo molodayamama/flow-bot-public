@@ -596,6 +596,7 @@ from storage.session_state import (
     pending_photo_routes,
     mix_baskets,
     wizard_state,
+    _ws,
 )
 from storage.media_registry import image_registry, video_registry
 
@@ -763,8 +764,7 @@ _referral_service = ReferralService(
 # wizard_state (button-wizard per-user state) now lives in storage/session_state (Phase 10).
 
 
-def _ws(user_id: int) -> dict:
-    return wizard_state[user_id]
+# _ws moved to storage/session_state.py (Phase 5); re-imported below.
 
 
 def _reset_image_flow(user_id: int, *, keep_last: bool = True) -> None:
