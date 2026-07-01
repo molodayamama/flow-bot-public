@@ -17,6 +17,7 @@ from generation.contracts import (
 )
 from generation.edit_service import EditService
 from generation.image_service import ImageService
+from generation.service import BackendGenerationService
 from generation.video_service import VideoService
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "ImageService",
     "EditService",
     "VideoService",
+    "BackendGenerationService",
 ]
