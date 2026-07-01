@@ -582,25 +582,22 @@ def _client_for(user_id: int) -> FlowHttpClient:
 bot = _make_bot()
 dp = Dispatcher()
 
-user_last_request: dict[int, float] = defaultdict(float)
-# Юзеры с запросом «в работе» (uid -> момент старта) — чтобы параллельные
-# запросы не абузили. Слот авто-протухает через BUSY_MAX_SEC: если операция
-# зависла и finally не отработал, юзер не остаётся залочен навсегда.
-user_busy: dict[int, float] = {}
+# Per-user session state + media registries now live in storage/ (Phase 10);
+# re-imported so existing references keep working unchanged.
+from storage.session_state import (
+    user_last_request,
+    user_busy,
+    pending_edits,
+    pending_photo_routes,
+    mix_baskets,
+    wizard_state,
+)
+from storage.media_registry import image_registry, video_registry
+
 BUSY_MAX_SEC = 300  # старше — считаем зависшим и отпускаем
 
 # Каждый Telegram-пользователь -> свой Flow-проект (переживает рестарт).
 project_store = UserProjectStore(USER_PROJECTS_FILE)
-# token -> ImageRef для инлайн-кнопок (в памяти, ограниченный размер).
-image_registry = ImageRegistry()
-# token -> VideoRef для кнопки «скачать видео» (тот же класс реестра).
-video_registry = ImageRegistry(max_entries=2000)
-# user_id -> token: пользователь нажал «Редактировать» и мы ждём его текст-правку.
-pending_edits: dict[int, str] = {}
-# user_id -> transient photo+caption route choice (Telegram file_id + prompt).
-pending_photo_routes: dict[int, dict[str, str]] = {}
-# user_id -> список картинок-«ингредиентов», выбранных кнопкой «➕ В микс».
-mix_baskets: dict[int, list[dict]] = defaultdict(list)
 MIX_MAX = 4
 
 # Баланс кредитов на пользователя (монетизация).
@@ -758,10 +755,7 @@ _referral_service = ReferralService(
     store=credit_store, metrics=metrics, notify=_notify_referrer, log=log
 )
 
-# ── состояние кнопочного визарда генерации (в памяти) ──────────────────
-# user_id -> {"step", "count", "fmt", "msg_id", "await": "prompt|edit|revary|photo",
-#             "ref_token": <для edit/revary>, "last": {...настройки повтора...}}
-wizard_state: dict[int, dict] = defaultdict(dict)
+# wizard_state (button-wizard per-user state) now lives in storage/session_state (Phase 10).
 
 
 def _ws(user_id: int) -> dict:
