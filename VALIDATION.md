@@ -131,6 +131,23 @@ Secret hygiene:
 - Run safe file-only secret scan against files intended for commit.
 - Do not delete or rotate real secrets unless explicitly requested.
 
+Server migration/cutover:
+
+- Requires explicit operator approval before starting live bot services.
+- Pull a local backup before changing the destination host; do not print env,
+  cookie, bearer, HAR, proxy credential, or browser-profile contents.
+- Verify copied archives with `sha256sum -c` before extraction.
+- Verify SQLite state with `sqlite3 metrics.db 'PRAGMA integrity_check;'`.
+- Verify nginx with `nginx -t` and public HTTPS/admin responses.
+- Verify local proxy/listener exposure with `ss -ltnp`; VNC ports must not be
+  exposed publicly unless the operator explicitly asks for interactive VNC.
+- Verify the intended services only:
+  `systemctl is-active geminifree-bot geminifree-seller-bot`.
+- Verify startup journal reaches Telegram polling and has no fresh
+  `Traceback`, `ERROR`, `CRITICAL`, `exception`, or restart loop.
+- Do not run media generation, paid/captcha diagnostics, Google re-login, or
+  `login.py` unless explicitly approved.
+
 Dependency manifests:
 
 - `requirements.txt` is the current Python manifest.

@@ -61,6 +61,9 @@ snnme.txt
 # HAR files (contain sensitive data)
 *.har
 
+# Local VPS migration backups (contain env files, DBs, profiles, certs)
+nl_backup_*/
+
 # Logs
 bot.log
 *.log
