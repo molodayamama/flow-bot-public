@@ -7,6 +7,7 @@ import unittest
 
 import flow_core
 import flow_bot
+import config.settings as _cfg
 from generation import backend_service
 
 
@@ -51,29 +52,29 @@ class SellerPackTests(unittest.TestCase):
 
 class SellerMenuTests(unittest.TestCase):
     def setUp(self) -> None:
-        self._was_seller = flow_bot.IS_SELLER
+        self._was_seller = _cfg.IS_SELLER
 
     def tearDown(self) -> None:
-        flow_bot.IS_SELLER = self._was_seller
+        _cfg.IS_SELLER = self._was_seller
 
     def _callbacks(self, kb) -> list[str]:
         return [b.callback_data for row in kb.inline_keyboard for b in row]
 
     def test_marketplace_button_only_in_seller_mode(self) -> None:
-        flow_bot.IS_SELLER = True
+        _cfg.IS_SELLER = True
         self.assertIn("m:mp", self._callbacks(flow_bot.main_menu_kb()))
-        flow_bot.IS_SELLER = False
+        _cfg.IS_SELLER = False
         self.assertNotIn("m:mp", self._callbacks(flow_bot.main_menu_kb()))
 
     def test_seller_main_menu_is_marketplace_first(self) -> None:
-        flow_bot.IS_SELLER = True
+        _cfg.IS_SELLER = True
         cb = self._callbacks(flow_bot.main_menu_kb())
         self.assertEqual(cb[0], "m:mp")               # marketplace first
         self.assertIn("m:balance", cb)
         for consumer_only in ("m:gen", "m:vid", "m:ideas", "m:myphoto"):
             self.assertNotIn(consumer_only, cb)
         # Consumer menu keeps its own buttons and has no marketplace entry.
-        flow_bot.IS_SELLER = False
+        _cfg.IS_SELLER = False
         ccb = self._callbacks(flow_bot.main_menu_kb())
         self.assertIn("m:gen", ccb)
         self.assertNotIn("m:mp", ccb)
@@ -141,10 +142,10 @@ class SellerMenuTests(unittest.TestCase):
             self.assertEqual(msg.answers[0][1].get("parse_mode"), "HTML")
             st.clear()
 
-        was_seller = flow_bot.IS_SELLER
+        was_seller = _cfg.IS_SELLER
         old_metrics = flow_bot.metrics
         old_credit_store = flow_bot.credit_store
-        flow_bot.IS_SELLER = True
+        _cfg.IS_SELLER = True
         flow_bot.metrics = SimpleNamespace(
             log_event=lambda *args, **kwargs: None,
             upsert_user=lambda *args, **kwargs: None,
@@ -155,7 +156,7 @@ class SellerMenuTests(unittest.TestCase):
             asyncio.run(run_case("mp_photo", "photo", 701))
             asyncio.run(run_case("mp_series_photo", "series", 702, {"mp_series_count": 3}))
         finally:
-            flow_bot.IS_SELLER = was_seller
+            _cfg.IS_SELLER = was_seller
             flow_bot.metrics = old_metrics
             flow_bot.credit_store = old_credit_store
 
@@ -294,7 +295,7 @@ class SellerMenuTests(unittest.TestCase):
 
     def test_seller_start_goes_directly_to_jobs(self) -> None:
         source = inspect.getsource(flow_bot.cmd_start)
-        seller_branch = source[source.index("if IS_SELLER:"):source.index("if _referral_welcome_bonus")]
+        seller_branch = source[source.index("if _cfg.IS_SELLER:"):source.index("if _referral_welcome_bonus")]
         self.assertIn("mp_jobs_kb", seller_branch)
         self.assertIn("_mp_stamp_message", seller_branch)
         self.assertNotIn("show_main_menu(message, user_id=user_id)", seller_branch)
@@ -550,7 +551,7 @@ class SellerMenuTests(unittest.TestCase):
 
     def test_seller_history_uses_flow_jobs(self) -> None:
         source = inspect.getsource(flow_bot._show_prompt_history)
-        self.assertIn("if IS_SELLER", source)
+        self.assertIn("if _cfg.IS_SELLER", source)
         self.assertIn("_seller_history_text(user_id)", source)
         orig_history = getattr(flow_bot.metrics, "get_seller_history", None)
         orig_gallery = getattr(flow_bot.metrics, "get_gallery", None)

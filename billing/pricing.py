@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
-from config.settings import IS_SELLER, ROBOKASSA_CARD_DISCOUNT_PCT, STARS_TO_RUB
+import config.settings as _cfg
+from config.settings import ROBOKASSA_CARD_DISCOUNT_PCT, STARS_TO_RUB
 from flow_core import (
     VIDEO_MODELS,
     action_price,
@@ -34,7 +35,7 @@ def _rub_display(amount: str) -> str:
 
 
 def _topup_image_price() -> int:
-    return action_price("edit") if IS_SELLER else price_gen(1)
+    return action_price("edit") if _cfg.IS_SELLER else price_gen(1)
 
 
 def _topup_video_price() -> int:

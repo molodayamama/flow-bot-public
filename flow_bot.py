@@ -178,6 +178,7 @@ from generation import backend_service
 import metrics
 from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScenario
 import prompts_lib
+import config.settings as _cfg
 
 # Topup/pack pricing helpers extracted to billing/pricing.py (Phase 5 wave 3).
 from billing.pricing import (
@@ -210,7 +211,6 @@ from config.settings import (
     _robokassa_clean_scope,
     BOT_USERNAME,
     BOT_MODE,
-    IS_SELLER,
     ROBOKASSA_SCOPE,
     STARS_PAYMENT_ENABLED,
     SBP_PAYMENT_ENABLED,
@@ -466,7 +466,7 @@ client = clients[DEFAULT_ACCOUNT_ID]
 # Operator-raised local gost proxies (admin ISP-proxy onboarding). Consumer-only:
 # the seller bot has no account pool / admin panel. None disables the routes.
 local_proxy_sup = None
-if not IS_SELLER:
+if not _cfg.IS_SELLER:
     try:
         from proxy_supervisor import LocalProxySupervisor
         local_proxy_sup = LocalProxySupervisor()
@@ -479,7 +479,7 @@ startup_state: dict = {
     "polling": False,
     "ready_accounts": 0,
     "total_accounts": len(keepers),
-    "min_ready": 0 if IS_SELLER else min(MIN_READY_ACCOUNTS, len(keepers)),
+    "min_ready": 0 if _cfg.IS_SELLER else min(MIN_READY_ACCOUNTS, len(keepers)),
     "accounts": {
         acc_id: {"status": "pending", "ready": False, "updated_at": None}
         for acc_id in keepers
@@ -1005,7 +1005,7 @@ def main_menu_kb(show_repeat: bool = False, credits: int | None = None) -> types
         f"💳 {credits} кр · Пополнить" if credits is not None
         else L("balance")
     )
-    if IS_SELLER:
+    if _cfg.IS_SELLER:
         # Селлер-бот (@photozhab_wb_bot): маркетплейс-ориентированное меню —
         # карточки первым экраном, без консьюмерских пунктов (свободная
         # генерация/видео/идеи/мои фото).
@@ -1864,7 +1864,7 @@ def _is_balance_reply_text(text: str) -> bool:
 def reply_menu_kb(user_id: int | None = None) -> types.ReplyKeyboardMarkup:
     """Постоянная клавиатура внизу чата — всегда под рукой."""
     B = types.KeyboardButton
-    if IS_SELLER:
+    if _cfg.IS_SELLER:
         # Селлер-бот: минимальная нижняя клавиатура (меню = карточки, баланс).
         return types.ReplyKeyboardMarkup(
             keyboard=[[B(text=L("kb_menu")), B(text=_balance_reply_label(user_id))]],
@@ -1884,7 +1884,7 @@ def reply_menu_kb(user_id: int | None = None) -> types.ReplyKeyboardMarkup:
 
 async def _show_help_screen(message: types.Message, *, edit: bool) -> None:
     kb = types.InlineKeyboardMarkup(inline_keyboard=[[_menu_button("menu", "m:menu")]])
-    help_text = flow_copy.msg("seller_help" if IS_SELLER else "help")
+    help_text = flow_copy.msg("seller_help" if _cfg.IS_SELLER else "help")
     if edit:
         await message.edit_text(help_text, reply_markup=kb, parse_mode="HTML")
     else:
@@ -2835,7 +2835,7 @@ def topup_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
 
 def topup_stars_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
     rows = []
-    for pid in public_pack_ids(include_test=_include_test_packs(is_admin), seller=IS_SELLER):
+    for pid in public_pack_ids(include_test=_include_test_packs(is_admin), seller=_cfg.IS_SELLER):
         rows.append([types.InlineKeyboardButton(text=_stars_pack_label(pid), callback_data=f"m:pack:{pid}")])
     rows.append([_menu_button("back", "m:topup")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
@@ -2844,7 +2844,7 @@ def topup_stars_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
 def topup_robo_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
     rows = [
         [types.InlineKeyboardButton(text=_robokassa_pack_label(pid), callback_data=f"m:robo:{pid}")]
-        for pid in public_pack_ids(include_test=_include_test_packs(is_admin), seller=IS_SELLER)
+        for pid in public_pack_ids(include_test=_include_test_packs(is_admin), seller=_cfg.IS_SELLER)
     ]
     rows.append([_menu_button("back", "m:topup")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
@@ -2862,7 +2862,7 @@ async def show_main_menu(
     last = _ws(user_id).get("last")
     credits = credit_store.balance(user_id)
     kb = main_menu_kb(show_repeat=bool(last), credits=credits)
-    if IS_SELLER:
+    if _cfg.IS_SELLER:
         text = flow_copy.msg("seller_menu_title")
     else:
         import random as _random
@@ -2921,10 +2921,10 @@ async def _send_one_image(
             prompt=prompt,
             aspect_ratio=aspect_ratio,
             account_id=account_id,
-            platform=_ws(user_id).get("mp_platform", "") if IS_SELLER else "",
+            platform=_ws(user_id).get("mp_platform", "") if _cfg.IS_SELLER else "",
         )
     )
-    keyboard = _seller_image_keyboard(token) if IS_SELLER else _image_keyboard(token)
+    keyboard = _seller_image_keyboard(token) if _cfg.IS_SELLER else _image_keyboard(token)
     try:
         sent = await message.reply_photo(
             photo=url, caption=caption, reply_markup=keyboard, parse_mode="HTML"
@@ -3012,7 +3012,7 @@ async def cmd_start(message: types.Message):
     # Постоянная нижняя клавиатура всегда показывается при /start
     await message.answer("👇", reply_markup=reply_menu_kb(user_id))
 
-    if IS_SELLER:
+    if _cfg.IS_SELLER:
         # Селлер-бот: сразу показываем выбор задачи, без промежуточного hub-экрана.
         st = _ws(user_id)
         st.setdefault("mp_platform", "wb")
@@ -3888,7 +3888,7 @@ async def _seller_generate_and_send(
 async def _maybe_brandkit_nudge(message: types.Message, user_id: int) -> None:
     """После первой удачной seller-генерации (один раз) предлагаем заполнить
     бренд-кит — чтобы карточки были в едином стиле магазина."""
-    if not IS_SELLER:
+    if not _cfg.IS_SELLER:
         return
     try:
         if _mp_brand_kit(user_id):
@@ -4147,7 +4147,7 @@ async def _generate_and_send(
 
     # Селлер-бот не держит свой пул — генерация идёт в основной процесс через
     # общий backend (SELLER_BOT_PLAN.md §A). Кредиты списываются с seller-кошелька.
-    if IS_SELLER:
+    if _cfg.IS_SELLER:
         await _seller_generate_and_send(
             message, prompt, num_images=num_images, aspect_ratio=aspect_ratio,
             user_id=user_id, action=action, image_model=image_model,
@@ -5393,7 +5393,7 @@ def _seller_history_text(user_id: int) -> str:
 
 async def _show_prompt_history(message: types.Message, *, user_id: int) -> None:
     """Показать историю промптов пользователя с кнопками «Повторить»."""
-    if IS_SELLER:
+    if _cfg.IS_SELLER:
         kb = types.InlineKeyboardMarkup(inline_keyboard=[
             [_menu_button("gallery", "m:gallery")],
             [_menu_button("menu", "m:menu")],
@@ -5809,7 +5809,7 @@ async def on_marketplace_action(callback: types.CallbackQuery):
         plat = _ws(user_id).get("mp_platform", "wb")
         if job == "animate":
             await callback.answer()
-            if IS_SELLER:
+            if _cfg.IS_SELLER:
                 _reset_image_flow(user_id)
                 st = _ws(user_id)
                 st["mp_platform"] = plat
@@ -8807,7 +8807,7 @@ async def _start_web_server() -> web.AppRunner:
             asyncio.create_task(local_proxy_sup.supervise_loop())
         except Exception:
             log.warning("local proxy supervisor startup failed", exc_info=True)
-    if not IS_SELLER:
+    if not _cfg.IS_SELLER:
         # Только consumer (с пулом) отдаёт генерацию для seller-бота (§A).
         try:
             import seller_backend
@@ -8901,7 +8901,7 @@ async def on_image_action(callback: types.CallbackQuery):
         await callback.answer("Увеличиваю разрешение 🔍")
         await _real_upscale_and_send(callback.message, ref)
     elif action == "skuadd":
-        if not IS_SELLER:
+        if not _cfg.IS_SELLER:
             await callback.answer()
             return
         photos = getattr(callback.message, "photo", None) or []
@@ -8923,7 +8923,7 @@ async def on_image_action(callback: types.CallbackQuery):
         )
         _mp_stamp_message(user_id, sent)
     elif action == "mpexport":
-        if not IS_SELLER:
+        if not _cfg.IS_SELLER:
             await callback.answer()
             return
         await callback.answer("Готовлю файл для маркетплейса ⬇️")
@@ -9307,7 +9307,7 @@ async def handle_photo(message: types.Message):
             niche=_mp_niche(user_id),
         )
         metrics.log_event("mp_series_photo_uploaded", user_id=user_id, source=f"{plat}:{count}")
-        if IS_SELLER:
+        if _cfg.IS_SELLER:
             # Не генерируем сразу: показываем подтверждение с ценой, генерим по кнопке.
             st["mp_pending_file_id"] = message.photo[-1].file_id
             st["mp_pending_caption"] = caption_text
@@ -9358,7 +9358,7 @@ async def handle_photo(message: types.Message):
             niche=_mp_niche(user_id),
         )
         metrics.log_event("mp_photo_uploaded", user_id=user_id, source=f"{plat}:{job}")
-        if IS_SELLER:
+        if _cfg.IS_SELLER:
             # Не генерируем сразу: показываем подтверждение с ценой, генерим по кнопке.
             st["mp_pending_file_id"] = message.photo[-1].file_id
             st["mp_pending_caption"] = caption_text
@@ -9853,7 +9853,7 @@ async def handle_plain_text(message: types.Message):
 
     # Seller-бот — это инструмент для карточек, а не свободный генератор. Случайный
     # текст НЕ должен открывать платный image-визард: подсказываем выбрать задачу.
-    if IS_SELLER:
+    if _cfg.IS_SELLER:
         await message.answer(
             "🛒 Я делаю карточки для маркетплейсов. Выбери задачу в меню "
             "«Карточки» и пришли фото товара — там подберём формат и стиль.",
@@ -9934,7 +9934,7 @@ async def _main_impl():
             log.warning("get_me failed; referral links use the env fallback")
 
         # Нативное меню команд Telegram (синяя кнопка «Меню» у поля ввода).
-        if IS_SELLER:
+        if _cfg.IS_SELLER:
             _bot_commands = [
                 types.BotCommand(command="start", description="Запуск и меню"),
                 types.BotCommand(command="menu", description="🛒 Карточки для маркетплейсов"),
@@ -9955,7 +9955,7 @@ async def _main_impl():
         except Exception:
             log.warning("Не удалось установить меню команд")
 
-        if IS_SELLER:
+        if _cfg.IS_SELLER:
             log.info("🛒 Seller mode: пропускаю прогрев пула (генерация через основной бот)")
             startup_state["min_ready"] = 0
             for acc_id in keepers:
@@ -10025,7 +10025,7 @@ async def _main_impl():
 
         log.info("🤖 Бот запущен!")
         asyncio.create_task(_daily_digest_loop())
-        if not IS_SELLER:
+        if not _cfg.IS_SELLER:
             asyncio.create_task(_video_pool_health_loop())
         startup_state["polling"] = True
         _startup_set_phase("polling")
