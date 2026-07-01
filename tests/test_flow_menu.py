@@ -1272,22 +1272,24 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertNotIn("grant_first_generation_referral_reward", self.source)
         self.assertNotIn("REFERRAL_FIRST_GENERATION_BONUS", self.source)
         self.assertIn("first_referral_cta", self.source)
-        self.assertIn('"referral_reward_paid"', self.source)
+        # Reward orchestration moved to referrals/service.py (Phase 9).
+        svc = (PROJECT_ROOT / "referrals" / "service.py").read_text(encoding="utf-8")
+        self.assertIn('"referral_reward_paid"', svc)
         self.assertIn('data == "m:invite"', self.source)
         self.assertIn("_invite_button(", self.source)
         self.assertIn("_clawback_referral_rewards(", self.source)
         # Reward must be applied only after a recorded (idempotent) payment.
-        self.assertIn("referral_milestone_bonus(", self.source)
-        self.assertIn("referral_ongoing_bonus(", self.source)
+        self.assertIn("referral_milestone_bonus(", svc)
+        self.assertIn("referral_ongoing_bonus(", svc)
         # Milestone выдаётся через атомарный клейм joined→rewarded (без TOCTOU):
         # начисление кредитов реферу — только при выигранном UPDATE.
-        self.assertIn("metrics.grant_milestone_if_joined(", self.source)
+        self.assertIn("grant_milestone_if_joined(", svc)
         self.assertNotIn('"tier": "join"', self.source)
-        start = self.source.index("def _maybe_apply_referral_rewards")
-        block = self.source[start:start + 2200]
+        start = svc.index("def apply_payment_rewards")
+        block = svc[start:start + 2200]
         self.assertLess(
-            block.index("metrics.grant_milestone_if_joined("),
-            block.index("credit_store.add(referrer_id, bonus)"),
+            block.index("grant_milestone_if_joined("),
+            block.index("self._store.add(referrer_id, bonus)"),
         )
 
     def test_video_generation_holds_user_slot(self) -> None:

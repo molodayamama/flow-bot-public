@@ -178,6 +178,7 @@ from generation import backend_service
 import metrics
 from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScenario
 import prompts_lib
+from referrals.service import ReferralService
 
 # Flow provider extracted into flow_provider/ (PR-2a). Re-exported so the
 # rest of flow_bot.py keeps its existing references unchanged.
@@ -688,54 +689,11 @@ def _maybe_apply_referral_rewards(
     referred_user_id: int, *, stars_paid: int, credits_issued: int,
     pack_id: str, provider_payment_id: str,
 ) -> None:
-    """Начислить рефереру награду за платёж приглашённого (идемпотентно, с кэпом).
-
-    Никогда не бросает в вызывающего: реферальная логика не должна ломать оплату.
-    """
-    try:
-        referrer_id = metrics.get_referrer_of(referred_user_id)
-        if not referrer_id or referrer_id == referred_user_id:
-            return
-        # Привязка реферала действует ограниченное окно (≈3 мес). После него
-        # ни разовый бонус, ни % не начисляются — иначе «два аккаунта» дают
-        # вечную скидку и съедают маржу.
-        if not metrics.referral_is_active(referred_user_id, REFERRAL_REWARD_WINDOW_DAYS):
-            return
-        status = metrics.referral_status(referred_user_id)
-        cap = REFERRAL_DAILY_CAP_CREDITS
-
-        if status == "joined":
-            bonus = referral_milestone_bonus(stars_paid)
-            if bonus > 0 and metrics.get_referral_credits_today(referrer_id) + bonus <= cap:
-                # Атомарный клейм joined→rewarded: из двух конкурентных платежей
-                # приглашённого бонус получит ровно один (без TOCTOU-окна).
-                if metrics.grant_milestone_if_joined(
-                    referred_user_id=referred_user_id, reward_credits=bonus
-                ):
-                    credit_store.add(referrer_id, bonus)
-                    metrics.log_event("referral_reward_paid", user_id=referrer_id,
-                                      payload={"tier": "milestone", "bonus": bonus,
-                                               "referred": referred_user_id})
-                    _notify_referrer(referrer_id, bonus)
-            return
-
-        if status == "rewarded":
-            ongoing = referral_ongoing_bonus(credits_issued)
-            if ongoing <= 0:
-                return
-            if metrics.get_ongoing_reward_by_payment(provider_payment_id):
-                return  # дубль вебхука
-            if metrics.get_referral_credits_today(referrer_id) + ongoing > cap:
-                return
-            if metrics.record_ongoing_reward(referrer_id, referred_user_id, ongoing,
-                                             provider_payment_id):
-                credit_store.add(referrer_id, ongoing)
-                metrics.log_event("referral_reward_paid", user_id=referrer_id,
-                                  payload={"tier": "ongoing", "bonus": ongoing,
-                                           "referred": referred_user_id})
-                _notify_referrer(referrer_id, ongoing)
-    except Exception:
-        log.warning("referral reward failed", exc_info=True)
+    """Reward the referrer for a referred user's payment (Phase 9 service)."""
+    _referral_service.apply_payment_rewards(
+        referred_user_id, stars_paid=stars_paid, credits_issued=credits_issued,
+        pack_id=pack_id, provider_payment_id=provider_payment_id,
+    )
 
 
 def _first_referral_cta_text(user_id: int) -> str | None:
@@ -772,25 +730,8 @@ async def _post_generation_referral_hooks(
 
 
 def _clawback_referral_rewards(referred_user_id: int, charge_id: str) -> None:
-    """Откатить реферальные награды по возвращённому платежу (best-effort)."""
-    try:
-        ongoing = metrics.get_ongoing_reward_by_payment(charge_id)
-        if ongoing:
-            credit_store.charge(ongoing["referrer_user_id"],
-                                min(ongoing["reward_credits"],
-                                    credit_store.balance(ongoing["referrer_user_id"])))
-            metrics.log_event("referral_reward_clawback", user_id=ongoing["referrer_user_id"],
-                              payload={"amount": ongoing["reward_credits"], "tier": "ongoing"})
-        milestone = metrics.get_milestone_by_referred(referred_user_id)
-        if milestone and milestone.get("status") == "rewarded":
-            credit_store.charge(milestone["referrer_user_id"],
-                                min(milestone["reward_credits"],
-                                    credit_store.balance(milestone["referrer_user_id"])))
-            metrics.reset_referral_to_joined(referred_user_id)
-            metrics.log_event("referral_reward_clawback", user_id=milestone["referrer_user_id"],
-                              payload={"amount": milestone["reward_credits"], "tier": "milestone"})
-    except Exception:
-        log.warning("referral clawback failed", exc_info=True)
+    """Reverse referral rewards for a refunded payment (Phase 9 service)."""
+    _referral_service.clawback(referred_user_id, charge_id)
 
 
 def _notify_referrer(referrer_id: int, bonus: int, *, message_key: str = "referral_reward_got") -> None:
@@ -809,6 +750,13 @@ def _notify_referrer(referrer_id: int, bonus: int, *, message_key: str = "referr
         asyncio.create_task(_send())
     except Exception:
         pass
+
+
+# Referral reward orchestration moved to referrals/ (Phase 9); wired with this
+# process's credit store and Telegram notifier.
+_referral_service = ReferralService(
+    store=credit_store, metrics=metrics, notify=_notify_referrer, log=log
+)
 
 # ── состояние кнопочного визарда генерации (в памяти) ──────────────────
 # user_id -> {"step", "count", "fmt", "msg_id", "await": "prompt|edit|revary|photo",
