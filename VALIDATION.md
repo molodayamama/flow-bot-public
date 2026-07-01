@@ -139,6 +139,8 @@ Server migration/cutover:
 - Verify copied archives with `sha256sum -c` before extraction.
 - Verify SQLite state with `sqlite3 metrics.db 'PRAGMA integrity_check;'`.
 - Verify nginx with `nginx -t` and public HTTPS/admin responses.
+- If nginx uses `auth_basic_user_file`, verify the referenced htpasswd file
+  exists on the destination and is readable by nginx; do not print its contents.
 - Verify local proxy/listener exposure with `ss -ltnp`; VNC ports must not be
   exposed publicly unless the operator explicitly asks for interactive VNC.
 - Verify the intended services only:
