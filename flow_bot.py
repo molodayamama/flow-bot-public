@@ -180,6 +180,23 @@ from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScen
 import prompts_lib
 import config.settings as _cfg
 
+from config.video import (
+    VID_DEFAULT_FMT,
+    VID_FRAMES_VARIANTS,
+    VID_REF_VARIANTS,
+    _VID_FMT_NAMES,
+    _VID_OMNI_DURATIONS,
+    _VID_OMNI_DUR_MODEL,
+    _VID_QUICKSTART_MODEL,
+    _VID_STYLES,
+    _VID_VEO_QUALITY_CYCLE,
+    _VID_VEO_QUAL_MODEL,
+    _VID_VEO_QUAL_NAMES,
+    VIDEO_EXTEND_MODEL,
+    SELECT_STYLE,
+)
+
+
 # Topup/pack pricing helpers extracted to billing/pricing.py (Phase 5 wave 3).
 from billing.pricing import (
     _robokassa_pack_amount,
@@ -1601,7 +1618,6 @@ DEFAULT_FMT = "land"
 _FMT_NAMES = {"land": "16:9", "port": "9:16", "sq": "1:1", "f43": "4:3", "f34": "3:4"}
 
 
-SELECT_STYLE = "success"  # green — Bot API 9.4 colour for the chosen wizard option
 
 
 def _sel_btn(label: str, chosen: bool, callback_data: str) -> types.InlineKeyboardButton:
@@ -2010,7 +2026,6 @@ async def show_prompt_picker(message: types.Message, *, user_id: int, edit: bool
 # Состояние живёт в том же wizard_state[user_id], но ключи с префиксом v*,
 # чтобы не пересекаться с визардом картинок (step/count/fmt/await/...).
 
-VID_DEFAULT_FMT = "land"
 VID_DEFAULT_COUNT = 1
 VID_REF_DEFAULT_MODEL = "omni-flash-4s"
 # Frames (старт/финиш-кадр) дефолтится на veo-lite: единственный interpolation-
@@ -2018,7 +2033,6 @@ VID_REF_DEFAULT_MODEL = "omni-flash-4s"
 # tiers — догадка по паттерну, пока не подтверждены живым прогоном.
 VID_FRAMES_DEFAULT_MODEL = "veo-lite"
 _VID_FMT_TO_ASPECT = {"land": "landscape", "port": "portrait"}
-_VID_FMT_NAMES = {"land": "16:9", "port": "9:16"}
 
 # Правка ЗАГРУЖЕННОГО пользователем видео временно отключена: сервис нестабильно
 # отдаёт результат («Oops, something went wrong!» / видео недогружается) — судя по
@@ -2097,7 +2111,6 @@ def _vid_family_min_price(code: str) -> int:
     return 0
 
 
-_VID_QUICKSTART_MODEL = "omni-flash-4s"
 _VID_QUICKSTART_FAMILY = "omni-flash"
 
 
@@ -2173,7 +2186,6 @@ def _video_can_edit(ref: VideoRef | None) -> bool:
 
 # Продление всегда выполняется моделью veo-lite, но ИСХОДНИК может быть любым
 # veo-видео (lite/fast/quality) — оператор подтвердил. Omni продлевать нельзя.
-VIDEO_EXTEND_MODEL = "veo-lite"
 
 
 def _video_can_extend(ref: VideoRef | None) -> bool:
@@ -2209,8 +2221,6 @@ def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
 
 # Варианты модели, доступные в reference-to-video. Ingredients умеет Omni и Veo;
 # Frames/interpolation остаётся Veo-only.
-VID_REF_VARIANTS = tuple(VIDEO_MODELS.keys())
-VID_FRAMES_VARIANTS = ("veo-lite", "veo-fast", "veo-quality")
 
 
 def _vid_model_row(mode: str, selected: str | None) -> list:
@@ -2350,14 +2360,6 @@ async def show_video_frames(message: types.Message, *, user_id: int, edit: bool 
 # Новый flow: юзер пишет промпт (+ опционально фото) → бот показывает
 # настройки. Без фото → Omni Flash; с фото → Veo (качество тоглом).
 #
-_VID_STYLES: dict[str, tuple[str, str]] = {
-    "":       ("Никакой",           ""),
-    "cine":   ("Кинематографичный", ", cinematic style, film look, dramatic lighting"),
-    "anime":  ("Аниме",             ", anime style, Studio Ghibli animation"),
-    "3d":     ("3D",                ", 3D render, CGI animation, volumetric lighting"),
-    "photo":  ("Фотореализм",       ", photorealistic, 8K, professional photography"),
-    "retro":  ("Ретро",             ", vintage 80s, film grain, retro cinematography"),
-}
 
 # Соответствие стилей «Подбора по шагам» (guided picker) → стили video wizard.
 # Ключи слева — значения из _GUIDED_STEPS["style"]; справа — ключи _VID_STYLES.
@@ -2368,13 +2370,7 @@ _GUIDED_TO_VID_STYLE: dict[str, str] = {
     "cinematic": "cine",
 }
 
-_VID_OMNI_DURATIONS = [4, 6, 8, 10]
-_VID_OMNI_DUR_MODEL = {4: "omni-flash-4s", 6: "omni-flash-6s",
-                        8: "omni-flash-8s", 10: "omni-flash-10s"}
 
-_VID_VEO_QUALITY_CYCLE = ["lite", "fast", "quality"]
-_VID_VEO_QUAL_MODEL = {"lite": "veo-lite", "fast": "veo-fast", "quality": "veo-quality"}
-_VID_VEO_QUAL_NAMES = {"lite": "Lite", "fast": "Fast", "quality": "Quality"}
 
 
 def _nwiz_engine(st: dict) -> str:

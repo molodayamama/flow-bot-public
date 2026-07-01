@@ -719,7 +719,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # The chosen wizard option turns the BUTTON green natively via the Bot API
         # 9.4 `style="success"` field (not a text marker). (Live build asserted in
         # the smoke test, which sets up a temp credits file before importing.)
-        self.assertIn('SELECT_STYLE = "success"', self.source)
+        self.assertIn('SELECT_STYLE = "success"', (PROJECT_ROOT / "config" / "video.py").read_text(encoding="utf-8"))
         self.assertIn("def _sel_btn", self.source)
         helper_start = self.source.index("def _sel_btn")
         helper = self.source[helper_start:helper_start + 900]
@@ -765,8 +765,9 @@ class BotMenuWiringTests(unittest.TestCase):
         # Ingredients supports Omni + Veo; Frames stays Veo-only.
         self.assertIn("def _vid_model_row", self.source)
         self.assertIn('VID_REF_DEFAULT_MODEL = "omni-flash-4s"', self.source)
-        self.assertIn("VID_REF_VARIANTS = tuple(VIDEO_MODELS.keys())", self.source)
-        self.assertIn('VID_FRAMES_VARIANTS = ("veo-lite", "veo-fast", "veo-quality")', self.source)
+        _vid_cfg = (PROJECT_ROOT / "config" / "video.py").read_text(encoding="utf-8")
+        self.assertIn("VID_REF_VARIANTS = tuple(VIDEO_MODELS.keys())", _vid_cfg)
+        self.assertIn('VID_FRAMES_VARIANTS = ("veo-lite", "veo-fast", "veo-quality")', _vid_cfg)
         self.assertIn('data.startswith("v:vmod:")', self.source)
 
     def test_ingredients_generation_enabled(self) -> None:
@@ -1011,7 +1012,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("def _video_can_extend", self.source)
         self.assertIn("ref.workflow_id", self.source)
         self.assertIn('str(ref.model_id).startswith("veo-")', self.source)
-        self.assertIn('VIDEO_EXTEND_MODEL = "veo-lite"', self.source)
+        self.assertIn('VIDEO_EXTEND_MODEL = "veo-lite"', (PROJECT_ROOT / "config" / "video.py").read_text(encoding="utf-8"))
         self.assertIn("not ref.prompt_edited", self.source)
         self.assertIn('callback_data=f"v:edit:{vtoken}"', self.source)
         self.assertIn('callback_data=f"v:extend:{vtoken}"', self.source)
