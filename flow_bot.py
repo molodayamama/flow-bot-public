@@ -220,6 +220,9 @@ from config.settings import (
 # Telegram keyboard builders extracted to channels/telegram/keyboards.py
 # (Phase 5); re-exported so flow_bot handlers keep working.
 from channels.telegram.keyboards import (
+    main_menu_kb,
+    topup_kb,
+    topup_method_kb,
     L,
     _menu_button,
     _guided_step_kb,
@@ -999,34 +1002,6 @@ def _seller_image_keyboard(token: str) -> types.InlineKeyboardMarkup:
 
 
 
-def main_menu_kb(show_repeat: bool = False, credits: int | None = None) -> types.InlineKeyboardMarkup:
-    B = types.InlineKeyboardButton
-    balance_label = (
-        f"💳 {credits} кр · Пополнить" if credits is not None
-        else L("balance")
-    )
-    if _cfg.IS_SELLER:
-        # Селлер-бот (@photozhab_wb_bot): маркетплейс-ориентированное меню —
-        # карточки первым экраном, без консьюмерских пунктов (свободная
-        # генерация/видео/идеи/мои фото).
-        rows = [
-            [B(text="🛒 Карточки для маркетплейсов", callback_data="m:mp")],
-            [B(text=balance_label, callback_data="m:balance")],
-            [_menu_button("profile", "m:profile"), _menu_button("invite", "m:invite")],
-        ]
-        return types.InlineKeyboardMarkup(inline_keyboard=rows)
-
-    rows = [
-        [_menu_button("gen", "m:gen")],
-        [_menu_button("vid_gen", "m:vid")],
-        [B(text=f"{L('animate')} · от {video_animate_min_price()} кр", callback_data="m:animate")],
-        [_menu_button("myphoto", "m:myphoto")],
-        [_menu_button("ideas", "m:ideas")],
-        [B(text=balance_label, callback_data="m:balance")],
-        [_menu_button("profile", "m:profile"), _menu_button("invite", "m:invite")],
-    ]
-    # show_repeat parameter kept for backward compatibility but ignored
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ── Маркетплейс-меню селлер-бота (docs/SELLER_BOT_PLAN.md §4) ─────────────
@@ -2790,21 +2765,6 @@ def _include_test_packs(is_admin: bool = False) -> bool:
 
 
 
-def topup_method_kb() -> types.InlineKeyboardMarkup:
-    try:
-        import config_store as _cs
-        _flags = _cs.get_section("flags")
-        stars_on = bool(_flags.get("stars_pay", STARS_PAYMENT_ENABLED))
-        sbp_on   = bool(_flags.get("sbp_pay",   SBP_PAYMENT_ENABLED))
-    except Exception:
-        stars_on, sbp_on = STARS_PAYMENT_ENABLED, SBP_PAYMENT_ENABLED
-    rows = []
-    if stars_on:
-        rows.append([_menu_button("pay_stars", "m:pay:stars")])
-    if sbp_on:
-        rows.append([_menu_button("pay_robo", "m:pay:robo")])
-    rows.append([_menu_button("back", "m:balance")])
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _zero_balance_kb() -> types.InlineKeyboardMarkup:
@@ -2829,8 +2789,6 @@ def _zero_balance_kb() -> types.InlineKeyboardMarkup:
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def topup_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
-    return topup_method_kb()
 
 
 def topup_stars_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:

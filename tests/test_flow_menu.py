@@ -434,7 +434,6 @@ class BotMenuWiringTests(unittest.TestCase):
             'F.data.startswith("w:")',     # wizard router
             "async def on_menu_action",
             "async def on_wizard_action",
-            "def main_menu_kb",
             "def wizard_kb",               # single-screen count+format
             'data == "w:go"',              # one "generate" button
             'st["await"] = "prompt"',       # wizard waits for prompt
@@ -442,9 +441,11 @@ class BotMenuWiringTests(unittest.TestCase):
             self.assertIn(needle, self.source, needle)
 
     def test_main_menu_has_animate_under_video_with_source_price(self) -> None:
-        start = self.source.index("def main_menu_kb")
-        end = self.source.index("# ── Маркетплейс-меню", start)
-        block = self.source[start:end]
+        # main_menu_kb moved to channels/telegram/keyboards.py (Phase 5).
+        kb_src = (PROJECT_ROOT / "channels" / "telegram" / "keyboards.py").read_text(encoding="utf-8")
+        start = kb_src.index("def main_menu_kb")
+        end = kb_src.index("def topup_method_kb", start)
+        block = kb_src[start:end]
         video_pos = block.index('"m:vid"')
         animate_pos = block.index('callback_data="m:animate"')
         ideas_pos = block.index('"m:ideas"')

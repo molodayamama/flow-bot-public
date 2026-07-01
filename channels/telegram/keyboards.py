@@ -11,6 +11,10 @@ from aiogram import types
 import flow_copy
 import prompts_lib
 
+import config.settings as _cfg
+from config.settings import SBP_PAYMENT_ENABLED, STARS_PAYMENT_ENABLED
+from flow_core import video_animate_min_price
+
 L = flow_copy.label
 
 
@@ -145,3 +149,54 @@ def _guided_step_kb(step: int) -> types.InlineKeyboardMarkup:
     nav.append(_menu_button("cancel", "gp:cancel"))
     rows.append(nav)
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def main_menu_kb(show_repeat: bool = False, credits: int | None = None) -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    balance_label = (
+        f"💳 {credits} кр · Пополнить" if credits is not None
+        else L("balance")
+    )
+    if _cfg.IS_SELLER:
+        # Селлер-бот (@photozhab_wb_bot): маркетплейс-ориентированное меню —
+        # карточки первым экраном, без консьюмерских пунктов (свободная
+        # генерация/видео/идеи/мои фото).
+        rows = [
+            [B(text="🛒 Карточки для маркетплейсов", callback_data="m:mp")],
+            [B(text=balance_label, callback_data="m:balance")],
+            [_menu_button("profile", "m:profile"), _menu_button("invite", "m:invite")],
+        ]
+        return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+    rows = [
+        [_menu_button("gen", "m:gen")],
+        [_menu_button("vid_gen", "m:vid")],
+        [B(text=f"{L('animate')} · от {video_animate_min_price()} кр", callback_data="m:animate")],
+        [_menu_button("myphoto", "m:myphoto")],
+        [_menu_button("ideas", "m:ideas")],
+        [B(text=balance_label, callback_data="m:balance")],
+        [_menu_button("profile", "m:profile"), _menu_button("invite", "m:invite")],
+    ]
+    # show_repeat parameter kept for backward compatibility but ignored
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def topup_method_kb() -> types.InlineKeyboardMarkup:
+    try:
+        import config_store as _cs
+        _flags = _cs.get_section("flags")
+        stars_on = bool(_flags.get("stars_pay", STARS_PAYMENT_ENABLED))
+        sbp_on   = bool(_flags.get("sbp_pay",   SBP_PAYMENT_ENABLED))
+    except Exception:
+        stars_on, sbp_on = STARS_PAYMENT_ENABLED, SBP_PAYMENT_ENABLED
+    rows = []
+    if stars_on:
+        rows.append([_menu_button("pay_stars", "m:pay:stars")])
+    if sbp_on:
+        rows.append([_menu_button("pay_robo", "m:pay:robo")])
+    rows.append([_menu_button("back", "m:balance")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def topup_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
+    return topup_method_kb()

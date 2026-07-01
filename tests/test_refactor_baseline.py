@@ -23,9 +23,11 @@ class RefactorBaselineTests(unittest.TestCase):
         cls.seller_backend = (PROJECT_ROOT / "seller_backend.py").read_text(encoding="utf-8")
 
     def test_consumer_main_menu_routes_are_baselined(self) -> None:
-        start = self.flow_bot.index("def main_menu_kb")
-        end = self.flow_bot.index("# ── Маркетплейс-меню", start)
-        block = self.flow_bot[start:end]
+        # main_menu_kb moved to channels/telegram/keyboards.py (Phase 5).
+        kb_src = (PROJECT_ROOT / "channels" / "telegram" / "keyboards.py").read_text(encoding="utf-8")
+        start = kb_src.index("def main_menu_kb")
+        end = kb_src.index("def topup_method_kb", start)
+        block = kb_src[start:end]
         for callback_data in ("m:gen", "m:vid", "m:animate", "m:myphoto", "m:ideas", "m:balance"):
             self.assertIn(f'"{callback_data}"', block)
         self.assertIn("video_animate_min_price()", block)
