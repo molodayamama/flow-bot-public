@@ -38,6 +38,8 @@ import sqlite3
 import threading
 from contextlib import closing
 
+from core.user_identity import platform_identity, telegram_legacy_internal_id, uses_telegram_legacy_id
+
 __all__ = [
     "init_db",
     "close",
@@ -65,6 +67,12 @@ __all__ = [
     "report_margin",
     "report_referral_quality",
     # credits store
+    "ensure_user_identity",
+    "get_user_identity",
+    "credits_balance_for_identity",
+    "credits_charge_for_identity",
+    "credits_refund_for_identity",
+    "credits_add_for_identity",
     "credits_balance",
     "credits_charge",
     "credits_refund",
@@ -247,6 +255,16 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_last_active ON users(last_active);
 CREATE INDEX IF NOT EXISTS idx_users_first_seen  ON users(first_seen);
 CREATE INDEX IF NOT EXISTS idx_users_channel     ON users(acq_channel);
+
+CREATE TABLE IF NOT EXISTS user_identities (
+    platform         TEXT NOT NULL,
+    platform_user_id TEXT NOT NULL,
+    internal_user_id INTEGER NOT NULL UNIQUE,
+    created_at       TEXT DEFAULT (datetime('now')),
+    last_seen_at     TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (platform, platform_user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_identities_internal ON user_identities(internal_user_id);
 
 CREATE TABLE IF NOT EXISTS user_gallery (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -889,6 +907,108 @@ def referral_stats(referrer_user_id: int) -> dict:
 # These functions mirror the CreditStore (JSON) API but persist to the
 # ``credits`` SQLite table. They follow the same contract as the rest of
 # this module: never raise into the caller, swallow errors at WARNING level.
+
+
+def ensure_user_identity(
+    platform: str,
+    platform_user_id: str | int,
+    *,
+    legacy_user_id: int | None = None,
+) -> int:
+    """Return the internal user id for one platform identity.
+
+    Telegram keeps the historical positive Telegram user id so existing
+    balances/referrals/payments remain compatible. New platforms are assigned
+    negative ids, keeping Telegram ``42`` and MAX ``42`` in separate credit
+    namespaces by default.
+    """
+    try:
+        identity = platform_identity(platform, platform_user_id)
+        preferred_id = (
+            telegram_legacy_internal_id(identity.platform_user_id, legacy_user_id)
+            if uses_telegram_legacy_id(identity.platform)
+            else None
+        )
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT internal_user_id FROM user_identities "
+                "WHERE platform=? AND platform_user_id=?",
+                (identity.platform, identity.platform_user_id),
+            ).fetchone()
+            if row is not None:
+                internal_id = int(row[0])
+                conn.execute(
+                    "UPDATE user_identities SET last_seen_at=datetime('now') "
+                    "WHERE platform=? AND platform_user_id=?",
+                    (identity.platform, identity.platform_user_id),
+                )
+                conn.commit()
+                return internal_id
+
+            internal_id = preferred_id if preferred_id is not None else _next_external_identity_id(conn)
+            conn.execute(
+                "INSERT INTO user_identities "
+                "(platform, platform_user_id, internal_user_id, created_at, last_seen_at) "
+                "VALUES (?, ?, ?, datetime('now'), datetime('now'))",
+                (identity.platform, identity.platform_user_id, internal_id),
+            )
+            conn.commit()
+            return int(internal_id)
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "ensure_user_identity failed for platform=%r platform_user_id=%r",
+            platform,
+            platform_user_id,
+            exc_info=True,
+        )
+        return 0
+
+
+def get_user_identity(platform: str, platform_user_id: str | int) -> dict | None:
+    """Return a stored identity mapping, or ``None`` when absent."""
+    try:
+        identity = platform_identity(platform, platform_user_id)
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT platform, platform_user_id, internal_user_id, created_at, last_seen_at "
+                "FROM user_identities WHERE platform=? AND platform_user_id=?",
+                (identity.platform, identity.platform_user_id),
+            ).fetchone()
+            return dict(row) if row else None
+    except Exception:  # noqa: BLE001
+        log.warning("get_user_identity failed", exc_info=True)
+        return None
+
+
+def credits_balance_for_identity(platform: str, platform_user_id: str | int, starter: int) -> int:
+    internal_id = ensure_user_identity(platform, platform_user_id)
+    return credits_balance(internal_id, starter) if internal_id else 0
+
+
+def credits_charge_for_identity(platform: str, platform_user_id: str | int, amount: int, starter: int) -> bool:
+    internal_id = ensure_user_identity(platform, platform_user_id)
+    return credits_charge(internal_id, amount, starter) if internal_id else False
+
+
+def credits_refund_for_identity(platform: str, platform_user_id: str | int, amount: int) -> None:
+    internal_id = ensure_user_identity(platform, platform_user_id)
+    if internal_id:
+        credits_refund(internal_id, amount)
+
+
+def credits_add_for_identity(platform: str, platform_user_id: str | int, amount: int, starter: int) -> int:
+    internal_id = ensure_user_identity(platform, platform_user_id)
+    return credits_add(internal_id, amount, starter) if internal_id else 0
+
+
+def _next_external_identity_id(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT MIN(internal_user_id) FROM user_identities WHERE internal_user_id < 0"
+    ).fetchone()
+    current_min = row[0] if row else None
+    return -1 if current_min is None else int(current_min) - 1
 
 
 def credits_balance(user_id: int, starter: int) -> int:
