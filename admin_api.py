@@ -34,15 +34,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("flow.admin_api")
 
-_pool: "AccountPool | None" = None
-# Optional: account_id -> SessionKeeper, for live G-credits lookup. Injected
-# by register_admin_routes(); None means /api/admin/accounts skips g_credits.
-_keepers: dict | None = None
-_video_clients: dict | None = None
-_startup_state: dict | None = None
-# Optional: LocalProxySupervisor for operator-raised gost proxies. Injected by
-# register_admin_routes(); None means the /api/admin/proxy/* routes return 503.
-_proxy_sup = None
+from admin.context import AdminContext
+
+# Runtime services for the /api/admin/* handlers (Phase 11). Injected by
+# register_admin_routes(); a module singleton whose attributes are mutated.
+_ctx = AdminContext()
 GCREDITS_LOOKUP_TIMEOUT_SEC = 3.0
 ONBOARD_SESSION_TTL_SEC = 10 * 60
 _onboard_sessions: dict[str, dict] = {}
@@ -110,12 +106,12 @@ def _audit(request: web.Request, action: str, *, old: object = None, new: object
 
 
 def _startup_snapshot() -> dict | None:
-    if not isinstance(_startup_state, dict):
+    if not isinstance(_ctx.startup_state, dict):
         return None
     try:
-        return json.loads(json.dumps(_startup_state, ensure_ascii=False, default=str))
+        return json.loads(json.dumps(_ctx.startup_state, ensure_ascii=False, default=str))
     except Exception:
-        return dict(_startup_state)
+        return dict(_ctx.startup_state)
 
 
 def _startup_for_account(account_id: str) -> dict | None:
@@ -130,33 +126,33 @@ def _startup_for_account(account_id: str) -> dict | None:
 
 
 def _startup_set_account_status(account_id: str, status: str, *, ready: bool = False, error: str | None = None) -> None:
-    if not isinstance(_startup_state, dict):
+    if not isinstance(_ctx.startup_state, dict):
         return
-    item = _startup_state.setdefault("accounts", {}).setdefault(account_id, {})
+    item = _ctx.startup_state.setdefault("accounts", {}).setdefault(account_id, {})
     item.update({"status": status, "ready": bool(ready), "updated_at": time.time()})
     if error:
         item["error"] = error
     else:
         item.pop("error", None)
-    accounts = _startup_state.get("accounts")
+    accounts = _ctx.startup_state.get("accounts")
     if isinstance(accounts, dict):
-        _startup_state["ready_accounts"] = sum(1 for a in accounts.values() if isinstance(a, dict) and a.get("ready"))
-        _startup_state["total_accounts"] = len(accounts)
+        _ctx.startup_state["ready_accounts"] = sum(1 for a in accounts.values() if isinstance(a, dict) and a.get("ready"))
+        _ctx.startup_state["total_accounts"] = len(accounts)
 
 
 def _startup_remove_account(account_id: str) -> bool:
     """Drop an account from the startup snapshot so a deleted account can't
     linger as a ghost card. Returns True if an entry was removed."""
-    if not isinstance(_startup_state, dict):
+    if not isinstance(_ctx.startup_state, dict):
         return False
-    accounts = _startup_state.get("accounts")
+    accounts = _ctx.startup_state.get("accounts")
     if not isinstance(accounts, dict) or account_id not in accounts:
         return False
     accounts.pop(account_id, None)
-    _startup_state["ready_accounts"] = sum(
+    _ctx.startup_state["ready_accounts"] = sum(
         1 for a in accounts.values() if isinstance(a, dict) and a.get("ready")
     )
-    _startup_state["total_accounts"] = len(accounts)
+    _ctx.startup_state["total_accounts"] = len(accounts)
     return True
 
 
@@ -328,11 +324,11 @@ async def handle_proxy_check(request: web.Request) -> web.Response:
     in the browser, request sent from aiohttp). Returns only host:port of proxies,
     never credentials.
     """
-    if not _keepers:
+    if not _ctx.keepers:
         return _json({"error": "keepers not available"}, 503)
-    ids = list(_keepers.keys())
+    ids = list(_ctx.keepers.keys())
     results = await asyncio.gather(
-        *[_keepers[a].public_ips() for a in ids], return_exceptions=True
+        *[_ctx.keepers[a].public_ips() for a in ids], return_exceptions=True
     )
     out = []
     for aid, res in zip(ids, results):
@@ -353,20 +349,20 @@ async def handle_proxy_check(request: web.Request) -> web.Response:
 
 async def handle_proxy_ports_get(request: web.Request) -> web.Response:
     """Which local ports are taken and what is the next free one to raise."""
-    if _proxy_sup is None:
+    if _ctx.proxy_sup is None:
         return _json({"error": "proxy supervisor not available"}, 503)
-    return _json(_proxy_sup.ports_view())
+    return _json(_ctx.proxy_sup.ports_view())
 
 
 async def handle_proxy_list_get(request: web.Request) -> web.Response:
-    if _proxy_sup is None:
+    if _ctx.proxy_sup is None:
         return _json({"error": "proxy supervisor not available"}, 503)
-    return _json({"managed": _proxy_sup.list_status()})
+    return _json({"managed": _ctx.proxy_sup.list_status()})
 
 
 async def handle_proxy_verify_post(request: web.Request) -> web.Response:
     """Check that a pasted upstream proxy actually egresses (no port raised)."""
-    if _proxy_sup is None:
+    if _ctx.proxy_sup is None:
         return _json({"error": "proxy supervisor not available"}, 503)
     body = await _body(request)
     if body is None:
@@ -374,7 +370,7 @@ async def handle_proxy_verify_post(request: web.Request) -> web.Response:
     proxy = str(body.get("proxy") or "").strip()
     if not proxy:
         return _json({"error": "empty_proxy"}, 400)
-    result = await _proxy_sup.check_upstream(proxy)
+    result = await _ctx.proxy_sup.check_upstream(proxy)
     # Audit with label only — never the pasted credentials.
     _audit(request, "proxy.check",
            new={"label": result.get("label"), "ok": result.get("ok")},
@@ -384,7 +380,7 @@ async def handle_proxy_verify_post(request: web.Request) -> web.Response:
 
 async def handle_proxy_raise_post(request: web.Request) -> web.Response:
     """Verify the upstream, raise a local gost on a free port, return its URL."""
-    if _proxy_sup is None:
+    if _ctx.proxy_sup is None:
         return _json({"error": "proxy supervisor not available"}, 503)
     body = await _body(request)
     if body is None:
@@ -394,7 +390,7 @@ async def handle_proxy_raise_post(request: web.Request) -> web.Response:
         return _json({"error": "empty_proxy"}, 400)
     import proxy_supervisor
     try:
-        result = await _proxy_sup.raise_proxy(proxy)
+        result = await _ctx.proxy_sup.raise_proxy(proxy)
     except proxy_supervisor.ProxyError as exc:
         _audit(request, "proxy.raise", new={"error": str(exc)}, result="fail")
         return _json({"error": str(exc)}, 400)
@@ -410,7 +406,7 @@ async def handle_proxy_raise_post(request: web.Request) -> web.Response:
 
 async def handle_proxy_teardown_post(request: web.Request) -> web.Response:
     """Stop and forget a previously raised local proxy."""
-    if _proxy_sup is None:
+    if _ctx.proxy_sup is None:
         return _json({"error": "proxy supervisor not available"}, 503)
     body = await _body(request)
     if body is None:
@@ -419,25 +415,25 @@ async def handle_proxy_teardown_post(request: web.Request) -> web.Response:
         port = int(body.get("port"))
     except (TypeError, ValueError):
         return _json({"error": "invalid_port"}, 400)
-    ok = _proxy_sup.teardown(port)
+    ok = _ctx.proxy_sup.teardown(port)
     _audit(request, "proxy.teardown", new={"port": port}, result="ok" if ok else "not_found")
     return _json({"ok": ok}, 200 if ok else 404)
 
 
 def _pick_video_ab_account() -> str | None:
-    if not _video_clients:
+    if not _ctx.video_clients:
         return None
-    if _pool is not None:
-        for acc in _pool.status():
+    if _ctx.pool is not None:
+        for acc in _ctx.pool.status():
             aid = acc.get("id")
             if (
-                aid in _video_clients
+                aid in _ctx.video_clients
                 and not acc.get("disabled")
                 and bool(acc.get("video_allowed", True))
                 and int(acc.get("cooldown_left") or 0) <= 0
             ):
                 return aid
-    return next(iter(_video_clients), None)
+    return next(iter(_ctx.video_clients), None)
 
 
 def _video_model_labels(model: str) -> tuple[str, str]:
@@ -463,7 +459,7 @@ def _video_model_labels(model: str) -> tuple[str, str]:
 
 async def handle_video_ab_post(request: web.Request) -> web.Response:
     """Costly diagnostic: compare direct HTTP vs browser fetch video submit."""
-    if not _video_clients:
+    if not _ctx.video_clients:
         return _json({"error": "video clients not available"}, 503)
     body = await _body(request)
     if body is None:
@@ -473,7 +469,7 @@ async def handle_video_ab_post(request: web.Request) -> web.Response:
 
     account_id = str(body.get("account") or body.get("account_id") or "").strip()
     account_id = account_id or _pick_video_ab_account()
-    if not account_id or account_id not in _video_clients:
+    if not account_id or account_id not in _ctx.video_clients:
         return _json({"error": f"account {account_id!r} not found"}, 404)
 
     prompt = str(body.get("prompt") or "simple cinematic shot of a calm sunrise over a lake").strip()
@@ -486,7 +482,7 @@ async def handle_video_ab_post(request: web.Request) -> web.Response:
     except (TypeError, ValueError):
         pause_sec = 4.0
 
-    client = _video_clients[account_id]
+    client = _ctx.video_clients[account_id]
     try:
         result = await client.video_transport_ab_test(
             prompt=prompt,
@@ -543,7 +539,7 @@ async def handle_agent_probe_post(request: web.Request) -> web.Response:
     agent call, but it still contacts Google, so it is gated by confirm=true.
     Returns sanitized results only (status, action, parsed variant/single counts).
     """
-    if not _video_clients:
+    if not _ctx.video_clients:
         return _json({"error": "video clients not available"}, 503)
     body = await _body(request)
     if body is None:
@@ -553,7 +549,7 @@ async def handle_agent_probe_post(request: web.Request) -> web.Response:
 
     account_id = str(body.get("account") or body.get("account_id") or "").strip()
     account_id = account_id or _pick_video_ab_account()
-    if not account_id or account_id not in _video_clients:
+    if not account_id or account_id not in _ctx.video_clients:
         return _json({"error": f"account {account_id!r} not found"}, 404)
 
     prompt = str(body.get("prompt") or "котёнок на лежанке").strip()[:500] or "котёнок на лежанке"
@@ -578,7 +574,7 @@ async def handle_agent_probe_post(request: web.Request) -> web.Response:
         turn_number = 1
     agent_session_id = body.get("agent_session_id")
     agent_session_id = str(agent_session_id) if agent_session_id else None
-    client = _video_clients[account_id]
+    client = _ctx.video_clients[account_id]
     results: list[dict] = []
     found: str | None = None
     for idx, action in enumerate(actions):
@@ -621,14 +617,14 @@ async def handle_agent_action_scan_post(request: web.Request) -> web.Response:
 
     Read-only: no Google API call, no captcha, no credit spend. Helps identify
     the flowCreationAgent reCAPTCHA action without guessing."""
-    if not _video_clients:
+    if not _ctx.video_clients:
         return _json({"error": "video clients not available"}, 503)
     body = await _body(request) or {}
     account_id = str(body.get("account") or body.get("account_id") or "").strip()
     account_id = account_id or _pick_video_ab_account()
-    if not account_id or account_id not in _video_clients:
+    if not account_id or account_id not in _ctx.video_clients:
         return _json({"error": f"account {account_id!r} not found"}, 404)
-    keeper = getattr(_video_clients[account_id], "keeper", None)
+    keeper = getattr(_ctx.video_clients[account_id], "keeper", None)
     if keeper is None or not hasattr(keeper, "scan_recaptcha_actions"):
         return _json({"error": "scan unavailable"}, 503)
     try:
@@ -644,16 +640,16 @@ async def handle_agent_capture_post(request: web.Request) -> web.Response:
     """Drive the live browser: open project, click Agent, send a prompt, and
     capture the flowCreationAgent/session network calls (sanitized). confirm=true
     gated because it briefly uses the account's browser (no credit spend)."""
-    if not _video_clients:
+    if not _ctx.video_clients:
         return _json({"error": "video clients not available"}, 503)
     body = await _body(request) or {}
     if body.get("confirm") is not True:
         return _json({"error": "confirm=true required"}, 400)
     account_id = str(body.get("account") or body.get("account_id") or "").strip()
     account_id = account_id or _pick_video_ab_account()
-    if not account_id or account_id not in _video_clients:
+    if not account_id or account_id not in _ctx.video_clients:
         return _json({"error": f"account {account_id!r} not found"}, 404)
-    keeper = getattr(_video_clients[account_id], "keeper", None)
+    keeper = getattr(_ctx.video_clients[account_id], "keeper", None)
     if keeper is None or not hasattr(keeper, "capture_agent_flow"):
         return _json({"error": "capture unavailable"}, 503)
     prompt = str(body.get("prompt") or "улучши промпт: котёнок на лежанке").strip()[:300]
@@ -672,14 +668,14 @@ async def handle_agent_capture_post(request: web.Request) -> web.Response:
 
 async def handle_agent_sessions_post(request: web.Request) -> web.Response:
     """Explore flowCreationAgent/sessions (bearer only, no captcha, no spend)."""
-    if not _video_clients:
+    if not _ctx.video_clients:
         return _json({"error": "video clients not available"}, 503)
     body = await _body(request) or {}
     account_id = str(body.get("account") or body.get("account_id") or "").strip()
     account_id = account_id or _pick_video_ab_account()
-    if not account_id or account_id not in _video_clients:
+    if not account_id or account_id not in _ctx.video_clients:
         return _json({"error": f"account {account_id!r} not found"}, 404)
-    client = _video_clients[account_id]
+    client = _ctx.video_clients[account_id]
     if not hasattr(client, "agent_session_call"):
         return _json({"error": "unavailable"}, 503)
     method = str(body.get("method") or "GET").upper()
@@ -700,8 +696,8 @@ async def handle_agent_sessions_post(request: web.Request) -> web.Response:
 
 async def handle_ops_get(request: web.Request) -> web.Response:
     accounts = []
-    if _pool is not None:
-        accounts = _pool.status()
+    if _ctx.pool is not None:
+        accounts = _ctx.pool.status()
     active_accounts = [
         a for a in accounts
         if not a.get("disabled") and not a.get("needs_relogin")
@@ -733,11 +729,11 @@ async def handle_ops_get(request: web.Request) -> web.Response:
 # ── accounts ───────────────────────────────────────────────────────────
 
 async def _get_keeper_gcredits(account_id: str) -> dict | None:
-    if not _keepers or account_id not in _keepers:
+    if not _ctx.keepers or account_id not in _ctx.keepers:
         return None
     try:
         result = await asyncio.wait_for(
-            _keepers[account_id].get_g_credits(),
+            _ctx.keepers[account_id].get_g_credits(),
             timeout=GCREDITS_LOOKUP_TIMEOUT_SEC,
         )
         return result if isinstance(result, dict) else None
@@ -750,21 +746,21 @@ async def _get_keeper_gcredits(account_id: str) -> dict | None:
 
 
 async def handle_accounts_get(request: web.Request) -> web.Response:
-    if _pool is None:
+    if _ctx.pool is None:
         return _json({"error": "pool not initialized"}, 503)
-    accounts = _pool.status()
+    accounts = _ctx.pool.status()
     stats = metrics.report_account_stats()
     metadata = _load_account_metadata()
 
     gcredits_map: dict = {}
-    if _keepers:
+    if _ctx.keepers:
         ids = []
         for acc in accounts:
             aid = str(acc["id"])
             startup = _startup_for_account(aid)
             if startup and startup.get("status") in {"pending", "running"}:
                 continue
-            if aid in _keepers:
+            if aid in _ctx.keepers:
                 ids.append(aid)
         results = await asyncio.gather(*[_get_keeper_gcredits(aid) for aid in ids])
         gcredits_map = dict(zip(ids, results))
@@ -777,7 +773,7 @@ async def handle_accounts_get(request: web.Request) -> web.Response:
         acc["last_activity"] = s.get("last_activity")
         acc["last_error"] = s.get("last_error")
         acc["g_credits"] = gcredits_map.get(acc["id"])
-        pool_acc = _pool.get(str(acc["id"])) if _pool is not None else None
+        pool_acc = _ctx.pool.get(str(acc["id"])) if _ctx.pool is not None else None
         meta = metadata.get(str(acc["id"])) if isinstance(metadata.get(str(acc["id"])), dict) else {}
         acc["email"] = str(meta.get("email") or _profile_email_guess(acc.get("profile_dir")) or "")
         if pool_acc is not None:
@@ -804,10 +800,10 @@ async def handle_accounts_get(request: web.Request) -> web.Response:
 
 async def handle_account_enable(request: web.Request) -> web.Response:
     acc_id = request.match_info["id"]
-    if _pool is None:
+    if _ctx.pool is None:
         return _json({"error": "pool not initialized"}, 503)
-    before = next((a for a in _pool.status() if a.get("id") == acc_id), None)
-    ok = _pool.set_disabled(acc_id, False)
+    before = next((a for a in _ctx.pool.status() if a.get("id") == acc_id), None)
+    ok = _ctx.pool.set_disabled(acc_id, False)
     if not ok:
         _audit(request, "account.enable", old=before, new={"id": acc_id}, result="not_found")
         return _json({"error": f"account {acc_id!r} not found"}, 404)
@@ -817,10 +813,10 @@ async def handle_account_enable(request: web.Request) -> web.Response:
 
 async def handle_account_disable(request: web.Request) -> web.Response:
     acc_id = request.match_info["id"]
-    if _pool is None:
+    if _ctx.pool is None:
         return _json({"error": "pool not initialized"}, 503)
-    before = next((a for a in _pool.status() if a.get("id") == acc_id), None)
-    ok = _pool.set_disabled(acc_id, True)
+    before = next((a for a in _ctx.pool.status() if a.get("id") == acc_id), None)
+    ok = _ctx.pool.set_disabled(acc_id, True)
     if not ok:
         _audit(request, "account.disable", old=before, new={"id": acc_id}, result="not_found")
         return _json({"error": f"account {acc_id!r} not found"}, 404)
@@ -830,14 +826,14 @@ async def handle_account_disable(request: web.Request) -> web.Response:
 
 async def handle_account_video(request: web.Request) -> web.Response:
     acc_id = request.match_info["id"]
-    if _pool is None:
+    if _ctx.pool is None:
         return _json({"error": "pool not initialized"}, 503)
     body = await _body(request)
     if body is None:
         return _json({"error": "invalid JSON body"}, 400)
     allowed = bool(body.get("allowed", True))
-    before = next((a for a in _pool.status() if a.get("id") == acc_id), None)
-    ok = _pool.set_video_allowed(acc_id, allowed)
+    before = next((a for a in _ctx.pool.status() if a.get("id") == acc_id), None)
+    ok = _ctx.pool.set_video_allowed(acc_id, allowed)
     if not ok:
         _audit(request, "account.video", old=before, new={"id": acc_id, "video_allowed": allowed}, result="not_found")
         return _json({"error": f"account {acc_id!r} not found"}, 404)
@@ -847,10 +843,10 @@ async def handle_account_video(request: web.Request) -> web.Response:
 
 async def handle_account_reset(request: web.Request) -> web.Response:
     acc_id = request.match_info["id"]
-    if _pool is None:
+    if _ctx.pool is None:
         return _json({"error": "pool not initialized"}, 503)
-    before = next((a for a in _pool.status() if a.get("id") == acc_id), None)
-    ok = _pool.reset_failures(acc_id)
+    before = next((a for a in _ctx.pool.status() if a.get("id") == acc_id), None)
+    ok = _ctx.pool.reset_failures(acc_id)
     if not ok:
         _audit(request, "account.reset_failures", old=before, new={"id": acc_id}, result="not_found")
         return _json({"error": f"account {acc_id!r} not found"}, 404)
@@ -865,15 +861,15 @@ async def handle_account_delete(request: web.Request) -> web.Response:
         return _json({"error": "invalid JSON body"}, 400)
     if body.get("confirm_delete") is not True:
         return _json({"error": "confirm_delete=true required"}, 400)
-    if _pool is None:
+    if _ctx.pool is None:
         return _json({"error": "pool not initialized"}, 503)
 
-    before = next((a for a in _pool.status() if a.get("id") == acc_id), None)
+    before = next((a for a in _ctx.pool.status() if a.get("id") == acc_id), None)
     in_pool = before is not None
     in_startup = _startup_for_account(acc_id) is not None
 
     # Guard against emptying the pool (only meaningful for a live pool member).
-    if in_pool and len(_pool.account_ids()) <= 1:
+    if in_pool and len(_ctx.pool.account_ids()) <= 1:
         return _json({"ok": False, "status": "last_account", "error": "last_account"}, 400)
 
     # Best-effort .env removal. Tolerate "already gone" so repeated clicks and
@@ -903,7 +899,7 @@ async def handle_account_delete(request: web.Request) -> web.Response:
     # Fast teardown: schedule the slow browser close in the background so the
     # response returns immediately and the UI refreshes cleanly.
     await _close_runtime_account(acc_id, background=True)
-    runtime_removed = _pool.remove_account(acc_id)
+    runtime_removed = _ctx.pool.remove_account(acc_id)
     ghost_removed = _startup_remove_account(acc_id)
     _remove_account_metadata(acc_id)
     log.info(
@@ -924,8 +920,8 @@ async def handle_account_delete(request: web.Request) -> web.Response:
 # ── config: messages ───────────────────────────────────────────────────
 
 async def _warm_hot_added_account(account_id: str, keeper) -> None:
-    if _pool is not None:
-        _pool.set_runtime_ready(account_id, False, "warming")
+    if _ctx.pool is not None:
+        _ctx.pool.set_runtime_ready(account_id, False, "warming")
     _startup_set_account_status(account_id, "running", ready=False)
     try:
         await keeper.start()
@@ -935,12 +931,12 @@ async def _warm_hot_added_account(account_id: str, keeper) -> None:
             log.warning("hot-added account project init failed for %s: %s", account_id, exc.__class__.__name__)
     except Exception as exc:  # noqa: BLE001 - background warmup state
         log.warning("hot-added account warmup failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
-        if _pool is not None:
-            _pool.set_runtime_ready(account_id, False, "error")
+        if _ctx.pool is not None:
+            _ctx.pool.set_runtime_ready(account_id, False, "error")
         _startup_set_account_status(account_id, "error", ready=False, error=exc.__class__.__name__)
         return
-    if _pool is not None:
-        _pool.set_runtime_ready(account_id, True, "ready")
+    if _ctx.pool is not None:
+        _ctx.pool.set_runtime_ready(account_id, True, "ready")
     _startup_set_account_status(account_id, "ready", ready=True)
 
 
@@ -948,12 +944,12 @@ async def _close_runtime_account(account_id: str, *, background: bool = False) -
     """Stop a runtime account. With ``background=True`` the (potentially slow)
     browser teardown is scheduled instead of awaited, so HTTP handlers like
     delete stay fast and the client doesn't time out / double-submit."""
-    if _pool is not None:
-        _pool.set_runtime_ready(account_id, False, "stopped")
+    if _ctx.pool is not None:
+        _ctx.pool.set_runtime_ready(account_id, False, "stopped")
     _startup_set_account_status(account_id, "stopped", ready=False)
-    if _video_clients is not None:
-        _video_clients.pop(account_id, None)
-    keeper = _keepers.pop(account_id, None) if _keepers is not None else None
+    if _ctx.video_clients is not None:
+        _ctx.video_clients.pop(account_id, None)
+    keeper = _ctx.keepers.pop(account_id, None) if _ctx.keepers is not None else None
     if keeper is None:
         return
 
@@ -970,12 +966,12 @@ async def _close_runtime_account(account_id: str, *, background: bool = False) -
 
 
 def _start_runtime_account(account_id: str) -> dict:
-    if _pool is None:
+    if _ctx.pool is None:
         return {"runtime_added": False, "runtime_reason": "pool_not_initialized"}
-    account = _pool.get(account_id)
+    account = _ctx.pool.get(account_id)
     if account is None:
         return {"runtime_added": False, "runtime_reason": "account_not_found"}
-    if _keepers is None or _video_clients is None:
+    if _ctx.keepers is None or _ctx.video_clients is None:
         _startup_set_account_status(account_id, "pending_restart", ready=False)
         return {"runtime_added": False, "runtime_reason": "restart_required_for_clients"}
     try:
@@ -987,23 +983,23 @@ def _start_runtime_account(account_id: str) -> dict:
             browser_proxy_url=account.browser_proxy_url,
             api_proxy_url=account.api_proxy_url,
         )
-        _keepers[account.id] = keeper
-        _video_clients[account.id] = FlowHttpClient(keeper)
+        _ctx.keepers[account.id] = keeper
+        _ctx.video_clients[account.id] = FlowHttpClient(keeper)
         _startup_set_account_status(account.id, "pending", ready=False)
         asyncio.create_task(_warm_hot_added_account(account.id, keeper))
         return {"runtime_added": True, "runtime_reason": "warming"}
     except Exception as exc:  # noqa: BLE001
         log.warning("runtime account start failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
-        if _pool is not None:
-            _pool.set_runtime_ready(account_id, False, "pending_restart")
+        if _ctx.pool is not None:
+            _ctx.pool.set_runtime_ready(account_id, False, "pending_restart")
         _startup_set_account_status(account_id, "pending_restart", ready=False, error=exc.__class__.__name__)
         return {"runtime_added": False, "runtime_reason": "restart_required_for_clients"}
 
 
 def _try_hot_add_account(account_id: str, profile_dir: str, proxy_url: str) -> dict:
-    if _pool is None:
+    if _ctx.pool is None:
         return {"runtime_added": False, "runtime_reason": "pool_not_initialized"}
-    if account_id in _pool.account_ids():
+    if account_id in _ctx.pool.account_ids():
         return {"runtime_added": False, "runtime_reason": "already_in_runtime"}
     entry = account_onboarding.AccountEntry(
         account_id=account_id,
@@ -1011,10 +1007,10 @@ def _try_hot_add_account(account_id: str, profile_dir: str, proxy_url: str) -> d
         proxy_url=proxy_url,
     )
     account = account_onboarding.account_from_entry(entry)
-    if not _pool.add_account(account):
+    if not _ctx.pool.add_account(account):
         return {"runtime_added": False, "runtime_reason": "pool_rejected"}
 
-    if _keepers is None or _video_clients is None:
+    if _ctx.keepers is None or _ctx.video_clients is None:
         _startup_set_account_status(account_id, "pending_restart", ready=False)
         return {"runtime_added": True, "runtime_reason": "restart_required_for_clients"}
 
@@ -1027,15 +1023,15 @@ def _try_hot_add_account(account_id: str, profile_dir: str, proxy_url: str) -> d
             browser_proxy_url=account.browser_proxy_url,
             api_proxy_url=account.api_proxy_url,
         )
-        _keepers[account.id] = keeper
-        _video_clients[account.id] = FlowHttpClient(keeper)
+        _ctx.keepers[account.id] = keeper
+        _ctx.video_clients[account.id] = FlowHttpClient(keeper)
         _startup_set_account_status(account.id, "pending", ready=False)
         asyncio.create_task(_warm_hot_added_account(account.id, keeper))
         return {"runtime_added": True, "runtime_reason": "warming"}
     except Exception as exc:  # noqa: BLE001
         log.warning("hot-add client setup failed for %s: %s", account_id, exc.__class__.__name__, exc_info=True)
-        if _pool is not None:
-            _pool.set_runtime_ready(account_id, False, "pending_restart")
+        if _ctx.pool is not None:
+            _ctx.pool.set_runtime_ready(account_id, False, "pending_restart")
         _startup_set_account_status(account_id, "pending_restart", ready=False, error=exc.__class__.__name__)
         return {"runtime_added": True, "runtime_reason": "restart_required_for_clients"}
 
@@ -1155,7 +1151,7 @@ async def handle_account_onboard_start_post(request: web.Request) -> web.Respons
     except (TypeError, ValueError):
         timeout_sec = 180
 
-    pool_acc = _pool.get(account_id) if (_pool is not None and account_id) else None
+    pool_acc = _ctx.pool.get(account_id) if (_ctx.pool is not None and account_id) else None
     if relogin:
         if pool_acc is None:
             return _json({"ok": False, "status": "account_not_found", "error": "account_not_found"}, 404)
@@ -1468,9 +1464,9 @@ async def handle_account_onboard_post(request: web.Request) -> web.Response:
 
 
 def _account_client(account_id: str):
-    if not _video_clients or account_id not in _video_clients:
+    if not _ctx.video_clients or account_id not in _ctx.video_clients:
         return None
-    return _video_clients[account_id]
+    return _ctx.video_clients[account_id]
 
 
 async def handle_account_test_image_post(request: web.Request) -> web.Response:
@@ -1873,8 +1869,8 @@ async def handle_settings_get(request: web.Request) -> web.Response:
         starter = 30
     defaults = {
         "starter_credits": starter,
-        "cooldown_sec":    int(_pool._cooldown_sec) if _pool else 600,
-        "max_failures":    int(_pool._max_failures) if _pool else 3,
+        "cooldown_sec":    int(_ctx.pool._cooldown_sec) if _ctx.pool else 600,
+        "max_failures":    int(_ctx.pool._max_failures) if _ctx.pool else 3,
     }
     defaults.update(config_store.get_section("settings"))
     return _json(defaults)
@@ -1900,21 +1896,21 @@ async def handle_settings_post(request: web.Request) -> web.Response:
                 pass
         except (TypeError, ValueError):
             errors.append({"key": "starter_credits", "error": "invalid_non_negative_integer"})
-    if "cooldown_sec" in body and _pool is not None:
+    if "cooldown_sec" in body and _ctx.pool is not None:
         try:
             v = float(body["cooldown_sec"])
             if v < 30:
                 raise ValueError("cooldown_sec too small")
-            _pool._cooldown_sec = v
+            _ctx.pool._cooldown_sec = v
             applied["cooldown_sec"] = v
         except (TypeError, ValueError):
             errors.append({"key": "cooldown_sec", "error": "invalid_min_30"})
-    if "max_failures" in body and _pool is not None:
+    if "max_failures" in body and _ctx.pool is not None:
         try:
             v = int(body["max_failures"])
             if v < 1:
                 raise ValueError("max_failures must be >= 1")
-            _pool._max_failures = v
+            _ctx.pool._max_failures = v
             applied["max_failures"] = v
         except (TypeError, ValueError):
             errors.append({"key": "max_failures", "error": "invalid_min_1"})
@@ -2532,12 +2528,12 @@ def register_admin_routes(
     account diagnostics. ``video_clients`` enables costly admin-only video A/B.
     ``proxy_supervisor`` enables the ISP-proxy onboarding routes.
     """
-    global _pool, _keepers, _video_clients, _startup_state, _proxy_sup
-    _pool = pool
-    _keepers = keepers
-    _video_clients = video_clients
-    _startup_state = startup_state
-    _proxy_sup = proxy_supervisor
+    global _ctx
+    _ctx.pool = pool
+    _ctx.keepers = keepers
+    _ctx.video_clients = video_clients
+    _ctx.startup_state = startup_state
+    _ctx.proxy_sup = proxy_supervisor
     r = app.router
     r.add_get ("/api/admin/ping",                      handle_ping)
     r.add_get ("/api/admin/ops",                       handle_ops_get)

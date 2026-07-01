@@ -142,10 +142,10 @@ class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self._reset_globals)
 
     def _reset_globals(self):
-        admin_api._pool = None
-        admin_api._keepers = None
-        admin_api._video_clients = None
-        admin_api._startup_state = None
+        admin_api._ctx.pool = None
+        admin_api._ctx.keepers = None
+        admin_api._ctx.video_clients = None
+        admin_api._ctx.startup_state = None
         admin_api.GCREDITS_LOOKUP_TIMEOUT_SEC = 3.0
 
     async def test_g_credits_attached_when_keepers_present(self):
@@ -157,8 +157,8 @@ class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
             "a1": _FakeKeeper({"credits": 50, "is_paid": False}),
             "a2": _FakeKeeper(raises=True),
         }
-        admin_api._pool = pool
-        admin_api._keepers = keepers
+        admin_api._ctx.pool = pool
+        admin_api._ctx.keepers = keepers
 
         resp = await admin_api.handle_accounts_get(None)
         body = json.loads(resp.body)
@@ -168,8 +168,8 @@ class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_g_credits_absent_without_keepers(self):
         pool = _FakePool([{"id": "a1", "disabled": False, "cooldown_left": 0, "fails": 0}])
-        admin_api._pool = pool
-        admin_api._keepers = None
+        admin_api._ctx.pool = pool
+        admin_api._ctx.keepers = None
 
         resp = await admin_api.handle_accounts_get(None)
         body = json.loads(resp.body)
@@ -179,8 +179,8 @@ class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
         pool = _FakePool([
             {"id": "a1", "disabled": False, "cooldown_left": 0, "fails": 0},
         ])
-        admin_api._pool = pool
-        admin_api._keepers = {"a1": _FakeKeeper({"credits": 50}, delay=0.05)}
+        admin_api._ctx.pool = pool
+        admin_api._ctx.keepers = {"a1": _FakeKeeper({"credits": 50}, delay=0.05)}
         admin_api.GCREDITS_LOOKUP_TIMEOUT_SEC = 0.001
 
         resp = await admin_api.handle_accounts_get(None)
@@ -192,8 +192,8 @@ class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
         pool = _FakePool([
             {"id": "a1", "disabled": False, "cooldown_left": 0, "fails": 0},
         ])
-        admin_api._pool = pool
-        admin_api._startup_state = {
+        admin_api._ctx.pool = pool
+        admin_api._ctx.startup_state = {
             "phase": "warming",
             "accounts": {"a1": {"status": "running", "ready": False}},
         }
@@ -241,13 +241,13 @@ class _FakeProxySup:
 class ProxyEndpointTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.addCleanup(self._reset)
-        admin_api._proxy_sup = _FakeProxySup()
+        admin_api._ctx.proxy_sup = _FakeProxySup()
 
     def _reset(self):
-        admin_api._proxy_sup = None
+        admin_api._ctx.proxy_sup = None
 
     async def test_ports_503_when_disabled(self):
-        admin_api._proxy_sup = None
+        admin_api._ctx.proxy_sup = None
         resp = await admin_api.handle_proxy_ports_get(None)
         self.assertEqual(resp.status, 503)
 
@@ -274,7 +274,7 @@ class ProxyEndpointTests(unittest.IsolatedAsyncioTestCase):
             _JsonReq({"proxy": "user:pass@1.2.3.4:10000"}))
         body = json.loads(resp.body)
         self.assertEqual(body["local_url"], "http://127.0.0.1:8130")
-        self.assertEqual(admin_api._proxy_sup.raised, ["user:pass@1.2.3.4:10000"])
+        self.assertEqual(admin_api._ctx.proxy_sup.raised, ["user:pass@1.2.3.4:10000"])
 
     async def test_raise_proxy_error_400(self):
         resp = await admin_api.handle_proxy_raise_post(
@@ -301,15 +301,15 @@ class VideoAbEndpointTests(unittest.IsolatedAsyncioTestCase):
         admin_api.metrics.log_event = lambda *args, **kwargs: self.logged_events.append((args, kwargs))
 
     def _reset_globals(self):
-        admin_api._pool = None
-        admin_api._keepers = None
-        admin_api._video_clients = None
-        admin_api._startup_state = None
+        admin_api._ctx.pool = None
+        admin_api._ctx.keepers = None
+        admin_api._ctx.video_clients = None
+        admin_api._ctx.startup_state = None
         admin_api.metrics.log_event = self._orig_log_event
 
     async def test_video_ab_requires_explicit_spend_confirmation(self):
         client = _FakeVideoClient()
-        admin_api._video_clients = {"a1": client}
+        admin_api._ctx.video_clients = {"a1": client}
 
         resp = await admin_api.handle_video_ab_post(_JsonReq({"account": "a1"}))
         body = json.loads(resp.body)
@@ -320,11 +320,11 @@ class VideoAbEndpointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_video_ab_selects_available_account_and_calls_client(self):
         client = _FakeVideoClient()
-        admin_api._pool = _FakePool([
+        admin_api._ctx.pool = _FakePool([
             {"id": "a0", "disabled": True, "video_allowed": True, "cooldown_left": 0},
             {"id": "a1", "disabled": False, "video_allowed": True, "cooldown_left": 0},
         ])
-        admin_api._video_clients = {"a1": client}
+        admin_api._ctx.video_clients = {"a1": client}
 
         resp = await admin_api.handle_video_ab_post(_JsonReq({
             "confirm_spend": True,
@@ -346,7 +346,7 @@ class VideoAbEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(args and args[0] == "video_ab" for args, _ in self.logged_events))
 
     async def test_video_ab_unknown_account_is_404(self):
-        admin_api._video_clients = {"a1": _FakeVideoClient()}
+        admin_api._ctx.video_clients = {"a1": _FakeVideoClient()}
 
         resp = await admin_api.handle_video_ab_post(_JsonReq({
             "confirm_spend": True,
@@ -371,10 +371,10 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         admin_api.metrics.log_event = lambda *args, **kwargs: self.logged_events.append((args, kwargs))
 
     def _reset_globals(self):
-        admin_api._pool = None
-        admin_api._keepers = None
-        admin_api._video_clients = None
-        admin_api._startup_state = None
+        admin_api._ctx.pool = None
+        admin_api._ctx.keepers = None
+        admin_api._ctx.video_clients = None
+        admin_api._ctx.startup_state = None
         admin_api._onboard_sessions.clear()
         admin_api.metrics.log_event = self._orig_log_event
         admin_api.account_onboarding.onboard_google_flow_account = self._orig_onboard
@@ -526,12 +526,12 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_relogin_start_closes_runtime_and_uses_existing_profile(self):
         calls = []
         keeper = _FakeKeeper({"credits": 1})
-        admin_api._pool = _FakePool([
+        admin_api._ctx.pool = _FakePool([
             {"id": "sub7", "profile_dir": "./google_profile_sub7", "disabled": False,
              "cooldown_left": 0, "fails": 0, "proxy": "http://127.0.0.1:8126"},
         ])
-        admin_api._keepers = {"sub7": keeper}
-        admin_api._video_clients = {"sub7": object()}
+        admin_api._ctx.keepers = {"sub7": keeper}
+        admin_api._ctx.video_clients = {"sub7": object()}
 
         async def fake_start_login(**kwargs):
             calls.append(kwargs)
@@ -557,14 +557,14 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.status, 200)
         self.assertTrue(body["ready_to_add"])
         self.assertTrue(keeper.closed)
-        self.assertNotIn("sub7", admin_api._keepers)
+        self.assertNotIn("sub7", admin_api._ctx.keepers)
         self.assertTrue(calls[0]["allow_existing_profile"])
         self.assertTrue(calls[0]["skip_account_exists"])
         self.assertEqual(calls[0]["profile_dir"], "./google_profile_sub7")
 
     async def test_delete_account_requires_confirm_and_removes_runtime(self):
         calls = []
-        admin_api._pool = _FakePool([
+        admin_api._ctx.pool = _FakePool([
             {"id": "sub7", "profile_dir": "./google_profile_sub7", "disabled": False,
              "cooldown_left": 0, "fails": 0},
             {"id": "sub8", "profile_dir": "./google_profile_sub8", "disabled": False,
@@ -587,16 +587,16 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.status, 200)
         self.assertTrue(body["ok"])
         self.assertEqual(calls, ["sub7"])
-        self.assertEqual([a["id"] for a in admin_api._pool.status()], ["sub8"])
+        self.assertEqual([a["id"] for a in admin_api._ctx.pool.status()], ["sub8"])
 
     async def test_delete_is_idempotent_when_already_absent(self):
         # sub7 is gone from the pool, .env, and startup — a repeated delete
         # click must return ok (already_removed), not a scary 404.
-        admin_api._pool = _FakePool([
+        admin_api._ctx.pool = _FakePool([
             {"id": "sub8", "profile_dir": "./google_profile_sub8", "disabled": False,
              "cooldown_left": 0, "fails": 0},
         ])
-        admin_api._startup_state = None
+        admin_api._ctx.startup_state = None
 
         def fake_remove_env(account_id):
             raise admin_api.account_onboarding.AccountOnboardingError("account_not_found")
@@ -609,17 +609,17 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(body["ok"])
         self.assertEqual(body["status"], "already_removed")
         # sub8 untouched.
-        self.assertEqual([a["id"] for a in admin_api._pool.status()], ["sub8"])
+        self.assertEqual([a["id"] for a in admin_api._ctx.pool.status()], ["sub8"])
 
     async def test_delete_purges_startup_ghost(self):
         # A deleted account must not linger as a startup ghost card.
-        admin_api._pool = _FakePool([
+        admin_api._ctx.pool = _FakePool([
             {"id": "sub7", "profile_dir": "./google_profile_sub7", "disabled": False,
              "cooldown_left": 0, "fails": 0},
             {"id": "sub8", "profile_dir": "./google_profile_sub8", "disabled": False,
              "cooldown_left": 0, "fails": 0},
         ])
-        admin_api._startup_state = {"accounts": {"sub7": {"status": "stopped", "ready": False}}}
+        admin_api._ctx.startup_state = {"accounts": {"sub7": {"status": "stopped", "ready": False}}}
         admin_api.account_onboarding.remove_flow_account_from_env = lambda account_id: {"accounts_count": 1}
 
         self.assertIsNotNone(admin_api._startup_for_account("sub7"))
@@ -628,7 +628,7 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.status, 200)
         self.assertTrue(body["ok"])
         self.assertIsNone(admin_api._startup_for_account("sub7"))
-        self.assertEqual([a["id"] for a in admin_api._pool.status()], ["sub8"])
+        self.assertEqual([a["id"] for a in admin_api._ctx.pool.status()], ["sub8"])
 
     async def test_onboard_progress_endpoint_returns_snapshot(self):
         admin_api.account_onboarding._PROGRESS.pop("sub7", None)
@@ -662,7 +662,7 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_image_test_requires_confirm_and_then_calls_client(self):
         client = _FakeVideoClient()
-        admin_api._video_clients = {"sub7": client}
+        admin_api._ctx.video_clients = {"sub7": client}
 
         resp = await admin_api.handle_account_test_image_post(_JsonReq({}, {"id": "sub7"}))
         self.assertEqual(resp.status, 400)
@@ -680,7 +680,7 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
         client = _FakeVideoClient(result={
             "arms": [{"transport": "direct_http", "status": 200, "ok": True}]
         })
-        admin_api._video_clients = {"sub7": client}
+        admin_api._ctx.video_clients = {"sub7": client}
 
         resp = await admin_api.handle_account_test_video_post(_JsonReq({}, {"id": "sub7"}))
         self.assertEqual(resp.status, 400)
@@ -697,8 +697,8 @@ class AccountOnboardingEndpointTests(unittest.IsolatedAsyncioTestCase):
 
 class AdminApiValidationTests(unittest.TestCase):
     def test_ping_includes_startup_snapshot(self) -> None:
-        admin_api._startup_state = {"phase": "warming", "polling": False}
-        self.addCleanup(setattr, admin_api, "_startup_state", None)
+        admin_api._ctx.startup_state = {"phase": "warming", "polling": False}
+        self.addCleanup(setattr, admin_api, "_ctx.startup_state", None)
 
         resp = asyncio.run(admin_api.handle_ping(None))
         body = json.loads(resp.body)
