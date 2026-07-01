@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, MutableMapping, Protocol, runtime_checkable
 
 from channels.base import Button, IncomingCallback, IncomingMessage, Keyboard
+from billing.credit_gate import NotEnoughCredits, open_credit_gate
 from flow_core import (
     PRICE_PER_IMAGE,
     STARTER_CREDITS,
@@ -192,6 +193,30 @@ class MetricsWallet:
         metrics.credits_refund_for_identity(platform, user_id, amount)
 
 
+class _WalletGate:
+    """Adapt an identity-aware Wallet to the store shape ``open_credit_gate`` wants.
+
+    ``open_credit_gate`` uses ``balance/charge/refund(user_id, ...)``; MAX wallets
+    are keyed by ``(platform, platform_user_id)``, so we bind the platform and let
+    the platform user id flow through as the gate's ``user_id``.
+    """
+
+    __slots__ = ("_wallet", "_platform")
+
+    def __init__(self, wallet: Wallet, platform: str) -> None:
+        self._wallet = wallet
+        self._platform = platform
+
+    def balance(self, user_id: str) -> int:
+        return self._wallet.balance(self._platform, user_id)
+
+    def charge(self, user_id: str, amount: int) -> Any:
+        return self._wallet.charge(self._platform, user_id, amount)
+
+    def refund(self, user_id: str, amount: int) -> Any:
+        return self._wallet.refund(self._platform, user_id, amount)
+
+
 class MaxMvpBot:
     """Minimal MAX product flow over the platform-neutral event contract."""
 
@@ -329,28 +354,35 @@ class MaxMvpBot:
         await self._charged_generation(chat, uid, price=price, call=call)
 
     async def _charged_generation(self, chat: str, uid: str, *, price: int, call) -> None:
-        """Charge, run the injected generation, refund on any failure.
+        """Run the injected generation behind the shared billing credit gate.
 
-        Encodes the refund invariant: a failed generation must never keep the
-        user's credits (see the Phase 0 baseline safety net).
+        The charge-on-success / refund-on-failure rule lives in
+        ``billing.open_credit_gate`` — the same rule the Telegram bot uses — so a
+        failed generation never keeps the user's credits.
         """
-        if not self._charge(uid, price):
-            self._clear(uid)
-            await self._show_low_balance(chat)
-            return
-        self._clear(uid)
+        store = _WalletGate(self.wallet, MAX_PLATFORM)
         internal_id = self.wallet.internal_id(MAX_PLATFORM, uid)
+
+        async def _on_insufficient(have: int, needed: int) -> None:
+            await self._show_low_balance(chat)
+
         try:
-            result = await call(internal_id)
-        except Exception:
-            self._refund(uid, price)
-            await self._fail(chat)
-            return
-        if not result or result.get("error"):
-            self._refund(uid, price)
-            await self._fail(chat)
-            return
-        await self._deliver(chat, result)
+            async with open_credit_gate(
+                store, uid, price, on_insufficient=_on_insufficient
+            ) as charge:
+                self._clear(uid)
+                try:
+                    result = await call(internal_id)
+                except Exception:
+                    await self._fail(chat)
+                    return  # charge.ok stays False -> refunded on gate exit
+                if not result or result.get("error"):
+                    await self._fail(chat)
+                    return  # refunded on gate exit
+                charge.ok = True
+                await self._deliver(chat, result)
+        except NotEnoughCredits:
+            self._clear(uid)
 
     async def _deliver(self, chat: str, result: Mapping[str, Any]) -> None:
         urls = [
@@ -427,15 +459,6 @@ class MaxMvpBot:
         )
 
     # -- helpers ----------------------------------------------------------
-
-    def _charge(self, uid: str, amount: int) -> bool:
-        if amount <= 0:
-            return True
-        return self.wallet.charge(MAX_PLATFORM, uid, amount)
-
-    def _refund(self, uid: str, amount: int) -> None:
-        if amount > 0:
-            self.wallet.refund(MAX_PLATFORM, uid, amount)
 
     def _set_await(self, uid: str, action: str) -> None:
         self._state[uid] = {"await": action}
