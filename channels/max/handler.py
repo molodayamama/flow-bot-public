@@ -29,7 +29,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, MutableMapping, Protocol, runtime_checkable
 
-from channels.base import Button, IncomingCallback, IncomingMessage, Keyboard
+from channels.base import (
+    Button,
+    IncomingCallback,
+    IncomingMessage,
+    Keyboard,
+    PlatformMedia,
+)
 from billing.credit_gate import NotEnoughCredits, open_credit_gate
 from flow_core import (
     PRICE_PER_IMAGE,
@@ -114,6 +120,16 @@ class ChatPlatform(Protocol):
         ...
 
     async def answer_callback(self, callback_id: str, text: str | None = None) -> Any:
+        ...
+
+    async def send_photo(
+        self, chat_id: str, media: PlatformMedia, keyboard: Keyboard | None = None
+    ) -> Any:
+        ...
+
+    async def send_video(
+        self, chat_id: str, media: PlatformMedia, keyboard: Keyboard | None = None
+    ) -> Any:
         ...
 
 
@@ -385,15 +401,43 @@ class MaxMvpBot:
             self._clear(uid)
 
     async def _deliver(self, chat: str, result: Mapping[str, Any]) -> None:
-        urls = [
+        """Send generated media through the platform media API.
+
+        Images and videos are delivered as attachments (``send_photo`` /
+        ``send_video``) rather than as raw URLs in a text message. If the
+        generation result carries no recognisable media, fall back to a plain
+        text confirmation so the flow never silently drops a reply.
+        """
+        image_urls = [
             str(img.get("url"))
             for img in (result.get("images") or [])
             if isinstance(img, Mapping) and img.get("url")
         ]
-        if urls:
-            body = self.copy.delivered_image + "\n" + "\n".join(urls)
-            await self.platform.send_message(chat, body, self._menu_keyboard())
+        if image_urls:
+            keyboard = self._menu_keyboard()
+            for index, url in enumerate(image_urls):
+                caption = self.copy.delivered_image if index == 0 else None
+                media = PlatformMedia(kind="photo", url=url, caption=caption)
+                await self.platform.send_photo(
+                    chat, media, keyboard if index == len(image_urls) - 1 else None
+                )
             return
+
+        video_urls = [
+            str(vid.get("url"))
+            for vid in (result.get("videos") or [])
+            if isinstance(vid, Mapping) and vid.get("url")
+        ]
+        if video_urls:
+            keyboard = self._menu_keyboard()
+            for index, url in enumerate(video_urls):
+                caption = self.copy.delivered_video if index == 0 else None
+                media = PlatformMedia(kind="video", url=url, caption=caption)
+                await self.platform.send_video(
+                    chat, media, keyboard if index == len(video_urls) - 1 else None
+                )
+            return
+
         if result.get("videos"):
             await self.platform.send_message(
                 chat, self.copy.delivered_video, self._menu_keyboard()

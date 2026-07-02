@@ -107,6 +107,8 @@ class FakePlatform:
     def __init__(self) -> None:
         self.messages: list[dict] = []
         self.answers: list[dict] = []
+        self.photos: list[dict] = []
+        self.videos: list[dict] = []
 
     async def send_message(self, chat_id, text, keyboard=None):
         self.messages.append({"chat_id": chat_id, "text": text, "keyboard": keyboard})
@@ -115,6 +117,20 @@ class FakePlatform:
     async def answer_callback(self, callback_id, text=None):
         self.answers.append({"callback_id": callback_id})
         return {"ok": True}
+
+    async def send_photo(self, chat_id, media, keyboard=None):
+        self.photos.append({"chat_id": chat_id, "media": media, "keyboard": keyboard})
+        return {"ok": True}
+
+    async def send_video(self, chat_id, media, keyboard=None):
+        self.videos.append({"chat_id": chat_id, "media": media, "keyboard": keyboard})
+        return {"ok": True}
+
+    async def send_document(self, chat_id, media, keyboard=None):
+        return {"ok": True}
+
+    async def get_file_bytes(self, file):
+        return b""
 
     @property
     def last_text(self) -> str:
@@ -166,8 +182,9 @@ class MaxOnSharedEngineTests(unittest.TestCase):
         self.assertLess(internal_id, 0)
         self.assertEqual(self.img.calls[0][1]["user_id"], internal_id)
         self.assertEqual(self.img.calls[0][1]["prompt"], "a red cat")
-        # Delivered and charged.
-        self.assertIn("u1", self.platform.last_text)
+        # Delivered through the media API (not a text message) and charged.
+        self.assertEqual(len(self.platform.photos), 1)
+        self.assertEqual(self.platform.photos[-1]["media"].url, "u1")
         self.assertEqual(self._balance(), 190)
 
     def test_animate_flows_through_video_core_with_photo_bytes(self) -> None:

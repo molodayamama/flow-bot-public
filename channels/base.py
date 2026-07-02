@@ -92,6 +92,35 @@ class IncomingCallback:
     raw: Any = None
 
 
+@dataclass(frozen=True)
+class PlatformFile:
+    """A file reference already known to one chat platform."""
+
+    file_id: str
+    url: str | None = None
+    size: int | None = None
+    mime_type: str | None = None
+
+
+@dataclass(frozen=True)
+class PlatformMedia:
+    """Platform-neutral outbound media (photo/video/document).
+
+    At least one content source (``file``, ``url`` or ``bytes_data``) must be
+    provided so a channel adapter always has something to send.
+    """
+
+    kind: str
+    file: PlatformFile | None = None
+    url: str | None = None
+    bytes_data: bytes | None = None
+    caption: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.file is None and self.url is None and self.bytes_data is None:
+            raise ValueError("PlatformMedia needs a file, url or bytes_data source")
+
+
 @runtime_checkable
 class BotPlatform(Protocol):
     """Minimal async channel contract consumed by shared scenarios."""
@@ -116,5 +145,32 @@ class BotPlatform(Protocol):
         ...
 
     async def answer_callback(self, callback_id: str, text: str | None = None) -> Any:
+        ...
+
+    async def send_photo(
+        self,
+        chat_id: str,
+        media: PlatformMedia,
+        keyboard: Keyboard | None = None,
+    ) -> Any:
+        ...
+
+    async def send_video(
+        self,
+        chat_id: str,
+        media: PlatformMedia,
+        keyboard: Keyboard | None = None,
+    ) -> Any:
+        ...
+
+    async def send_document(
+        self,
+        chat_id: str,
+        media: PlatformMedia,
+        keyboard: Keyboard | None = None,
+    ) -> Any:
+        ...
+
+    async def get_file_bytes(self, file: PlatformFile) -> bytes:
         ...
 

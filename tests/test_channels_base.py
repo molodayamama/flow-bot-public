@@ -8,6 +8,8 @@ from channels.base import (
     IncomingCallback,
     IncomingMessage,
     Keyboard,
+    PlatformFile,
+    PlatformMedia,
     PlatformUser,
 )
 from channels.telegram.renderer import render_button, render_keyboard
@@ -74,7 +76,45 @@ class ChannelBaseTests(unittest.TestCase):
             async def answer_callback(self, callback_id, text=None):
                 return None
 
+            async def send_photo(self, chat_id, media, keyboard=None):
+                return None
+
+            async def send_video(self, chat_id, media, keyboard=None):
+                return None
+
+            async def send_document(self, chat_id, media, keyboard=None):
+                return None
+
+            async def get_file_bytes(self, file):
+                return b""
+
         self.assertIsInstance(FakePlatform(), BotPlatform)
+
+    def test_platform_file_holds_optional_metadata(self) -> None:
+        file = PlatformFile(file_id="abc")
+        self.assertIsNone(file.url)
+        self.assertIsNone(file.size)
+        self.assertIsNone(file.mime_type)
+
+        full = PlatformFile(file_id="abc", url="https://x/1.png", size=123, mime_type="image/png")
+        self.assertEqual(full.url, "https://x/1.png")
+        self.assertEqual(full.size, 123)
+        self.assertEqual(full.mime_type, "image/png")
+
+    def test_platform_media_accepts_any_single_source(self) -> None:
+        by_url = PlatformMedia(kind="photo", url="https://x/1.png")
+        self.assertEqual(by_url.kind, "photo")
+        self.assertEqual(by_url.url, "https://x/1.png")
+
+        by_file = PlatformMedia(kind="video", file=PlatformFile(file_id="f1"))
+        self.assertEqual(by_file.file.file_id, "f1")
+
+        by_bytes = PlatformMedia(kind="document", bytes_data=b"data")
+        self.assertEqual(by_bytes.bytes_data, b"data")
+
+    def test_platform_media_requires_a_source(self) -> None:
+        with self.assertRaises(ValueError):
+            PlatformMedia(kind="photo")
 
 
 class TelegramRendererTests(unittest.TestCase):

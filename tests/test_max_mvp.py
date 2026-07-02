@@ -36,6 +36,9 @@ class FakePlatform:
     def __init__(self) -> None:
         self.messages: list[dict] = []
         self.answers: list[dict] = []
+        self.photos: list[dict] = []
+        self.videos: list[dict] = []
+        self.documents: list[dict] = []
 
     async def send_message(self, chat_id, text, keyboard=None):
         self.messages.append({"chat_id": chat_id, "text": text, "keyboard": keyboard})
@@ -44,6 +47,21 @@ class FakePlatform:
     async def answer_callback(self, callback_id, text=None):
         self.answers.append({"callback_id": callback_id, "text": text})
         return {"ok": True}
+
+    async def send_photo(self, chat_id, media, keyboard=None):
+        self.photos.append({"chat_id": chat_id, "media": media, "keyboard": keyboard})
+        return {"ok": True}
+
+    async def send_video(self, chat_id, media, keyboard=None):
+        self.videos.append({"chat_id": chat_id, "media": media, "keyboard": keyboard})
+        return {"ok": True}
+
+    async def send_document(self, chat_id, media, keyboard=None):
+        self.documents.append({"chat_id": chat_id, "media": media, "keyboard": keyboard})
+        return {"ok": True}
+
+    async def get_file_bytes(self, file):
+        return b""
 
     @property
     def last_text(self) -> str:
@@ -172,7 +190,13 @@ class MaxMvpTests(unittest.TestCase):
 
         self.assertEqual(self._balance(), 20)  # 30 starter - 10
         self.assertEqual(self.service.calls[-1]["kind"], "create_image")
-        self.assertIn("https://img/1.png", self.platform.last_text)
+        # Delivery goes through the media API, not a text message with a URL.
+        self.assertEqual(len(self.platform.photos), 1)
+        photo = self.platform.photos[-1]
+        self.assertEqual(photo["media"].kind, "photo")
+        self.assertEqual(photo["media"].url, "https://img/1.png")
+        self.assertIsNotNone(photo["keyboard"])
+        self.assertNotIn("https://img/1.png", self.platform.last_text)
 
     def test_create_image_failure_refunds(self) -> None:
         self.service.error = "generation failed"
@@ -212,6 +236,7 @@ class MaxMvpTests(unittest.TestCase):
     # -- photo flows ------------------------------------------------------
 
     def test_animate_photo_charges_animate_price(self) -> None:
+        self.service.result = {"videos": [{"url": "https://img/clip.mp4"}]}
         bot = self._bot()
         # top up so animate (100) is affordable
         metrics.credits_add_for_identity("max", "u1", 100, self.config.starter_credits)
@@ -221,6 +246,12 @@ class MaxMvpTests(unittest.TestCase):
         self.assertEqual(self.service.calls[-1]["kind"], "animate_photo")
         self.assertEqual(self.service.calls[-1]["photo_file_id"], "photo-1")
         self.assertEqual(self._balance(), 30)  # 130 - 100
+        # Video delivery goes through send_video, not a text message.
+        self.assertEqual(len(self.platform.videos), 1)
+        video = self.platform.videos[-1]
+        self.assertEqual(video["media"].kind, "video")
+        self.assertEqual(video["media"].url, "https://img/clip.mp4")
+        self.assertEqual(self.platform.photos, [])
 
     def test_edit_photo_without_photo_asks_for_photo(self) -> None:
         bot = self._bot()
