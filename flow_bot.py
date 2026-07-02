@@ -2039,7 +2039,9 @@ _VID_FMT_TO_ASPECT = {"land": "landscape", "port": "portrait"}
 # всему, проблема на стороне сервиса. Видео, СГЕНЕРИРОВАННЫЕ в самом сервисе,
 # редактируются штатно (кнопка ✏️ под роликом). Весь upload-код сохранён:
 # вернуть фичу = поставить True (и обратно проверить через capture). См. HANDOFF.
-UPLOAD_VIDEO_EDIT_ENABLED = False
+# Flag now lives in config.settings (Phase 5) and is hot-patched there; readers use
+# live _cfg.UPLOAD_VIDEO_EDIT_ENABLED. Re-exported for backward-compatible access.
+UPLOAD_VIDEO_EDIT_ENABLED = _cfg.UPLOAD_VIDEO_EDIT_ENABLED
 
 # Payment method toggles — can be hot-patched via admin panel (config_store flags).
 # topup_method_kb() reads config_store at call-time so changes survive restarts.
@@ -2136,7 +2138,7 @@ def video_family_kb() -> types.InlineKeyboardMarkup:
     ] + (
         [[B(text=f"{L('vid_upload_edit')} · {action_price('video_prompt_edit')} кр",
             callback_data="vu:start")]]
-        if UPLOAD_VIDEO_EDIT_ENABLED else []
+        if _cfg.UPLOAD_VIDEO_EDIT_ENABLED else []
     ) + [
         [B(text=L("cancel"), callback_data="v:cancel")],
     ])
@@ -6729,7 +6731,7 @@ async def on_video_upload_action(callback: types.CallbackQuery):
     msg = callback.message
     st = _ws(user_id)
     if data == "vu:start":
-        if not UPLOAD_VIDEO_EDIT_ENABLED:
+        if not _cfg.UPLOAD_VIDEO_EDIT_ENABLED:
             # Фича временно выключена — гасим даже устаревшие кнопки.
             await callback.answer(flow_copy.msg("vid_upload_disabled"), show_alert=True)
             return
@@ -6751,7 +6753,7 @@ async def handle_video_upload(message: types.Message):
     """Приём пользовательского видео для режима «Изменить своё видео»."""
     user_id = message.from_user.id
     st = _ws(user_id)
-    if not UPLOAD_VIDEO_EDIT_ENABLED or st.get("vawait") != "vu_video":
+    if not _cfg.UPLOAD_VIDEO_EDIT_ENABLED or st.get("vawait") != "vu_video":
         return  # видео ждём только в этом режиме (и пока фича включена) — иначе игнор
     file_obj = message.video or message.document
     if file_obj is None:

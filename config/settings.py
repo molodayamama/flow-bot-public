@@ -73,3 +73,9 @@ IS_SELLER = BOT_MODE == "seller"
 ROBOKASSA_SCOPE = _robokassa_clean_scope(os.getenv("ROBOKASSA_SCOPE") or ("seller" if IS_SELLER else "consumer"))
 STARS_PAYMENT_ENABLED: bool = True
 SBP_PAYMENT_ENABLED: bool = True
+
+# Uploaded-video edit is captured but hidden: the service returns "Oops…" /
+# under-loads on user-uploaded video. Whole upload path is preserved; flip to
+# True (and re-verify via capture) to bring it back. Hot-patchable via admin,
+# so readers must use a live attribute read (config.settings.UPLOAD_VIDEO_EDIT_ENABLED).
+UPLOAD_VIDEO_EDIT_ENABLED: bool = False

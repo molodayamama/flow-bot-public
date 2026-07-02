@@ -1973,11 +1973,11 @@ async def handle_flags_get(request: web.Request) -> web.Response:
     result = {}
     for key, meta in _FLAG_META.items():
         code_default = bool(meta["default"])
-        # For upload_video_edit, read actual runtime value from flow_bot
+        # For upload_video_edit, read actual runtime value from config.settings
         if key == "upload_video_edit":
             try:
-                import flow_bot
-                live = getattr(flow_bot, "UPLOAD_VIDEO_EDIT_ENABLED", code_default)
+                import config.settings as _cfg
+                live = getattr(_cfg, "UPLOAD_VIDEO_EDIT_ENABLED", code_default)
             except Exception:
                 live = code_default
             value = stored.get(key, live)
@@ -2007,11 +2007,17 @@ async def handle_flags_post(request: web.Request) -> web.Response:
         log.warning("flags.save: write failed", exc_info=True)
         _audit(request, "flags.save", old=old, new=flags, result="write_error")
         return _json({"error": "write_failed"}, 500)
-    # Hot-apply UPLOAD_VIDEO_EDIT_ENABLED
+    # Hot-apply UPLOAD_VIDEO_EDIT_ENABLED (live flag lives in config.settings; readers
+    # use config.settings.UPLOAD_VIDEO_EDIT_ENABLED). flow_bot re-export kept in sync.
     if "upload_video_edit" in flags:
         try:
-            import flow_bot
-            flow_bot.UPLOAD_VIDEO_EDIT_ENABLED = flags["upload_video_edit"]
+            import config.settings as _cfg
+            _cfg.UPLOAD_VIDEO_EDIT_ENABLED = flags["upload_video_edit"]
+            try:
+                import flow_bot
+                flow_bot.UPLOAD_VIDEO_EDIT_ENABLED = flags["upload_video_edit"]
+            except Exception:
+                pass
             log.info("admin: UPLOAD_VIDEO_EDIT_ENABLED set to %s", flags["upload_video_edit"])
         except Exception:
             log.warning("admin: failed to hot-apply UPLOAD_VIDEO_EDIT_ENABLED", exc_info=True)

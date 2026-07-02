@@ -1444,14 +1444,16 @@ class BotMenuWiringTests(unittest.TestCase):
         self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         # Загрузка/правка СВОЕГО видео временно отключена флагом: сервис отдаёт
         # «Oops…» / недогруз. Реализация сохранена целиком, но спрятана за
-        # UPLOAD_VIDEO_EDIT_ENABLED (вернуть фичу = поставить True).
-        self.assertIn("UPLOAD_VIDEO_EDIT_ENABLED = False", self.source)
-        self.assertIn("if UPLOAD_VIDEO_EDIT_ENABLED else []", self.source)   # кнопка в семействе
-        self.assertIn("if not UPLOAD_VIDEO_EDIT_ENABLED:", self.source)      # колбэк vu:start
+        # UPLOAD_VIDEO_EDIT_ENABLED (вернуть фичу = поставить True). Флаг живёт в
+        # config/settings.py (live-config, Phase 5); читатели используют _cfg.
+        _settings_src = (PROJECT_ROOT / "config" / "settings.py").read_text(encoding="utf-8")
+        self.assertIn("UPLOAD_VIDEO_EDIT_ENABLED: bool = False", _settings_src)
+        self.assertIn("if _cfg.UPLOAD_VIDEO_EDIT_ENABLED else []", self.source)   # кнопка в семействе
+        self.assertIn("if not _cfg.UPLOAD_VIDEO_EDIT_ENABLED:", self.source)      # колбэк vu:start
         self.assertIn("vid_upload_disabled", flow_copy.MESSAGES)
         # handle_video_upload игнорирует видео, пока фича выключена.
         self.assertIn(
-            "if not UPLOAD_VIDEO_EDIT_ENABLED or st.get(\"vawait\") != \"vu_video\":",
+            "if not _cfg.UPLOAD_VIDEO_EDIT_ENABLED or st.get(\"vawait\") != \"vu_video\":",
             self.source,
         )
         # Реализация (на случай возврата фичи) на месте: колбэк + хендлер + правка.
@@ -1972,13 +1974,16 @@ class BotImportSmokeTests(unittest.TestCase):
             self.assertIn("кр", fam_first)
             # "Изменить своё видео" (upload→edit) временно отключено флагом:
             # пока UPLOAD_VIDEO_EDIT_ENABLED=False, кнопки vu:start в семействе нет.
-            self.assertFalse(fb.UPLOAD_VIDEO_EDIT_ENABLED)
+            # Флаг живёт в config.settings (live-config); читатель video_family_kb
+            # берёт его через _cfg, поэтому тумблим именно config.settings.
+            import config.settings as _cfg
+            self.assertFalse(_cfg.UPLOAD_VIDEO_EDIT_ENABLED)
             fam_rows = fb.video_family_kb().inline_keyboard
             self.assertFalse(
                 any((b.callback_data or "") == "vu:start" for row in fam_rows for b in row)
             )
             # Возврат флага возвращает кнопку (с ценой) — проводка сохранена, лишь скрыта.
-            fb.UPLOAD_VIDEO_EDIT_ENABLED = True
+            _cfg.UPLOAD_VIDEO_EDIT_ENABLED = True
             try:
                 rows_on = fb.video_family_kb().inline_keyboard
                 upload_btn = next(
@@ -1986,7 +1991,7 @@ class BotImportSmokeTests(unittest.TestCase):
                 )
                 self.assertIn("кр", upload_btn.text)
             finally:
-                fb.UPLOAD_VIDEO_EDIT_ENABLED = False
+                _cfg.UPLOAD_VIDEO_EDIT_ENABLED = False
             # "Оживить фото" under a generated image (an:img:) now carries a price too.
             img_rows = fb._image_keyboard("abcd1234").inline_keyboard
             animate_btn = next(
