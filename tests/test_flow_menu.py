@@ -432,6 +432,12 @@ class BotMenuWiringTests(unittest.TestCase):
         self.kb_source = (
             PROJECT_ROOT / "channels" / "telegram" / "keyboards.py"
         ).read_text(encoding="utf-8")
+        # Public command handlers (/menu /help /referral /balance) moved to
+        # channels/telegram/routers/commands.py (Phase 6). Scrapes of those
+        # handlers read commands_router_source instead of flow_bot.
+        self.commands_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "commands.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         for needle in (
@@ -561,13 +567,30 @@ class BotMenuWiringTests(unittest.TestCase):
             self.assertIn(f'text == L("{key}")', self.source)
 
     def test_public_help_ideas_referral_commands_wired(self) -> None:
-        for command in ('Command("help")', 'Command("ideas")', 'Command("referral", "ref")'):
-            self.assertIn(command, self.source)
+        # /help and /referral handlers live in the extracted commands router;
+        # /ideas still lives in flow_bot (its renderer is defined later there).
+        for command in ('Command("help")', 'Command("referral", "ref")'):
+            self.assertIn(command, self.commands_router_source)
+        self.assertIn('Command("ideas")', self.source)
         self.assertIn("async def _show_help_screen", self.source)
         self.assertIn("async def _show_referral_screen", self.source)
         self.assertIn("_show_ideas_root(message, user_id=user_id, edit=False)", self.source)
         for command in ('command="ideas"', 'command="help"', 'command="referral"'):
             self.assertIn(command, self.source)
+
+    def test_public_commands_router_wired_with_injected_renderers(self) -> None:
+        # The router is included on dp with flow_bot renderers injected.
+        self.assertIn("dp.include_router(", self.source)
+        self.assertIn("tg_commands_router.create_router(", self.source)
+        for needle in (
+            "show_main_menu=show_main_menu",
+            "show_help_screen=_show_help_screen",
+            "show_referral_screen=_show_referral_screen",
+            "show_balance=show_balance",
+        ):
+            self.assertIn(needle, self.source)
+        for command in ('Command("menu")', 'Command("balance")'):
+            self.assertIn(command, self.commands_router_source)
 
     def test_start_resets_stale_generation_state(self) -> None:
         start = self.source.index("async def cmd_start")
@@ -598,7 +621,7 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_status_diagnostics_restricted_to_admins(self) -> None:
         start = self.source.index('@dp.message(Command("status"))')
-        end = self.source.index('@dp.message(Command("balance"))', start)
+        end = self.source.index('@dp.message(Command("promo"))', start)
         block = self.source[start:end]
         self.assertIn("message.from_user.id not in ADMIN_IDS", block)
         self.assertIn('flow_copy.msg("admin_denied")', block)

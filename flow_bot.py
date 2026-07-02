@@ -315,6 +315,7 @@ from channels.telegram.texts import (
     _seller_history_cost,
     _seller_history_text as _telegram_seller_history_text,
 )
+from channels.telegram.routers import commands as tg_commands_router
 
 from referrals.service import ReferralService
 
@@ -2371,15 +2372,22 @@ async def cmd_start(message: types.Message):
     await show_main_menu(message, user_id=user_id)
 
 
-@dp.message(Command("menu"))
-async def cmd_menu(message: types.Message):
-    # Постоянная нижняя клавиатура держится с /start; здесь показываем меню.
-    await show_main_menu(message, user_id=message.from_user.id, ensure_kb=True)
-
-
-@dp.message(Command("help"))
-async def cmd_help(message: types.Message):
-    await _show_help_screen(message, edit=False)
+# /menu, /help, /referral and /balance live in channels/telegram/routers/
+# commands.py (Phase 6), wired via dependency injection so the router module
+# never imports flow_bot back. Router handlers are matched after dp-level
+# ones; commands cannot be shadowed because every dp-level catch-all filter
+# (plain text without "/", photo, video/document, successful_payment)
+# excludes bot commands.
+dp.include_router(
+    tg_commands_router.create_router(
+        tg_commands_router.CommandsDeps(
+            show_main_menu=show_main_menu,
+            show_help_screen=_show_help_screen,
+            show_referral_screen=_show_referral_screen,
+            show_balance=show_balance,
+        )
+    )
+)
 
 
 @dp.message(Command("ideas"))
@@ -2388,11 +2396,6 @@ async def cmd_ideas(message: types.Message):
     _reset_image_flow(user_id)
     _vid_clear(user_id)
     await _show_ideas_root(message, user_id=user_id, edit=False)
-
-
-@dp.message(Command("referral", "ref"))
-async def cmd_referral(message: types.Message):
-    await _show_referral_screen(message, user_id=message.from_user.id, edit=False)
 
 
 @dp.message(Command("status"))
@@ -2465,11 +2468,6 @@ async def cmd_status(message: types.Message):
         f"<b>Видео-здоровье:</b>\n{vh_section}\n",
         parse_mode="HTML",
     )
-
-
-@dp.message(Command("balance"))
-async def cmd_balance(message: types.Message):
-    await show_balance(message, user_id=message.from_user.id, edit=False)
 
 
 @dp.message(Command("promo"))
