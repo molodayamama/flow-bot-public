@@ -6,6 +6,8 @@ keys and literal callback_data. flow_bot re-exports these for its handlers.
 
 from __future__ import annotations
 
+import html
+
 from aiogram import types
 
 import flow_copy
@@ -36,6 +38,126 @@ from flow_core import (
 from storage.media_registry import video_registry
 
 L = flow_copy.label
+
+
+# --- Marketplace render data + keyboards (Phase 5: moved from flow_bot) ---
+
+_MP_PLAT_NAMES = {"wb": "Wildberries", "ozon": "Ozon", "ym": "Яндекс Маркет"}
+
+_MP_PLATFORM_FMT = {"wb": "f34", "ozon": "f34", "ym": "sq"}
+
+_MP_PLATFORM_SIZE = {"wb": "1080x1440", "ozon": "1080x1440", "ym": "1000x1000"}
+
+_MP_PLATFORM_GUIDANCE = {
+    "wb": (
+        "Wildberries: вертикальная 3:4 карточка, товар крупно; "
+        "оставь верхнюю зону под короткий заголовок или выгоду."
+    ),
+    "ozon": (
+        "Ozon: чистая светлая композиция, аккуратный белый или светло-серый фон, "
+        "понятная зона под преимущества без визуального шума."
+    ),
+    "ym": (
+        "Яндекс Маркет: квадратная 1:1 карточка, товар по центру, умеренные подписи; "
+        "важное не прижимать к краям."
+    ),
+}
+
+def _mp_platform_fmt(platform: str) -> str:
+    return _MP_PLATFORM_FMT.get(platform, "f34")
+
+def _mp_platform_format_label(platform: str) -> str:
+    fmt = _mp_platform_fmt(platform)
+    name = {"f34": "3:4", "sq": "1:1"}.get(fmt, fmt)
+    size = _MP_PLATFORM_SIZE.get(platform)
+    return f"{name} ({size})" if size else name
+
+def _mp_platform_guidance(platform: str) -> str:
+    return _MP_PLATFORM_GUIDANCE.get(platform, _MP_PLATFORM_GUIDANCE["wb"])
+
+def _mp_jobs_text(platform: str) -> str:
+    plat = platform if platform in _MP_PLAT_NAMES else "wb"
+    return (
+        "🛒 <b>Что сделать с товаром?</b>\n\n"
+        "Выбери результат, пришли фото товара и проверь цену перед созданием.\n"
+        f"По умолчанию: <b>{html.escape(_MP_PLAT_NAMES[plat])}</b>, "
+        f"{html.escape(_mp_platform_format_label(plat))}. Площадку можно поменять на следующем шаге."
+    )
+
+def _mp_more_text(platform: str) -> str:
+    return (
+        "⚙️ <b>Ещё для карточки</b>\n\n"
+        "Дополнительные задачи и настройки магазина. Если нужен быстрый результат, "
+        "вернись к основным задачам."
+    )
+
+def _mp_photo_settings_kb(plat: str) -> types.InlineKeyboardMarkup:
+    """Экран приёма фото: выбор площадки (формат/стиль) прямо здесь, перед
+    генерацией — вместо отдельного шага выбора площадки в начале."""
+    B = types.InlineKeyboardButton
+    plat = plat if plat in _MP_PLAT_NAMES else "wb"
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [
+            _sel_btn("🟣 WB 3:4", plat == "wb", "mp:setplat:wb"),
+            _sel_btn("🔵 Ozon 3:4", plat == "ozon", "mp:setplat:ozon"),
+            _sel_btn("🟡 ЯМ 1:1", plat == "ym", "mp:setplat:ym"),
+        ],
+        [B(text="◀️ Назад", callback_data="m:mp")],
+        [_menu_button("menu", "m:menu")],
+    ])
+
+def mp_series_kb(platform: str) -> types.InlineKeyboardMarkup:
+    """Выбор размера серии слайдов для одного товара."""
+    B = types.InlineKeyboardButton
+    plat = platform if platform in _MP_PLAT_NAMES else "wb"
+    rows = [
+        [B(text=f"🧩 Мини-серия · 3 слайда · {action_price('mp_series', 3)} кр", callback_data="mp:series:3")],
+        [B(text=f"🧩 Стандарт · 5 слайдов · {action_price('mp_series', 5)} кр", callback_data="mp:series:5")],
+        [B(text=f"🧩 Полная карточка · 8 слайдов · {action_price('mp_series', 8)} кр", callback_data="mp:series:8")],
+        [B(text="◀️ Задачи", callback_data="m:mp")],
+        [_menu_button("menu", "m:menu")],
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+_MP_NICHES = {
+    "clothes": (
+        "Одежда",
+        "показать посадку, фактуру ткани, сезонность и размер; уместны модель, flat lay и детали швов",
+    ),
+    "beauty": (
+        "Косметика",
+        "чистый премиальный свет, текстура продукта, оттенок, состав/эффект и аккуратные макро-детали",
+    ),
+    "electronics": (
+        "Электроника",
+        "выделить экран/разъёмы/комплектацию, сценарий использования, масштаб и ощущение надёжности",
+    ),
+    "kids": (
+        "Детские товары",
+        "мягкие светлые сцены, безопасность, возраст, комплектация и доверие для родителей",
+    ),
+    "food": (
+        "Еда",
+        "аппетитный свет, свежесть, упаковка, состав/вкус и аккуратная сервировка без лишнего шума",
+    ),
+}
+
+def _mp_niche_guidance(niche: str | None) -> str:
+    item = _MP_NICHES.get((niche or "").strip())
+    if not item:
+        return ""
+    label, guidance = item
+    return f"{label}: {guidance}"
+
+def _mp_niche_kb() -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    rows = [
+        [B(text=f"🏷️ {label}", callback_data=f"mp:niche:{niche_id}")]
+        for niche_id, (label, _guidance) in _MP_NICHES.items()
+    ]
+    rows.append([B(text="◀️ Назад", callback_data="m:mp")])
+    rows.append([_menu_button("menu", "m:menu")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _menu_button(copy_key: str, data: str) -> types.InlineKeyboardButton:
