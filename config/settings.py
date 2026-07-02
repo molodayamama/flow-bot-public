@@ -73,6 +73,9 @@ IS_SELLER = BOT_MODE == "seller"
 ROBOKASSA_SCOPE = _robokassa_clean_scope(os.getenv("ROBOKASSA_SCOPE") or ("seller" if IS_SELLER else "consumer"))
 STARS_PAYMENT_ENABLED: bool = True
 SBP_PAYMENT_ENABLED: bool = True
+TOPUP_TEST_PACKS_ENABLED: bool = _env_any(
+    "TOPUP_TEST_PACKS_ENABLED", "PAYMENT_TEST_PACKS_ENABLED", default="0"
+).strip().lower() in ("1", "true", "yes", "on")
 
 # Uploaded-video edit is captured but hidden: the service returns "Oops…" /
 # under-loads on user-uploaded video. Whole upload path is preserved; flip to

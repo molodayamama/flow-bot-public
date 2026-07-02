@@ -579,7 +579,6 @@ class BotMenuWiringTests(unittest.TestCase):
         for needle in (
             "ROBOKASSA_HASH_ALGO",
             "ROBOKASSA_INC_CURR_LABEL",
-            'callback_data=f"m:robo:{pid}"',
             'data.startswith("m:robo:")',
             "robokassa_payment_signature(",
             "robokassa_result_signature(",
@@ -588,6 +587,7 @@ class BotMenuWiringTests(unittest.TestCase):
             "await _start_robokassa_web_server()",
         ):
             self.assertIn(needle, self.source, needle)
+        self.assertIn('callback_data=f"m:robo:{pid}"', self.kb_source)
 
     def test_admin_grant_restricted(self) -> None:
         self.assertIn('@dp.message(Command("grant"))', self.source)
@@ -1950,15 +1950,16 @@ class BotImportSmokeTests(unittest.TestCase):
             self.assertTrue(any("1500 кр" in text and "≈150 карточек" in text and "900⭐" in text for text in stars_texts))
             admin_stars_texts = [b.text for row in fb.topup_stars_kb(is_admin=True).inline_keyboard for b in row]
             self.assertFalse(any("Тест" in text for text in admin_stars_texts))
-            old_test_flag = fb.TOPUP_TEST_PACKS_ENABLED
-            fb.TOPUP_TEST_PACKS_ENABLED = True
+            import config.settings as _cfg
+            old_test_flag = _cfg.TOPUP_TEST_PACKS_ENABLED
+            _cfg.TOPUP_TEST_PACKS_ENABLED = True
             try:
                 flagged_admin_texts = [b.text for row in fb.topup_stars_kb(is_admin=True).inline_keyboard for b in row]
                 flagged_user_texts = [b.text for row in fb.topup_stars_kb(is_admin=False).inline_keyboard for b in row]
                 self.assertTrue(any("Тест" in text for text in flagged_admin_texts))
                 self.assertFalse(any("Тест" in text for text in flagged_user_texts))
             finally:
-                fb.TOPUP_TEST_PACKS_ENABLED = old_test_flag
+                _cfg.TOPUP_TEST_PACKS_ENABLED = old_test_flag
             robo_texts = [b.text for row in fb.topup_robo_kb().inline_keyboard for b in row]
             self.assertIn("45 кр · ≈4 карточек · 45 ₽", robo_texts)
             self.assertTrue(any("100 кр" in text and "≈2 видео" in text and "90 ₽" in text for text in robo_texts))

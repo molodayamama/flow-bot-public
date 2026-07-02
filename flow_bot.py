@@ -231,6 +231,7 @@ from config.settings import (
     ROBOKASSA_SCOPE,
     STARS_PAYMENT_ENABLED,
     SBP_PAYMENT_ENABLED,
+    TOPUP_TEST_PACKS_ENABLED,
 )
 
 
@@ -240,6 +241,9 @@ from channels.telegram.keyboards import (
     main_menu_kb,
     topup_kb,
     topup_method_kb,
+    topup_stars_kb,
+    topup_robo_kb,
+    _include_test_packs,
     L,
     _menu_button,
     _guided_step_kb,
@@ -1724,9 +1728,9 @@ UPLOAD_VIDEO_EDIT_ENABLED = _cfg.UPLOAD_VIDEO_EDIT_ENABLED
 
 # Payment method toggles — can be hot-patched via admin panel (config_store flags).
 # topup_method_kb() reads config_store at call-time so changes survive restarts.
-TOPUP_TEST_PACKS_ENABLED: bool = _env_any(
-    "TOPUP_TEST_PACKS_ENABLED", "PAYMENT_TEST_PACKS_ENABLED", default="0"
-).strip().lower() in ("1", "true", "yes", "on")
+# TOPUP_TEST_PACKS_ENABLED now lives in config.settings; topup readers use _cfg
+# live reads. Re-exported for backward-compatible access.
+TOPUP_TEST_PACKS_ENABLED = _cfg.TOPUP_TEST_PACKS_ENABLED
 
 
 def _vid_clear(user_id: int) -> None:
@@ -2250,10 +2254,6 @@ def _topup_copy(key: str) -> str:
     return flow_copy.msg(key, image_price=_topup_image_price(), video_price=_topup_video_price())
 
 
-def _include_test_packs(is_admin: bool = False) -> bool:
-    return bool(TOPUP_TEST_PACKS_ENABLED and is_admin)
-
-
 def _zero_balance_kb() -> types.InlineKeyboardMarkup:
     """Клавиатура экрана «кончились кредиты»: прямые кнопки trial-пака + все пакеты."""
     B = types.InlineKeyboardButton
@@ -2273,23 +2273,6 @@ def _zero_balance_kb() -> types.InlineKeyboardMarkup:
         rows.append([B(text=_stars_pack_label("trial"), callback_data="m:pack:trial")])
     rows.append([_menu_button("topup", "m:topup")])  # Все пакеты
     rows.append([_menu_button("menu", "m:menu")])
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def topup_stars_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
-    rows = []
-    for pid in public_pack_ids(include_test=_include_test_packs(is_admin), seller=_cfg.IS_SELLER):
-        rows.append([types.InlineKeyboardButton(text=_stars_pack_label(pid), callback_data=f"m:pack:{pid}")])
-    rows.append([_menu_button("back", "m:topup")])
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def topup_robo_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
-    rows = [
-        [types.InlineKeyboardButton(text=_robokassa_pack_label(pid), callback_data=f"m:robo:{pid}")]
-        for pid in public_pack_ids(include_test=_include_test_packs(is_admin), seller=_cfg.IS_SELLER)
-    ]
-    rows.append([_menu_button("back", "m:topup")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 

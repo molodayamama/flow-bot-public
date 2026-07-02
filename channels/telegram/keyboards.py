@@ -15,6 +15,7 @@ import prompts_lib
 
 import config.settings as _cfg
 from config.settings import SBP_PAYMENT_ENABLED, STARS_PAYMENT_ENABLED
+from billing.pricing import _robokassa_pack_label, _stars_pack_label
 from config.video import (
     SELECT_STYLE,
     VIDEO_EXTEND_MODEL,
@@ -31,6 +32,7 @@ from flow_core import (
     action_price,
     image_model_extra,
     price_gen,
+    public_pack_ids,
     video_animate_min_price,
     video_extend_price,
     video_models_in_family,
@@ -343,6 +345,27 @@ def topup_method_kb() -> types.InlineKeyboardMarkup:
 
 def topup_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
     return topup_method_kb()
+
+
+# --- Topup pack keyboards (Phase 5: moved from flow_bot) ---
+
+def _include_test_packs(is_admin: bool = False) -> bool:
+    return bool(_cfg.TOPUP_TEST_PACKS_ENABLED and is_admin)
+
+def topup_stars_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
+    rows = []
+    for pid in public_pack_ids(include_test=_include_test_packs(is_admin), seller=_cfg.IS_SELLER):
+        rows.append([types.InlineKeyboardButton(text=_stars_pack_label(pid), callback_data=f"m:pack:{pid}")])
+    rows.append([_menu_button("back", "m:topup")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+def topup_robo_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
+    rows = [
+        [types.InlineKeyboardButton(text=_robokassa_pack_label(pid), callback_data=f"m:robo:{pid}")]
+        for pid in public_pack_ids(include_test=_include_test_packs(is_admin), seller=_cfg.IS_SELLER)
+    ]
+    rows.append([_menu_button("back", "m:topup")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # --- Leaf image/video option keyboards (Phase 5: moved from flow_bot) ---
