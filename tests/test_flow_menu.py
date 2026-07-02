@@ -702,8 +702,8 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertNotIn("_enhance_and_send", real_block)
 
     def test_image_keyboard_has_no_mix_button_and_credit_prices(self) -> None:
-        start = self.source.index("def _image_keyboard")
-        block = self.source[start:start + 1300]
+        start = self.kb_source.index("def _image_keyboard")
+        block = self.kb_source[start:start + 1300]
         self.assertNotIn('b("mix"', block)          # «В микс» removed from results
         self.assertNotIn('b("up2x"', block)         # «Чёткость ×2» removed from results
         self.assertNotIn('b("vary"', block)         # Варианты removed from results (UX cleanup)
@@ -1321,7 +1321,7 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_animate_image_to_video_wired(self) -> None:
         # "Оживить фото" button under images + main-menu entry → r2v pipeline.
-        kb = self.source[self.source.index("def _image_keyboard"):][:1200]
+        kb = self.kb_source[self.kb_source.index("def _image_keyboard"):][:1200]
         self.assertIn('f"an:img:{token}"', kb)
         self.assertIn('@dp.callback_query(F.data.startswith("an:"))', self.source)
         self.assertIn('data == "m:animate"', self.source)

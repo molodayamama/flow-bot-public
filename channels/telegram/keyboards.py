@@ -24,6 +24,7 @@ from flow_core import (
     DEFAULT_IMAGE_MODEL,
     IMAGE_MODELS,
     VideoRef,
+    action_callback_data,
     action_price,
     image_model_extra,
     price_gen,
@@ -219,6 +220,57 @@ def topup_method_kb() -> types.InlineKeyboardMarkup:
 
 def topup_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
     return topup_method_kb()
+
+
+# --- Image result keyboards (Phase 5: moved verbatim from flow_bot) ---
+
+def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
+    """Инлайн-кнопки под картинкой: Изменить · Повторить · Улучшить качество · Оживить."""
+    B = types.InlineKeyboardButton
+
+    edit_price = action_price("edit")
+    edit_label = f"✏️ Изменить · {edit_price} кр" if edit_price > 0 else "✏️ Изменить"
+    upscale_price = action_price("realup")
+    upscale_label = (
+        f"{L('realup')} · {upscale_price} кр" if upscale_price > 0 else L("realup")
+    )
+    animate_price = _vid_family_min_price("ing")
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                B(text=edit_label, callback_data=action_callback_data("edit", token)),
+                B(text="🔁 Повторить", callback_data="m:repeat"),
+            ],
+            [
+                # Родной апскейл сервиса (2K): присылает улучшенную картинку.
+                B(text=upscale_label, callback_data=action_callback_data("realup", token)),
+            ],
+            [
+                B(text=f"🎬 Оживить фото · от {animate_price} кр", callback_data=f"an:img:{token}"),
+            ],
+        ]
+    )
+
+
+def _seller_image_keyboard(token: str) -> types.InlineKeyboardMarkup:
+    """Тулбар под seller-карточкой. Без «🔁 Повторить» — для seller он не работал
+    (нет сохранённого prompt-состояния; повтор = просто прислать фото заново)."""
+    B = types.InlineKeyboardButton
+    edit_price = action_price("edit")
+    edit_label = f"✏️ Изменить · {edit_price} кр" if edit_price > 0 else "✏️ Изменить"
+    upscale_price = action_price("realup")
+    upscale_label = (
+        f"{L('realup')} · {upscale_price} кр" if upscale_price > 0 else L("realup")
+    )
+    animate_price = _vid_family_min_price("ing")
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [B(text=edit_label, callback_data=action_callback_data("edit", token))],
+        [B(text=upscale_label, callback_data=action_callback_data("realup", token))],
+        [B(text=f"🎬 Оживить фото · от {animate_price} кр", callback_data=f"an:img:{token}")],
+        [B(text="⬇️ Скачать для маркетплейса", callback_data=action_callback_data("mpexport", token))],
+        [B(text="➕ В серию SKU", callback_data=action_callback_data("skuadd", token))],
+        [B(text="🛒 Новая карточка", callback_data="m:mp")],
+    ])
 
 
 # --- Video wizard + edit keyboards (Phase 5: moved verbatim from flow_bot) ---

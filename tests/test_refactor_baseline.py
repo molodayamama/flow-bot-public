@@ -21,6 +21,7 @@ class RefactorBaselineTests(unittest.TestCase):
         cls.flow_bot = (PROJECT_ROOT / "flow_bot.py").read_text(encoding="utf-8")
         cls.flow_core = (PROJECT_ROOT / "flow_core.py").read_text(encoding="utf-8")
         cls.seller_backend = (PROJECT_ROOT / "seller_backend.py").read_text(encoding="utf-8")
+        cls.kb_src = (PROJECT_ROOT / "channels" / "telegram" / "keyboards.py").read_text(encoding="utf-8")
 
     def test_consumer_main_menu_routes_are_baselined(self) -> None:
         # main_menu_kb moved to channels/telegram/keyboards.py (Phase 5).
@@ -34,16 +35,16 @@ class RefactorBaselineTests(unittest.TestCase):
         self.assertIn("show_repeat parameter kept for backward compatibility", block)
 
     def test_result_actions_use_stable_callback_contract(self) -> None:
-        start = self.flow_bot.index("def _image_keyboard")
-        end = self.flow_bot.index("def _seller_image_keyboard", start)
-        block = self.flow_bot[start:end]
+        start = self.kb_src.index("def _image_keyboard")
+        end = self.kb_src.index("def _seller_image_keyboard", start)
+        block = self.kb_src[start:end]
         self.assertIn('action_callback_data("edit", token)', block)
         self.assertIn('callback_data="m:repeat"', block)
         self.assertIn('action_callback_data("realup", token)', block)
         self.assertIn('callback_data=f"an:img:{token}"', block)
 
         for action in ("edit", "realup", "mpexport", "skuadd"):
-            self.assertRegex(self.flow_bot, rf'action_callback_data\("{action}", token\)')
+            self.assertRegex(self.kb_src, rf'action_callback_data\("{action}", token\)')
         for action in ("regen", "revary", "up2x"):
             self.assertIn(action, self.flow_core)
         self.assertIn("def parse_action_callback", self.flow_core)

@@ -254,6 +254,8 @@ from channels.telegram.keyboards import (
     mp_jobs_kb,
     mp_more_kb,
     mp_root_kb,
+    _image_keyboard,
+    _seller_image_keyboard,
     wizard_kb,
     video_family_kb,
     video_variant_kb,
@@ -960,55 +962,6 @@ async def ensure_user_project(user_id: int, *, account_id: str | None = None) ->
             _project_creation_failures,
         )
     return None
-
-
-def _image_keyboard(token: str) -> types.InlineKeyboardMarkup:
-    """Инлайн-кнопки под картинкой: Изменить · Повторить · Улучшить качество · Оживить."""
-    B = types.InlineKeyboardButton
-
-    edit_price = action_price("edit")
-    edit_label = f"✏️ Изменить · {edit_price} кр" if edit_price > 0 else "✏️ Изменить"
-    upscale_price = action_price("realup")
-    upscale_label = (
-        f"{L('realup')} · {upscale_price} кр" if upscale_price > 0 else L("realup")
-    )
-    animate_price = _vid_family_min_price("ing")
-    return types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                B(text=edit_label, callback_data=action_callback_data("edit", token)),
-                B(text="🔁 Повторить", callback_data="m:repeat"),
-            ],
-            [
-                # Родной апскейл сервиса (2K): присылает улучшенную картинку.
-                B(text=upscale_label, callback_data=action_callback_data("realup", token)),
-            ],
-            [
-                B(text=f"🎬 Оживить фото · от {animate_price} кр", callback_data=f"an:img:{token}"),
-            ],
-        ]
-    )
-
-
-def _seller_image_keyboard(token: str) -> types.InlineKeyboardMarkup:
-    """Тулбар под seller-карточкой. Без «🔁 Повторить» — для seller он не работал
-    (нет сохранённого prompt-состояния; повтор = просто прислать фото заново)."""
-    B = types.InlineKeyboardButton
-    edit_price = action_price("edit")
-    edit_label = f"✏️ Изменить · {edit_price} кр" if edit_price > 0 else "✏️ Изменить"
-    upscale_price = action_price("realup")
-    upscale_label = (
-        f"{L('realup')} · {upscale_price} кр" if upscale_price > 0 else L("realup")
-    )
-    animate_price = _vid_family_min_price("ing")
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        [B(text=edit_label, callback_data=action_callback_data("edit", token))],
-        [B(text=upscale_label, callback_data=action_callback_data("realup", token))],
-        [B(text=f"🎬 Оживить фото · от {animate_price} кр", callback_data=f"an:img:{token}")],
-        [B(text="⬇️ Скачать для маркетплейса", callback_data=action_callback_data("mpexport", token))],
-        [B(text="➕ В серию SKU", callback_data=action_callback_data("skuadd", token))],
-        [B(text="🛒 Новая карточка", callback_data="m:mp")],
-    ])
 
 
 # ── меню и визард (кнопочный UX) ──────────────────────────────────────

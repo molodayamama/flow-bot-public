@@ -503,10 +503,13 @@ class FlowBotWiringStaticTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.source = (PROJECT_ROOT / "flow_bot.py").read_text(encoding="utf-8")
+        self.kb_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "keyboards.py"
+        ).read_text(encoding="utf-8")
 
     def test_edit_button_and_callback_handler_present(self) -> None:
         # Labels now come from flow_copy; the edit button uses the "edit" action.
-        self.assertIn('action_callback_data("edit", token)', self.source)
+        self.assertIn('action_callback_data("edit", token)', self.kb_source)
         self.assertIn("@dp.callback_query()", self.source)
         self.assertIn("async def on_image_action", self.source)
         self.assertIn("parse_action_callback", self.source)
