@@ -1,0 +1,11 @@
+[Unit]
+Description=Run GeminiFree failover controller every minute
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=10
+Unit=geminifree-failover.service
+
+[Install]
+WantedBy=timers.target

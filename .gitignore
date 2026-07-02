@@ -5,6 +5,7 @@
 .env_flow
 .env.seller
 .env.consumer
+failover.env
 
 # Local secret config (kept on disk, never committed)
 api_config.json

@@ -188,6 +188,28 @@ Fail URL:    https://pay.photozhab.ru/robokassa/fail    GET
 VPS nginx must proxy `/robokassa/` on `pay.photozhab.ru` to the bot callback
 server, usually `http://127.0.0.1:8081`.
 
+## Failover controller
+
+NL warm-standby failover uses `/etc/geminifree/failover.env`, not a repo file.
+Copy `deploy/examples/failover.env.example` on NL, fill real REG.RU
+credentials, and set mode `600`.
+
+Important fields:
+
+```dotenv
+REGRU_USERNAME=replace_me
+REGRU_PASSWORD=replace_me
+DOMAIN=photozhab.ru
+DNS_RECORDS=@,pay
+FI_IP=192.0.2.10
+NL_IP=192.0.2.10
+FI_SSH_HOST=root@192.0.2.10
+SERVICES=geminifree-bot
+```
+
+Do not add `geminifree-seller-bot` to `SERVICES` unless the seller bot should
+participate in failover.
+
 ## Runtime paths
 
 Эти переменные обычно не надо задавать: у них есть безопасные default-значения,

@@ -150,6 +150,21 @@ Server migration/cutover:
 - Do not run media generation, paid/captcha diagnostics, Google re-login, or
   `login.py` unless explicitly approved.
 
+Failover controller:
+
+- Syntax check:
+  `python -m py_compile tools/failover_controller.py tests/test_failover_controller.py`
+- Targeted tests:
+  `python -m unittest discover -s tests -p "test_failover_controller.py"`
+- On NL, with secrets installed but without mutation:
+  `python /opt/geminifree/tools/failover_controller.py status --dry-run`
+- On NL, verify REG.RU read access without printing credentials:
+  `python /opt/geminifree/tools/failover_controller.py dns-status --dry-run`
+- Before enabling the timer, confirm `/etc/geminifree/failover.env` is mode
+  `600`, `SERVICES=geminifree-bot`, and `geminifree-seller-bot` is inactive.
+- Live DNS mutation commands (`tick`, `failover-to-nl`, `failback-to-fi`,
+  `sync`) are external/stateful operations and require operator approval.
+
 Dependency manifests:
 
 - `requirements.txt` is the current Python manifest.
