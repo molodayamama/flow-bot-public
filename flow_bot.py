@@ -318,6 +318,7 @@ from channels.telegram.texts import (
 from channels.telegram.routers import commands as tg_commands_router
 from channels.telegram.routers import onboarding as tg_onboarding_router
 from channels.telegram.routers import photo_route as tg_photo_route_router
+from channels.telegram.routers import image_retry as tg_image_retry_router
 from channels.telegram.routers import fallback as tg_fallback_router
 
 from referrals.service import ReferralService
@@ -7989,26 +7990,6 @@ async def _start_robokassa_web_server() -> web.AppRunner | None:
     return await _start_web_server()
 
 
-@dp.callback_query(F.data == "img:retry")
-async def on_img_retry(callback: types.CallbackQuery):
-    """Повторить последний провалившийся запрос на генерацию картинок."""
-    user_id = callback.from_user.id
-    snap = _ws(user_id).get("img_retry")
-    if not snap or not snap.get("prompt"):
-        await callback.answer("Запрос устарел — попробуйте снова.", show_alert=True)
-        return
-    await callback.answer("Повторяю 🔁")
-    await _generate_and_send(
-        callback.message,
-        snap["prompt"],
-        num_images=snap.get("num_images", 1),
-        aspect_ratio=snap.get("aspect_ratio", "landscape"),
-        actor_id=user_id,
-        action=snap.get("action", "gen"),
-        image_model=snap.get("image_model", DEFAULT_IMAGE_MODEL),
-    )
-
-
 def _is_action_callback(callback: types.CallbackQuery) -> bool:
     """Precise routing filter for the image-action handler below.
 
@@ -9326,6 +9307,15 @@ dp.include_router(
             pending_photo_routes=pending_photo_routes,
             prepare_photo_edit_from_file_id=_prepare_photo_edit_from_file_id,
             prepare_photo_video_from_file_id=_prepare_photo_video_from_file_id,
+        )
+    )
+)
+dp.include_router(
+    tg_image_retry_router.create_router(
+        tg_image_retry_router.ImageRetryDeps(
+            workspace=_ws,
+            generate_and_send=_generate_and_send,
+            default_image_model=DEFAULT_IMAGE_MODEL,
         )
     )
 )

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from aiogram import Router
 
 from channels.telegram.routers import commands as commands_router
+from channels.telegram.routers import image_retry as image_retry_router
 from channels.telegram.routers import onboarding as onboarding_router
 from channels.telegram.routers import photo_route as photo_route_router
 
@@ -253,6 +254,88 @@ class OnboardingRouterTests(unittest.TestCase):
 
     def test_onboarding_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(onboarding_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class RecordingImageRetryDeps:
+    def __init__(self) -> None:
+        self.workspaces: dict[int, dict] = {}
+        self.calls: list[tuple[tuple, dict]] = []
+
+    def workspace(self, user_id: int) -> dict:
+        return self.workspaces.setdefault(user_id, {})
+
+    async def generate_and_send(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return None
+
+
+def _image_retry_deps() -> tuple[image_retry_router.ImageRetryDeps, RecordingImageRetryDeps]:
+    rec = RecordingImageRetryDeps()
+    deps = image_retry_router.ImageRetryDeps(
+        workspace=rec.workspace,
+        generate_and_send=rec.generate_and_send,
+        default_image_model="default-model",
+    )
+    return deps, rec
+
+
+class ImageRetryRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _image_retry_deps()
+        self.router = image_retry_router.create_router(self.deps)
+        self.handler = self.router.callback_query.handlers[0].callback
+
+    def test_creates_exact_img_retry_callback_router(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        self.assertEqual(self.router.name, "tg-image-retry")
+        self.assertEqual(len(self.router.callback_query.handlers), 1)
+        self.assertEqual(self.router.callback_query.handlers[0].callback.__name__, "on_img_retry")
+
+    def test_stale_retry_alerts_without_generation(self) -> None:
+        callback = FakeCallback("img:retry")
+        run(self.handler(callback))
+        self.assertEqual(callback.answers[-1][1], {"show_alert": True})
+        self.assertEqual(self.rec.calls, [])
+
+    def test_retry_delegates_to_generation_with_snapshot(self) -> None:
+        self.rec.workspaces[42] = {
+            "img_retry": {
+                "prompt": "draw cat",
+                "num_images": 2,
+                "aspect_ratio": "portrait",
+                "action": "imgn",
+                "image_model": "model-a",
+            }
+        }
+        callback = FakeCallback("img:retry")
+        run(self.handler(callback))
+        args, kwargs = self.rec.calls[-1]
+        self.assertEqual(args, (callback.message, "draw cat"))
+        self.assertEqual(kwargs, {
+            "num_images": 2,
+            "aspect_ratio": "portrait",
+            "actor_id": 42,
+            "action": "imgn",
+            "image_model": "model-a",
+        })
+
+    def test_retry_uses_defaults_for_partial_snapshot(self) -> None:
+        self.rec.workspaces[42] = {"img_retry": {"prompt": "draw dog"}}
+        callback = FakeCallback("img:retry")
+        run(self.handler(callback))
+        _args, kwargs = self.rec.calls[-1]
+        self.assertEqual(kwargs["num_images"], 1)
+        self.assertEqual(kwargs["aspect_ratio"], "landscape")
+        self.assertEqual(kwargs["action"], "gen")
+        self.assertEqual(kwargs["image_model"], "default-model")
+
+    def test_image_retry_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.default_image_model = "x"  # type: ignore[misc]
+
+    def test_image_retry_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(image_retry_router)
         self.assertNotIn("flow_bot", src)
 
 
