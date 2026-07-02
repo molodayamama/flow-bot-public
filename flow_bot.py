@@ -301,6 +301,12 @@ from channels.telegram.texts import (
     _MP_JOB_OUTCOMES,
     _MP_SERIES_COUNTS,
     _MP_SERIES_LABELS,
+    _mp_brand_kit,
+    _mp_niche,
+    _mp_niche_label,
+    _mp_brandkit_text,
+    _mp_niche_text,
+    _mp_sku_open_text,
     _mp_photo_request_text,
     _mp_video_request_text,
     _mp_series_request_text,
@@ -1057,22 +1063,6 @@ _MP_JOB_SEED = {
 _MP_PRODUCT_PHOTO_JOBS = frozenset(_MP_JOB_SEED)
 
 
-def _mp_brand_kit(user_id: int) -> str:
-    profile = metrics.get_seller_profile(user_id)
-    return str(profile.get("brand_kit") or "").strip()
-
-
-def _mp_niche(user_id: int) -> str:
-    profile = metrics.get_seller_profile(user_id)
-    return str(profile.get("niche") or "").strip()
-
-
-def _mp_niche_label(user_id: int) -> str:
-    niche_id = _mp_niche(user_id)
-    item = _MP_NICHES.get(niche_id)
-    return item[0] if item else ""
-
-
 def _mp_confirm_screen(user_id: int):
     """Экран подтверждения перед генерацией: задача, площадка, бренд-кит, ниша,
     ЦЕНА, баланс — чтобы селлер видел стоимость и контекст до списания."""
@@ -1249,56 +1239,6 @@ def _mp_sku_projects_kb(user_id: int, projects: list[dict] | None = None) -> typ
     rows.append([B(text="◀️ Маркетплейсы", callback_data="m:mp")])
     rows.append([_menu_button("menu", "m:menu")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _mp_sku_open_text(user_id: int, sku: str) -> str:
-    project = metrics.get_seller_sku_project(user_id, sku) or {"sku": sku, "items": 0}
-    sku_name = str(project.get("sku") or sku or "SKU")
-    count = int(project.get("items") or 0)
-    platform = str(project.get("platform") or "").strip()
-    platform_label = _MP_PLAT_NAMES.get(platform, platform) if platform else "не задана"
-    updated = (project.get("updated_at") or "")[:16] or "—"
-    latest_prompt = str(project.get("latest_prompt") or "").strip()
-    lines = [
-        f"📦 <b>{html.escape(sku_name)}</b>",
-        "",
-        f"Слайдов: <b>{count} {_slides_word(count)}</b>",
-        f"Площадка: {html.escape(platform_label)}",
-        f"Обновлено: {html.escape(updated)}",
-    ]
-    if latest_prompt:
-        lines.append(f"Последний запрос: <blockquote>{html.escape(latest_prompt[:180])}</blockquote>")
-    else:
-        lines.append("В этом SKU пока нет сохранённых карточек.")
-    return "\n".join(lines)
-
-
-def _mp_brandkit_text(user_id: int) -> str:
-    brand = _mp_brand_kit(user_id)
-    current = (
-        f"\n\nТекущий бренд-кит:\n<blockquote>{html.escape(brand)}</blockquote>"
-        if brand else
-        "\n\nТекущий бренд-кит не задан."
-    )
-    return (
-        "🎨 <b>Бренд-кит</b>\n\n"
-        "Пришли одним сообщением цвета, стиль, тон и правила для карточек. "
-        "Например: «чёрный/золото, премиальный минимализм, крупный товар, "
-        "без кислотных фонов, логотип не рисовать». "
-        "Я буду учитывать это в карточках и сериях."
-        f"{current}"
-    )
-
-
-def _mp_niche_text(user_id: int) -> str:
-    niche = _mp_niche(user_id)
-    current = _MP_NICHES.get(niche, ("не задана", ""))[0] if niche else "не задана"
-    return (
-        "🏷️ <b>Ниша товара</b>\n\n"
-        "Выбери основную категорию магазина. Я буду добавлять её как подсказку "
-        "к карточкам и сериям, чтобы ракурсы, фон и акценты были ближе к товару.\n\n"
-        f"Текущая ниша: <b>{html.escape(current)}</b>"
-    )
 
 
 async def _show_sku_projects(message: types.Message, *, user_id: int, edit: bool) -> None:

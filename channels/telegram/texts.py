@@ -9,6 +9,7 @@ import metrics
 from channels.telegram.keyboards import (
     L,
     _MP_JOB_LABELS,
+    _MP_NICHES,
     _MP_PLAT_NAMES,
     _mp_platform_format_label,
     _slides_word,
@@ -74,6 +75,72 @@ def _mp_series_request_text(platform: str, count: int) -> str:
         "Можно добавить подпись к фото — например нишу, УТП, цвет бренда или "
         "что обязательно показать в серии."
     )
+
+def _mp_brand_kit(user_id: int) -> str:
+    profile = metrics.get_seller_profile(user_id)
+    return str(profile.get("brand_kit") or "").strip()
+
+
+def _mp_niche(user_id: int) -> str:
+    profile = metrics.get_seller_profile(user_id)
+    return str(profile.get("niche") or "").strip()
+
+
+def _mp_niche_label(user_id: int) -> str:
+    niche_id = _mp_niche(user_id)
+    item = _MP_NICHES.get(niche_id)
+    return item[0] if item else ""
+
+
+def _mp_sku_open_text(user_id: int, sku: str) -> str:
+    project = metrics.get_seller_sku_project(user_id, sku) or {"sku": sku, "items": 0}
+    sku_name = str(project.get("sku") or sku or "SKU")
+    count = int(project.get("items") or 0)
+    platform = str(project.get("platform") or "").strip()
+    platform_label = _MP_PLAT_NAMES.get(platform, platform) if platform else "не задана"
+    updated = (project.get("updated_at") or "")[:16] or "—"
+    latest_prompt = str(project.get("latest_prompt") or "").strip()
+    lines = [
+        f"📦 <b>{html.escape(sku_name)}</b>",
+        "",
+        f"Слайдов: <b>{count} {_slides_word(count)}</b>",
+        f"Площадка: {html.escape(platform_label)}",
+        f"Обновлено: {html.escape(updated)}",
+    ]
+    if latest_prompt:
+        lines.append(f"Последний запрос: <blockquote>{html.escape(latest_prompt[:180])}</blockquote>")
+    else:
+        lines.append("В этом SKU пока нет сохранённых карточек.")
+    return "\n".join(lines)
+
+
+def _mp_brandkit_text(user_id: int) -> str:
+    brand = _mp_brand_kit(user_id)
+    current = (
+        f"\n\nТекущий бренд-кит:\n<blockquote>{html.escape(brand)}</blockquote>"
+        if brand else
+        "\n\nТекущий бренд-кит не задан."
+    )
+    return (
+        "🎨 <b>Бренд-кит</b>\n\n"
+        "Пришли одним сообщением цвета, стиль, тон и правила для карточек. "
+        "Например: «чёрный/золото, премиальный минимализм, крупный товар, "
+        "без кислотных фонов, логотип не рисовать». "
+        "Я буду учитывать это в карточках и сериях."
+        f"{current}"
+    )
+
+
+def _mp_niche_text(user_id: int) -> str:
+    niche = _mp_niche(user_id)
+    current = _MP_NICHES.get(niche, ("не задана", ""))[0] if niche else "не задана"
+    return (
+        "🏷️ <b>Ниша товара</b>\n\n"
+        "Выбери основную категорию магазина. Я буду добавлять её как подсказку "
+        "к карточкам и сериям, чтобы ракурсы, фон и акценты были ближе к товару.\n\n"
+        f"Текущая ниша: <b>{html.escape(current)}</b>"
+    )
+
 
 def _seller_history_job_platform(row: dict) -> tuple[str, str]:
     source = str(row.get("mp_source") or "").strip()

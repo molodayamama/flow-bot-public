@@ -1761,6 +1761,15 @@ class RobokassaWebhookTests(unittest.TestCase):
         def referral(*args, **kwargs):
             events.append(("referral_checked", int(args[0]) if args else 0, "robokassa", kwargs))
 
+        old_credit_store = fb.credit_store
+        old_metrics = fb.metrics
+        old_notify = fb._notify_robokassa_success
+        old_referral = fb._maybe_apply_referral_rewards
+        self.addCleanup(setattr, fb, "credit_store", old_credit_store)
+        self.addCleanup(setattr, fb, "metrics", old_metrics)
+        self.addCleanup(setattr, fb, "_notify_robokassa_success", old_notify)
+        self.addCleanup(setattr, fb, "_maybe_apply_referral_rewards", old_referral)
+
         fb.credit_store = FakeCreditStore()
         fb.metrics = SimpleNamespace(
             record_transaction_status=record_transaction_status,
