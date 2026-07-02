@@ -769,8 +769,8 @@ class BotMenuWiringTests(unittest.TestCase):
     def test_model_picker_in_frames_and_ingredients(self) -> None:
         # Ingredients supports Omni + Veo; Frames stays Veo-only.
         self.assertIn("def _vid_model_row", self.kb_source)
-        self.assertIn('VID_REF_DEFAULT_MODEL = "omni-flash-4s"', self.source)
         _vid_cfg = (PROJECT_ROOT / "config" / "video.py").read_text(encoding="utf-8")
+        self.assertIn('VID_REF_DEFAULT_MODEL = "omni-flash-4s"', _vid_cfg)
         self.assertIn("VID_REF_VARIANTS = tuple(VIDEO_MODELS.keys())", _vid_cfg)
         self.assertIn('VID_FRAMES_VARIANTS = ("veo-lite", "veo-fast", "veo-quality")', _vid_cfg)
         self.assertIn('data.startswith("v:vmod:")', self.source)

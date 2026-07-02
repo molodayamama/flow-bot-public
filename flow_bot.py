@@ -192,6 +192,7 @@ from config.video import (
     _VID_VEO_QUALITY_CYCLE,
     _VID_VEO_QUAL_MODEL,
     _VID_VEO_QUAL_NAMES,
+    VID_REF_DEFAULT_MODEL,
     VIDEO_EXTEND_MODEL,
     SELECT_STYLE,
 )
@@ -297,6 +298,12 @@ from channels.telegram.keyboards import (
     _slides_word,
 )
 from channels.telegram.texts import (
+    _MP_JOB_OUTCOMES,
+    _MP_SERIES_COUNTS,
+    _MP_SERIES_LABELS,
+    _mp_photo_request_text,
+    _mp_video_request_text,
+    _mp_series_request_text,
     _seller_history_job_platform,
     _seller_history_status,
     _seller_history_cost,
@@ -1048,19 +1055,6 @@ _MP_JOB_SEED = {
     "bg": "заменить фон у фото товара на чистый и продающий",
 }
 _MP_PRODUCT_PHOTO_JOBS = frozenset(_MP_JOB_SEED)
-_MP_JOB_OUTCOMES = {
-    "whitebg": "чистое каталожное фото товара на белом фоне.",
-    "info": "карточка с крупным товаром, местом под заголовок и ключевые выгоды.",
-    "model": "реалистичная сцена с моделью или фоном, где товар выглядит в использовании.",
-    "cover": "главный слайд с крупным товаром и цепляющим ракурсом.",
-    "bg": "аккуратный новый фон без лишних деталей.",
-}
-_MP_SERIES_COUNTS = (3, 5, 8)
-_MP_SERIES_LABELS = {
-    3: "мини-серия",
-    5: "стандартная серия",
-    8: "полная карточка",
-}
 
 
 def _mp_brand_kit(user_id: int) -> str:
@@ -1156,33 +1150,6 @@ def _mp_job_instruction(
     return prompt
 
 
-def _mp_photo_request_text(platform: str, job: str) -> str:
-    platform_name = html.escape(_MP_PLAT_NAMES.get(platform, platform))
-    job_label = html.escape(_MP_JOB_LABELS.get(job, job))
-    outcome = html.escape(_MP_JOB_OUTCOMES.get(job, "готовая карточка товара для маркетплейса."))
-    format_label = html.escape(_mp_platform_format_label(platform))
-    price = action_price("edit")
-    return (
-        f"🛒 <b>{platform_name}</b> · {job_label}\n\n"
-        f"📐 Формат: <b>{format_label}</b> · стоимость: <b>{price} кр</b>\n\n"
-        "Пришли фото товара. Можно добавить короткую подпись: ниша, УТП, цвет бренда "
-        "или что обязательно показать.\n\n"
-        f"Что получится: {outcome}"
-    )
-
-
-def _mp_video_request_text(platform: str) -> str:
-    platform_name = html.escape(_MP_PLAT_NAMES.get(platform, platform))
-    model_name = html.escape(L(f"vid_model_name:{VID_REF_DEFAULT_MODEL}"))
-    price = video_price(VID_REF_DEFAULT_MODEL, 1, "ingredients")
-    return (
-        f"🎬 <b>{platform_name}</b> · оживить фото товара\n\n"
-        "Пришли одно фото товара. Подпись к фото можно использовать как сценарий: "
-        "например, «медленный поворот, мягкий свет, акцент на фактуре».\n\n"
-        f"По умолчанию: <b>{model_name}</b>, 9:16, 1 видео · {price} кр."
-    )
-
-
 def _mp_video_prompt(
     platform: str,
     seller_note: str | None = None,
@@ -1209,22 +1176,6 @@ def _mp_video_prompt(
     if brand:
         parts.append(f"Brand kit / visual rules: {brand}.")
     return " ".join(parts)
-
-
-def _mp_series_request_text(platform: str, count: int) -> str:
-    platform_name = html.escape(_MP_PLAT_NAMES.get(platform, platform))
-    count = count if count in _MP_SERIES_COUNTS else 3
-    label = html.escape(_MP_SERIES_LABELS[count])
-    format_label = html.escape(_mp_platform_format_label(platform))
-    price = action_price("mp_series", count)
-    return (
-        f"🧩 <b>{platform_name}</b> · {label} · {count} {_slides_word(count)} · {price} кр\n\n"
-        f"📐 Формат серии: <b>{format_label}</b>\n\n"
-        "Пришли одно фото товара. Я соберу серию слайдов "
-        "для карточки маркетплейса на основе этого товара.\n\n"
-        "Можно добавить подпись к фото — например нишу, УТП, цвет бренда или "
-        "что обязательно показать в серии."
-    )
 
 
 def _mp_series_prompt(
@@ -1714,7 +1665,6 @@ async def show_prompt_picker(message: types.Message, *, user_id: int, edit: bool
 # чтобы не пересекаться с визардом картинок (step/count/fmt/await/...).
 
 VID_DEFAULT_COUNT = 1
-VID_REF_DEFAULT_MODEL = "omni-flash-4s"
 # Frames (старт/финиш-кадр) дефолтится на veo-lite: единственный interpolation-
 # ключ, подтверждённый живым захватом (veo_3_1_interpolation_lite). Остальные
 # tiers — догадка по паттерну, пока не подтверждены живым прогоном.
