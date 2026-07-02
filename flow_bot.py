@@ -254,6 +254,24 @@ from channels.telegram.keyboards import (
     mp_jobs_kb,
     mp_more_kb,
     mp_root_kb,
+    wizard_kb,
+    video_family_kb,
+    video_variant_kb,
+    video_wizard_kb,
+    video_result_kb,
+    ingredients_kb,
+    frames_kb,
+    edit_settings_kb,
+    edit_confirm_kb,
+    _sel_btn,
+    _fmt_rows,
+    _vid_fmt_count_rows,
+    _imodel_toggle_btn,
+    _vid_model_row,
+    _vid_family_min_price,
+    _video_can_edit,
+    _video_can_extend,
+    _slides_word,
 )
 
 from referrals.service import ReferralService
@@ -313,8 +331,6 @@ FLOW_ACCOUNTS_RAW = os.getenv("FLOW_ACCOUNTS", "")
 FLOW_ACCOUNTS_STATE_FILE = os.getenv("FLOW_ACCOUNTS_STATE_FILE", "flow_accounts_state.json")
 
 
-
-
 ROBOKASSA_HASH_ALGO = _env_any("ROBOKASSA_HASH_ALGO", "ROBOKASSA_HASH_ALGORITHM", default="md5")
 
 
@@ -357,8 +373,6 @@ GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 # Set IDLE_PARK_SEC<=0 to disable (legacy always-on-Flow behaviour).
 
 
-
-
 # Файл с картой telegram_user_id -> flow_project_id (каждый юзер = свой проект).
 USER_PROJECTS_FILE = os.getenv("USER_PROJECTS_FILE", "user_projects.json")
 # Файл с захваченным форматом запроса редактирования (imageInputs). Бот учится
@@ -397,20 +411,6 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ───────────────────────────────────────────
@@ -1014,13 +1014,6 @@ def _seller_image_keyboard(token: str) -> types.InlineKeyboardMarkup:
 # ── меню и визард (кнопочный UX) ──────────────────────────────────────
 
 
-
-
-
-
-
-
-
 # ── Маркетплейс-меню селлер-бота (docs/SELLER_BOT_PLAN.md §4) ─────────────
 _MP_PLAT_NAMES = {"wb": "Wildberries", "ozon": "Ozon", "ym": "Яндекс Маркет"}
 _MP_PLATFORM_FMT = {"wb": "f34", "ozon": "f34", "ym": "sq"}
@@ -1060,12 +1053,6 @@ def _mp_platform_guidance(platform: str) -> str:
     return _MP_PLATFORM_GUIDANCE.get(platform, _MP_PLATFORM_GUIDANCE["wb"])
 
 
-
-
-
-
-
-
 def _mp_jobs_text(platform: str) -> str:
     plat = platform if platform in _MP_PLAT_NAMES else "wb"
     return (
@@ -1082,8 +1069,6 @@ def _mp_more_text(platform: str) -> str:
         "Дополнительные задачи и настройки магазина. Если нужен быстрый результат, "
         "вернись к основным задачам."
     )
-
-
 
 
 _MP_STALE_SCREEN_TEXT = "Это старый экран — открой актуальное меню"
@@ -1359,19 +1344,6 @@ def _mp_video_prompt(
     return " ".join(parts)
 
 
-def _slides_word(n: int) -> str:
-    """Правильная форма слова «слайд» для числа (1 слайд, 3 слайда, 5 слайдов)."""
-    n = abs(int(n))
-    if 11 <= n % 100 <= 14:
-        return "слайдов"
-    d = n % 10
-    if d == 1:
-        return "слайд"
-    if 2 <= d <= 4:
-        return "слайда"
-    return "слайдов"
-
-
 def _mp_series_request_text(platform: str, count: int) -> str:
     platform_name = html.escape(_MP_PLAT_NAMES.get(platform, platform))
     count = count if count in _MP_SERIES_COUNTS else 3
@@ -1481,8 +1453,6 @@ def _mp_sku_open_text(user_id: int, sku: str) -> str:
     else:
         lines.append("В этом SKU пока нет сохранённых карточек.")
     return "\n".join(lines)
-
-
 
 
 def _mp_brandkit_text(user_id: int) -> str:
@@ -1618,23 +1588,6 @@ DEFAULT_FMT = "land"
 _FMT_NAMES = {"land": "16:9", "port": "9:16", "sq": "1:1", "f43": "4:3", "f34": "3:4"}
 
 
-
-
-def _sel_btn(label: str, chosen: bool, callback_data: str) -> types.InlineKeyboardButton:
-    """Wizard-option button; the chosen one turns green via Bot API 9.4 ``style``.
-
-    ``style="success"`` (Bot API 9.4, Feb 2026) colours the button green on the
-    client. aiogram 3.24 doesn't type the field, but pydantic forwards it in the
-    outgoing JSON, so we pass it as an extra kwarg only when selected. Clients
-    older than 9.4 simply ignore the unknown field — the label stays readable, just
-    without the colour (graceful degradation), so no checkmark prefix is needed.
-    """
-    kwargs = {"text": label, "callback_data": callback_data}
-    if chosen:
-        kwargs["style"] = SELECT_STYLE
-    return types.InlineKeyboardButton(**kwargs)
-
-
 def _imodel_row(
     selected: str,
     prefix: str = "w:imodel",
@@ -1650,34 +1603,6 @@ def _imodel_row(
         label = f"{meta['label']} · {price} кр"
         row.append(_sel_btn(label, mid == selected, f"{prefix}:{mid}"))
     return row
-
-
-def _imodel_toggle_btn(selected: str, prefix: str = "w:imodel") -> types.InlineKeyboardButton:
-    """Одна кнопка-тогл модели: показывает текущую, клик → следующая по кругу."""
-    ids = list(IMAGE_MODELS.keys())
-    meta = IMAGE_MODELS.get(selected, IMAGE_MODELS[ids[0]])
-    # Следующая модель по кругу
-    cur_idx = ids.index(selected) if selected in ids else 0
-    next_id = ids[(cur_idx + 1) % len(ids)]
-    label = f"🎨 Модель: {meta['label']}"
-    return types.InlineKeyboardButton(text=label, callback_data=f"{prefix}:{next_id}")
-
-
-
-
-
-
-def _fmt_rows(fmt: str, prefix: str = "w:fmt") -> list:
-    """Два ряда выбора формата картинки (16:9 / 4:3 / 1:1 / 3:4 / 9:16)."""
-    B = types.InlineKeyboardButton
-
-    def fb(code: str, key: str):
-        return _sel_btn(L(key), fmt == code, f"{prefix}:{code}")
-
-    return [
-        [fb("land", "fmt:land"), fb("f43", "fmt:f43"), fb("sq", "fmt:sq")],
-        [fb("f34", "fmt:f34"), fb("port", "fmt:port")],
-    ]
 
 
 def _short_prompt(text: str, limit: int = 80) -> str:
@@ -1733,81 +1658,6 @@ _QUICK_IDEAS: list[str] = [
     "домик на дереве с гирляндами в осеннем лесу, уют",
     "феникс из золотых искр взлетает над вулканом, динамично",
 ]
-
-
-def wizard_kb(
-    count: int,
-    fmt: str,
-    imodel: str = DEFAULT_IMAGE_MODEL,
-    *,
-    show_boost: bool = False,
-    show_improve: bool = False,
-) -> types.InlineKeyboardMarkup:
-    """Шаг 2: настройки генерации (количество + формат + модель-тогл + «Сгенерировать»)."""
-    B = types.InlineKeyboardButton
-    total_price = price_gen(count) + image_model_extra(imodel) * count
-    go_label = f"{L('go')} · {total_price} кр"
-    rows: list[list[types.InlineKeyboardButton]] = [
-        [
-            _sel_btn(L("cnt:1"), count == 1, "w:cnt:1"),
-            _sel_btn(L("cnt:2"), count == 2, "w:cnt:2"),
-            _sel_btn(L("cnt:4"), count == 4, "w:cnt:4"),
-        ],
-        *_fmt_rows(fmt, "w:fmt"),
-        [_imodel_toggle_btn(imodel, "w:imodel")],
-    ]
-    # AI-агент: улучшить промпт (3 варианта). Заменяет старый бесплатный boost.
-    # «Улучшить промпт» стоит выше «Сгенерировать», чтобы сначала предложить
-    # доработку запроса, и только потом — финальный запуск.
-    if show_improve:
-        rows.append([B(
-            text=f"✨ Улучшить промпт · {action_price('prompt_improve')} кр",
-            callback_data="ag:improve",
-        )])
-    elif show_boost:
-        rows.append([B(text=L("boost_prompt"), callback_data="w:boost_prompt")])
-    rows.append([B(text=go_label, callback_data="w:go")])
-    rows.append([
-        B(text=L("change_prompt"), callback_data="w:change_prompt"),
-        _menu_button("cancel", "w:cancel"),
-    ])
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def edit_settings_kb(fmt: str, imodel: str) -> types.InlineKeyboardMarkup:
-    """Формат + модель для редактирования фото (правку пользователь вводит текстом).
-
-    Callback-префикс ``es:`` намеренно не пересекается с ``edit:`` (кнопка
-    «Изменить» под картинкой), иначе хендлер перехватил бы её.
-    """
-    return types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            *_fmt_rows(fmt, "es:fmt"),
-            [_imodel_toggle_btn(imodel, "es:imodel")],
-            [_menu_button("cancel", "es:cancel")],
-        ]
-    )
-
-
-def edit_confirm_kb(fmt: str, imodel: str, *, as_generation: bool = False) -> types.InlineKeyboardMarkup:
-    """Подтверждение правки фото: настройки + сгенерировать/улучшить запрос.
-
-    ``as_generation`` — фото пришло из «Создать картинку» (референс к новому
-    изображению), поэтому цена как у генерации (10/15), а не как у правки (15/20).
-    """
-    B = types.InlineKeyboardButton
-    # Цена = базовая + надбавка модели (как в _edit_and_send), чтобы менялась при
-    # переключении модели.
-    base = price_gen(1) if as_generation else action_price("edit")
-    edit_price = base + image_model_extra(imodel)
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        *_fmt_rows(fmt, "es:fmt"),
-        [_imodel_toggle_btn(imodel, "es:imodel")],
-        [B(text=f"✨ Улучшить запрос · {action_price('prompt_improve')} кр", callback_data="ag:eimprove")],
-        [B(text=f"✅ Сгенерировать · {edit_price} кр", callback_data="es:apply")],
-        [B(text="✏️ Изменить запрос", callback_data="es:change"),
-         _menu_button("cancel", "es:cancel")],
-    ])
 
 
 async def show_edit_confirm(message: types.Message, *, user_id: int, edit: bool):
@@ -1994,8 +1844,6 @@ def _prompt_picker_text(ideas: list[str]) -> str:
     return "\n".join(lines)
 
 
-
-
 async def show_prompt_picker(message: types.Message, *, user_id: int, edit: bool):
     """Шаг 1 визарда: список идей в тексте + ввод своего промпта."""
     import random as _random
@@ -2100,48 +1948,7 @@ def _video_plain_text_ready(st: dict) -> bool:
     return clamp_num_videos(vcount) == vcount
 
 
-def _vid_family_min_price(code: str) -> int:
-    """Минимальная цена в семействе — для подписи кнопки «· от N кр» (без хардкода)."""
-    if code == "omni":
-        return min(video_price(m, 1, "text") for m, _ in video_models_in_family("omni-flash"))
-    if code == "veo":
-        return min(video_price(m, 1, "text") for m, _ in video_models_in_family("veo"))
-    if code == "ing":
-        return video_animate_min_price()
-    if code == "frm":
-        return min(video_price(m, 1, "frames") for m in VID_REF_VARIANTS)
-    return 0
-
-
 _VID_QUICKSTART_FAMILY = "omni-flash"
-
-
-def video_family_kb() -> types.InlineKeyboardMarkup:
-    B = types.InlineKeyboardButton
-
-    def fam(code: str) -> types.InlineKeyboardButton:
-        return B(
-            text=f"{L('vid_fam:' + code)} · от {_vid_family_min_price(code)} кр",
-            callback_data=f"v:fam:{code}",
-        )
-
-    # Быстрый старт — omni-flash-4s без пикера модели
-    quick_price = video_price(_VID_QUICKSTART_MODEL, 1, "text")
-    quick_btn = B(text=f"⚡ Быстро · {quick_price} кр", callback_data="v:quick")
-
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        [quick_btn],
-        [fam("omni")],
-        [fam("veo")],
-        [fam("ing")],
-        [fam("frm")],
-    ] + (
-        [[B(text=f"{L('vid_upload_edit')} · {action_price('video_prompt_edit')} кр",
-            callback_data="vu:start")]]
-        if _cfg.UPLOAD_VIDEO_EDIT_ENABLED else []
-    ) + [
-        [B(text=L("cancel"), callback_data="v:cancel")],
-    ])
 
 
 # family id (в каталоге) -> короткий код в callback_data и обратно
@@ -2149,132 +1956,12 @@ _VID_FAMILY_CODE = {"omni-flash": "omni", "veo": "veo"}
 _VID_CODE_FAMILY = {v: k for k, v in _VID_FAMILY_CODE.items()}
 
 
-def video_variant_kb(family: str, selected_model: str | None) -> types.InlineKeyboardMarkup:
-    """Кнопки выбора конкретной модели внутри семейства."""
-    B = types.InlineKeyboardButton
-    rows = []
-    for model_id, meta in video_models_in_family(family):
-        name = L(f"vid_model_name:{model_id}")
-        label = f"{name} · {meta['price']} кр"
-        rows.append([_sel_btn(
-            label, model_id == selected_model, f"v:model:{model_id}",
-        )])
-    rows.append([B(text=L("vid_back:fam"), callback_data="v:back:fam")])
-    rows.append([B(text=L("cancel"), callback_data="v:cancel")])
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def video_wizard_kb(vfmt: str, vcount: int) -> types.InlineKeyboardMarkup:
-    """Экран настроек: формат (16:9 / 9:16) + количество (1–4) + действия."""
-    B = types.InlineKeyboardButton
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        [
-            _sel_btn(L("fmt:land"), vfmt == "land", "v:fmt:land"),
-            _sel_btn(L("fmt:port"), vfmt == "port", "v:fmt:port"),
-        ],
-        [
-            _sel_btn(f"{n}", vcount == n, f"v:cnt:{n}")
-            for n in (1, 2, 3, 4)
-        ],
-        [_menu_button("vid_go", "v:go")],
-        [_menu_button("vid_back:model", "v:back:model")],
-        [_menu_button("cancel", "v:cancel")],
-    ])
-
-
-def _video_can_edit(ref: VideoRef | None) -> bool:
-    return bool(ref and ref.media_id and ref.project_id and ref.workflow_id)
-
-
 # Продление всегда выполняется моделью veo-lite, но ИСХОДНИК может быть любым
 # veo-видео (lite/fast/quality) — оператор подтвердил. Omni продлевать нельзя.
 
 
-def _video_can_extend(ref: VideoRef | None) -> bool:
-    return bool(
-        ref
-        and ref.media_id
-        and ref.project_id
-        and ref.workflow_id
-        and str(ref.model_id).startswith("veo-")
-        and not ref.prompt_edited
-    )
-
-
-def video_result_kb(vtoken: str) -> types.InlineKeyboardMarkup:
-    """Клавиатура под результатом видео: Продлить · Изменить (раздельными строками)."""
-    B = types.InlineKeyboardButton
-    ref = video_registry.get(vtoken)
-
-    can_extend = _video_can_extend(ref)
-    can_edit = _video_can_edit(ref)
-
-    rows: list[list[types.InlineKeyboardButton]] = []
-    if can_extend:
-        next_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
-        rows.append([B(text=f"➕ Продлить · {next_price} кр", callback_data=f"v:extend:{vtoken}")])
-    if can_edit:
-        edit_price = action_price("video_prompt_edit")
-        rows.append([B(text=f"✏️ Изменить · {edit_price} кр", callback_data=f"v:edit:{vtoken}")])
-    if not rows:
-        rows.append([_menu_button("menu", "m:menu")])
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 # Варианты модели, доступные в reference-to-video. Ingredients умеет Omni и Veo;
 # Frames/interpolation остаётся Veo-only.
-
-
-def _vid_model_row(mode: str, selected: str | None) -> list:
-    """Rows for selecting a video model with the current mode price."""
-    variants = VID_REF_VARIANTS if mode == "ingredients" else VID_FRAMES_VARIANTS
-    rows = []
-    for mid in variants:
-        price = video_price(mid, 1, mode)
-        label = f"{L('vid_model_name:' + mid)} {price} кр"
-        rows.append([_sel_btn(label, mid == selected, f"v:vmod:{mid}")])
-    return rows
-
-
-def _vid_fmt_count_rows(vfmt: str, vcount: int) -> list:
-    """Общие ряды кнопок «формат + количество» для видео-экранов."""
-    B = types.InlineKeyboardButton
-    return [
-        [
-            _sel_btn(L("fmt:land"), vfmt == "land", "v:fmt:land"),
-            _sel_btn(L("fmt:port"), vfmt == "port", "v:fmt:port"),
-        ],
-        [
-            _sel_btn(f"{n}", vcount == n, f"v:cnt:{n}")
-            for n in (1, 2, 3, 4)
-        ],
-    ]
-
-
-def ingredients_kb(
-    n: int, vfmt: str, vcount: int, vmodel: str | None, has_caption: bool = False
-) -> types.InlineKeyboardMarkup:
-    B = types.InlineKeyboardButton
-    rows = _vid_model_row("ingredients", vmodel) + _vid_fmt_count_rows(vfmt, vcount)
-    if n >= 1:
-        # Подпись к фото уже задаёт описание → кнопка ведёт сразу на генерацию.
-        done_key = "vid_ing_done_ready" if has_caption else "vid_ing_done"
-        rows.append([B(text=L(done_key), callback_data="v:ing:done")])
-    rows.append([B(text=L("vid_ing_clear"), callback_data="v:ing:clear")])
-    rows.append([B(text=L("vid_back:fam"),  callback_data="v:back:fam")])
-    rows.append([B(text=L("cancel"),        callback_data="v:cancel")])
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def frames_kb(has_start: bool, has_end: bool, vfmt: str, vcount: int, vmodel: str | None) -> types.InlineKeyboardMarkup:
-    B = types.InlineKeyboardButton
-    rows = _vid_model_row("frames", vmodel) + _vid_fmt_count_rows(vfmt, vcount)
-    if has_start and has_end:
-        rows.append([B(text=L("vid_frm_go"), callback_data="v:frm:go")])
-    rows.append([B(text=L("vid_frm_clear"), callback_data="v:frm:clear")])
-    rows.append([B(text=L("vid_back:fam"),  callback_data="v:back:fam")])
-    rows.append([B(text=L("cancel"),        callback_data="v:cancel")])
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def show_video_ingredients(message: types.Message, *, user_id: int, edit: bool = False):
@@ -2371,8 +2058,6 @@ _GUIDED_TO_VID_STYLE: dict[str, str] = {
     "realism":   "photo",
     "cinematic": "cine",
 }
-
-
 
 
 def _nwiz_engine(st: dict) -> str:
@@ -2741,28 +2426,12 @@ def _robokassa_configured() -> bool:
     )
 
 
-
-
-
-
-
-
-
-
 def _topup_copy(key: str) -> str:
     return flow_copy.msg(key, image_price=_topup_image_price(), video_price=_topup_video_price())
 
 
 def _include_test_packs(is_admin: bool = False) -> bool:
     return bool(TOPUP_TEST_PACKS_ENABLED and is_admin)
-
-
-
-
-
-
-
-
 
 
 def _zero_balance_kb() -> types.InlineKeyboardMarkup:
@@ -2785,8 +2454,6 @@ def _zero_balance_kb() -> types.InlineKeyboardMarkup:
     rows.append([_menu_button("topup", "m:topup")])  # Все пакеты
     rows.append([_menu_button("menu", "m:menu")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 
 
 def topup_stars_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
@@ -6012,8 +5679,6 @@ async def on_onboarding_action(callback: types.CallbackQuery):
     await callback.answer()
 
 
-
-
 def _store_pending_photo_route(user_id: int, *, file_id: str, caption: str) -> None:
     pending_photo_routes[user_id] = {
         "file_id": file_id,
@@ -6237,8 +5902,6 @@ async def _show_ideas_root(message: types.Message, *, user_id: int, edit: bool):
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
-
-
 async def _render_template_step(message: types.Message, *, user_id: int):
     """Показать текущий вопрос шаблона (или скомпоновать промпт и уйти в визард)."""
     st = _ws(user_id)
@@ -6430,8 +6093,6 @@ async def on_template_action(callback: types.CallbackQuery):
         await _show_ideas_root(msg, user_id=user_id, edit=True)
     else:
         await callback.answer()
-
-
 
 
 async def _render_guided_step(message: types.Message, *, user_id: int):

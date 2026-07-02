@@ -427,6 +427,11 @@ class CopyTests(unittest.TestCase):
 class BotMenuWiringTests(unittest.TestCase):
     def setUp(self) -> None:
         self.source = (PROJECT_ROOT / "flow_bot.py").read_text(encoding="utf-8")
+        # Video/edit keyboard builders moved to channels/telegram/keyboards.py
+        # (Phase 5). Scrapes of those defs read kb_source instead of flow_bot.
+        self.kb_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "keyboards.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         for needle in (
@@ -434,11 +439,11 @@ class BotMenuWiringTests(unittest.TestCase):
             'F.data.startswith("w:")',     # wizard router
             "async def on_menu_action",
             "async def on_wizard_action",
-            "def wizard_kb",               # single-screen count+format
             'data == "w:go"',              # one "generate" button
             'st["await"] = "prompt"',       # wizard waits for prompt
         ):
             self.assertIn(needle, self.source, needle)
+        self.assertIn("def wizard_kb", self.kb_source)   # single-screen count+format
 
     def test_main_menu_has_animate_under_video_with_source_price(self) -> None:
         # main_menu_kb moved to channels/telegram/keyboards.py (Phase 5).
@@ -471,9 +476,9 @@ class BotMenuWiringTests(unittest.TestCase):
                 self.assertNotIn(needle, text, rel)
 
     def test_single_screen_wizard_has_count_and_format_together(self) -> None:
-        start = self.source.index("def wizard_kb")
-        end = self.source.index("def reply_menu_kb")
-        block = self.source[start:end]
+        start = self.kb_source.index("def wizard_kb")
+        end = self.kb_source.index("def edit_settings_kb")
+        block = self.kb_source[start:end]
         self.assertIn('"w:cnt:1"', block)
         # Format rows from shared helper; model is now a single toggle button.
         self.assertIn('_fmt_rows(fmt, "w:fmt")', block)
@@ -481,21 +486,21 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('"w:go"', block)
 
     def test_fmt_rows_cover_five_formats(self) -> None:
-        start = self.source.index("def _fmt_rows")
-        block = self.source[start:start + 700]
+        start = self.kb_source.index("def _fmt_rows")
+        block = self.kb_source[start:start + 700]
         for code in ("land", "f43", "sq", "f34", "port"):
             self.assertIn(f'"{code}"', block)
         self.assertIn('f"{prefix}:{code}"', block)
 
     def test_edit_settings_kb_offers_format_and_model(self) -> None:
-        start = self.source.index("def edit_settings_kb")
-        block = self.source[start:start + 500]
+        start = self.kb_source.index("def edit_settings_kb")
+        block = self.kb_source[start:start + 500]
         self.assertIn('_fmt_rows(fmt, "es:fmt")', block)
         self.assertIn('_imodel_toggle_btn(imodel, "es:imodel")', block)
 
     def test_edit_confirm_kb_keeps_format_and_model_toggles(self) -> None:
-        start = self.source.index("def edit_confirm_kb")
-        block = self.source[start:start + 1200]
+        start = self.kb_source.index("def edit_confirm_kb")
+        block = self.kb_source[start:start + 1200]
         self.assertIn("def edit_confirm_kb(fmt: str, imodel: str", block)
         self.assertIn('_fmt_rows(fmt, "es:fmt")', block)
         self.assertIn('_imodel_toggle_btn(imodel, "es:imodel")', block)
@@ -720,9 +725,9 @@ class BotMenuWiringTests(unittest.TestCase):
         # 9.4 `style="success"` field (not a text marker). (Live build asserted in
         # the smoke test, which sets up a temp credits file before importing.)
         self.assertIn('SELECT_STYLE = "success"', (PROJECT_ROOT / "config" / "video.py").read_text(encoding="utf-8"))
-        self.assertIn("def _sel_btn", self.source)
-        helper_start = self.source.index("def _sel_btn")
-        helper = self.source[helper_start:helper_start + 900]
+        self.assertIn("def _sel_btn", self.kb_source)
+        helper_start = self.kb_source.index("def _sel_btn")
+        helper = self.kb_source[helper_start:helper_start + 900]
         self.assertIn('kwargs["style"] = SELECT_STYLE', helper)
         # The old text-prefix selector must be gone everywhere.
         self.assertNotIn("text=_sel(", self.source)
@@ -738,9 +743,9 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_credit_price_tags_on_action_buttons(self) -> None:
         # Video result / model rows show the credit cost in credits.
-        self.assertIn('· {edit_price} кр', self.source)
-        self.assertIn('· {next_price} кр', self.source)
-        self.assertIn("{price} кр", self.source)
+        self.assertIn('· {edit_price} кр', self.kb_source)
+        self.assertIn('· {next_price} кр', self.kb_source)
+        self.assertIn("{price} кр", self.kb_source)
 
     def test_stale_photo_edit_cleared_on_navigation(self) -> None:
         # Regression: photo upload sets pending_edits; navigating to generate/menu
@@ -754,16 +759,16 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_frames_and_ingredients_have_format_and_count(self) -> None:
         # Frames/Ingredients screens reuse the shared format+count picker rows.
-        self.assertIn("def _vid_fmt_count_rows", self.source)
-        self.assertIn("def frames_kb(has_start: bool, has_end: bool, vfmt: str, vcount: int, vmodel", self.source)
-        self.assertIn("def ingredients_kb(", self.source)
+        self.assertIn("def _vid_fmt_count_rows", self.kb_source)
+        self.assertIn("def frames_kb(has_start: bool, has_end: bool, vfmt: str, vcount: int, vmodel", self.kb_source)
+        self.assertIn("def ingredients_kb(", self.kb_source)
         # Format/count callbacks re-render the active video screen by mode.
         self.assertIn("def _vid_rerender_settings", self.source)
         self.assertIn("await _vid_rerender_settings(msg, user_id=user_id)", self.source)
 
     def test_model_picker_in_frames_and_ingredients(self) -> None:
         # Ingredients supports Omni + Veo; Frames stays Veo-only.
-        self.assertIn("def _vid_model_row", self.source)
+        self.assertIn("def _vid_model_row", self.kb_source)
         self.assertIn('VID_REF_DEFAULT_MODEL = "omni-flash-4s"', self.source)
         _vid_cfg = (PROJECT_ROOT / "config" / "video.py").read_text(encoding="utf-8")
         self.assertIn("VID_REF_VARIANTS = tuple(VIDEO_MODELS.keys())", _vid_cfg)
@@ -782,8 +787,8 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_ingredients_minimum_is_one_photo(self) -> None:
         # Ingredients works from a single photo now (no 2-photo gate).
-        ing = self.source.index("def ingredients_kb")
-        block = self.source[ing:ing + 400]
+        ing = self.kb_source.index("def ingredients_kb")
+        block = self.kb_source[ing:ing + 400]
         self.assertIn("if n >= 1:", block)
         self.assertIn('if len(photos) < 1:', self.source)
 
@@ -921,7 +926,7 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_video_plain_text_ready_is_narrow(self) -> None:
         start = self.source.index("def _video_plain_text_ready")
-        end = self.source.index("def video_family_kb", start)
+        end = self.source.index("async def show_video_ingredients", start)
         block = self.source[start:end]
         self.assertIn('st.get("vawait")', block)
         self.assertIn('st.get("vstep") != "vsettings"', block)
@@ -1008,14 +1013,14 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("vstyle=gv_style", self.source)
 
     def test_video_result_edit_and_extend_wiring(self) -> None:
-        self.assertIn("def _video_can_edit", self.source)
-        self.assertIn("def _video_can_extend", self.source)
-        self.assertIn("ref.workflow_id", self.source)
-        self.assertIn('str(ref.model_id).startswith("veo-")', self.source)
+        self.assertIn("def _video_can_edit", self.kb_source)
+        self.assertIn("def _video_can_extend", self.kb_source)
+        self.assertIn("ref.workflow_id", self.kb_source)
+        self.assertIn('str(ref.model_id).startswith("veo-")', self.kb_source)
         self.assertIn('VIDEO_EXTEND_MODEL = "veo-lite"', (PROJECT_ROOT / "config" / "video.py").read_text(encoding="utf-8"))
-        self.assertIn("not ref.prompt_edited", self.source)
-        self.assertIn('callback_data=f"v:edit:{vtoken}"', self.source)
-        self.assertIn('callback_data=f"v:extend:{vtoken}"', self.source)
+        self.assertIn("not ref.prompt_edited", self.kb_source)
+        self.assertIn('callback_data=f"v:edit:{vtoken}"', self.kb_source)
+        self.assertIn('callback_data=f"v:extend:{vtoken}"', self.kb_source)
         self.assertIn('if data.startswith("v:edit:")', self.source)
         self.assertIn('if data.startswith("v:extend:")', self.source)
         self.assertIn('st["vawait"] = "vedit_prompt"', self.source)
@@ -1027,20 +1032,20 @@ class BotMenuWiringTests(unittest.TestCase):
 
     # ── Phase 1 upgrades ───────────────────────────────────────────────
     def test_ingredients_and_frames_have_back_to_family(self) -> None:
-        ing = self.source[self.source.index("def ingredients_kb"):][:900]
-        frm = self.source[self.source.index("def frames_kb"):][:900]
+        ing = self.kb_source[self.kb_source.index("def ingredients_kb"):][:900]
+        frm = self.kb_source[self.kb_source.index("def frames_kb"):][:900]
         self.assertIn('"v:back:fam"', ing)
         self.assertIn('"v:back:fam"', frm)
 
     def test_family_picker_shows_min_prices(self) -> None:
-        self.assertIn("def _vid_family_min_price", self.source)
-        block = self.source[self.source.index("def video_family_kb"):][:600]
+        self.assertIn("def _vid_family_min_price", self.kb_source)
+        block = self.kb_source[self.kb_source.index("def video_family_kb"):][:600]
         self.assertIn("от ", block)
         self.assertIn("кр", block)
         self.assertIn("_vid_family_min_price", block)
 
     def test_ingredients_done_label_is_dynamic(self) -> None:
-        block = self.source[self.source.index("def ingredients_kb"):][:600]
+        block = self.kb_source[self.kb_source.index("def ingredients_kb"):][:600]
         self.assertIn("has_caption", block)
         self.assertIn("vid_ing_done_ready", block)
         # screen shows the pending caption like frames mode does
@@ -1448,7 +1453,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # config/settings.py (live-config, Phase 5); читатели используют _cfg.
         _settings_src = (PROJECT_ROOT / "config" / "settings.py").read_text(encoding="utf-8")
         self.assertIn("UPLOAD_VIDEO_EDIT_ENABLED: bool = False", _settings_src)
-        self.assertIn("if _cfg.UPLOAD_VIDEO_EDIT_ENABLED else []", self.source)   # кнопка в семействе
+        self.assertIn("if _cfg.UPLOAD_VIDEO_EDIT_ENABLED else []", self.kb_source)   # кнопка в семействе
         self.assertIn("if not _cfg.UPLOAD_VIDEO_EDIT_ENABLED:", self.source)      # колбэк vu:start
         self.assertIn("vid_upload_disabled", flow_copy.MESSAGES)
         # handle_video_upload игнорирует видео, пока фича выключена.
