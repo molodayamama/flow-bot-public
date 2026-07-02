@@ -316,6 +316,7 @@ from channels.telegram.texts import (
     _seller_history_text as _telegram_seller_history_text,
 )
 from channels.telegram.routers import commands as tg_commands_router
+from channels.telegram.routers import fallback as tg_fallback_router
 
 from referrals.service import ReferralService
 
@@ -8085,7 +8086,17 @@ async def on_img_retry(callback: types.CallbackQuery):
     )
 
 
-@dp.callback_query()
+def _is_action_callback(callback: types.CallbackQuery) -> bool:
+    """Precise routing filter for the image-action handler below.
+
+    Matches exactly the callbacks the old bare catch-all actually processed
+    (every flow_core.ACTION_PREFIXES prefix). Anything else now falls through
+    to the tail fallback router, which keeps the old silent-ack behaviour.
+    """
+    return parse_action_callback(callback.data or "") is not None
+
+
+@dp.callback_query(_is_action_callback)
 async def on_image_action(callback: types.CallbackQuery):
     """Единый обработчик инлайн-кнопок под картинкой (edit/vary/regen/mix/up)."""
     parsed = parse_action_callback(callback.data or "")
@@ -9365,6 +9376,15 @@ async def _video_pool_health_loop() -> None:
         except Exception:
             log.warning("_video_pool_health_loop iteration failed", exc_info=True)
         await asyncio.sleep(_VIDEO_POOL_CHECK_INTERVAL_S)
+
+
+# Tail fallback for unmatched callback queries (Phase 6). Must stay the LAST
+# include_router call in this module: aiogram matches included routers in
+# inclusion order, so every future extracted callback router has to be
+# included above this line. Preserves the old dp-level catch-all behaviour
+# for unknown callbacks: expired/legacy buttons get a silent ack instead of
+# an endless spinner.
+dp.include_router(tg_fallback_router.create_router())
 
 
 async def main():
