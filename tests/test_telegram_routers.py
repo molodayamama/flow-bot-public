@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from aiogram import Router
 
 from channels.telegram.routers import commands as commands_router
+from channels.telegram.routers import photo_route as photo_route_router
 
 
 def run(coro):
@@ -115,6 +116,110 @@ class CommandsRouterTests(unittest.TestCase):
 
     def test_router_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(commands_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class RecordingPhotoRouteDeps:
+    def __init__(self) -> None:
+        self.pending_photo_routes: dict[int, dict[str, str]] = {}
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    async def prepare_photo_edit_from_file_id(self, *args, **kwargs):
+        self.calls.append(("edit", args, kwargs))
+        return True
+
+    async def prepare_photo_video_from_file_id(self, *args, **kwargs):
+        self.calls.append(("video", args, kwargs))
+        return True
+
+
+class FakeCallback:
+    def __init__(self, data: str, user_id: int = 42) -> None:
+        self.data = data
+        self.from_user = SimpleNamespace(id=user_id)
+        self.message = SimpleNamespace(edit_reply_markup=self._edit_reply_markup)
+        self.answers: list[tuple[tuple, dict]] = []
+        self.edits: list[dict] = []
+
+    async def answer(self, *args, **kwargs):
+        self.answers.append((args, kwargs))
+
+    async def _edit_reply_markup(self, **kwargs):
+        self.edits.append(kwargs)
+
+
+def _photo_route_deps() -> tuple[photo_route_router.PhotoRouteDeps, RecordingPhotoRouteDeps]:
+    rec = RecordingPhotoRouteDeps()
+    deps = photo_route_router.PhotoRouteDeps(
+        pending_photo_routes=rec.pending_photo_routes,
+        prepare_photo_edit_from_file_id=rec.prepare_photo_edit_from_file_id,
+        prepare_photo_video_from_file_id=rec.prepare_photo_video_from_file_id,
+    )
+    return deps, rec
+
+
+class PhotoRouteRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _photo_route_deps()
+        self.router = photo_route_router.create_router(self.deps)
+        self.handler = self.router.callback_query.handlers[0].callback
+
+    def test_creates_pr_callback_router(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        self.assertEqual(self.router.name, "tg-photo-route")
+        self.assertEqual(len(self.router.callback_query.handlers), 1)
+        self.assertEqual(self.router.message.handlers, [])
+        self.assertEqual(self.router.callback_query.handlers[0].callback.__name__, "on_photo_route_choice")
+
+    def test_cancel_drops_pending_route_and_removes_markup(self) -> None:
+        self.rec.pending_photo_routes[42] = {"file_id": "f1", "caption": "cap"}
+        callback = FakeCallback("pr:cancel")
+        run(self.handler(callback))
+        self.assertNotIn(42, self.rec.pending_photo_routes)
+        self.assertEqual(len(callback.answers[-1][0]), 1)
+        self.assertEqual(callback.edits[-1], {"reply_markup": None})
+        self.assertEqual(self.rec.calls, [])
+
+    def test_stale_route_alerts_without_prepare_call(self) -> None:
+        callback = FakeCallback("pr:img")
+        run(self.handler(callback))
+        self.assertEqual(callback.answers[-1][1], {"show_alert": True})
+        self.assertEqual(self.rec.calls, [])
+
+    def test_img_route_delegates_to_edit_prepare_as_generation(self) -> None:
+        self.rec.pending_photo_routes[42] = {"file_id": "f1", "caption": "cap"}
+        callback = FakeCallback("pr:img")
+        run(self.handler(callback))
+        self.assertNotIn(42, self.rec.pending_photo_routes)
+        name, args, kwargs = self.rec.calls[-1]
+        self.assertEqual(name, "edit")
+        self.assertEqual(args, (callback.message,))
+        self.assertEqual(kwargs, {
+            "user_id": 42,
+            "file_id": "f1",
+            "caption": "cap",
+            "as_generation": True,
+        })
+
+    def test_vid_route_delegates_to_video_prepare(self) -> None:
+        self.rec.pending_photo_routes[42] = {"file_id": "f2", "caption": "video cap"}
+        callback = FakeCallback("pr:vid")
+        run(self.handler(callback))
+        name, args, kwargs = self.rec.calls[-1]
+        self.assertEqual(name, "video")
+        self.assertEqual(args, (callback.message,))
+        self.assertEqual(kwargs, {
+            "user_id": 42,
+            "file_id": "f2",
+            "caption": "video cap",
+        })
+
+    def test_photo_route_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.prepare_photo_edit_from_file_id = None  # type: ignore[misc]
+
+    def test_photo_route_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(photo_route_router)
         self.assertNotIn("flow_bot", src)
 
 

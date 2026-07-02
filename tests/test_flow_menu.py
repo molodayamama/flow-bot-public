@@ -438,6 +438,10 @@ class BotMenuWiringTests(unittest.TestCase):
         self.commands_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "commands.py"
         ).read_text(encoding="utf-8")
+        # Photo-route callback handler (pr:) moved to its own router (Phase 6).
+        self.photo_route_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "photo_route.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         for needle in (
@@ -920,13 +924,13 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_captioned_photo_without_mode_asks_image_or_video(self) -> None:
         self.assertIn("pending_photo_routes", self.source)
-        self.assertIn('F.data.startswith("pr:")', self.source)
-        self.assertIn('"pr:img"', self.source)
-        self.assertIn('"pr:vid"', self.source)
+        self.assertIn('F.data.startswith("pr:")', self.photo_route_source)
+        self.assertIn('"pr:img"', self.photo_route_source)
+        self.assertIn('"pr:vid"', self.photo_route_source)
         start = self.source.index("async def handle_photo")
         block = self.source[start:start + 13000]
         self.assertIn("await _offer_photo_route_choice(message, user_id=user_id, caption=caption)", block)
-        self.assertIn("await _prepare_photo_edit_from_file_id(", block)
+        self.assertIn("await deps.prepare_photo_edit_from_file_id(", self.photo_route_source)
         self.assertIn("_prepare_photo_video_from_file_id(", self.source)
         # The old fallback edited immediately when a caption was attached.
         self.assertNotIn("await _edit_and_send(message, ref, caption", block)

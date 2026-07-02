@@ -316,6 +316,7 @@ from channels.telegram.texts import (
     _seller_history_text as _telegram_seller_history_text,
 )
 from channels.telegram.routers import commands as tg_commands_router
+from channels.telegram.routers import photo_route as tg_photo_route_router
 from channels.telegram.routers import fallback as tg_fallback_router
 
 from referrals.service import ReferralService
@@ -5397,46 +5398,6 @@ async def _prepare_photo_video_from_file_id(
     return True
 
 
-@dp.callback_query(F.data.startswith("pr:"))
-async def on_photo_route_choice(callback: types.CallbackQuery):
-    """Фото+подпись без выбранного режима: выбрать image/video before upload."""
-    user_id = callback.from_user.id
-    data = callback.data or ""
-    snap = pending_photo_routes.get(user_id)
-    if data == "pr:cancel":
-        pending_photo_routes.pop(user_id, None)
-        await callback.answer("Отменено")
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-        return
-    if not snap or not snap.get("file_id") or not snap.get("caption"):
-        await callback.answer("Запрос устарел — пришлите фото ещё раз.", show_alert=True)
-        return
-    file_id = snap["file_id"]
-    caption = snap["caption"]
-    pending_photo_routes.pop(user_id, None)
-    await callback.answer()
-    if data == "pr:img":
-        await _prepare_photo_edit_from_file_id(
-            callback.message,
-            user_id=user_id,
-            file_id=file_id,
-            caption=caption,
-            as_generation=True,  # «Создать изображение» по фото = тариф генерации
-        )
-        return
-    if data == "pr:vid":
-        await _prepare_photo_video_from_file_id(
-            callback.message,
-            user_id=user_id,
-            file_id=file_id,
-            caption=caption,
-        )
-        return
-
-
 @dp.callback_query(F.data.startswith("an:"))
 async def on_animate_action(callback: types.CallbackQuery):
     """«Оживить фото»: взять сгенерированную картинку как референс для нового video wizard."""
@@ -9384,6 +9345,15 @@ async def _video_pool_health_loop() -> None:
 # included above this line. Preserves the old dp-level catch-all behaviour
 # for unknown callbacks: expired/legacy buttons get a silent ack instead of
 # an endless spinner.
+dp.include_router(
+    tg_photo_route_router.create_router(
+        tg_photo_route_router.PhotoRouteDeps(
+            pending_photo_routes=pending_photo_routes,
+            prepare_photo_edit_from_file_id=_prepare_photo_edit_from_file_id,
+            prepare_photo_video_from_file_id=_prepare_photo_video_from_file_id,
+        )
+    )
+)
 dp.include_router(tg_fallback_router.create_router())
 
 
