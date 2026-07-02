@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from aiogram import Router
 
 from channels.telegram.routers import commands as commands_router
+from channels.telegram.routers import onboarding as onboarding_router
 from channels.telegram.routers import photo_route as photo_route_router
 
 
@@ -137,15 +138,122 @@ class FakeCallback:
     def __init__(self, data: str, user_id: int = 42) -> None:
         self.data = data
         self.from_user = SimpleNamespace(id=user_id)
-        self.message = SimpleNamespace(edit_reply_markup=self._edit_reply_markup)
+        self.message = SimpleNamespace(
+            edit_reply_markup=self._edit_reply_markup,
+            edit_text=self._edit_text,
+        )
         self.answers: list[tuple[tuple, dict]] = []
         self.edits: list[dict] = []
+        self.text_edits: list[tuple[tuple, dict]] = []
 
     async def answer(self, *args, **kwargs):
         self.answers.append((args, kwargs))
 
     async def _edit_reply_markup(self, **kwargs):
         self.edits.append(kwargs)
+
+    async def _edit_text(self, *args, **kwargs):
+        self.text_edits.append((args, kwargs))
+
+
+class RecordingOnboardingDeps:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple, dict]] = []
+        self.workspaces: dict[int, dict] = {}
+
+    def balance(self, user_id: int) -> int:
+        self.calls.append(("balance", (user_id,), {}))
+        return 7
+
+    def reset_image_flow(self, *args, **kwargs):
+        self.calls.append(("reset_image_flow", args, kwargs))
+
+    def vid_clear(self, user_id: int) -> None:
+        self.calls.append(("vid_clear", (user_id,), {}))
+
+    def workspace(self, user_id: int) -> dict:
+        self.calls.append(("workspace", (user_id,), {}))
+        return self.workspaces.setdefault(user_id, {})
+
+    def _make_async(self, name):
+        async def renderer(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return None
+
+        return renderer
+
+
+def _onboarding_deps() -> tuple[onboarding_router.OnboardingDeps, RecordingOnboardingDeps]:
+    rec = RecordingOnboardingDeps()
+    deps = onboarding_router.OnboardingDeps(
+        balance=rec.balance,
+        show_main_menu=rec._make_async("show_main_menu"),
+        reset_image_flow=rec.reset_image_flow,
+        show_prompt_picker=rec._make_async("show_prompt_picker"),
+        vid_clear=rec.vid_clear,
+        show_video_prompt_input=rec._make_async("show_video_prompt_input"),
+        workspace=rec.workspace,
+    )
+    return deps, rec
+
+
+class OnboardingRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _onboarding_deps()
+        self.router = onboarding_router.create_router(self.deps)
+        self.handler = self.router.callback_query.handlers[0].callback
+
+    def test_creates_ob_callback_router(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        self.assertEqual(self.router.name, "tg-onboarding")
+        self.assertEqual(len(self.router.callback_query.handlers), 1)
+        self.assertEqual(self.router.callback_query.handlers[0].callback.__name__, "on_onboarding_action")
+
+    def test_skip_delegates_to_main_menu(self) -> None:
+        callback = FakeCallback("ob:skip")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.calls[-1][0], "show_main_menu")
+        self.assertEqual(self.rec.calls[-1][1], (callback.message,))
+        self.assertEqual(self.rec.calls[-1][2], {"user_id": 42, "edit": True})
+
+    def test_kind_choice_edits_step2_screen(self) -> None:
+        callback = FakeCallback("ob:img")
+        run(self.handler(callback))
+        self.assertTrue(callback.answers)
+        self.assertTrue(callback.text_edits)
+        args, kwargs = callback.text_edits[-1]
+        self.assertTrue(args[0])
+        self.assertIn("reply_markup", kwargs)
+        self.assertEqual(kwargs["parse_mode"], "HTML")
+
+    def test_go_image_resets_and_opens_prompt_picker(self) -> None:
+        callback = FakeCallback("ob:go:img")
+        run(self.handler(callback))
+        self.assertIn(("reset_image_flow", (42,), {}), self.rec.calls)
+        self.assertEqual(self.rec.calls[-1][0], "show_prompt_picker")
+        self.assertEqual(self.rec.calls[-1][2], {"user_id": 42, "edit": True})
+
+    def test_go_video_clears_video_and_opens_video_prompt(self) -> None:
+        callback = FakeCallback("ob:go:vid")
+        run(self.handler(callback))
+        self.assertIn(("vid_clear", (42,), {}), self.rec.calls)
+        self.assertEqual(self.rec.calls[-1][0], "show_video_prompt_input")
+        self.assertEqual(self.rec.calls[-1][2], {"user_id": 42, "edit": True})
+
+    def test_go_photo_sets_photo_await_state(self) -> None:
+        callback = FakeCallback("ob:go:photo")
+        run(self.handler(callback))
+        self.assertIn(("reset_image_flow", (42,), {"keep_last": False}), self.rec.calls)
+        self.assertEqual(self.rec.workspaces[42]["await"], "photo")
+        self.assertTrue(callback.text_edits)
+
+    def test_onboarding_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.balance = None  # type: ignore[misc]
+
+    def test_onboarding_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(onboarding_router)
+        self.assertNotIn("flow_bot", src)
 
 
 def _photo_route_deps() -> tuple[photo_route_router.PhotoRouteDeps, RecordingPhotoRouteDeps]:

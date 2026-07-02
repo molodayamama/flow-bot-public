@@ -316,6 +316,7 @@ from channels.telegram.texts import (
     _seller_history_text as _telegram_seller_history_text,
 )
 from channels.telegram.routers import commands as tg_commands_router
+from channels.telegram.routers import onboarding as tg_onboarding_router
 from channels.telegram.routers import photo_route as tg_photo_route_router
 from channels.telegram.routers import fallback as tg_fallback_router
 
@@ -5256,45 +5257,6 @@ async def on_menu_action(callback: types.CallbackQuery):
         await callback.answer()
 
 
-@dp.callback_query(F.data.startswith("ob:"))
-async def on_onboarding_action(callback: types.CallbackQuery):
-    """Онбординг новых пользователей: 2-шаговый выбор что создавать."""
-    user_id = callback.from_user.id
-    data = callback.data or ""
-    msg = callback.message
-    credits = credit_store.balance(user_id)
-
-    if data == "ob:skip":
-        await callback.answer()
-        await show_main_menu(msg, user_id=user_id, edit=True)
-        return
-
-    if data in ("ob:img", "ob:vid", "ob:photo"):
-        kind = data.split(":")[1]
-        copy_key = f"onboarding_step2_{kind}"
-        text = flow_copy.msg(copy_key, credits=credits)
-        await callback.answer()
-        await msg.edit_text(text, reply_markup=_onboarding_step2_kb(kind), parse_mode="HTML")
-        return
-
-    if data.startswith("ob:go:"):
-        kind = data.split(":")[2]
-        await callback.answer()
-        if kind == "img":
-            _reset_image_flow(user_id)
-            await show_prompt_picker(msg, user_id=user_id, edit=True)
-        elif kind == "vid":
-            _vid_clear(user_id)
-            await show_video_prompt_input(msg, user_id=user_id, edit=True)
-        elif kind == "photo":
-            _reset_image_flow(user_id, keep_last=False)
-            _ws(user_id)["await"] = "photo"
-            await msg.edit_text(flow_copy.msg("ask_photo"))
-        return
-
-    await callback.answer()
-
-
 def _store_pending_photo_route(user_id: int, *, file_id: str, caption: str) -> None:
     pending_photo_routes[user_id] = {
         "file_id": file_id,
@@ -9345,6 +9307,19 @@ async def _video_pool_health_loop() -> None:
 # included above this line. Preserves the old dp-level catch-all behaviour
 # for unknown callbacks: expired/legacy buttons get a silent ack instead of
 # an endless spinner.
+dp.include_router(
+    tg_onboarding_router.create_router(
+        tg_onboarding_router.OnboardingDeps(
+            balance=credit_store.balance,
+            show_main_menu=show_main_menu,
+            reset_image_flow=_reset_image_flow,
+            show_prompt_picker=show_prompt_picker,
+            vid_clear=_vid_clear,
+            show_video_prompt_input=show_video_prompt_input,
+            workspace=_ws,
+        )
+    )
+)
 dp.include_router(
     tg_photo_route_router.create_router(
         tg_photo_route_router.PhotoRouteDeps(
