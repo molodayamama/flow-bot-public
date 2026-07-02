@@ -263,6 +263,7 @@ from channels.telegram.keyboards import (
     _MP_PLATFORM_SIZE,
     _MP_PLATFORM_GUIDANCE,
     _MP_NICHES,
+    _MP_JOB_LABELS,
     _mp_platform_fmt,
     _mp_platform_format_label,
     _mp_platform_guidance,
@@ -295,8 +296,18 @@ from channels.telegram.keyboards import (
     _video_can_extend,
     _slides_word,
 )
+from channels.telegram.texts import (
+    _seller_history_job_platform,
+    _seller_history_status,
+    _seller_history_cost,
+    _seller_history_text as _telegram_seller_history_text,
+)
 
 from referrals.service import ReferralService
+
+
+def _seller_history_text(user_id: int) -> str:
+    return _telegram_seller_history_text(user_id, metrics_module=metrics)
 
 # Flow provider extracted into flow_provider/ (PR-2a). Re-exported so the
 # rest of flow_bot.py keeps its existing references unchanged.
@@ -1037,13 +1048,6 @@ _MP_JOB_SEED = {
     "bg": "заменить фон у фото товара на чистый и продающий",
 }
 _MP_PRODUCT_PHOTO_JOBS = frozenset(_MP_JOB_SEED)
-_MP_JOB_LABELS = {
-    "whitebg": "белый фон для каталога",
-    "info": "готовая карточка с инфографикой",
-    "model": "товар на модели / в сцене",
-    "cover": "обложка / главный слайд",
-    "bg": "заменить фон",
-}
 _MP_JOB_OUTCOMES = {
     "whitebg": "чистое каталожное фото товара на белом фоне.",
     "info": "карточка с крупным товаром, местом под заголовок и ключевые выгоды.",
@@ -4734,87 +4738,6 @@ async def _show_gallery(message: types.Message, *, user_id: int) -> None:
         "⬆️ Вот твои последние работы",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=bottom_rows),
     )
-
-
-def _seller_history_job_platform(row: dict) -> tuple[str, str]:
-    source = str(row.get("mp_source") or "").strip()
-    platform = ""
-    job = ""
-    if source:
-        parts = source.split(":")
-        if parts:
-            platform = _MP_PLAT_NAMES.get(parts[0], parts[0])
-        if len(parts) >= 2:
-            if parts[1] == "series":
-                count = parts[2] if len(parts) >= 3 else ""
-                job = f"серия · {count} {_slides_word(int(count))}" if str(count).isdigit() else "серия слайдов"
-            elif parts[1] == "animate":
-                job = "оживить фото"
-            else:
-                job = _MP_JOB_LABELS.get(parts[1], parts[1])
-    if not job:
-        op = str(row.get("operation_type") or "")
-        job = {
-            "mp_series": "серия слайдов",
-            "video_mp_animate": "оживить фото",
-            "edit": "карточка товара",
-            "image": "картинка",
-            "enhance": "улучшение",
-        }.get(op, op or "запрос")
-    return job, platform
-
-
-def _seller_history_status(row: dict) -> str:
-    status = str(row.get("status") or "").strip().lower()
-    if status == "success":
-        return "✅ готово"
-    if status in {"fail", "failed", "error"}:
-        reason = str(row.get("error_type") or "").strip()
-        return f"❌ ошибка: {html.escape(reason)}" if reason else "❌ ошибка"
-    return f"⏳ {html.escape(status)}" if status else "⏳ в работе"
-
-
-def _seller_history_cost(row: dict) -> str:
-    charged = int(row.get("bot_credits_charged") or 0)
-    refunded = int(row.get("refund_amount") or 0)
-    if charged > 0:
-        return f"списано {charged} кр"
-    if refunded > 0:
-        return f"возврат {refunded} кр"
-    return "без списания"
-
-
-def _seller_history_text(user_id: int) -> str:
-    get_history = getattr(metrics, "get_seller_history", None)
-    jobs = get_history(user_id, limit=10) if callable(get_history) else []
-    if jobs:
-        lines = [flow_copy.msg("seller_history_title", n=len(jobs))]
-        for idx, row in enumerate(jobs, 1):
-            job, platform = _seller_history_job_platform(row)
-            platform_line = f" · {html.escape(platform)}" if platform else ""
-            lines.append(flow_copy.msg(
-                "seller_history_item",
-                idx=idx,
-                date=html.escape((row.get("created_at") or "")[:16]),
-                job=html.escape(job),
-                platform=platform_line,
-                status=_seller_history_status(row),
-                cost=html.escape(_seller_history_cost(row)),
-            ))
-        return "\n".join(lines)
-
-    gallery = metrics.get_gallery(user_id, limit=5)
-    if gallery:
-        items = []
-        for item in gallery:
-            prompt = str(item.get("prompt") or "готовая работа").strip()[:90]
-            items.append(flow_copy.msg(
-                "seller_history_gallery_item",
-                date=html.escape((item.get("created_at") or "")[:16]),
-                prompt=html.escape(prompt or "готовая работа"),
-            ))
-        return flow_copy.msg("seller_history_gallery_fallback", items="\n".join(items))
-    return flow_copy.msg("seller_history_empty")
 
 
 async def _show_prompt_history(message: types.Message, *, user_id: int) -> None:

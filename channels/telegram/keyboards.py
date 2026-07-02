@@ -66,6 +66,13 @@ _MP_PLATFORM_GUIDANCE = {
     ),
 }
 
+_MP_JOB_LABELS = {
+    "whitebg": "белый фон для каталога",
+    "info": "готовая карточка с инфографикой",
+    "model": "товар на модели / в сцене",
+    "cover": "обложка / главный слайд",
+    "bg": "заменить фон",
+}
 def _mp_platform_fmt(platform: str) -> str:
     return _MP_PLATFORM_FMT.get(platform, "f34")
 
