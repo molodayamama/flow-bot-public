@@ -20,6 +20,7 @@ from config.video import (
     VIDEO_EXTEND_MODEL,
     VID_FRAMES_VARIANTS,
     VID_REF_VARIANTS,
+    _VID_STYLES,
     _VID_QUICKSTART_MODEL,
 )
 from flow_core import (
@@ -342,6 +343,35 @@ def topup_method_kb() -> types.InlineKeyboardMarkup:
 
 def topup_kb(is_admin: bool = False) -> types.InlineKeyboardMarkup:
     return topup_method_kb()
+
+
+# --- Leaf image/video option keyboards (Phase 5: moved from flow_bot) ---
+
+def _imodel_row(
+    selected: str,
+    prefix: str = "w:imodel",
+    *,
+    base_price: int | None = None,
+) -> list:
+    """Ряд выбора модели картинки (Nano Banana 2 / Pro) с наценкой в подписи."""
+    B = types.InlineKeyboardButton
+    row = []
+    base = price_gen(1) if base_price is None else int(base_price)
+    for mid, meta in IMAGE_MODELS.items():
+        price = base + int(meta.get("extra") or 0)
+        label = f"{meta['label']} · {price} кр"
+        row.append(_sel_btn(label, mid == selected, f"{prefix}:{mid}"))
+    return row
+
+def _nwiz_styles_kb() -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    _STYLE_EMOJI = {"": "❌", "cine": "🎬", "anime": "🎌", "3d": "🖥", "photo": "📷", "retro": "📼"}
+    rows = [
+        [B(text=f"{_STYLE_EMOJI.get(k,'•')} {name}", callback_data=f"v:nstyle:{k}")]
+        for k, (name, _) in _VID_STYLES.items()
+    ]
+    rows.append([B(text="← Назад", callback_data="v:nstyle:back")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # --- Image result keyboards (Phase 5: moved verbatim from flow_bot) ---

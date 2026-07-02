@@ -268,6 +268,8 @@ from channels.telegram.keyboards import (
     mp_series_kb,
     _mp_niche_guidance,
     _mp_niche_kb,
+    _imodel_row,
+    _nwiz_styles_kb,
     _image_keyboard,
     _seller_image_keyboard,
     wizard_kb,
@@ -1434,23 +1436,6 @@ DEFAULT_FMT = "land"
 _FMT_NAMES = {"land": "16:9", "port": "9:16", "sq": "1:1", "f43": "4:3", "f34": "3:4"}
 
 
-def _imodel_row(
-    selected: str,
-    prefix: str = "w:imodel",
-    *,
-    base_price: int | None = None,
-) -> list:
-    """Ряд выбора модели картинки (Nano Banana 2 / Pro) с наценкой в подписи."""
-    B = types.InlineKeyboardButton
-    row = []
-    base = price_gen(1) if base_price is None else int(base_price)
-    for mid, meta in IMAGE_MODELS.items():
-        price = base + int(meta.get("extra") or 0)
-        label = f"{meta['label']} · {price} кр"
-        row.append(_sel_btn(label, mid == selected, f"{prefix}:{mid}"))
-    return row
-
-
 def _short_prompt(text: str, limit: int = 80) -> str:
     """Trim a prompt for captions/status lines, adding an ellipsis if cut.
 
@@ -2015,17 +2000,6 @@ def _nwiz_kb(user_id: int) -> types.InlineKeyboardMarkup:
         B(text=f"🎬 Создать · {price} кр", callback_data="v:ngo"),
     ])
     rows.append([B(text=L("cancel"), callback_data="v:cancel")])
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _nwiz_styles_kb() -> types.InlineKeyboardMarkup:
-    B = types.InlineKeyboardButton
-    _STYLE_EMOJI = {"": "❌", "cine": "🎬", "anime": "🎌", "3d": "🖥", "photo": "📷", "retro": "📼"}
-    rows = [
-        [B(text=f"{_STYLE_EMOJI.get(k,'•')} {name}", callback_data=f"v:nstyle:{k}")]
-        for k, (name, _) in _VID_STYLES.items()
-    ]
-    rows.append([B(text="← Назад", callback_data="v:nstyle:back")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
