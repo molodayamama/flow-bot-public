@@ -246,6 +246,10 @@ from config.settings import (
 
 # Telegram keyboard builders extracted to channels/telegram/keyboards.py
 # (Phase 5); re-exported so flow_bot handlers keep working.
+from product.marketplace import (
+    marketplace_export_filename,
+    marketplace_export_caption,
+)
 from channels.telegram.keyboards import (
     main_menu_kb,
     reply_menu_kb as _telegram_reply_menu_kb,
@@ -3389,35 +3393,6 @@ def _image_ext_from_bytes(data: bytes, fallback: str = "png") -> str:
     return image_ext_from_bytes(data, fallback)
 
 
-def _marketplace_export_filename(ref: ImageRef, data: bytes) -> str:
-    platform = (getattr(ref, "platform", "") or "").strip().lower()
-    platform_slug = {
-        "wb": "wildberries",
-        "ozon": "ozon",
-        "ym": "yandex_market",
-    }.get(platform, "marketplace")
-    aspect_slug = {
-        "portrait_34": "3x4",
-        "square": "1x1",
-        "landscape": "16x9",
-        "portrait": "9x16",
-        "landscape_43": "4x3",
-    }.get((getattr(ref, "aspect_ratio", "") or "").strip(), "card")
-    media_id = ref.source.get("mediaId") if isinstance(ref.source, dict) else None
-    suffix = str(media_id or "image")[-12:]
-    ext = _image_ext_from_bytes(data)
-    return f"photozhab_{platform_slug}_{aspect_slug}_{suffix}.{ext}"
-
-
-def _marketplace_export_caption(ref: ImageRef) -> str:
-    platform = (getattr(ref, "platform", "") or "").strip().lower()
-    platform_name = _MP_PLAT_NAMES.get(platform, "маркетплейса")
-    return (
-        f"⬇️ Файл для {platform_name}: оригинал без сжатия Telegram. "
-        "Подходит как исходник для загрузки в карточку; точный resize/zip серии будет отдельной функцией."
-    )
-
-
 async def _send_original_file(message: types.Message, ref: ImageRef, *, marketplace_export: bool = False):
     """⬇️ Оригинал: отдать картинку файлом в полном качестве.
 
@@ -3460,8 +3435,8 @@ async def _do_send_original_file(
 
     media_id = ref.source.get("mediaId") if isinstance(ref.source, dict) else None
     if marketplace_export:
-        filename = _marketplace_export_filename(ref, data)
-        caption = _marketplace_export_caption(ref)
+        filename = marketplace_export_filename(ref, _image_ext_from_bytes(data))
+        caption = marketplace_export_caption(ref)
     else:
         filename = f"flow_{media_id or 'image'}.{_image_ext_from_bytes(data)}"
         caption = "⬇️ Оригинал в полном качестве (Telegram не сжимает документы)."

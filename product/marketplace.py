@@ -69,3 +69,37 @@ def _mp_niche_guidance(niche: str | None) -> str:
         return ""
     label, guidance = item
     return f"{label}: {guidance}"
+
+
+# Export helpers: build a marketplace-ready filename/caption for the ⬇️ original
+# file delivery. Structural over an ImageRef (platform/aspect_ratio/source);
+# ``ext`` is precomputed by the caller so this module stays import-free.
+_MP_PLATFORM_SLUG = {"wb": "wildberries", "ozon": "ozon", "ym": "yandex_market"}
+_MP_ASPECT_SLUG = {
+    "portrait_34": "3x4",
+    "square": "1x1",
+    "landscape": "16x9",
+    "portrait": "9x16",
+    "landscape_43": "4x3",
+}
+
+
+def marketplace_export_filename(ref, ext: str) -> str:
+    platform = (getattr(ref, "platform", "") or "").strip().lower()
+    platform_slug = _MP_PLATFORM_SLUG.get(platform, "marketplace")
+    aspect_slug = _MP_ASPECT_SLUG.get(
+        (getattr(ref, "aspect_ratio", "") or "").strip(), "card"
+    )
+    source = getattr(ref, "source", None)
+    media_id = source.get("mediaId") if isinstance(source, dict) else None
+    suffix = str(media_id or "image")[-12:]
+    return f"photozhab_{platform_slug}_{aspect_slug}_{suffix}.{ext}"
+
+
+def marketplace_export_caption(ref) -> str:
+    platform = (getattr(ref, "platform", "") or "").strip().lower()
+    platform_name = _MP_PLAT_NAMES.get(platform, "маркетплейса")
+    return (
+        f"⬇️ Файл для {platform_name}: оригинал без сжатия Telegram. "
+        "Подходит как исходник для загрузки в карточку; точный resize/zip серии будет отдельной функцией."
+    )

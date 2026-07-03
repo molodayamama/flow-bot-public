@@ -548,10 +548,10 @@ class SellerMenuTests(unittest.TestCase):
             platform="wb",
             aspect_ratio="portrait_34",
         )
-        filename = flow_bot._marketplace_export_filename(ref, b"\x89PNG\r\n\x1a\nrest")
+        filename = flow_bot.marketplace_export_filename(ref, "png")
         self.assertTrue(filename.startswith("photozhab_wildberries_3x4_"))
         self.assertTrue(filename.endswith(".png"))
-        self.assertIn("Wildberries", flow_bot._marketplace_export_caption(ref))
+        self.assertIn("Wildberries", flow_bot.marketplace_export_caption(ref))
         square_ref = flow_core.ImageRef(
             user_id=1,
             project_id="p",
@@ -559,7 +559,7 @@ class SellerMenuTests(unittest.TestCase):
             platform="ym",
             aspect_ratio="square",
         )
-        square_filename = flow_bot._marketplace_export_filename(square_ref, b"\x89PNG\r\n\x1a\nrest")
+        square_filename = flow_bot.marketplace_export_filename(square_ref, "png")
         self.assertTrue(square_filename.startswith("photozhab_yandex_market_1x1_"))
 
     def test_seller_history_uses_flow_jobs(self) -> None:
