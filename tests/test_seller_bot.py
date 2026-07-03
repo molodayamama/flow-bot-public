@@ -8,6 +8,7 @@ import unittest
 import flow_core
 import flow_bot
 import config.settings as _cfg
+from channels.telegram.routers import marketplace as marketplace_router
 from generation import backend_service
 
 
@@ -92,9 +93,9 @@ class SellerMenuTests(unittest.TestCase):
         self.assertEqual(flow_bot.wizard_state[user_id]["mp_active_msg_id"], 201)
 
     def test_marketplace_callbacks_are_stale_guarded(self) -> None:
-        source = inspect.getsource(flow_bot.on_marketplace_action)
-        self.assertIn("_mp_is_stale_callback(user_id, callback)", source)
-        self.assertIn("_mp_reject_stale_callback(callback)", source)
+        source = inspect.getsource(marketplace_router)
+        self.assertIn("deps.mp_is_stale_callback(user_id, callback)", source)
+        self.assertIn("await deps.mp_reject_stale_callback(callback)", source)
         from channels.telegram.routers import menu as menu_router
         menu_source = inspect.getsource(menu_router)
         self.assertIn('elif data == "m:mp":', menu_source)
@@ -231,7 +232,7 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("client_max_size=client_max_size", src)
 
     def test_seller_marketplace_animate_is_backend_wired(self) -> None:
-        source = inspect.getsource(flow_bot.on_marketplace_action)
+        source = inspect.getsource(marketplace_router)
         self.assertIn('st["await"] = "mp_video_photo"', source)
         self.assertIn("_mp_video_request_text(plat)", source)
         self.assertNotIn("Видео для карточек скоро", source)
@@ -373,8 +374,8 @@ class SellerMenuTests(unittest.TestCase):
             self.assertTrue(flow_bot._MP_JOB_SEED[job])
 
     def test_marketplace_image_jobs_wait_for_product_photo(self) -> None:
-        source = inspect.getsource(flow_bot.on_marketplace_action)
-        self.assertIn('if job not in _MP_PRODUCT_PHOTO_JOBS:', source)
+        source = inspect.getsource(marketplace_router)
+        self.assertIn("if job not in deps.product_photo_jobs:", source)
         self.assertIn('st["await"] = "mp_photo"', source)
         self.assertIn('st["edit_fmt"] = _mp_platform_fmt(plat)', source)
         self.assertIn("_mp_photo_request_text(plat, job)", source)
@@ -398,7 +399,7 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("товар по центру", ym_prompt)
 
     def test_marketplace_series_waits_for_product_photo(self) -> None:
-        source = inspect.getsource(flow_bot.on_marketplace_action)
+        source = inspect.getsource(marketplace_router)
         self.assertIn('if data == "mp:series":', source)
         self.assertIn('if data.startswith("mp:series:"):', source)
         self.assertIn('st["await"] = "mp_series_photo"', source)
@@ -446,7 +447,7 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn('action="mp_series"', source)
 
     def test_done4you_sets_support_brief_state(self) -> None:
-        source = inspect.getsource(flow_bot.on_marketplace_action)
+        source = inspect.getsource(marketplace_router)
         self.assertIn('if data == "mp:done4you":', source)
         self.assertIn('st["support_await"] = True', source)
         self.assertIn('st["support_kind"] = "mp_done4you"', source)
@@ -460,15 +461,15 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn('"mp_done4you_submitted"', source)
 
     def test_sku_projects_menu_and_result_action(self) -> None:
-        source = inspect.getsource(flow_bot.on_marketplace_action)
+        source = inspect.getsource(marketplace_router)
         self.assertIn('if data == "mp:projects":', source)
-        self.assertIn("_show_sku_projects", source)
+        self.assertIn("deps.show_sku_projects", source)
         self.assertIn('data.startswith("mp:sku:open:")', source)
         self.assertIn('if data == "mp:sku:addlast":', source)
         self.assertIn('if data == "mp:sku:rename":', source)
         self.assertIn('if data == "mp:sku:delete"', source)
         self.assertIn("metrics.rename_seller_sku_project", inspect.getsource(flow_bot.handle_plain_text))
-        self.assertIn("metrics.delete_seller_sku_project", source)
+        self.assertIn("deps.metrics.delete_seller_sku_project", source)
         from channels.telegram.routers import image_action as image_action_router
         action_source = inspect.getsource(image_action_router)
         self.assertIn('elif action == "skuadd":', action_source)
@@ -623,7 +624,7 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("карточка товара", text)
 
     def test_brandkit_sets_profile_state(self) -> None:
-        source = inspect.getsource(flow_bot.on_marketplace_action)
+        source = inspect.getsource(marketplace_router)
         self.assertIn('if data == "mp:brandkit":', source)
         self.assertIn('st["await"] = "mp_brandkit"', source)
         self.assertIn("_mp_brandkit_text(user_id)", source)
@@ -634,7 +635,7 @@ class SellerMenuTests(unittest.TestCase):
             [c for c in cb if c.startswith("mp:niche:")],
             ["mp:niche:clothes", "mp:niche:beauty", "mp:niche:electronics", "mp:niche:kids", "mp:niche:food"],
         )
-        source = inspect.getsource(flow_bot.on_marketplace_action)
+        source = inspect.getsource(marketplace_router)
         self.assertIn('if data == "mp:niche":', source)
         self.assertIn('if data.startswith("mp:niche:"):', source)
         self.assertIn("metrics.save_seller_profile(user_id, niche=niche_id)", source)

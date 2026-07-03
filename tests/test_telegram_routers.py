@@ -16,6 +16,7 @@ from channels.telegram.routers import image_action as image_action_router
 from channels.telegram.routers import ideas_flow as ideas_flow_router
 from channels.telegram.routers import image_retry as image_retry_router
 from channels.telegram.routers import ideas_hub as ideas_hub_router
+from channels.telegram.routers import marketplace as marketplace_router
 from channels.telegram.routers import onboarding as onboarding_router
 from channels.telegram.routers import menu as menu_router
 from channels.telegram.routers import photo_route as photo_route_router
@@ -725,6 +726,190 @@ class MenuRouterTests(unittest.TestCase):
 
     def test_menu_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(menu_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class RecordingMarketplaceMetrics:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def _record(self, name, *args, **kwargs):
+        self.calls.append((name, args, kwargs))
+
+    def upsert_user(self, *args, **kwargs):
+        self._record("upsert_user", *args, **kwargs)
+
+    def log_event(self, *args, **kwargs):
+        self._record("log_event", *args, **kwargs)
+
+    def list_seller_sku_projects(self, *args, **kwargs):
+        self._record("list_seller_sku_projects", *args, **kwargs)
+        return []
+
+    def get_seller_sku_project(self, *args, **kwargs):
+        self._record("get_seller_sku_project", *args, **kwargs)
+        return {}
+
+    def delete_seller_sku_project(self, *args, **kwargs):
+        self._record("delete_seller_sku_project", *args, **kwargs)
+        return 1
+
+    def save_seller_profile(self, *args, **kwargs):
+        self._record("save_seller_profile", *args, **kwargs)
+        return True
+
+
+class RecordingMarketplaceDeps:
+    def __init__(self, *, seller: bool = True) -> None:
+        self.workspaces: dict[int, dict] = {}
+        self.pending_edits: dict[int, str] = {}
+        self.metrics = RecordingMarketplaceMetrics()
+        self.seller = seller
+        self.stale = False
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def workspace(self, user_id: int) -> dict:
+        return self.workspaces.setdefault(user_id, {})
+
+    def is_seller(self) -> bool:
+        return self.seller
+
+    def mp_is_stale_callback(self, *args, **kwargs):
+        self.calls.append(("mp_is_stale_callback", args, kwargs))
+        return self.stale
+
+    async def mp_reject_stale_callback(self, *args, **kwargs):
+        self.calls.append(("mp_reject_stale_callback", args, kwargs))
+
+    def mp_stamp_message(self, *args, **kwargs):
+        self.calls.append(("mp_stamp_message", args, kwargs))
+
+    def mp_job_instruction(self, *args, **kwargs):
+        self.calls.append(("mp_job_instruction", args, kwargs))
+        return "job instruction"
+
+    def mp_series_prompt(self, *args, **kwargs):
+        self.calls.append(("mp_series_prompt", args, kwargs))
+        return "series prompt"
+
+    async def seller_i2i_from_file_id(self, *args, **kwargs):
+        self.calls.append(("seller_i2i_from_file_id", args, kwargs))
+        return True
+
+    async def show_sku_projects(self, *args, **kwargs):
+        self.calls.append(("show_sku_projects", args, kwargs))
+
+    def pending_sku_payload(self, *args, **kwargs):
+        self.calls.append(("pending_sku_payload", args, kwargs))
+        return None
+
+    def latest_sku_payload(self, *args, **kwargs):
+        self.calls.append(("latest_sku_payload", args, kwargs))
+        return None
+
+    async def save_sku_payload(self, *args, **kwargs):
+        self.calls.append(("save_sku_payload", args, kwargs))
+        return True
+
+    async def save_pending_sku_item(self, *args, **kwargs):
+        self.calls.append(("save_pending_sku_item", args, kwargs))
+
+    def reset_image_flow(self, *args, **kwargs):
+        self.calls.append(("reset_image_flow", args, kwargs))
+
+    def vid_clear(self, *args, **kwargs):
+        self.calls.append(("vid_clear", args, kwargs))
+
+    def clear_image_flow_keys(self, *args, **kwargs):
+        self.calls.append(("clear_image_flow_keys", args, kwargs))
+
+    async def show_video_ingredients(self, *args, **kwargs):
+        self.calls.append(("show_video_ingredients", args, kwargs))
+
+
+def _marketplace_deps(*, seller: bool = True) -> tuple[marketplace_router.MarketplaceDeps, RecordingMarketplaceDeps]:
+    rec = RecordingMarketplaceDeps(seller=seller)
+    deps = marketplace_router.MarketplaceDeps(
+        workspace=rec.workspace,
+        pending_edits=rec.pending_edits,
+        metrics=rec.metrics,
+        is_seller=rec.is_seller,
+        product_photo_jobs={"whitebg", "info", "model", "cover", "bg"},
+        mp_is_stale_callback=rec.mp_is_stale_callback,
+        mp_reject_stale_callback=rec.mp_reject_stale_callback,
+        mp_stamp_message=rec.mp_stamp_message,
+        mp_job_instruction=rec.mp_job_instruction,
+        mp_series_prompt=rec.mp_series_prompt,
+        seller_i2i_from_file_id=rec.seller_i2i_from_file_id,
+        show_sku_projects=rec.show_sku_projects,
+        pending_sku_payload=rec.pending_sku_payload,
+        latest_sku_payload=rec.latest_sku_payload,
+        save_sku_payload=rec.save_sku_payload,
+        save_pending_sku_item=rec.save_pending_sku_item,
+        reset_image_flow=rec.reset_image_flow,
+        vid_clear=rec.vid_clear,
+        clear_image_flow_keys=rec.clear_image_flow_keys,
+        show_video_ingredients=rec.show_video_ingredients,
+    )
+    return deps, rec
+
+
+class MarketplaceRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _marketplace_deps()
+        self.router = marketplace_router.create_router(self.deps)
+        self.handler = self.router.callback_query.handlers[0].callback
+
+    def test_creates_mp_callback_router(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        self.assertEqual(self.router.name, "tg-marketplace")
+        self.assertEqual(len(self.router.callback_query.handlers), 1)
+        self.assertEqual(self.router.callback_query.handlers[0].callback.__name__, "on_marketplace_action")
+
+    def test_stale_callback_is_rejected_before_stamp(self) -> None:
+        self.rec.stale = True
+        callback = FakeCallback("mp:plat:wb")
+        run(self.handler(callback))
+        self.assertEqual([c[0] for c in self.rec.calls], [
+            "mp_is_stale_callback",
+            "mp_reject_stale_callback",
+        ])
+
+    def test_platform_choice_updates_state_and_jobs_screen(self) -> None:
+        callback = FakeCallback("mp:plat:ozon")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42]["mp_platform"], "ozon")
+        self.assertTrue(callback.text_edits)
+        self.assertIn(("log_event", ("mp_platform",), {"user_id": 42, "source": "ozon"}), self.rec.metrics.calls)
+
+    def test_product_job_prepares_photo_upload_state(self) -> None:
+        self.rec.workspaces[42] = {"mp_platform": "wb"}
+        callback = FakeCallback("mp:job:whitebg")
+        run(self.handler(callback))
+        st = self.rec.workspaces[42]
+        self.assertEqual(st["await"], "mp_photo")
+        self.assertEqual(st["mp_preset"], "whitebg")
+        self.assertEqual(st["edit_imodel"], "nb2")
+        self.assertIn("reset_image_flow", [c[0] for c in self.rec.calls])
+
+    def test_non_seller_animate_delegates_to_video_ingredients(self) -> None:
+        deps, rec = _marketplace_deps(seller=False)
+        handler = marketplace_router.create_router(deps).callback_query.handlers[0].callback
+        rec.workspaces[42] = {"mp_platform": "wb"}
+        rec.pending_edits[42] = "tok"
+        callback = FakeCallback("mp:job:animate")
+        run(handler(callback))
+        self.assertNotIn(42, rec.pending_edits)
+        self.assertEqual(rec.workspaces[42]["vmode"], "ingredients")
+        self.assertIn("vid_clear", [c[0] for c in rec.calls])
+        self.assertIn("show_video_ingredients", [c[0] for c in rec.calls])
+
+    def test_marketplace_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.metrics = None  # type: ignore[misc]
+
+    def test_marketplace_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(marketplace_router)
         self.assertNotIn("flow_bot", src)
 
 

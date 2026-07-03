@@ -317,6 +317,7 @@ from channels.telegram.texts import (
 )
 from channels.telegram.routers import commands as tg_commands_router
 from channels.telegram.routers import menu as tg_menu_router
+from channels.telegram.routers import marketplace as tg_marketplace_router
 from channels.telegram.routers import onboarding as tg_onboarding_router
 from channels.telegram.routers import photo_route as tg_photo_route_router
 from channels.telegram.routers import image_retry as tg_image_retry_router
@@ -4727,422 +4728,6 @@ async def _show_my_tickets(message: types.Message, *, user_id: int, edit: bool) 
         await message.answer(text, reply_markup=back_kb)
 
 
-@dp.callback_query(F.data.startswith("mp:"))
-async def on_marketplace_action(callback: types.CallbackQuery):
-    """Селлер-меню «Маркетплейсы»: площадка → задача (docs/SELLER_BOT_PLAN.md §4)."""
-    user_id = callback.from_user.id
-    metrics.upsert_user(user_id, username=getattr(callback.from_user, "username", None),
-                        first_name=getattr(callback.from_user, "first_name", None))
-    data = callback.data or ""
-    msg = callback.message
-    if _mp_is_stale_callback(user_id, callback):
-        await _mp_reject_stale_callback(callback)
-        return
-    _mp_stamp_message(user_id, msg)
-
-    if data.startswith("mp:plat:"):
-        plat = data.split(":", 2)[2]
-        if plat not in _MP_PLAT_NAMES:
-            await callback.answer()
-            return
-        _ws(user_id)["mp_platform"] = plat
-        await callback.answer()
-        metrics.log_event("mp_platform", user_id=user_id, source=plat)
-        await msg.edit_text(
-            _mp_jobs_text(plat),
-            reply_markup=mp_jobs_kb(plat),
-            parse_mode="HTML",
-        )
-        return
-
-    # Выбор площадки прямо на экране настроек (перед загрузкой фото).
-    if data.startswith("mp:setplat:"):
-        plat = data.split(":", 2)[2]
-        if plat not in _MP_PLAT_NAMES:
-            await callback.answer()
-            return
-        st = _ws(user_id)
-        st["mp_platform"] = plat
-        st["edit_fmt"] = _mp_platform_fmt(plat)
-        await callback.answer(_MP_PLAT_NAMES[plat])
-        metrics.log_event("mp_platform", user_id=user_id, source=f"setplat:{plat}")
-        try:
-            if st.get("await") == "mp_video_photo":
-                await msg.edit_text(
-                    _mp_video_request_text(plat),
-                    reply_markup=_mp_photo_settings_kb(plat),
-                    parse_mode="HTML",
-                )
-            else:
-                job = st.get("mp_preset", "whitebg")
-                await msg.edit_text(
-                    _mp_photo_request_text(plat, job),
-                    reply_markup=_mp_photo_settings_kb(plat),
-                    parse_mode="HTML",
-                )
-        except Exception:
-            pass
-        return
-
-    if data == "mp:more":
-        plat = _ws(user_id).get("mp_platform", "wb")
-        if plat not in _MP_PLAT_NAMES:
-            plat = "wb"
-        await callback.answer()
-        metrics.log_event("mp_more_open", user_id=user_id, source=plat)
-        await msg.edit_text(
-            _mp_more_text(plat),
-            reply_markup=mp_more_kb(plat),
-            parse_mode="HTML",
-        )
-        return
-
-    # Подтверждение генерации карточки: генерим по ранее загруженному фото.
-    if data == "mp:create":
-        st = _ws(user_id)
-        file_id = st.get("mp_pending_file_id")
-        if not file_id:
-            await callback.answer("Сначала пришли фото товара 🙏", show_alert=True)
-            return
-        plat = st.get("mp_platform", "wb")
-        st["edit_fmt"] = _mp_platform_fmt(plat)
-        kind = st.get("mp_pending_kind", "photo")
-        caption_text = (st.get("mp_pending_caption") or "").strip()
-        aspect = _mp_platform_aspect(plat)
-        await callback.answer("Запускаю…")
-        st.pop("mp_pending_file_id", None)  # защита от повторного клика → двойной генерации
-        if kind == "series":
-            count = st.get("mp_series_count", 3)
-            if count not in _MP_SERIES_COUNTS:
-                count = 3
-            prompt = _mp_series_prompt(plat, count, caption_text,
-                                       brand_kit=_mp_brand_kit(user_id), niche=_mp_niche(user_id))
-            ok = await _seller_i2i_from_file_id(
-                callback.message, file_id, prompt, num_images=count,
-                aspect_ratio=aspect, user_id=user_id, action="mp_series",
-            )
-            if ok:
-                st.pop("mp_series_count", None)
-        else:
-            job = st.get("mp_preset", "whitebg")
-            instruction = _mp_job_instruction(job, plat, caption_text,
-                                              brand_kit=_mp_brand_kit(user_id), niche=_mp_niche(user_id))
-            await _seller_i2i_from_file_id(
-                callback.message, file_id, instruction, num_images=1,
-                aspect_ratio=aspect, user_id=user_id, action="edit",
-            )
-        return
-
-    if data == "mp:series":
-        plat = _ws(user_id).get("mp_platform", "wb")
-        if plat not in _MP_PLAT_NAMES:
-            plat = "wb"
-        await callback.answer()
-        metrics.log_event("mp_series_open", user_id=user_id, source=plat)
-        await msg.edit_text(
-            f"🧩 <b>{_MP_PLAT_NAMES[plat]}</b> — выбери размер серии",
-            reply_markup=mp_series_kb(plat),
-            parse_mode="HTML",
-        )
-        return
-
-    if data == "mp:projects":
-        await callback.answer()
-        metrics.log_event("mp_projects_open", user_id=user_id, source="seller")
-        await _show_sku_projects(msg, user_id=user_id, edit=True)
-        return
-
-    if data.startswith("mp:sku:open:"):
-        try:
-            idx = int(data.rsplit(":", 1)[1])
-        except (TypeError, ValueError):
-            await callback.answer()
-            return
-        st = _ws(user_id)
-        choices = st.get("mp_sku_project_choices") or [
-            str(p.get("sku") or "") for p in metrics.list_seller_sku_projects(user_id, limit=12)
-        ]
-        if idx < 0 or idx >= len(choices) or not choices[idx]:
-            await callback.answer("SKU не найден", show_alert=True)
-            return
-        sku = str(choices[idx])
-        st["mp_sku_open"] = sku
-        await callback.answer()
-        await msg.edit_text(_mp_sku_open_text(user_id, sku), reply_markup=_mp_sku_open_kb(), parse_mode="HTML")
-        return
-
-    if data == "mp:sku:addlast":
-        st = _ws(user_id)
-        sku = str(st.get("mp_sku_open") or "").strip()
-        if not sku:
-            await callback.answer("Сначала открой SKU", show_alert=True)
-            return
-        project = metrics.get_seller_sku_project(user_id, sku) or {}
-        payload = _pending_sku_payload(user_id) or _latest_sku_payload(
-            user_id, platform=str(project.get("platform") or st.get("mp_platform") or "")
-        )
-        if not payload:
-            await callback.answer("Нет карточки для добавления", show_alert=True)
-            return
-        if not await _save_sku_payload(msg, user_id, sku, payload):
-            await callback.answer("Не удалось сохранить", show_alert=True)
-            return
-        st.pop("mp_sku_pending", None)
-        st.pop("mp_sku_choices", None)
-        st["await"] = None
-        metrics.log_event("mp_sku_saved", user_id=user_id, source=str(payload.get("platform") or "seller"))
-        await callback.answer("Добавлено в SKU")
-        await msg.edit_text(_mp_sku_open_text(user_id, sku), reply_markup=_mp_sku_open_kb(), parse_mode="HTML")
-        return
-
-    if data == "mp:sku:rename":
-        sku = str(_ws(user_id).get("mp_sku_open") or "").strip()
-        if not sku:
-            await callback.answer("Сначала открой SKU", show_alert=True)
-            return
-        _ws(user_id)["await"] = "mp_sku_rename"
-        await callback.answer()
-        await msg.answer(
-            f"✏️ Пришли новое название для SKU <b>{html.escape(sku)}</b> одним сообщением.",
-            parse_mode="HTML",
-        )
-        return
-
-    if data == "mp:sku:delete":
-        sku = str(_ws(user_id).get("mp_sku_open") or "").strip()
-        if not sku:
-            await callback.answer("Сначала открой SKU", show_alert=True)
-            return
-        await callback.answer()
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="🗑 Да, удалить SKU", callback_data="mp:sku:delete:yes")],
-            [types.InlineKeyboardButton(text="◀️ Оставить", callback_data="mp:sku:backopen")],
-        ])
-        await msg.edit_text(
-            f"🗑 Удалить SKU <b>{html.escape(sku)}</b> и сохранённые слайды?",
-            reply_markup=kb,
-            parse_mode="HTML",
-        )
-        return
-
-    if data == "mp:sku:backopen":
-        sku = str(_ws(user_id).get("mp_sku_open") or "").strip()
-        if not sku:
-            await callback.answer()
-            await _show_sku_projects(msg, user_id=user_id, edit=True)
-            return
-        await callback.answer()
-        await msg.edit_text(_mp_sku_open_text(user_id, sku), reply_markup=_mp_sku_open_kb(), parse_mode="HTML")
-        return
-
-    if data == "mp:sku:delete:yes":
-        st = _ws(user_id)
-        sku = str(st.get("mp_sku_open") or "").strip()
-        if not sku:
-            await callback.answer("Сначала открой SKU", show_alert=True)
-            return
-        deleted = metrics.delete_seller_sku_project(user_id, sku)
-        st.pop("mp_sku_open", None)
-        metrics.log_event("mp_sku_deleted", user_id=user_id, source="seller", payload={"rows": deleted})
-        await callback.answer("SKU удалён")
-        await _show_sku_projects(msg, user_id=user_id, edit=True)
-        return
-
-    if data == "mp:brandkit":
-        await callback.answer()
-        st = _ws(user_id)
-        st["await"] = "mp_brandkit"
-        metrics.log_event("mp_brandkit_open", user_id=user_id, source="seller")
-        await msg.edit_text(
-            _mp_brandkit_text(user_id),
-            reply_markup=_mp_back_kb(),
-            parse_mode="HTML",
-        )
-        return
-
-    if data == "mp:niche":
-        await callback.answer()
-        metrics.log_event("mp_niche_open", user_id=user_id, source="seller")
-        await msg.edit_text(
-            _mp_niche_text(user_id),
-            reply_markup=_mp_niche_kb(),
-            parse_mode="HTML",
-        )
-        return
-
-    if data.startswith("mp:niche:"):
-        niche_id = data.rsplit(":", 1)[1]
-        if niche_id not in _MP_NICHES:
-            await callback.answer()
-            return
-        label = _MP_NICHES[niche_id][0]
-        ok = metrics.save_seller_profile(user_id, niche=niche_id)
-        metrics.log_event("mp_niche_saved", user_id=user_id, source=niche_id)
-        await callback.answer("Ниша сохранена" if ok else "Не удалось сохранить")
-        if ok:
-            await msg.edit_text(
-                f"🏷️ Ниша сохранена: <b>{html.escape(label)}</b>\n\n"
-                "Теперь seller-карточки и серии будут учитывать эту категорию.",
-                reply_markup=_mp_back_kb(),
-                parse_mode="HTML",
-            )
-        else:
-            await msg.edit_text(
-                "Не удалось сохранить нишу. Попробуй ещё раз позже.",
-                reply_markup=_mp_niche_kb(),
-                parse_mode="HTML",
-            )
-        return
-
-    if data == "mp:sku:new":
-        await callback.answer()
-        _ws(user_id)["await"] = "mp_sku_name"
-        has_pending = bool(_pending_sku_payload(user_id))
-        title = "название нового SKU для этого результата" if has_pending else "название нового SKU"
-        await msg.answer(
-            f"📦 Пришли {title} одним сообщением. "
-            "Например: <code>SKU-104 красные ботинки</code>",
-            parse_mode="HTML",
-        )
-        return
-
-    if data.startswith("mp:sku:"):
-        payload = _pending_sku_payload(user_id)
-        if not payload:
-            await callback.answer("Кнопка устарела", show_alert=True)
-            return
-        try:
-            idx = int(data.rsplit(":", 1)[1])
-        except (TypeError, ValueError):
-            await callback.answer()
-            return
-        choices = _ws(user_id).get("mp_sku_choices") or []
-        if idx < 0 or idx >= len(choices):
-            await callback.answer()
-            return
-        await callback.answer()
-        await _save_pending_sku_item(msg, user_id, str(choices[idx]))
-        return
-
-    if data.startswith("mp:series:"):
-        plat = _ws(user_id).get("mp_platform", "wb")
-        if plat not in _MP_PLAT_NAMES:
-            plat = "wb"
-        try:
-            count = int(data.rsplit(":", 1)[1])
-        except (TypeError, ValueError):
-            await callback.answer()
-            return
-        if count not in _MP_SERIES_COUNTS:
-            await callback.answer()
-            return
-        await callback.answer()
-        _reset_image_flow(user_id)
-        st = _ws(user_id)
-        st["mp_platform"] = plat
-        st["mp_series_count"] = count
-        st["await"] = "mp_series_photo"
-        st["edit_fmt"] = _mp_platform_fmt(plat)
-        metrics.log_event(
-            "mp_job", user_id=user_id, source=f"{plat}:series:{count}",
-            payload={"count": count},
-        )
-        await msg.edit_text(
-            _mp_series_request_text(plat, count),
-            reply_markup=_mp_back_kb(),
-            parse_mode="HTML",
-        )
-        return
-
-    if data.startswith("mp:job:"):
-        job = data.split(":", 2)[2]
-        plat = _ws(user_id).get("mp_platform", "wb")
-        if job == "animate":
-            await callback.answer()
-            if _cfg.IS_SELLER:
-                _reset_image_flow(user_id)
-                st = _ws(user_id)
-                st["mp_platform"] = plat
-                st["await"] = "mp_video_photo"
-                st["vmodel"] = VID_REF_DEFAULT_MODEL
-                st["vfmt"] = "port"
-                st["vcount"] = 1
-                metrics.log_event("mp_job", user_id=user_id, source=f"{plat}:animate")
-                await msg.edit_text(
-                    _mp_video_request_text(plat),
-                    reply_markup=_mp_photo_settings_kb(plat),
-                    parse_mode="HTML",
-                )
-            else:
-                pending_edits.pop(user_id, None)
-                _vid_clear(user_id)
-                st = _ws(user_id)
-                _clear_image_flow_keys(st)
-                st["vmode"] = "ingredients"
-                st["vmodel"] = VID_REF_DEFAULT_MODEL
-                st["vcount"] = 1
-                st["mp_platform"] = plat
-                await show_video_ingredients(msg, user_id=user_id, edit=True)
-            return
-        if job not in _MP_PRODUCT_PHOTO_JOBS:
-            await callback.answer()
-            return
-        await callback.answer()
-        _reset_image_flow(user_id)
-        st = _ws(user_id)
-        st["mp_platform"] = plat
-        st["mp_preset"] = job
-        st["await"] = "mp_photo"
-        st["edit_fmt"] = _mp_platform_fmt(plat)
-        st["edit_imodel"] = DEFAULT_IMAGE_MODEL
-        metrics.log_event("mp_job", user_id=user_id, source=f"{plat}:{job}")
-        await msg.edit_text(
-            _mp_photo_request_text(plat, job),
-            reply_markup=_mp_photo_settings_kb(plat),
-            parse_mode="HTML",
-        )
-        return
-
-    if data == "mp:done4you":
-        await callback.answer()
-        plat = _ws(user_id).get("mp_platform", "wb")
-        if plat not in _MP_PLAT_NAMES:
-            plat = "wb"
-        _reset_image_flow(user_id)
-        st = _ws(user_id)
-        st["mp_platform"] = plat
-        st["support_await"] = True
-        st["support_kind"] = "mp_done4you"
-        metrics.log_event("mp_done4you_open", user_id=user_id, source="seller")
-        await msg.edit_text(
-            "🙌 <b>Сделаем карточки под ключ</b>\n\n"
-            "Опиши задачу прямо здесь одним сообщением: что за товар, площадка, "
-            "сколько слайдов, ссылки/артикулы и что важно показать. Я создам "
-            "заявку для оператора, дальше можно будет добавить фото товара. "
-            "Оплата по тарифу.",
-            reply_markup=_mp_back_kb(),
-            parse_mode="HTML",
-        )
-        return
-
-    if data == "mp:tips":
-        await callback.answer()
-        await msg.edit_text(
-            "💡 <b>Что делает карточку продающей</b>\n\n"
-            "• Главное фото: товар крупно, чистый фон, без лишнего.\n"
-            "• 1-й слайд = оффер: заголовок + ключевая выгода.\n"
-            "• Слайды: характеристики, состав/гарантия, до/после.\n"
-            "• Текст крупный и читаемый, важное — не в углах (safe-зоны).\n"
-            "• Единый стиль: один цвет/шрифт во всей серии.",
-            reply_markup=_mp_back_kb(),
-        )
-        return
-
-    await callback.answer()
-
-
-
-
 def _store_pending_photo_route(user_id: int, *, file_id: str, caption: str) -> None:
     pending_photo_routes[user_id] = {
         "file_id": file_id,
@@ -8750,6 +8335,32 @@ dp.include_router(
             default_count=DEFAULT_COUNT,
             default_fmt=DEFAULT_FMT,
             default_image_model=DEFAULT_IMAGE_MODEL,
+        )
+    )
+)
+dp.include_router(
+    tg_marketplace_router.create_router(
+        tg_marketplace_router.MarketplaceDeps(
+            workspace=_ws,
+            pending_edits=pending_edits,
+            metrics=metrics,
+            is_seller=lambda: _cfg.IS_SELLER,
+            product_photo_jobs=_MP_PRODUCT_PHOTO_JOBS,
+            mp_is_stale_callback=_mp_is_stale_callback,
+            mp_reject_stale_callback=_mp_reject_stale_callback,
+            mp_stamp_message=_mp_stamp_message,
+            mp_job_instruction=_mp_job_instruction,
+            mp_series_prompt=_mp_series_prompt,
+            seller_i2i_from_file_id=_seller_i2i_from_file_id,
+            show_sku_projects=_show_sku_projects,
+            pending_sku_payload=_pending_sku_payload,
+            latest_sku_payload=_latest_sku_payload,
+            save_sku_payload=_save_sku_payload,
+            save_pending_sku_item=_save_pending_sku_item,
+            reset_image_flow=_reset_image_flow,
+            vid_clear=_vid_clear,
+            clear_image_flow_keys=_clear_image_flow_keys,
+            show_video_ingredients=show_video_ingredients,
         )
     )
 )

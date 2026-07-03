@@ -49,6 +49,7 @@ _CALLBACK_RE = re.compile(r"callback_data=f?\"([^\"]+)\"|callback_data=f?'([^']+
 _SOURCE_FILES = (
     "flow_bot.py",
     str(Path("channels") / "telegram" / "keyboards.py"),
+    str(Path("channels") / "telegram" / "routers" / "marketplace.py"),
     str(Path("channels") / "telegram" / "texts.py"),
     "prompts_lib.py",
 )
