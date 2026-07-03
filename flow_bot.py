@@ -320,6 +320,7 @@ from channels.telegram.routers import payments as tg_payments_router
 from channels.telegram.routers import menu as tg_menu_router
 from channels.telegram.routers import marketplace as tg_marketplace_router
 from channels.telegram.routers import onboarding as tg_onboarding_router
+from channels.telegram.routers import photo_input as tg_photo_input_router
 from channels.telegram.routers import photo_route as tg_photo_route_router
 from channels.telegram.routers import image_retry as tg_image_retry_router
 from channels.telegram.routers import image_action as tg_image_action_router
@@ -2392,6 +2393,53 @@ async def cmd_start(message: types.Message):
     # Старый пользователь → обычный welcome + меню
     await message.answer(flow_copy.msg("welcome"), parse_mode="HTML")
     await show_main_menu(message, user_id=user_id)
+
+
+# Photo input lives in channels/telegram/routers/photo_input.py (Phase 6).
+# It is included before command routers to preserve the former dp-level
+# precedence for captioned photos such as "/menu"; dp-level /start still wins.
+dp.include_router(
+    tg_photo_input_router.create_router(
+        tg_photo_input_router.PhotoInputDeps(
+            workspace=_ws,
+            album_buffer=lambda: _album_buf,
+            album_tasks=lambda: _album_tasks,
+            create_task=asyncio.create_task,
+            flush_album=lambda *args, **kwargs: _flush_album(*args, **kwargs),
+            prepare_photo_edit_from_file_id=lambda *args, **kwargs: _prepare_photo_edit_from_file_id(*args, **kwargs),
+            upload_photo_source_from_message=lambda *args, **kwargs: _upload_photo_source_from_message(*args, **kwargs),
+            show_video_ingredients=lambda *args, **kwargs: show_video_ingredients(*args, **kwargs),
+            show_video_frames=lambda *args, **kwargs: show_video_frames(*args, **kwargs),
+            animate_photo_scenario=lambda: _animate_photo_scenario(),
+            context_factory=lambda message, user_id: _TelegramAnimatePhotoContext(message, user_id),
+            template_photo_received=lambda *args, **kwargs: _template_photo_received(*args, **kwargs),
+            video_plain_text_ready=_video_plain_text_ready,
+            video_generate_and_send=lambda *args, **kwargs: _video_generate_and_send(*args, **kwargs),
+            mp_video_prompt=lambda *args, **kwargs: _mp_video_prompt(*args, **kwargs),
+            mp_brand_kit=lambda user_id: _mp_brand_kit(user_id),
+            mp_niche=lambda user_id: _mp_niche(user_id),
+            log_event=lambda *args, **kwargs: metrics.log_event(*args, **kwargs),
+            seller_video_from_photo=lambda *args, **kwargs: _seller_video_from_photo(*args, **kwargs),
+            mp_series_counts=_MP_SERIES_COUNTS,
+            mp_series_prompt=lambda *args, **kwargs: _mp_series_prompt(*args, **kwargs),
+            is_seller=lambda: _cfg.IS_SELLER,
+            mp_confirm_screen=lambda user_id: _mp_confirm_screen(user_id),
+            mp_stamp_message=lambda *args, **kwargs: _mp_stamp_message(*args, **kwargs),
+            upload_image_ref_from_photo_message=lambda *args, **kwargs: _upload_image_ref_from_photo_message(*args, **kwargs),
+            mp_platform_aspect=lambda plat: _mp_platform_aspect(plat),
+            run_i2i=lambda *args, **kwargs: _run_i2i(*args, **kwargs),
+            pending_edits=pending_edits,
+            mp_job_instruction=lambda *args, **kwargs: _mp_job_instruction(*args, **kwargs),
+            mp_platform_fmt=lambda plat: _mp_platform_fmt(plat),
+            image_registry=image_registry,
+            edit_and_send=lambda *args, **kwargs: _edit_and_send(*args, **kwargs),
+            offer_photo_route_choice=lambda *args, **kwargs: _offer_photo_route_choice(*args, **kwargs),
+            default_fmt=DEFAULT_FMT,
+            default_image_model=DEFAULT_IMAGE_MODEL,
+            vid_ref_default_model=VID_REF_DEFAULT_MODEL,
+        )
+    )
+)
 
 
 # /menu, /help, /referral and /balance live in channels/telegram/routers/
@@ -6100,295 +6148,6 @@ async def _upload_image_ref_from_file_id(
         prompt=prompt,
         aspect_ratio=aspect_ratio,
         account_id=acc_id,
-    )
-
-
-@dp.message(F.photo)
-async def handle_photo(message: types.Message):
-    """Пользователь прислал фото (+ опц. подпись).
-
-    В явных режимах сохраняем контекст и показываем настройки/подтверждение;
-    без выбранного режима фото+подпись сначала просит выбрать картинку или видео.
-    """
-    user_id = message.from_user.id
-    st = _ws(user_id)
-    vawait = st.get("vawait")
-    caption = (message.caption or "").strip()
-
-    # Альбом в видео-режимах: буферизуем и обрабатываем пачкой (см. _flush_album).
-    mgid = message.media_group_id
-    if mgid and vawait in ("ving_photo", "vfrm_start", "vfrm_end"):
-        _album_buf.setdefault(mgid, []).append(message)
-        task = _album_tasks.get(mgid)
-        if task:
-            task.cancel()
-        _album_tasks[mgid] = asyncio.create_task(_flush_album(mgid, user_id))
-        return
-
-    if st.get("support_await"):
-        await message.answer(
-            "🙌 Сначала пришли текстовый бриф одним сообщением: товар, площадка, "
-            "сколько слайдов и что важно показать. Фото добавим после заявки."
-        )
-        return
-
-    # Явный режим «Изменить моё фото»: фото+подпись не генерит сразу, а открывает
-    # подтверждение с настройками формата/модели.
-    if st.get("await") == "photo":
-        await _prepare_photo_edit_from_file_id(
-            message,
-            user_id=user_id,
-            file_id=message.photo[-1].file_id,
-            caption=caption,
-            aspect_fmt=st.get("edit_fmt", DEFAULT_FMT),
-            image_model=st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
-        )
-        return
-
-    # В «Создать картинку» фото с подписью тоже не должно обходить настройки.
-    # Фото = референс к новому изображению → тариф генерации (10/15), не правки.
-    if caption and (
-        st.get("step") in ("prompt_picker", "wizard")
-        or st.get("await") == "prompt"
-        or st.get("pending_prompt")
-    ):
-        await _prepare_photo_edit_from_file_id(
-            message,
-            user_id=user_id,
-            file_id=message.photo[-1].file_id,
-            caption=caption,
-            aspect_fmt=st.get("fmt", DEFAULT_FMT),
-            image_model=st.get("imodel", DEFAULT_IMAGE_MODEL),
-            as_generation=True,
-        )
-        return
-
-    # Ingredients: upload and store Flow sources; generation stays blocked until API capture.
-    if vawait == "ving_photo":
-        photos: list = st.setdefault("ving_photos", [])
-        if len(photos) < 4:
-            status_msg = await message.answer(flow_copy.msg("uploading_photo"))
-            source = await _upload_photo_source_from_message(
-                message, user_id=user_id, status_msg=status_msg
-            )
-            if not source:
-                return
-            photos.append(source)
-            if caption:
-                st["vcaption_prompt"] = caption
-            try:
-                await status_msg.delete()
-            except Exception:
-                pass
-        await show_video_ingredients(message, user_id=user_id, edit=False)
-        return
-
-    # Frames: collect start / end frame photo.
-    if vawait == "vfrm_start":
-        status_msg = await message.answer(flow_copy.msg("uploading_photo"))
-        source = await _upload_photo_source_from_message(
-            message, user_id=user_id, status_msg=status_msg
-        )
-        if not source:
-            return
-        st["vfrm_start"] = source
-        st["vawait"] = "vfrm_end"
-        if caption:
-            st["vcaption_prompt"] = caption
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
-        await show_video_frames(message, user_id=user_id, edit=False)
-        return
-    if vawait == "vfrm_end":
-        status_msg = await message.answer(flow_copy.msg("uploading_photo"))
-        source = await _upload_photo_source_from_message(
-            message, user_id=user_id, status_msg=status_msg
-        )
-        if not source:
-            return
-        st["vfrm_end"] = source
-        st["vawait"] = None
-        if caption:
-            st["vcaption_prompt"] = caption
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
-        await show_video_frames(message, user_id=user_id, edit=False)
-        return
-
-    # Новый wizard: фото на шаге ввода промпта или на экране настроек.
-    vstep = st.get("vstep")
-    if vstep in ("vprompt_input", "vnewwiz"):
-        await _animate_photo_scenario().attach_uploaded_photo(
-            _TelegramAnimatePhotoContext(message, user_id),
-            file_id=message.photo[-1].file_id,
-            caption=caption,
-        )
-        return
-
-
-    # Активны «Идеи и шаблоны»: фото остаётся внутри этой ветки (основа для
-    # image/edit или референс для video), а не уходит в общий выбор image/video.
-    if st.get("tp_tpl") or "gp_step" in st or st.get("ideas_mode") in ("root", "templates", "guided"):
-        await _template_photo_received(message, user_id=user_id)
-        return
-
-    # Video wizard expects text, not a photo.
-    if vawait in ("vprompt", "vedit_prompt", "vextend_prompt"):
-        await message.answer(flow_copy.msg("vid_text_only_hint"))
-        return
-
-    # Текстовый видео-визард (omni/veo без референсов) — юзер прислал фото вместо текста.
-    # Если есть подпись — берём её как промпт и стартуем видео. Без подписи — напоминаем.
-    if _video_plain_text_ready(st):
-        if caption:
-            await _video_generate_and_send(message, caption, user_id=user_id)
-        else:
-            await message.answer(flow_copy.msg("vid_text_only_hint"))
-        return
-
-    if st.get("await") == "mp_video_photo":
-        plat = st.get("mp_platform", "wb")
-        caption_text = caption
-        prompt = _mp_video_prompt(
-            plat,
-            caption_text,
-            brand_kit=_mp_brand_kit(user_id),
-            niche=_mp_niche(user_id),
-        )
-        metrics.log_event("mp_video_photo_uploaded", user_id=user_id, source=f"{plat}:animate")
-        ok = await _seller_video_from_photo(
-            message, prompt, aspect_ratio="portrait", user_id=user_id,
-            video_model=st.get("vmodel") or VID_REF_DEFAULT_MODEL,
-        )
-        if ok:
-            st["await"] = None
-            pending_edits.pop(user_id, None)
-        return
-
-    if st.get("await") == "mp_series_photo":
-        plat = st.get("mp_platform", "wb")
-        count = st.get("mp_series_count", 3)
-        try:
-            count = int(count)
-        except (TypeError, ValueError):
-            count = 3
-        if count not in _MP_SERIES_COUNTS:
-            count = 3
-        caption_text = caption
-        prompt = _mp_series_prompt(
-            plat,
-            count,
-            caption_text,
-            brand_kit=_mp_brand_kit(user_id),
-            niche=_mp_niche(user_id),
-        )
-        metrics.log_event("mp_series_photo_uploaded", user_id=user_id, source=f"{plat}:{count}")
-        if _cfg.IS_SELLER:
-            # Не генерируем сразу: показываем подтверждение с ценой, генерим по кнопке.
-            st["mp_pending_file_id"] = message.photo[-1].file_id
-            st["mp_pending_caption"] = caption_text
-            st["mp_pending_kind"] = "series"
-            st["await"] = None
-            ctext, ckb = _mp_confirm_screen(user_id)
-            _sent = await message.answer(ctext, reply_markup=ckb, parse_mode="HTML")
-            _mp_stamp_message(user_id, _sent)  # чтобы stale-guard не отшил «Создать»
-            return
-        status_msg = await message.answer(flow_copy.msg("uploading_photo"))
-        ref = await _upload_image_ref_from_photo_message(
-            message,
-            user_id=user_id,
-            status_msg=status_msg,
-            prompt=prompt,
-            aspect_ratio=_mp_platform_aspect(plat),
-        )
-        if not ref:
-            return
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
-        ok = await _run_i2i(
-            message,
-            ref,
-            prompt,
-            num_images=count,
-            emoji="🧩",
-            action="mp_series",
-            fail_text=flow_copy.msg("nothing_returned"),
-        )
-        if ok:
-            st["await"] = None
-            st.pop("mp_series_count", None)
-            pending_edits.pop(user_id, None)
-        return
-
-    if st.get("await") == "mp_photo":
-        plat = st.get("mp_platform", "wb")
-        job = st.get("mp_preset", "whitebg")
-        caption_text = caption
-        instruction = _mp_job_instruction(
-            job,
-            plat,
-            caption_text,
-            brand_kit=_mp_brand_kit(user_id),
-            niche=_mp_niche(user_id),
-        )
-        metrics.log_event("mp_photo_uploaded", user_id=user_id, source=f"{plat}:{job}")
-        if _cfg.IS_SELLER:
-            # Не генерируем сразу: показываем подтверждение с ценой, генерим по кнопке.
-            st["mp_pending_file_id"] = message.photo[-1].file_id
-            st["mp_pending_caption"] = caption_text
-            st["mp_pending_kind"] = "photo"
-            st["await"] = None
-            ctext, ckb = _mp_confirm_screen(user_id)
-            _sent = await message.answer(ctext, reply_markup=ckb, parse_mode="HTML")
-            _mp_stamp_message(user_id, _sent)  # чтобы stale-guard не отшил «Создать»
-            return
-        status_msg = await message.answer(flow_copy.msg("uploading_photo"))
-        ref = await _upload_image_ref_from_photo_message(
-            message,
-            user_id=user_id,
-            status_msg=status_msg,
-            prompt=instruction,
-            aspect_ratio=_mp_platform_aspect(plat),
-        )
-        if not ref:
-            return
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
-        token = image_registry.add(ref)
-        pending_edits[user_id] = token
-        st["await"] = "edit"
-        st["edit_fmt"] = _mp_platform_fmt(plat)
-        st["edit_imodel"] = st.get("edit_imodel", DEFAULT_IMAGE_MODEL)
-        ok = await _edit_and_send(
-            message,
-            ref,
-            instruction,
-            aspect_ratio=_mp_platform_aspect(plat),
-            image_model=st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
-        )
-        if ok:
-            st["await"] = None
-            pending_edits.pop(user_id, None)
-        return
-
-    if caption:
-        await _offer_photo_route_choice(message, user_id=user_id, caption=caption)
-        return
-
-    # Без подписи — запоминаем как «текущую картинку для правки».
-    await _prepare_photo_edit_from_file_id(
-        message,
-        user_id=user_id,
-        file_id=message.photo[-1].file_id,
-        caption="",
     )
 
 

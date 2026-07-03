@@ -9,6 +9,7 @@ import flow_core
 import flow_bot
 import config.settings as _cfg
 from channels.telegram.routers import marketplace as marketplace_router
+from channels.telegram.routers import photo_input as photo_input_router
 from generation import backend_service
 
 
@@ -60,6 +61,12 @@ class SellerMenuTests(unittest.TestCase):
 
     def _callbacks(self, kb) -> list[str]:
         return [b.callback_data for row in kb.inline_keyboard for b in row]
+
+    def _photo_input_handler(self):
+        for router in flow_bot.dp.sub_routers:
+            if router.name == "tg-photo-input":
+                return router.message.handlers[0].callback
+        raise AssertionError("tg-photo-input router is not registered")
 
     def test_marketplace_button_only_in_seller_mode(self) -> None:
         _cfg.IS_SELLER = True
@@ -137,7 +144,7 @@ class SellerMenuTests(unittest.TestCase):
             if extra:
                 st.update(extra)
             msg = FakeMessage(user_id, f"file-{message_id}", message_id)
-            await flow_bot.handle_photo(msg)
+            await self._photo_input_handler()(msg)
             self.assertEqual(st.get("mp_active_msg_id"), message_id)
             self.assertEqual(st.get("mp_pending_file_id"), f"file-{message_id}")
             self.assertIsNone(st.get("await"))
@@ -236,9 +243,9 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn('st["await"] = "mp_video_photo"', source)
         self.assertIn("_mp_video_request_text(plat)", source)
         self.assertNotIn("Видео для карточек скоро", source)
-        photo_source = inspect.getsource(flow_bot.handle_photo)
+        photo_source = inspect.getsource(photo_input_router)
         self.assertIn('st.get("await") == "mp_video_photo"', photo_source)
-        self.assertIn("_seller_video_from_photo(", photo_source)
+        self.assertIn("deps.seller_video_from_photo(", photo_source)
 
     def test_platform_keyboard(self) -> None:
         cb = self._callbacks(flow_bot.mp_root_kb())
@@ -440,9 +447,9 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("Электроника", series_prompt)
 
     def test_marketplace_series_photo_runs_i2i_bundle_action(self) -> None:
-        source = inspect.getsource(flow_bot.handle_photo)
+        source = inspect.getsource(photo_input_router)
         self.assertIn('if st.get("await") == "mp_series_photo":', source)
-        self.assertIn("niche=_mp_niche(user_id)", source)
+        self.assertIn("niche=deps.mp_niche(user_id)", source)
         self.assertIn('num_images=count', source)
         self.assertIn('action="mp_series"', source)
 

@@ -443,6 +443,11 @@ class BotMenuWiringTests(unittest.TestCase):
         self.payments_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "payments.py"
         ).read_text(encoding="utf-8")
+        # Photo input (F.photo message handler) moved to its own router
+        # (Phase 6, wave H).
+        self.photo_input_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "photo_input.py"
+        ).read_text(encoding="utf-8")
         # Photo-route callback handler (pr:) moved to its own router (Phase 6).
         self.photo_route_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "photo_route.py"
@@ -600,7 +605,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn(str(fc.price_gen(1) + extra), gen_lbl)
         self.assertLess(fc.price_gen(1), fc.action_price("edit"))
         # pr:img и инлайн «Создать картинку» помечают фото как генерацию.
-        self.assertIn("as_generation=True", self.source)
+        self.assertIn("as_generation=True", self.photo_input_router_source)
         self.assertIn('price_action="gen" if st.get("edit_as_gen") else "edit"', self.edit_settings_router_source)
 
     def test_edit_settings_prefix_does_not_collide_with_edit_button(self) -> None:
@@ -898,7 +903,7 @@ class BotMenuWiringTests(unittest.TestCase):
     def test_album_and_caption_support(self) -> None:
         # Grouped photos (album) → first=start, second=end; caption → prompt.
         self.assertIn("async def _handle_album_photos", self.source)
-        self.assertIn("message.media_group_id", self.source)
+        self.assertIn("message.media_group_id", self.photo_input_router_source)
         self.assertIn('st["vfrm_start"] = sources[0]', self.source)
         self.assertIn("vcaption_prompt", self.source)
 
@@ -991,11 +996,11 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("return", block)
 
     def test_support_photo_does_not_upload_to_flow(self) -> None:
-        start = self.source.index("async def handle_photo")
-        support_guard = self.source.index('if st.get("support_await"):', start)
-        first_upload = self.source.index('flow_copy.msg("uploading_photo")', start)
+        start = self.photo_input_router_source.index("async def handle_photo")
+        support_guard = self.photo_input_router_source.index('if st.get("support_await"):', start)
+        first_upload = self.photo_input_router_source.index('flow_copy.msg("uploading_photo")', start)
         self.assertLess(support_guard, first_upload)
-        block = self.source[support_guard:support_guard + 320]
+        block = self.photo_input_router_source[support_guard:support_guard + 320]
         self.assertIn("текстовый бриф", block)
         self.assertIn("return", block)
 
@@ -1004,17 +1009,17 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('F.data.startswith("pr:")', self.photo_route_source)
         self.assertIn('"pr:img"', self.photo_route_source)
         self.assertIn('"pr:vid"', self.photo_route_source)
-        start = self.source.index("async def handle_photo")
-        block = self.source[start:start + 13000]
-        self.assertIn("await _offer_photo_route_choice(message, user_id=user_id, caption=caption)", block)
+        start = self.photo_input_router_source.index("async def handle_photo")
+        block = self.photo_input_router_source[start:start + 13000]
+        self.assertIn("await deps.offer_photo_route_choice(message, user_id=user_id, caption=caption)", block)
         self.assertIn("await deps.prepare_photo_edit_from_file_id(", self.photo_route_source)
         self.assertIn("_prepare_photo_video_from_file_id(", self.source)
         # The old fallback edited immediately when a caption was attached.
         self.assertNotIn("await _edit_and_send(message, ref, caption", block)
 
     def test_create_image_photo_caption_stops_at_edit_confirm(self) -> None:
-        start = self.source.index("async def handle_photo")
-        block = self.source[start:start + 4500]
+        start = self.photo_input_router_source.index("async def handle_photo")
+        block = self.photo_input_router_source[start:start + 4500]
         self.assertIn('st.get("step") in ("prompt_picker", "wizard")', block)
         self.assertIn('or st.get("await") == "prompt"', block)
         self.assertIn('or st.get("pending_prompt")', block)
@@ -1080,11 +1085,10 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("async def _template_photo_received", self.source)
         self.assertIn('_IDEAS_PHOTO_KEYS = ("ideas_photo_file_id", "ideas_photo_caption", "ideas_extra_prompt")', self.source)
         # handle_photo перехватывает фото внутри любой ветки «Идей».
-        self.assertIn(
-            'if st.get("tp_tpl") or "gp_step" in st or st.get("ideas_mode") in ("root", "templates", "guided"):',
-            self.source,
-        )
-        self.assertIn("await _template_photo_received(message, user_id=user_id)", self.source)
+        self.assertIn('if st.get("tp_tpl") or "gp_step" in st or st.get("ideas_mode") in (', self.photo_input_router_source)
+        for mode in ('"root"', '"templates"', '"guided"'):
+            self.assertIn(mode, self.photo_input_router_source)
+        self.assertIn("await deps.template_photo_received(message, user_id=user_id)", self.photo_input_router_source)
         receive = self.source[
             self.source.index("async def _template_photo_received"):
             self.source.index("async def _render_guided_step")

@@ -514,6 +514,9 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.generation_commands_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "generation_commands.py"
         ).read_text(encoding="utf-8")
+        self.photo_input_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "photo_input.py"
+        ).read_text(encoding="utf-8")
 
     def test_edit_button_and_callback_handler_present(self) -> None:
         # Labels now come from flow_copy; the edit button uses the "edit" action.
@@ -573,8 +576,8 @@ class FlowBotWiringStaticTests(unittest.TestCase):
 
     def test_photo_upload_and_edit_wired(self) -> None:
         self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
-        self.assertIn("@dp.message(F.photo)", self.source)
-        self.assertIn("async def handle_photo", self.source)
+        self.assertIn("@router.message(F.photo)", self.photo_input_router_source)
+        self.assertIn("async def handle_photo", self.photo_input_router_source)
         # Загрузка идёт через keeper аккаунта юзера (multi-account роутинг).
         self.assertIn("_keeper_for_acc(acc_id).upload_image", self.source)
         self.assertIn("_account_for_image(user_id, prefer_image_only=True)", self.source)
@@ -604,11 +607,15 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn('source.setdefault("_tg_file_id", file_id)', self.source)
 
     def test_pending_edit_routing_in_plain_text_handler(self) -> None:
+        start = self.source.index("async def handle_plain_text")
+        edit_start = self.source.index('if awaiting in ("edit", "revary"):', start)
+        block = self.source[edit_start:edit_start + 2400]
         self.assertIn("pending_edits", self.source)
-        self.assertIn("token = pending_edits.get(user_id)", self.source)
-        self.assertIn("ok = await _edit_and_send", self.source)
-        self.assertIn("if ok:", self.source)
-        self.assertIn("pending_edits.pop(user_id, None)", self.source)
+        self.assertIn("token = pending_edits.get(user_id)", block)
+        self.assertIn('st["edit_instruction"] = text', block)
+        self.assertIn('st["await"] = "edit_confirm"', block)
+        self.assertIn("await show_edit_confirm(message, user_id=user_id, edit=False)", block)
+        self.assertIn("pending_edits.pop(user_id, None)", block)
 
     def test_edit_rate_limit_keeps_context_copy(self) -> None:
         self.assertIn("def _is_rate_limit_error", self.source)

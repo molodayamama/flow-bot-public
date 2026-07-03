@@ -25,6 +25,7 @@ from channels.telegram.routers import marketplace as marketplace_router
 from channels.telegram.routers import onboarding as onboarding_router
 from channels.telegram.routers import menu as menu_router
 from channels.telegram.routers import payments as payments_router
+from channels.telegram.routers import photo_input as photo_input_router
 from channels.telegram.routers import photo_route as photo_route_router
 from channels.telegram.routers import video as video_router
 from channels.telegram.routers import video_upload as video_upload_router
@@ -367,6 +368,207 @@ class PaymentsRouterTests(unittest.TestCase):
 
     def test_router_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(payments_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class FakePhotoMessage:
+    def __init__(
+        self,
+        user_id: int = 42,
+        file_id: str = "photo-1",
+        caption: str | None = None,
+        media_group_id: str | None = None,
+    ) -> None:
+        self.from_user = SimpleNamespace(id=user_id)
+        self.photo = [SimpleNamespace(file_id=file_id)]
+        self.caption = caption
+        self.media_group_id = media_group_id
+        self.answers: list[tuple[tuple, dict]] = []
+
+    async def answer(self, *args, **kwargs):
+        self.answers.append((args, kwargs))
+        return SimpleNamespace(delete=self._delete)
+
+    async def _delete(self):
+        return None
+
+
+class RecordingPhotoInputDeps:
+    def __init__(self, *, is_seller: bool = False) -> None:
+        self.states: dict[int, dict] = defaultdict(dict)
+        self.is_seller_value = is_seller
+        self.album_buf: dict[str, list] = {}
+        self.album_tasks: dict[str, object] = {}
+        self.calls: list[tuple[str, tuple, dict]] = []
+        self.pending_edits: dict[int, object] = {}
+        self.image_registry = SimpleNamespace(add=self._image_add)
+
+    def build(self) -> photo_input_router.PhotoInputDeps:
+        return photo_input_router.PhotoInputDeps(
+            workspace=lambda user_id: self.states[user_id],
+            album_buffer=lambda: self.album_buf,
+            album_tasks=lambda: self.album_tasks,
+            create_task=self._create_task,
+            flush_album=self._async("flush_album"),
+            prepare_photo_edit_from_file_id=self._async("prepare_photo_edit_from_file_id"),
+            upload_photo_source_from_message=self._upload_photo_source_from_message,
+            show_video_ingredients=self._async("show_video_ingredients"),
+            show_video_frames=self._async("show_video_frames"),
+            animate_photo_scenario=lambda: SimpleNamespace(
+                attach_uploaded_photo=self._async("attach_uploaded_photo")
+            ),
+            context_factory=lambda message, user_id: ("ctx", message, user_id),
+            template_photo_received=self._async("template_photo_received"),
+            video_plain_text_ready=lambda st: bool(st.get("video_ready")),
+            video_generate_and_send=self._async("video_generate_and_send"),
+            mp_video_prompt=self._sync("mp_video_prompt", "video prompt"),
+            mp_brand_kit=lambda user_id: "brand",
+            mp_niche=lambda user_id: "niche",
+            log_event=self._sync("log_event", None),
+            seller_video_from_photo=self._async("seller_video_from_photo", True),
+            mp_series_counts=(3, 5, 8),
+            mp_series_prompt=self._sync("mp_series_prompt", "series prompt"),
+            is_seller=lambda: self.is_seller_value,
+            mp_confirm_screen=self._mp_confirm_screen,
+            mp_stamp_message=self._sync("mp_stamp_message", None),
+            upload_image_ref_from_photo_message=self._upload_image_ref_from_photo_message,
+            mp_platform_aspect=lambda plat: "portrait_34",
+            run_i2i=self._async("run_i2i", True),
+            pending_edits=self.pending_edits,
+            mp_job_instruction=self._sync("mp_job_instruction", "instruction"),
+            mp_platform_fmt=lambda plat: "f34",
+            image_registry=self.image_registry,
+            edit_and_send=self._async("edit_and_send", True),
+            offer_photo_route_choice=self._async("offer_photo_route_choice"),
+            default_fmt="land",
+            default_image_model="nb2",
+            vid_ref_default_model="veo-lite",
+        )
+
+    def _create_task(self, coro):
+        self.calls.append(("create_task", (coro,), {}))
+        coro.close()
+        return SimpleNamespace(cancel=lambda: self.calls.append(("cancel_task", (), {})))
+
+    def _async(self, name: str, result=None):
+        async def fn(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return result
+
+        return fn
+
+    def _sync(self, name: str, result):
+        def fn(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return result
+
+        return fn
+
+    async def _upload_photo_source_from_message(self, *args, **kwargs):
+        self.calls.append(("upload_photo_source_from_message", args, kwargs))
+        return {"mediaId": "m1"}
+
+    async def _upload_image_ref_from_photo_message(self, *args, **kwargs):
+        self.calls.append(("upload_image_ref_from_photo_message", args, kwargs))
+        return SimpleNamespace(user_id=kwargs.get("user_id"), source={})
+
+    def _mp_confirm_screen(self, user_id: int):
+        self.calls.append(("mp_confirm_screen", (user_id,), {}))
+        return "confirm", "kb"
+
+    def _image_add(self, ref):
+        self.calls.append(("image_registry.add", (ref,), {}))
+        return "tok"
+
+
+class PhotoInputRouterTests(unittest.TestCase):
+    def _router(self, rec: RecordingPhotoInputDeps | None = None):
+        self.rec = rec or RecordingPhotoInputDeps()
+        return photo_input_router.create_router(self.rec.build())
+
+    def _handler(self, router):
+        return router.message.handlers[0].callback
+
+    def test_creates_router_with_photo_handler(self) -> None:
+        router = self._router()
+        self.assertIsInstance(router, Router)
+        self.assertEqual(router.name, "tg-photo-input")
+        self.assertEqual(len(router.message.handlers), 1)
+        self.assertEqual(self._handler(router).__name__, "handle_photo")
+
+    def test_support_photo_repeats_brief_request_without_upload(self) -> None:
+        router = self._router()
+        self.rec.states[42]["support_await"] = True
+        message = FakePhotoMessage()
+
+        run(self._handler(router)(message))
+
+        self.assertIn("текстовый бриф", message.answers[0][0][0])
+        self.assertFalse(any(call[0].startswith("upload_") for call in self.rec.calls))
+
+    def test_album_photo_buffers_and_schedules_flush(self) -> None:
+        router = self._router()
+        self.rec.states[42]["vawait"] = "ving_photo"
+        message = FakePhotoMessage(media_group_id="album-1")
+
+        run(self._handler(router)(message))
+
+        self.assertEqual(self.rec.album_buf["album-1"], [message])
+        self.assertIn("album-1", self.rec.album_tasks)
+        self.assertEqual(self.rec.calls[0][0], "create_task")
+
+    def test_photo_edit_state_delegates_to_prepare_edit(self) -> None:
+        router = self._router()
+        self.rec.states[42]["await"] = "photo"
+        message = FakePhotoMessage(caption="fix it")
+
+        run(self._handler(router)(message))
+
+        call = self.rec.calls[0]
+        self.assertEqual(call[0], "prepare_photo_edit_from_file_id")
+        self.assertEqual(call[2]["file_id"], "photo-1")
+        self.assertEqual(call[2]["caption"], "fix it")
+
+    def test_video_prompt_waiting_photo_replies_text_only_hint(self) -> None:
+        router = self._router()
+        self.rec.states[42]["vawait"] = "vprompt"
+        message = FakePhotoMessage()
+
+        run(self._handler(router)(message))
+
+        self.assertEqual(len(message.answers), 1)
+        self.assertEqual(self.rec.calls, [])
+
+    def test_captioned_photo_without_mode_offers_route_choice(self) -> None:
+        router = self._router()
+        message = FakePhotoMessage(caption="make a poster")
+
+        run(self._handler(router)(message))
+
+        call = self.rec.calls[0]
+        self.assertEqual(call[0], "offer_photo_route_choice")
+        self.assertEqual(call[2], {"user_id": 42, "caption": "make a poster"})
+
+    def test_seller_photo_state_shows_confirm_without_upload(self) -> None:
+        router = self._router(RecordingPhotoInputDeps(is_seller=True))
+        self.rec.states[42].update({"await": "mp_photo", "mp_platform": "wb", "mp_preset": "whitebg"})
+        message = FakePhotoMessage(caption="red shoes")
+
+        run(self._handler(router)(message))
+
+        self.assertEqual(self.rec.states[42]["mp_pending_file_id"], "photo-1")
+        self.assertIsNone(self.rec.states[42]["await"])
+        self.assertEqual(message.answers[0], (("confirm",), {"reply_markup": "kb", "parse_mode": "HTML"}))
+        self.assertIn("mp_stamp_message", [call[0] for call in self.rec.calls])
+        self.assertNotIn("upload_image_ref_from_photo_message", [call[0] for call in self.rec.calls])
+
+    def test_deps_dataclass_is_frozen(self) -> None:
+        deps = RecordingPhotoInputDeps().build()
+        with self.assertRaises(Exception):
+            deps.default_fmt = "sq"  # type: ignore[misc]
+
+    def test_router_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(photo_input_router)
         self.assertNotIn("flow_bot", src)
 
 

@@ -42,7 +42,6 @@ import flow_bot
 # media catch-alls and /start deep-links.
 EXPECTED_DP_LEVEL = [
     "cmd_start",
-    "handle_photo",
     "handle_plain_text",
 ]
 
@@ -80,8 +79,8 @@ ROUTING_TABLE = {
     "text /acc_off": (dict(text="/acc_off a1"), "tg-admin-accounts:cmd_acc_off"),
     "plain text": (dict(text="hello"), "dp:handle_plain_text"),
     "successful payment": (dict(successful_payment=_PAYMENT), "tg-payments:on_successful_payment"),
-    "photo": (dict(photo=_PHOTO), "dp:handle_photo"),
-    "photo with command caption": (dict(photo=_PHOTO, caption="/menu"), "dp:handle_photo"),
+    "photo": (dict(photo=_PHOTO), "tg-photo-input:handle_photo"),
+    "photo with command caption": (dict(photo=_PHOTO, caption="/menu"), "tg-photo-input:handle_photo"),
     "video no caption": (dict(video=_VIDEO), "tg-video-upload-input:handle_video_upload"),
     "video plain caption": (
         dict(video=_VIDEO, caption="make it fly"),
@@ -134,6 +133,7 @@ class MessageRoutingRegressionTests(unittest.TestCase):
 
     def test_video_input_router_is_included_after_command_routers(self) -> None:
         names = [router.name for router in flow_bot.dp.sub_routers]
+        self.assertEqual(names[0], "tg-photo-input")
         self.assertIn("tg-video-upload-input", names)
         self.assertIn("tg-payments", names)
         video_idx = names.index("tg-video-upload-input")
