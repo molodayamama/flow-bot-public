@@ -32,6 +32,7 @@ CORE_MODULES = [
     "product.streak",
     "product.ideas_hub",
     "product.agent_prompts",
+    "product.job_log",
     "config.video",
     "storage.session_state",
     "billing.credit_gate",

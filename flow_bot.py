@@ -185,6 +185,11 @@ from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScen
 from product import video_reference
 from product import agent_prompts
 from product.streak import streak_note
+from product.job_log import (
+    ImageJobLogger,
+    ms_since as _ms_since,
+    seller_acc_tag as _seller_acc_tag,
+)
 import prompts_lib
 import config.settings as _cfg
 
@@ -1942,13 +1947,6 @@ _IMG_REQUEST_EVENT = {
     "edit": "image_edit_requested", "myphoto": "image_edit_requested",
     "mp_series": "image_edit_requested",
 }
-_IMG_OP = {
-    "gen": "image", "regen": "image", "revary": "variations",
-    "up2x": "enhance", "edit": "edit", "myphoto": "edit",
-    "mp_series": "mp_series",
-}
-
-
 # ── Shared generation backend (SELLER_BOT_PLAN.md §A) ────────────────────
 _backend_client_cache: "object | None" = None
 
@@ -2510,29 +2508,18 @@ async def _generate_and_send(
     _log_image_job(user_id, action, image_model, started, ok=ok, charged=charged)
 
 
-def _ms_since(started: float) -> int:
-    return int((time.monotonic() - started) * 1000)
-
-
-def _seller_acc_tag(backend_acc: str | None) -> str | None:
-    """Tag a seller job with the real consumer-backend account, e.g. ``sub5-sell``."""
-    acc = (backend_acc or "").strip()
-    return f"{acc}-sell" if acc else None
+# Image-job logging + timing helpers live in product.job_log (channel-neutral);
+# bind the logger to the runtime metrics/pool here.
+_image_job_logger = ImageJobLogger(
+    metrics=metrics, account_pool=account_pool, flow_account_id=FLOW_ACCOUNT_ID,
+)
 
 
 def _log_image_job(user_id, action, image_model, started, *, ok, charged=0, error=None,
                    account_id: str | None = None):
-    """flow_jobs-запись для картиночной операции (никогда не бросает).
-
-    ``account_id`` — явный аккаунт (для seller передаём ``<acc>-sell``); иначе
-    берём назначенный пользователю аккаунт из пула."""
-    metrics.log_flow_job(
-        user_id=user_id,
-        account_id=account_id or account_pool.assigned_to(user_id) or FLOW_ACCOUNT_ID,
-        operation_type=_IMG_OP.get(action, "image"), model=image_model,
-        bot_credits_charged=charged, duration_ms=_ms_since(started),
-        status="success" if ok else "fail",
-        error_type=error or (None if ok else "gen_failed"),
+    _image_job_logger.log(
+        user_id, action, image_model, started,
+        ok=ok, charged=charged, error=error, account_id=account_id,
     )
 
 

@@ -367,7 +367,7 @@ class BotPoolWiringTests(unittest.TestCase):
     def test_generation_paths_route_and_mark_health(self) -> None:
         # Image: отказ ДО credit_gate (без цикла «списали-вернули») при пустом пуле.
         gstart = self.source.index("async def _generate_and_send")
-        gblock = self.source[gstart:self.source.index("def _ms_since", gstart)]
+        gblock = self.source[gstart:self.source.index("async def _do_generate_and_send", gstart)]
         self.assertLess(
             gblock.index('flow_copy.msg("accounts_unavailable")'),
             gblock.index("credit_gate("),
