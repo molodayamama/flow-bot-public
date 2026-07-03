@@ -240,6 +240,7 @@ from config.settings import (
 # (Phase 5); re-exported so flow_bot handlers keep working.
 from channels.telegram.keyboards import (
     main_menu_kb,
+    reply_menu_kb as _telegram_reply_menu_kb,
     topup_kb,
     topup_method_kb,
     topup_stars_kb,
@@ -247,6 +248,8 @@ from channels.telegram.keyboards import (
     _include_test_packs,
     L,
     _menu_button,
+    _balance_reply_label as _telegram_balance_reply_label,
+    _is_balance_reply_text as _telegram_is_balance_reply_text,
     _guided_step_kb,
     _img_retry_kb,
     _mp_back_kb,
@@ -1448,38 +1451,18 @@ async def show_edit_confirm(message: types.Message, *, user_id: int, edit: bool)
 
 
 def _balance_reply_label(user_id: int | None = None) -> str:
-    label = L("kb_balance")
-    if user_id is None:
-        return label
-    try:
-        return f"{label} · {credit_store.balance(user_id)}кр"
-    except Exception:
-        return label
+    return _telegram_balance_reply_label(user_id, balance_fn=credit_store.balance)
 
 
 def _is_balance_reply_text(text: str) -> bool:
-    label = L("kb_balance")
-    return text == label or text.startswith(f"{label} ·")
+    return _telegram_is_balance_reply_text(text)
 
 
 def reply_menu_kb(user_id: int | None = None) -> types.ReplyKeyboardMarkup:
-    """Постоянная клавиатура внизу чата — всегда под рукой."""
-    B = types.KeyboardButton
-    if _cfg.IS_SELLER:
-        # Селлер-бот: минимальная нижняя клавиатура (меню = карточки, баланс).
-        return types.ReplyKeyboardMarkup(
-            keyboard=[[B(text=L("kb_menu")), B(text=_balance_reply_label(user_id))]],
-            resize_keyboard=True,
-            is_persistent=True,
-        )
-    return types.ReplyKeyboardMarkup(
-        keyboard=[
-            [B(text=L("kb_gen")), B(text=L("kb_vid"))],
-            [B(text=L("kb_menu")), B(text=_balance_reply_label(user_id))],
-        ],
-        resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder="Опиши картинку или жми «🎨 Создать картинку»",
+    return _telegram_reply_menu_kb(
+        user_id,
+        balance_fn=credit_store.balance,
+        is_seller=_cfg.IS_SELLER,
     )
 
 

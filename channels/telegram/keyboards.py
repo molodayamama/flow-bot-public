@@ -7,6 +7,7 @@ keys and literal callback_data. flow_bot re-exports these for its handlers.
 from __future__ import annotations
 
 import html
+from collections.abc import Callable
 
 from aiogram import types
 
@@ -41,6 +42,51 @@ from flow_core import (
 from storage.media_registry import video_registry
 
 L = flow_copy.label
+
+
+def _balance_reply_label(
+    user_id: int | None = None,
+    *,
+    balance_fn: Callable[[int], int] | None = None,
+) -> str:
+    label = L("kb_balance")
+    if user_id is None or balance_fn is None:
+        return label
+    try:
+        return f"{label} · {balance_fn(user_id)}кр"
+    except Exception:
+        return label
+
+
+def _is_balance_reply_text(text: str) -> bool:
+    label = L("kb_balance")
+    return text == label or text.startswith(f"{label} ·")
+
+
+def reply_menu_kb(
+    user_id: int | None = None,
+    *,
+    balance_fn: Callable[[int], int] | None = None,
+    is_seller: bool | None = None,
+) -> types.ReplyKeyboardMarkup:
+    """Persistent bottom chat keyboard."""
+    B = types.KeyboardButton
+    seller_mode = _cfg.IS_SELLER if is_seller is None else is_seller
+    if seller_mode:
+        return types.ReplyKeyboardMarkup(
+            keyboard=[[B(text=L("kb_menu")), B(text=_balance_reply_label(user_id, balance_fn=balance_fn))]],
+            resize_keyboard=True,
+            is_persistent=True,
+        )
+    return types.ReplyKeyboardMarkup(
+        keyboard=[
+            [B(text=L("kb_gen")), B(text=L("kb_vid"))],
+            [B(text=L("kb_menu")), B(text=_balance_reply_label(user_id, balance_fn=balance_fn))],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Опиши картинку или жми «🎨 Создать картинку»",
+    )
 
 
 # --- Marketplace render data + keyboards (Phase 5: moved from flow_bot) ---

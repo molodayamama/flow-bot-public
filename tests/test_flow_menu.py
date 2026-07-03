@@ -633,24 +633,38 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertNotIn('startswith("e:")', self.edit_settings_router_source)  # no over-broad filter
 
     def test_persistent_reply_keyboard_present(self) -> None:
-        self.assertIn("def reply_menu_kb", self.source)
-        self.assertIn("ReplyKeyboardMarkup", self.source)
-        self.assertIn("is_persistent=True", self.source)
-        start = self.source.index("def reply_menu_kb")
-        end = self.source.index("async def _show_help_screen", start)
-        block = self.source[start:end]
+        self.assertIn("def reply_menu_kb", self.kb_source)
+        self.assertIn("ReplyKeyboardMarkup", self.kb_source)
+        self.assertIn("is_persistent=True", self.kb_source)
+        start = self.kb_source.index("def reply_menu_kb")
+        end = self.kb_source.index("# --- Marketplace", start)
+        block = self.kb_source[start:end]
         # Reply-button taps are handled as plain text before prompt routing.
         self.assertIn('text == L("kb_gen")', self.plain_text_router_source)
         self.assertIn("_is_balance_reply_text(text)", self.plain_text_router_source)
-        self.assertIn("def _balance_reply_label", self.source)
+        self.assertIn("def _balance_reply_label", self.kb_source)
+        self.assertIn("balance_fn=credit_store.balance", self.source)
         self.assertIn('B(text=L("kb_gen"))', block)
         self.assertIn('B(text=L("kb_vid"))', block)
         self.assertIn('B(text=L("kb_menu"))', block)
-        self.assertIn("B(text=_balance_reply_label(user_id))", block)
+        self.assertIn("B(text=_balance_reply_label(user_id, balance_fn=balance_fn))", block)
         for key in ("ideas", "myphoto", "invite", "help"):
             self.assertNotIn(f'B(text=L("{key}"))', block)
         for key in ("ideas", "myphoto", "invite", "help"):
             self.assertIn(f'text == L("{key}")', self.plain_text_router_source)
+
+    def test_reply_menu_keyboard_uses_injected_balance_and_seller_mode(self) -> None:
+        from channels.telegram import keyboards as kb
+
+        balance_label = flow_copy.label("kb_balance")
+        consumer = kb.reply_menu_kb(42, balance_fn=lambda user_id: 17, is_seller=False)
+        consumer_rows = [[button.text for button in row] for row in consumer.keyboard]
+        self.assertEqual(consumer_rows[0], [flow_copy.label("kb_gen"), flow_copy.label("kb_vid")])
+        self.assertEqual(consumer_rows[1], [flow_copy.label("kb_menu"), f"{balance_label} · 17кр"])
+
+        seller = kb.reply_menu_kb(42, balance_fn=lambda user_id: 23, is_seller=True)
+        seller_rows = [[button.text for button in row] for row in seller.keyboard]
+        self.assertEqual(seller_rows, [[flow_copy.label("kb_menu"), f"{balance_label} · 23кр"]])
 
     def test_public_help_ideas_referral_commands_wired(self) -> None:
         # /help and /referral handlers live in the extracted commands router;
