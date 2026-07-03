@@ -923,6 +923,122 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertEqual(state[7]["vstep"], "vsettings")
         self.assertEqual(events[-1][2].get("parse_mode"), "HTML")
 
+    def test_new_video_wizard_screens_moved_to_telegram_screens_module(self) -> None:
+        self.assertIn("tg_screens.NewVideoWizardScreensDeps(", self.source)
+        for name in (
+            "def new_video_wizard_text",
+            "def new_video_wizard_kb",
+            "async def show_video_prompt_input",
+            "async def show_new_video_wizard",
+        ):
+            self.assertIn(name, self.screens_source, name)
+        for needle in (
+            "vid_clear=_vid_clear",
+            "nwiz_engine=_nwiz_engine",
+            "nwiz_model=_nwiz_model",
+            "nwiz_price=_nwiz_price",
+            "vid_omni_durations=tuple(_VID_OMNI_DURATIONS)",
+        ):
+            self.assertIn(needle, self.source)
+        self.assertIn("return tg_screens.new_video_wizard_text", self.source)
+        self.assertIn("return tg_screens.new_video_wizard_kb", self.source)
+        self.assertNotIn("flow_bot", self.screens_source)
+
+    def test_new_video_wizard_screens_use_injected_state(self) -> None:
+        from channels.telegram import screens as tg_screens
+
+        state = {
+            7: {
+                "vprompt": "<move>&",
+                "vfmt": "land",
+                "vdur": 4,
+                "vstyle": "cine",
+            }
+        }
+        events = []
+
+        class CreditStore:
+            def balance(self, user_id):
+                return 55
+
+        class Message:
+            async def answer(self, text, reply_markup=None, parse_mode=None):
+                events.append(("answer", text, reply_markup, parse_mode))
+                return SimpleNamespace(message_id=808)
+
+        def vid_clear(user_id):
+            events.append(("clear", dict(state[user_id])))
+            for key in list(state[user_id]):
+                if key.startswith("v"):
+                    state[user_id].pop(key, None)
+
+        async def vid_edit(*args, **kwargs):
+            events.append(("edit", args, kwargs))
+
+        def nwiz_engine(st):
+            return st.get("vengine") or "omni"
+
+        def nwiz_model(st):
+            return "veo-lite" if nwiz_engine(st) == "veo" else "omni-flash-4s"
+
+        def nwiz_price(st):
+            return 12 if st.get("vphoto") else 7
+
+        deps = tg_screens.NewVideoWizardScreensDeps(
+            wizard_state=state,
+            credit_store=CreditStore(),
+            vid_clear=vid_clear,
+            vid_edit=vid_edit,
+            nwiz_engine=nwiz_engine,
+            nwiz_model=nwiz_model,
+            nwiz_price=nwiz_price,
+            vid_default_fmt="land",
+            vid_fmt_names={"land": "16:9", "port": "9:16"},
+            vid_styles={"": ("Никакой", ""), "cine": ("Кино", " cinematic")},
+            vid_omni_durations=(4, 6),
+            vid_veo_quality_cycle=("lite", "fast", "quality"),
+            vid_veo_quality_names={"lite": "Lite", "fast": "Fast", "quality": "Quality"},
+        )
+
+        text = tg_screens.new_video_wizard_text(7, deps=deps)
+        self.assertIn("&lt;move&gt;&amp;", text)
+        self.assertIn("Кино", text)
+        self.assertIn("55", text)
+
+        kb = tg_screens.new_video_wizard_kb(7, deps=deps)
+        datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+        self.assertIn("v:neng:omni", datas)
+        self.assertIn("v:ndur:4", datas)
+        self.assertIn("ag:vimprove", datas)
+
+        asyncio.run(tg_screens.show_video_prompt_input(
+            Message(), user_id=7, edit=True, deps=deps, vfmt="port", vstyle="cine"
+        ))
+        self.assertEqual(events[0][0], "clear")
+        self.assertEqual(state[7]["vstep"], "vprompt_input")
+        self.assertEqual(state[7]["vmode"], "text")
+        self.assertEqual(state[7]["vfmt"], "port")
+        self.assertEqual(state[7]["vstyle"], "cine")
+        self.assertEqual(events[-1][0], "edit")
+        self.assertEqual(events[-1][2].get("parse_mode"), "HTML")
+
+        state[7].update({
+            "vprompt": "clip",
+            "vphoto": {"media_id": "m"},
+            "vengine": "veo",
+        })
+        asyncio.run(tg_screens.show_new_video_wizard(
+            Message(), user_id=7, edit=False, deps=deps
+        ))
+        self.assertEqual(state[7]["vstep"], "vnewwiz")
+        self.assertIsNone(state[7]["vawait"])
+        self.assertEqual(state[7]["vmodel"], "veo-lite")
+        self.assertEqual(state[7]["vmode"], "ingredients")
+        self.assertEqual(state[7]["vmsg_id"], 808)
+        datas = [b.callback_data for row in events[-1][2].inline_keyboard for b in row]
+        self.assertIn("v:nremove_photo", datas)
+        self.assertIn("v:nqual:fast", datas)
+
     def test_marketplace_screens_moved_to_telegram_screens_module(self) -> None:
         self.assertIn("tg_screens.MarketplaceScreensDeps(", self.source)
         for name in (
@@ -1374,12 +1490,12 @@ class BotMenuWiringTests(unittest.TestCase):
     def test_guided_video_carries_format_and_style(self) -> None:
         # «Подбор по шагам» → видео: выбранный формат (9:16) и стиль должны
         # переноситься в видео-визард, а не сбрасываться на дефолт 16:9.
-        # show_video_prompt_input применяет vfmt/vstyle ПОСЛЕ _vid_clear.
-        start = self.source.index("async def show_video_prompt_input")
-        block = self.source[start:start + 900]
+        # show_video_prompt_input применяет vfmt/vstyle ПОСЛЕ vid_clear.
+        start = self.screens_source.index("async def show_video_prompt_input")
+        block = self.screens_source[start:start + 900]
         self.assertIn("vfmt: str | None = None", block)
         self.assertIn("vstyle: str | None = None", block)
-        clear_at = block.index("_vid_clear(user_id)")
+        clear_at = block.index("deps.vid_clear(user_id)")
         apply_at = block.index('st["vfmt"] = vfmt')
         self.assertLess(clear_at, apply_at)  # применяем после очистки
         # Guided-ветка передаёт формат и стиль.

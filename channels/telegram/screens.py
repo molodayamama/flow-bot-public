@@ -18,6 +18,7 @@ from channels.telegram.keyboards import (
     _menu_button,
     _mp_platform_format_label,
     _prompt_picker_kb,
+    _sel_btn,
     _slides_word,
     edit_confirm_kb,
     frames_kb,
@@ -109,6 +110,25 @@ class VideoSettingsScreensDeps:
     vid_default_fmt: str
     vid_default_count: int
     vid_fmt_names: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class NewVideoWizardScreensDeps:
+    """Injected state and callbacks for the prompt-first video wizard screens."""
+
+    wizard_state: MutableMapping[int, MutableMapping[str, Any]]
+    credit_store: Any
+    vid_clear: Callable[[int], None]
+    vid_edit: Callable[..., Awaitable[Any]]
+    nwiz_engine: Callable[[Mapping[str, Any]], str]
+    nwiz_model: Callable[[Mapping[str, Any]], str]
+    nwiz_price: Callable[[Mapping[str, Any]], int]
+    vid_default_fmt: str
+    vid_fmt_names: Mapping[str, str]
+    vid_styles: Mapping[str, tuple[str, str]]
+    vid_omni_durations: tuple[int, ...]
+    vid_veo_quality_cycle: tuple[str, ...]
+    vid_veo_quality_names: Mapping[str, str]
 
 
 @dataclass(frozen=True)
@@ -397,6 +417,149 @@ async def show_video_frames(
             text += "\n\n" + flow_copy.msg("vid_frm_ready_next")
         st["vawait"] = None
     kb = frames_kb(has_start, has_end, vfmt, vcount, model_id)
+    if edit:
+        await deps.vid_edit(message, text, kb, user_id, parse_mode="HTML")
+    else:
+        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        st["vmsg_id"] = sent.message_id
+
+
+def new_video_wizard_text(user_id: int, *, deps: NewVideoWizardScreensDeps) -> str:
+    st = deps.wizard_state[user_id]
+    prompt = st.get("vprompt", "")
+    has_photo = bool(st.get("vphoto"))
+    vfmt = st.get("vfmt", deps.vid_default_fmt)
+    dur = st.get("vdur", 4)
+    style_key = st.get("vstyle", "")
+    style_name = deps.vid_styles.get(style_key, ("Никакой", ""))[0]
+    price = deps.nwiz_price(st)
+    credits = deps.credit_store.balance(user_id)
+
+    lines: list[str] = []
+    if prompt:
+        lines.append(f"<blockquote>{html.escape(prompt[:300])}</blockquote>")
+    if has_photo:
+        lines.append("📎 <b>Фото (1 шт.) добавлено</b>")
+    lines.append("")
+    fmt_name = deps.vid_fmt_names.get(vfmt, vfmt)
+    if deps.nwiz_engine(st) == "veo":
+        q_name = deps.vid_veo_quality_names.get(st.get("vquality", "lite"), "Lite")
+        details = f"💎 Качество: {q_name} · Формат: {fmt_name}"
+    else:
+        details = f"⚡ Быстро · {dur}с · Формат: {fmt_name}"
+    if style_key:
+        details += f" · Стиль: {style_name}"
+    lines.append(details)
+    lines.append(f"💰 Стоимость: <b>{price} кр.</b> · Баланс: {credits} кр.")
+    return "\n".join(lines)
+
+
+def new_video_wizard_kb(
+    user_id: int, *, deps: NewVideoWizardScreensDeps
+) -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    st = deps.wizard_state[user_id]
+    has_photo = bool(st.get("vphoto"))
+    vfmt = st.get("vfmt", deps.vid_default_fmt)
+    dur = st.get("vdur", 4)
+    style_key = st.get("vstyle", "")
+    style_label = deps.vid_styles.get(style_key, ("Никакой", ""))[0]
+    price = deps.nwiz_price(st)
+
+    engine = deps.nwiz_engine(st)
+    rows: list[list[types.InlineKeyboardButton]] = []
+
+    rows.append([
+        _sel_btn("⚡ Быстро", engine == "omni", "v:neng:omni"),
+        _sel_btn("💎 Качество", engine == "veo", "v:neng:veo"),
+    ])
+
+    next_fmt = "port" if vfmt == "land" else "land"
+    fmt_name = deps.vid_fmt_names.get(vfmt, vfmt)
+    fmt_emoji = "📱" if vfmt == "port" else "🖥"
+    rows.append([B(text=f"{fmt_emoji} {fmt_name}", callback_data=f"v:nfmt:{next_fmt}")])
+
+    if engine == "omni":
+        rows.append([
+            _sel_btn(f"{d}с", dur == d, f"v:ndur:{d}")
+            for d in deps.vid_omni_durations
+        ])
+    else:
+        quality = st.get("vquality", "lite")
+        rows.append([
+            _sel_btn(
+                deps.vid_veo_quality_names.get(t, t), quality == t, f"v:nqual:{t}"
+            )
+            for t in deps.vid_veo_quality_cycle
+        ])
+
+    style_btn = f"🎨 Стиль: {style_label}" if style_key else "🎨 Стили"
+    rows.append([B(text=style_btn, callback_data="v:nstyle:screen")])
+
+    if has_photo:
+        rows.append([B(text="🗑 Убрать фотографию", callback_data="v:nremove_photo")])
+
+    if (st.get("vprompt") or "").strip():
+        rows.append([B(
+            text=f"✨ Улучшить промпт · {action_price('prompt_improve')} кр",
+            callback_data="ag:vimprove",
+        )])
+
+    rows.append([
+        B(text="✏️ Изменить", callback_data="v:nchange"),
+        B(text=f"🎬 Создать · {price} кр", callback_data="v:ngo"),
+    ])
+    rows.append([B(text=L("cancel"), callback_data="v:cancel")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def show_video_prompt_input(
+    message: types.Message, *, user_id: int, edit: bool,
+    deps: NewVideoWizardScreensDeps,
+    vfmt: str | None = None, vstyle: str | None = None,
+) -> None:
+    """Экран 1 нового video wizard: просим описание видео."""
+
+    st = deps.wizard_state[user_id]
+    deps.vid_clear(user_id)
+    st["vstep"] = "vprompt_input"
+    st["vmode"] = "text"
+    st.setdefault("vfmt", deps.vid_default_fmt)
+    st.setdefault("vdur", 4)
+    st.setdefault("vquality", "lite")
+    st.setdefault("vstyle", "")
+    if vfmt:
+        st["vfmt"] = vfmt
+    if vstyle:
+        st["vstyle"] = vstyle
+    text = (
+        "🎬 <b>Создать видео</b>\n\n"
+        "Опишите, что должно происходить в видео. "
+        "Можно приложить фото — тогда оживим его в движение 📎"
+    )
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=L("cancel"), callback_data="v:cancel")]
+    ])
+    if edit:
+        await deps.vid_edit(message, text, kb, user_id, parse_mode="HTML")
+    else:
+        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        st["vmsg_id"] = sent.message_id
+
+
+async def show_new_video_wizard(
+    message: types.Message, *, user_id: int, edit: bool,
+    deps: NewVideoWizardScreensDeps,
+) -> None:
+    """Экран 2 нового video wizard: настройки."""
+
+    st = deps.wizard_state[user_id]
+    st["vstep"] = "vnewwiz"
+    st["vawait"] = None
+    st["vmodel"] = deps.nwiz_model(st)
+    st["vmode"] = "ingredients" if st.get("vphoto") else "text"
+    text = new_video_wizard_text(user_id, deps=deps)
+    kb = new_video_wizard_kb(user_id, deps=deps)
     if edit:
         await deps.vid_edit(message, text, kb, user_id, parse_mode="HTML")
     else:
