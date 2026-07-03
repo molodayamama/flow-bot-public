@@ -208,6 +208,7 @@ from billing.pricing import (
     _stars_pack_label,
     _robokassa_pack_label,
 )
+import billing.robokassa as robokassa_billing
 
 
 # App/payment config extracted to config/settings.py (Phase 5 wave 2);
@@ -5588,68 +5589,59 @@ async def _start_topup(callback: types.CallbackQuery, user_id: int, pack_id: str
         )
 
 
+def _robokassa_runtime_config() -> robokassa_billing.RobokassaConfig:
+    return robokassa_billing.RobokassaConfig(
+        merchant_login=ROBOKASSA_MERCHANT_LOGIN,
+        password1=ROBOKASSA_PASSWORD1,
+        password2=ROBOKASSA_PASSWORD2,
+        hash_algo=ROBOKASSA_HASH_ALGO,
+        inc_curr_label=ROBOKASSA_INC_CURR_LABEL,
+        test=ROBOKASSA_TEST,
+        pay_url=ROBOKASSA_PAY_URL,
+        scope=ROBOKASSA_SCOPE,
+        consumer_result_url=ROBOKASSA_CONSUMER_RESULT_URL,
+        seller_result_url=ROBOKASSA_SELLER_RESULT_URL,
+        consumer_bot_username=ROBOKASSA_CONSUMER_BOT_USERNAME,
+        seller_bot_username=ROBOKASSA_SELLER_BOT_USERNAME,
+    )
+
+
+def _robokassa_web_deps() -> robokassa_billing.RobokassaWebDeps:
+    return robokassa_billing.RobokassaWebDeps(
+        config=_robokassa_runtime_config(),
+        is_configured=_robokassa_configured,
+        credit_pack=credit_pack,
+        robokassa_pack_amount=_robokassa_pack_amount,
+        payment_signature=robokassa_payment_signature,
+        result_signature=robokassa_result_signature,
+        clean_scope=_robokassa_clean_scope,
+        credit_store=credit_store,
+        metrics=metrics,
+        log=log,
+        maybe_apply_referral_rewards=_maybe_apply_referral_rewards,
+        notify_success=_notify_robokassa_success,
+        forward_result=_robokassa_forward_result,
+    )
+
+
 def _robokassa_new_inv_id() -> int:
-    return int(time.time() * 1000) * 1000 + random.randint(100, 999)
+    return robokassa_billing.new_inv_id()
 
 
 def _robokassa_receipt_json(pack_id: str, out_sum: str, credits: int) -> str:
-    """Состав чека (номенклатура) для Робочеков СМЗ — сырой JSON.
-
-    Одна позиция: купленные кредиты, её ``sum`` равен ``OutSum``. Самозанятый
-    (НПД): без НДС (``tax=none``); ``sno`` не указываем — режим СМЗ держит сам
-    Robokassa. Возвращаем компактный JSON без URL-encode: именно он идёт в
-    подпись. Для ссылки его отдельно прогоняем через ``quote`` (rawurlencode).
-    """
-    receipt = {
-        "items": [
-            {
-                "name": f"Пополнение баланса ФотоЖаб — {credits} кредитов",
-                "quantity": 1,
-                "sum": round(float(out_sum), 2),
-                "payment_method": "full_payment",
-                "payment_object": "service",
-                "tax": "none",
-            }
-        ]
-    }
-    return json.dumps(receipt, ensure_ascii=False, separators=(",", ":"))
+    return robokassa_billing.receipt_json(pack_id, out_sum, credits)
 
 
 def _robokassa_payment_url(user_id: int, pack_id: str, inv_id: int) -> str:
-    p = credit_pack(pack_id)
-    if not p:
-        raise ValueError(f"unknown pack: {pack_id!r}")
-    out_sum = _robokassa_pack_amount(pack_id)
-    shp = {"Shp_bot": ROBOKASSA_SCOPE, "Shp_pack": pack_id, "Shp_user": int(user_id)}
-    receipt_json = _robokassa_receipt_json(pack_id, out_sum, int(p["credits"]))
-    signature = robokassa_payment_signature(
-        ROBOKASSA_MERCHANT_LOGIN,
-        out_sum,
+    return robokassa_billing.payment_url(
+        user_id,
+        pack_id,
         inv_id,
-        ROBOKASSA_PASSWORD1,
-        shp_params=shp,
-        receipt=receipt_json,
-        algorithm=ROBOKASSA_HASH_ALGO,
+        _robokassa_runtime_config(),
+        credit_pack=credit_pack,
+        robokassa_pack_amount=_robokassa_pack_amount,
+        payment_signature=robokassa_payment_signature,
     )
-    params = {
-        "MerchantLogin": ROBOKASSA_MERCHANT_LOGIN,
-        "OutSum": out_sum,
-        "InvId": str(inv_id),
-        "Description": f"PhotoZhab credits: {p['credits']}",
-        "SignatureValue": signature,
-        "Culture": "ru",
-        "Encoding": "utf-8",
-        **shp,
-    }
-    if ROBOKASSA_INC_CURR_LABEL:
-        params["IncCurrLabel"] = ROBOKASSA_INC_CURR_LABEL
-    if ROBOKASSA_TEST:
-        params["IsTest"] = "1"
-    # Receipt идёт в подпись сырым JSON, а в ссылку — rawurlencode'нутым
-    # (quote(..., safe="") ≡ PHP rawurlencode). Поэтому не пускаем его через
-    # urlencode (иначе двойное кодирование) — добавляем вручную.
-    query = urlencode(params) + "&Receipt=" + quote(receipt_json, safe="")
-    return ROBOKASSA_PAY_URL + "?" + query
 
 
 async def _start_robokassa_topup(callback: types.CallbackQuery, user_id: int, pack_id: str):
@@ -5697,67 +5689,44 @@ dp.include_router(
 
 
 async def _robokassa_request_data(request: web.Request) -> dict[str, str]:
-    data = {k: str(v) for k, v in request.query.items()}
-    if request.method == "POST":
-        post = await request.post()
-        data.update({k: str(v) for k, v in post.items()})
-    return data
+    return await robokassa_billing.request_data(request)
 
 
 def _robokassa_param(data: dict[str, str], *names: str) -> str:
-    lower = {k.lower(): v for k, v in data.items()}
-    for name in names:
-        if name in data:
-            return data[name]
-        value = lower.get(name.lower())
-        if value is not None:
-            return value
-    return ""
+    return robokassa_billing.param(data, *names)
 
 
 def _robokassa_shp_params(data: dict[str, str]) -> dict[str, str]:
-    return {k: v for k, v in data.items() if k.startswith("Shp_")}
+    return robokassa_billing.shp_params(data)
 
 
 def _robokassa_amount_matches(actual: str, expected: str) -> bool:
-    try:
-        return abs(Decimal(actual) - Decimal(expected)) <= Decimal("0.01")
-    except (InvalidOperation, TypeError):
-        return False
+    return robokassa_billing.amount_matches(actual, expected)
 
 
 def _robokassa_target_scope(shp: dict[str, str]) -> str:
-    # Old Robokassa invoices did not carry Shp_bot; keep them on consumer.
-    return _robokassa_clean_scope(shp.get("Shp_bot", "") or "consumer")
+    return robokassa_billing.target_scope(shp, clean_scope=_robokassa_clean_scope)
 
 
 def _robokassa_result_url_for_scope(scope: str) -> str:
-    return ROBOKASSA_SELLER_RESULT_URL if scope == "seller" else ROBOKASSA_CONSUMER_RESULT_URL
+    return robokassa_billing.result_url_for_scope(scope, _robokassa_runtime_config())
 
 
 def _robokassa_provider_payment_id(inv_id: str, scope: str, *, legacy: bool = False) -> str:
-    return f"robokassa:{inv_id}" if legacy else f"robokassa:{scope}:{inv_id}"
+    return robokassa_billing.provider_payment_id(inv_id, scope, legacy=legacy)
 
 
 async def _robokassa_forward_result(target_scope: str, data: dict[str, str]) -> web.Response:
-    target_url = _robokassa_result_url_for_scope(target_scope)
-    if not target_url:
-        return web.Response(status=503, text="route unavailable")
-    try:
-        timeout = aiohttp.ClientTimeout(total=15)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(target_url, data=data) as resp:
-                text = await resp.text()
-                return web.Response(status=resp.status, text=text)
-    except Exception:
-        log.exception("robokassa route forward failed target=%s", target_scope)
-        return web.Response(status=503, text="route unavailable")
+    return await robokassa_billing.forward_result(
+        target_scope,
+        data,
+        config=_robokassa_runtime_config(),
+        log=log,
+    )
 
 
 def _robokassa_bot_username_for_scope(scope: str) -> str:
-    if scope == "seller":
-        return ROBOKASSA_SELLER_BOT_USERNAME or "photozhab_wb_bot"
-    return ROBOKASSA_CONSUMER_BOT_USERNAME or "photozhab_bot"
+    return robokassa_billing.bot_username_for_scope(scope, _robokassa_runtime_config())
 
 
 async def _notify_robokassa_success(user_id: int, credits: int, balance: int) -> None:
@@ -5780,149 +5749,34 @@ async def _notify_robokassa_success(user_id: int, credits: int, balance: int) ->
 
 
 async def robokassa_result(request: web.Request) -> web.Response:
-    if not _robokassa_configured():
-        return web.Response(status=503, text="Robokassa is not configured")
-    data = await _robokassa_request_data(request)
-    out_sum = _robokassa_param(data, "OutSum")
-    inv_id = _robokassa_param(data, "InvId", "InvID")
-    signature = _robokassa_param(data, "SignatureValue")
-    shp = _robokassa_shp_params(data)
-    expected = robokassa_result_signature(
-        out_sum,
-        inv_id,
-        ROBOKASSA_PASSWORD2,
-        shp_params=shp,
-        algorithm=ROBOKASSA_HASH_ALGO,
-    )
-    if not signature or signature.lower() != expected.lower():
-        log.warning("robokassa bad signature inv_id=%s", inv_id[:32])
-        return web.Response(status=400, text="bad signature")
-
-    target_scope = _robokassa_target_scope(shp)
-    if target_scope != ROBOKASSA_SCOPE:
-        return await _robokassa_forward_result(target_scope, data)
-
-    pack_id = shp.get("Shp_pack", "")
-    user_raw = shp.get("Shp_user", "")
-    p = credit_pack(pack_id)
-    if not p or not user_raw.isdigit() or not inv_id:
-        log.warning(
-            "robokassa unmatched payment inv_id=%s pack=%r user=%r amount=%r",
-            inv_id[:32], pack_id[:64], user_raw[:32], out_sum[:32],
-        )
-        metrics.log_event(
-            "robokassa_unmatched_payment",
-            user_id=int(user_raw) if user_raw.isdigit() else 0,
-            source="robokassa",
-            payload={
-                "inv_id": inv_id[:64],
-                "pack": pack_id[:64],
-                "user": user_raw[:64],
-                "amount_rub": out_sum[:32],
-                "reason": "bad_order",
-            },
-        )
-        return web.Response(status=400, text="bad order")
-    expected_amount = _robokassa_pack_amount(pack_id)
-    if not _robokassa_amount_matches(out_sum, expected_amount):
-        log.warning("robokassa amount mismatch inv_id=%s", inv_id[:32])
-        return web.Response(status=400, text="bad amount")
-
-    user_id = int(user_raw)
-    provider_payment_id = _robokassa_provider_payment_id(
-        inv_id, target_scope, legacy=("Shp_bot" not in shp)
-    )
-    tx_status = metrics.record_transaction_status(
-        provider="robokassa",
-        provider_payment_id=provider_payment_id,
-        user_id=user_id,
-        package_id=pack_id,
-        amount_rub=float(Decimal(out_sum)),
-        stars_amount=0,
-        credits_issued=p["credits"],
-        status="paid",
-    )
-    if tx_status == "duplicate":
-        return web.Response(text=f"OK{inv_id}")
-    if tx_status == "error":
-        return web.Response(status=500, text="temporary error")
-
-    new_balance = credit_store.add(user_id, p["credits"])
-    metrics.log_event(
-        "payment_success",
-        user_id=user_id,
-        source="robokassa",
-        payload={"pack": pack_id, "amount_rub": out_sum, "credits": p["credits"]},
-    )
-    _maybe_apply_referral_rewards(
-        user_id,
-        stars_paid=p["stars"],
-        credits_issued=p["credits"],
-        pack_id=pack_id,
-        provider_payment_id=provider_payment_id,
-    )
-    await _notify_robokassa_success(user_id, p["credits"], new_balance)
-    return web.Response(text=f"OK{inv_id}")
+    return await robokassa_billing.handle_result(request, _robokassa_web_deps())
 
 
 async def _robokassa_status_page(request: web.Request, *, ok: bool) -> web.Response:
-    data = await _robokassa_request_data(request)
-    scope = _robokassa_target_scope(_robokassa_shp_params(data))
-    username = html.escape(_robokassa_bot_username_for_scope(scope))
-    if ok:
-        title = "Оплата прошла"
-        body = "Баланс пополнится автоматически. Можно вернуться в Telegram."
-    else:
-        title = "Оплата не завершена"
-        body = "Деньги не списаны или платёж отменён. Вернись в бот и попробуй ещё раз."
-    return web.Response(
-        text=(
-            "<!doctype html><meta charset='utf-8'>"
-            f"<title>{html.escape(title)}</title>"
-            "<body style='font-family:system-ui;max-width:560px;margin:48px auto;padding:0 20px'>"
-            f"<h1>{html.escape(title)}</h1>"
-            f"<p>{html.escape(body)}</p>"
-            f"<p><a href='https://t.me/{username}'>Открыть бота</a></p>"
-            "</body>"
-        ),
-        content_type="text/html",
-    )
+    return await robokassa_billing.status_page(request, _robokassa_web_deps(), ok=ok)
 
 
 async def robokassa_success(request: web.Request) -> web.Response:
-    return await _robokassa_status_page(request, ok=True)
-    return web.Response(
-        text=(
-            "<!doctype html><meta charset='utf-8'>"
-            "<title>Оплата прошла</title>"
-            "<body style='font-family:system-ui;max-width:560px;margin:48px auto;padding:0 20px'>"
-            "<h1>Оплата прошла</h1>"
-            "<p>Баланс пополнится автоматически. Можно вернуться в Telegram.</p>"
-            "<p><a href='https://t.me/photozhab_bot'>Открыть бота</a></p>"
-            "</body>"
-        ),
-        content_type="text/html",
-    )
+    return await robokassa_billing.success(request, _robokassa_web_deps())
 
 
 async def robokassa_fail(request: web.Request) -> web.Response:
-    return await _robokassa_status_page(request, ok=False)
-    return web.Response(
-        text=(
-            "<!doctype html><meta charset='utf-8'>"
-            "<title>Оплата не завершена</title>"
-            "<body style='font-family:system-ui;max-width:560px;margin:48px auto;padding:0 20px'>"
-            "<h1>Оплата не завершена</h1>"
-            "<p>Деньги не списаны или платёж отменён. Вернись в бот и попробуй ещё раз.</p>"
-            "<p><a href='https://t.me/photozhab_bot'>Открыть бота</a></p>"
-            "</body>"
-        ),
-        content_type="text/html",
-    )
+    return await robokassa_billing.fail(request, _robokassa_web_deps())
 
 
 async def robokassa_health(request: web.Request) -> web.Response:
-    return web.Response(text="OK")
+    return await robokassa_billing.health(request)
+
+
+def _register_robokassa_routes(app: web.Application) -> None:
+    robokassa_billing.register_routes(
+        app,
+        is_configured=_robokassa_configured,
+        result_handler=robokassa_result,
+        success_handler=robokassa_success,
+        fail_handler=robokassa_fail,
+        health_handler=robokassa_health,
+    )
 
 
 async def _start_web_server() -> web.AppRunner:
@@ -5952,13 +5806,7 @@ async def _start_web_server() -> web.AppRunner:
             seller_backend.register_internal_routes(app, _backend_generate)
         except Exception:
             log.exception("internal generation endpoint registration failed")
-    if _robokassa_configured():
-        app.router.add_route("*", "/robokassa/result", robokassa_result)
-        app.router.add_get("/robokassa/success", robokassa_success)
-        app.router.add_post("/robokassa/success", robokassa_success)
-        app.router.add_get("/robokassa/fail", robokassa_fail)
-        app.router.add_post("/robokassa/fail", robokassa_fail)
-        app.router.add_get("/robokassa/health", robokassa_health)
+    _register_robokassa_routes(app)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, ROBOKASSA_WEB_HOST, ROBOKASSA_WEB_PORT)

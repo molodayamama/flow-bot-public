@@ -514,6 +514,11 @@ class BotMenuWiringTests(unittest.TestCase):
         self.plain_text_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "plain_text.py"
         ).read_text(encoding="utf-8")
+        # Robokassa URL/webhook logic moved to billing/robokassa.py; flow_bot
+        # keeps compatibility wrappers and web-server registration.
+        self.robokassa_source = (
+            PROJECT_ROOT / "billing" / "robokassa.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         self.assertIn('F.data.startswith("m:")', self.menu_router_source)  # menu router
@@ -676,13 +681,19 @@ class BotMenuWiringTests(unittest.TestCase):
         for needle in (
             "ROBOKASSA_HASH_ALGO",
             "ROBOKASSA_INC_CURR_LABEL",
-            "robokassa_payment_signature(",
-            "robokassa_result_signature(",
             "async def robokassa_result",
-            'provider="robokassa"',
             "await _start_robokassa_web_server()",
         ):
             self.assertIn(needle, self.source, needle)
+        for needle in (
+            "payment_signature(",
+            "result_signature(",
+            'provider="robokassa"',
+            "def register_routes(",
+        ):
+            self.assertIn(needle, self.robokassa_source, needle)
+        self.assertIn("_register_robokassa_routes(app)", self.source)
+        self.assertNotIn("flow_bot", self.robokassa_source)
         self.assertIn('data.startswith("m:robo:")', self.menu_router_source)
         self.assertIn('callback_data=f"m:robo:{pid}"', self.kb_source)
 
