@@ -22,6 +22,11 @@ MAX_ENABLED_ENV = "MAX_ENABLED"
 MAX_BOT_TOKEN_ENV = "MAX_BOT_TOKEN"
 MAX_WEBHOOK_SECRET_ENV = "MAX_WEBHOOK_SECRET"
 MAX_API_BASE_URL_ENV = "MAX_API_BASE_URL"
+# Path to a CA bundle (PEM) that trusts the MAX API root. platform-api2.max.ru
+# presents a chain rooted in the Russian Trusted Root CA, which is not in the
+# Mozilla/certifi bundle; the operator points this at that CA (or installs it
+# system-wide). SSL verification is never disabled.
+MAX_CA_BUNDLE_ENV = "MAX_CA_BUNDLE"
 DEFAULT_MAX_API_BASE_URL = "https://platform-api2.max.ru"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
@@ -32,6 +37,7 @@ class MaxConfig:
     bot_token: str = ""
     webhook_secret: str = ""
     api_base_url: str = DEFAULT_MAX_API_BASE_URL
+    ca_bundle: str = ""
 
 
 def max_config_from_env(env: Mapping[str, str] | None = None) -> MaxConfig:
@@ -42,6 +48,7 @@ def max_config_from_env(env: Mapping[str, str] | None = None) -> MaxConfig:
         bot_token=str(source.get(MAX_BOT_TOKEN_ENV, "") or ""),
         webhook_secret=str(source.get(MAX_WEBHOOK_SECRET_ENV, "") or ""),
         api_base_url=str(source.get(MAX_API_BASE_URL_ENV, DEFAULT_MAX_API_BASE_URL) or DEFAULT_MAX_API_BASE_URL).rstrip("/"),
+        ca_bundle=str(source.get(MAX_CA_BUNDLE_ENV, "") or ""),
     )
 
 
@@ -51,7 +58,7 @@ def build_client_from_env(env: Mapping[str, str] | None = None) -> "MaxBotClient
         return None
     if not config.bot_token:
         raise ValueError(f"{MAX_BOT_TOKEN_ENV} is required when {MAX_ENABLED_ENV}=1")
-    return MaxBotClient(token=config.bot_token, base_url=config.api_base_url)
+    return MaxBotClient(token=config.bot_token, base_url=config.api_base_url, ca_bundle=config.ca_bundle)
 
 
 @dataclass
@@ -66,6 +73,20 @@ class MaxBotClient:
     base_url: str = DEFAULT_MAX_API_BASE_URL
     session: aiohttp.ClientSession | None = None
     name: str = "max"
+    ca_bundle: str = ""
+
+    def _ssl_arg(self) -> Any:
+        """SSL argument for aiohttp: a context trusting ``ca_bundle`` when set.
+
+        Returns None (aiohttp default verification) when no bundle is configured.
+        Verification is never disabled — MAX's Russian Trusted Root CA must be
+        supplied via MAX_CA_BUNDLE or installed system-wide.
+        """
+        if not self.ca_bundle:
+            return None
+        import ssl
+
+        return ssl.create_default_context(cafile=self.ca_bundle)
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -217,7 +238,7 @@ class MaxBotClient:
         if session is None:
             session = aiohttp.ClientSession()
         try:
-            async with session.get(url) as response:
+            async with session.get(url, ssl=self._ssl_arg()) as response:
                 response.raise_for_status()
                 return await response.read()
         finally:
@@ -231,7 +252,7 @@ class MaxBotClient:
         if session is None:
             session = aiohttp.ClientSession()
         try:
-            async with session.put(url, data=data) as response:
+            async with session.put(url, data=data, ssl=self._ssl_arg()) as response:
                 response.raise_for_status()
                 if response.content_type == "application/json":
                     return await response.json()
@@ -250,6 +271,7 @@ class MaxBotClient:
                 method,
                 f"{self.base_url.rstrip('/')}{path}",
                 headers=self._headers(),
+                ssl=self._ssl_arg(),
                 **kwargs,
             ) as response:
                 response.raise_for_status()

@@ -85,6 +85,20 @@ class ProtocolTests(unittest.TestCase):
     def test_auth_header_uses_token(self):
         self.assertEqual(MaxBotClient(token="ABC")._headers()["Authorization"], "ABC")
 
+    def test_ssl_arg_none_without_ca_bundle(self):
+        self.assertIsNone(MaxBotClient(token="x")._ssl_arg())
+
+    def test_ssl_arg_builds_context_from_ca_bundle(self):
+        import ssl as _ssl
+        import certifi  # any real PEM works to prove a context is built
+        ctx = MaxBotClient(token="x", ca_bundle=certifi.where())._ssl_arg()
+        self.assertIsInstance(ctx, _ssl.SSLContext)
+
+    def test_requests_pass_ssl_argument(self):
+        c, sess = _client([_FakeResp(json_body={"ok": True})])
+        run(c.send_message("7", "hi"))
+        self.assertIn("ssl", sess.calls[0][3])
+
 
 class MediaPayloadTests(unittest.TestCase):
     def test_image_url_payload(self):

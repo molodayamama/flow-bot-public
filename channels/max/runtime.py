@@ -38,7 +38,9 @@ def build_max_bot(
         return None
     if not config.bot_token:
         raise ValueError("MAX_BOT_TOKEN is required when MAX_ENABLED=1")
-    client = client or MaxBotClient(token=config.bot_token, base_url=config.api_base_url)
+    client = client or MaxBotClient(
+        token=config.bot_token, base_url=config.api_base_url, ca_bundle=config.ca_bundle
+    )
     bot = MaxMvpBot(platform=client, service=service, wallet=wallet)
     return client, bot
 
