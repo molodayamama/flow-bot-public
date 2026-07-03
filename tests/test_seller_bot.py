@@ -563,9 +563,9 @@ class SellerMenuTests(unittest.TestCase):
         self.assertTrue(square_filename.startswith("photozhab_yandex_market_1x1_"))
 
     def test_seller_history_uses_flow_jobs(self) -> None:
-        source = inspect.getsource(flow_bot._show_prompt_history)
-        self.assertIn("if _cfg.IS_SELLER", source)
-        self.assertIn("_seller_history_text(user_id)", source)
+        source = inspect.getsource(flow_bot.tg_screens.show_prompt_history)
+        self.assertIn("if deps.is_seller()", source)
+        self.assertIn("deps.seller_history_text(user_id)", source)
         orig_history = getattr(flow_bot.metrics, "get_seller_history", None)
         orig_gallery = getattr(flow_bot.metrics, "get_gallery", None)
 

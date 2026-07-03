@@ -523,6 +523,10 @@ class BotMenuWiringTests(unittest.TestCase):
         self.robokassa_source = (
             PROJECT_ROOT / "billing" / "robokassa.py"
         ).read_text(encoding="utf-8")
+        # Profile/gallery/history/support renderers moved to screens.py.
+        self.screens_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "screens.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         self.assertIn('F.data.startswith("m:")', self.menu_router_source)  # menu router
@@ -702,6 +706,20 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertNotIn("flow_bot", self.robokassa_source)
         self.assertIn('data.startswith("m:robo:")', self.menu_router_source)
         self.assertIn('callback_data=f"m:robo:{pid}"', self.kb_source)
+
+    def test_profile_screens_moved_to_telegram_screens_module(self) -> None:
+        self.assertIn("from channels.telegram import screens as tg_screens", self.source)
+        self.assertIn("tg_screens.ProfileScreensDeps(", self.source)
+        for name in (
+            "async def show_gallery",
+            "async def show_prompt_history",
+            "async def show_support_menu",
+            "async def show_profile_screen",
+            "async def show_my_tickets",
+        ):
+            self.assertIn(name, self.screens_source, name)
+        self.assertIn("seller_history_text=_seller_history_text", self.source)
+        self.assertNotIn("flow_bot", self.screens_source)
 
     def test_admin_grant_restricted(self) -> None:
         # /grant moved to the admin_credits router (Phase 6); the admin gate

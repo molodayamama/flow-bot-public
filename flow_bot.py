@@ -315,6 +315,7 @@ from channels.telegram.texts import (
     _seller_history_cost,
     _seller_history_text as _telegram_seller_history_text,
 )
+from channels.telegram import screens as tg_screens
 from channels.telegram.routers import commands as tg_commands_router
 from channels.telegram.routers import payments as tg_payments_router
 from channels.telegram.routers import menu as tg_menu_router
@@ -4006,131 +4007,45 @@ async def _do_mix_and_send(
     await status_msg.delete()
 
 
-async def _show_gallery(message: types.Message, *, user_id: int) -> None:
-    """Показываем последние 20 изображений из галереи пользователя."""
-    rows = metrics.get_gallery(user_id, limit=20)
-    back_kb = types.InlineKeyboardMarkup(inline_keyboard=[[_menu_button("menu", "m:menu")]])
-    if not rows:
-        await message.answer(
-            flow_copy.msg("gallery_empty"), reply_markup=back_kb, parse_mode="HTML"
-        )
-        return
-    # Разбиваем на группы по 10 (Telegram media group limit)
-    header_sent = False
-    for chunk_start in range(0, len(rows), 10):
-        chunk = rows[chunk_start:chunk_start + 10]
-        media_group = [types.InputMediaPhoto(media=r["file_id"]) for r in chunk]
-        if not header_sent:
-            media_group[0] = types.InputMediaPhoto(
-                media=chunk[0]["file_id"],
-                caption=flow_copy.msg("gallery_header", total=len(rows)),
-            )
-            header_sent = True
-        try:
-            await message.answer_media_group(media=media_group)
-        except Exception as exc:
-            log.warning(f"Gallery send error: {exc}")
+def _profile_screens_deps() -> tg_screens.ProfileScreensDeps:
+    return tg_screens.ProfileScreensDeps(
+        metrics=metrics,
+        workspace=_ws,
+        image_registry=image_registry,
+        seller_history_text=_seller_history_text,
+        is_seller=lambda: _cfg.IS_SELLER,
+        log=log,
+    )
 
-    # Кнопки под галереей — включая «Улучшить последнюю» если есть живой токен
-    bottom_rows: list[list[types.InlineKeyboardButton]] = []
-    latest_token = rows[0].get("token") if rows else None
-    if latest_token and image_registry.get(latest_token):
-        realup_price = action_price("realup")
-        label_up = f"🔍 Улучшить последнюю · {realup_price} кр" if realup_price else "🔍 Улучшить последнюю"
-        bottom_rows.append([types.InlineKeyboardButton(
-            text=label_up, callback_data=action_callback_data("realup", latest_token)
-        )])
-    bottom_rows.append([_menu_button("menu", "m:menu")])
-    await message.answer(
-        "⬆️ Вот твои последние работы",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=bottom_rows),
+
+async def _show_gallery(message: types.Message, *, user_id: int) -> None:
+    await tg_screens.show_gallery(
+        message, user_id=user_id, deps=_profile_screens_deps()
     )
 
 
 async def _show_prompt_history(message: types.Message, *, user_id: int) -> None:
-    """Показать историю промптов пользователя с кнопками «Повторить»."""
-    if _cfg.IS_SELLER:
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [_menu_button("gallery", "m:gallery")],
-            [_menu_button("menu", "m:menu")],
-        ])
-        await message.answer(_seller_history_text(user_id), reply_markup=kb, parse_mode="HTML")
-        return
-    prompts = metrics.get_prompt_history(user_id, limit=10)
-    back_kb = types.InlineKeyboardMarkup(inline_keyboard=[[_menu_button("menu", "m:menu")]])
-    if not prompts:
-        await message.answer(flow_copy.msg("history_empty"), reply_markup=back_kb, parse_mode="HTML")
-        return
-    B = types.InlineKeyboardButton
-    # Build numbered list in message text
-    lines = [flow_copy.msg("history_title", n=len(prompts))]
-    rows: list[list[types.InlineKeyboardButton]] = []
-    nums = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-    for i, p in enumerate(prompts):
-        emoji = nums[i] if i < len(nums) else f"{i+1}."
-        lines.append(f"{emoji} {html.escape(p[:100])}")
-        rows.append([B(text=f"{emoji} Использовать", callback_data=f"w:hist:{i}")])
-    rows.append([_menu_button("menu", "m:menu")])
-    text = "\n".join(lines)
-    # Stash the history list in wizard state so w:hist:N can retrieve it
-    _ws(user_id)["_hist_cache"] = prompts
-    await message.answer(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await tg_screens.show_prompt_history(
+        message, user_id=user_id, deps=_profile_screens_deps()
+    )
 
 
 async def _show_support_menu(message: types.Message, *, user_id: int, edit: bool) -> None:
-    _ws(user_id).pop("support_await", None)  # уход в меню поддержки снимает «жду вопрос»
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=L("support_new"), callback_data="m:support:new")],
-        [types.InlineKeyboardButton(text=L("support_my"), callback_data="m:support:my")],
-        [_menu_button("menu", "m:menu")],
-    ])
-    if edit:
-        await message.edit_text(flow_copy.msg("support_menu"), reply_markup=kb)
-    else:
-        await message.answer(flow_copy.msg("support_menu"), reply_markup=kb)
+    await tg_screens.show_support_menu(
+        message, user_id=user_id, edit=edit, deps=_profile_screens_deps()
+    )
 
 
 async def _show_profile_screen(message: types.Message, *, user_id: int, edit: bool) -> None:
-    """Экран «Мой профиль»: ссылки на галерею, историю запросов и поддержку."""
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [_menu_button("gallery", "m:gallery")],
-        [_menu_button("history", "m:history")],
-        [_menu_button("support", "m:support")],
-        [_menu_button("menu", "m:menu")],
-    ])
-    text = "👤 Мой профиль\n\nТвои работы и история запросов — всё здесь."
-    if edit:
-        await message.edit_text(text, reply_markup=kb)
-    else:
-        await message.answer(text, reply_markup=kb)
+    await tg_screens.show_profile_screen(
+        message, user_id=user_id, edit=edit, deps=_profile_screens_deps()
+    )
 
 
 async def _show_my_tickets(message: types.Message, *, user_id: int, edit: bool) -> None:
-    tickets = metrics.get_user_tickets(user_id)
-    back_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [_menu_button("support", "m:support")],
-        [_menu_button("menu", "m:menu")],
-    ])
-    if not tickets:
-        text = flow_copy.msg("support_no_tickets")
-    else:
-        items = "\n\n".join(
-            flow_copy.msg(
-                "support_ticket_item",
-                id=t["id"],
-                status_emoji="✅" if t["status"] == "replied" else "⏳",
-                status_label="Отвечен" if t["status"] == "replied" else "Ожидает",
-                question=html.escape(t["message_text"][:80]),
-                reply_line=(f"↪️ {html.escape(t['reply_text'][:120])}\n" if t["reply_text"] else ""),
-                date=(t.get("created_at") or "")[:16],
-            )
-            for i, t in enumerate(tickets)
-        )
-        text = flow_copy.msg("support_tickets_list", items=items)
-    if edit:
-        await message.edit_text(text, reply_markup=back_kb)
-    else:
-        await message.answer(text, reply_markup=back_kb)
+    await tg_screens.show_my_tickets(
+        message, user_id=user_id, edit=edit, deps=_profile_screens_deps()
+    )
 
 
 def _store_pending_photo_route(user_id: int, *, file_id: str, caption: str) -> None:
