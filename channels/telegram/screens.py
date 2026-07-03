@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import random
 from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
 from typing import Any
@@ -10,8 +11,8 @@ from typing import Any
 from aiogram import types
 
 import flow_copy
-from channels.telegram.keyboards import L, _menu_button
-from flow_core import action_callback_data, action_price
+from channels.telegram.keyboards import L, _menu_button, main_menu_kb
+from flow_core import action_callback_data, action_price, price_gen, video_price
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,109 @@ class ProfileScreensDeps:
     seller_history_text: Callable[[int], str]
     is_seller: Callable[[], bool]
     log: Any
+
+
+@dataclass(frozen=True)
+class PublicScreensDeps:
+    """Injected state and stores for public menu/help/referral screens."""
+
+    metrics: Any
+    workspace: Callable[[int], MutableMapping[str, Any]]
+    credit_store: Any
+    is_seller: Callable[[], bool]
+    invite_button: Callable[[int], types.InlineKeyboardButton]
+    referral_link: Callable[[int], str]
+    reply_menu_kb: Callable[[int], types.ReplyKeyboardMarkup]
+    referral_referred_bonus: int
+    referral_tier1_bonus: int
+    referral_tier2_bonus: int
+    referral_tier3_bonus: int
+    referral_ongoing_pct: float
+
+
+async def show_referral_screen(
+    message: types.Message, *, user_id: int, edit: bool, deps: PublicScreensDeps
+) -> None:
+    stats = deps.metrics.referral_stats(user_id)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [deps.invite_button(user_id)],
+        [_menu_button("menu", "m:menu")],
+    ])
+    text = flow_copy.msg(
+        "referral_screen",
+        link=html.escape(deps.referral_link(user_id)),
+        invited=stats["invited"],
+        earned=stats["earned"],
+        referred=deps.referral_referred_bonus,
+        t1=deps.referral_tier1_bonus,
+        t2=deps.referral_tier2_bonus,
+        t3=deps.referral_tier3_bonus,
+        pct=int(round(deps.referral_ongoing_pct * 100)),
+    )
+    if edit:
+        await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def show_help_screen(message: types.Message, *, edit: bool, deps: PublicScreensDeps) -> None:
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[[_menu_button("menu", "m:menu")]])
+    help_text = flow_copy.msg("seller_help" if deps.is_seller() else "help")
+    if edit:
+        await message.edit_text(help_text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await message.answer(help_text, reply_markup=kb, parse_mode="HTML")
+
+
+async def show_main_menu(
+    message: types.Message, *, user_id: int, edit: bool = False,
+    ensure_kb: bool = False, deps: PublicScreensDeps,
+) -> None:
+    if ensure_kb:
+        try:
+            await message.answer("\u041c\u0435\u043d\u044e \u043e\u0442\u043a\u0440\u044b\u0442\u043e \U0001f447", reply_markup=deps.reply_menu_kb(user_id))
+        except Exception:
+            pass
+    last = deps.workspace(user_id).get("last")
+    credits = deps.credit_store.balance(user_id)
+    kb = main_menu_kb(show_repeat=bool(last), credits=credits)
+    if deps.is_seller():
+        text = flow_copy.msg("seller_menu_title")
+    else:
+        variants = flow_copy.MESSAGES.get("menu_title_variants") or [flow_copy.msg("menu_title")]
+        text = random.choice(variants)
+    try:
+        if edit:
+            await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def show_balance(
+    message: types.Message, *, user_id: int, edit: bool = True, deps: PublicScreensDeps
+) -> None:
+    credits = deps.credit_store.balance(user_id)
+    text = flow_copy.msg(
+        "balance_screen",
+        credits=credits,
+        price=price_gen(1),
+        vprice=video_price("omni-flash-4s", 1),
+    )
+    kb = types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [_menu_button("topup", "m:topup")],
+            [_menu_button("menu", "m:menu")],
+        ]
+    )
+    try:
+        if edit:
+            await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 async def show_gallery(message: types.Message, *, user_id: int, deps: ProfileScreensDeps) -> None:

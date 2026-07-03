@@ -721,6 +721,23 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("seller_history_text=_seller_history_text", self.source)
         self.assertNotIn("flow_bot", self.screens_source)
 
+    def test_public_screens_moved_to_telegram_screens_module(self) -> None:
+        self.assertIn("tg_screens.PublicScreensDeps(", self.source)
+        for name in (
+            "async def show_referral_screen",
+            "async def show_help_screen",
+            "async def show_main_menu",
+            "async def show_balance",
+        ):
+            self.assertIn(name, self.screens_source, name)
+        for needle in (
+            "referral_link=_referral_link",
+            "invite_button=_invite_button",
+            "reply_menu_kb=reply_menu_kb",
+        ):
+            self.assertIn(needle, self.source)
+        self.assertNotIn("flow_bot", self.screens_source)
+
     def test_admin_grant_restricted(self) -> None:
         # /grant moved to the admin_credits router (Phase 6); the admin gate
         # is preserved bit-exact via injected deps.admin_ids.

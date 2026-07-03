@@ -758,24 +758,27 @@ def _invite_button(user_id: int) -> types.InlineKeyboardButton:
     return types.InlineKeyboardButton(text=flow_copy.label("invite_friend"), url=share)
 
 
-async def _show_referral_screen(message: types.Message, *, user_id: int, edit: bool) -> None:
-    stats = metrics.referral_stats(user_id)
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [_invite_button(user_id)],
-        [_menu_button("menu", "m:menu")],
-    ])
-    text = flow_copy.msg(
-        "referral_screen",
-        link=html.escape(_referral_link(user_id)),
-        invited=stats["invited"], earned=stats["earned"],
-        referred=REFERRAL_REFERRED_BONUS,
-        t1=REFERRAL_TIER1_BONUS, t2=REFERRAL_TIER2_BONUS, t3=REFERRAL_TIER3_BONUS,
-        pct=int(round(REFERRAL_ONGOING_PCT * 100)),
+def _public_screens_deps() -> tg_screens.PublicScreensDeps:
+    return tg_screens.PublicScreensDeps(
+        metrics=metrics,
+        workspace=_ws,
+        credit_store=credit_store,
+        is_seller=lambda: _cfg.IS_SELLER,
+        invite_button=_invite_button,
+        referral_link=_referral_link,
+        reply_menu_kb=reply_menu_kb,
+        referral_referred_bonus=REFERRAL_REFERRED_BONUS,
+        referral_tier1_bonus=REFERRAL_TIER1_BONUS,
+        referral_tier2_bonus=REFERRAL_TIER2_BONUS,
+        referral_tier3_bonus=REFERRAL_TIER3_BONUS,
+        referral_ongoing_pct=REFERRAL_ONGOING_PCT,
     )
-    if edit:
-        await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    else:
-        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def _show_referral_screen(message: types.Message, *, user_id: int, edit: bool) -> None:
+    await tg_screens.show_referral_screen(
+        message, user_id=user_id, edit=edit, deps=_public_screens_deps()
+    )
 
 
 def _maybe_apply_referral_rewards(
@@ -1481,12 +1484,9 @@ def reply_menu_kb(user_id: int | None = None) -> types.ReplyKeyboardMarkup:
 
 
 async def _show_help_screen(message: types.Message, *, edit: bool) -> None:
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[[_menu_button("menu", "m:menu")]])
-    help_text = flow_copy.msg("seller_help" if _cfg.IS_SELLER else "help")
-    if edit:
-        await message.edit_text(help_text, reply_markup=kb, parse_mode="HTML")
-    else:
-        await message.answer(help_text, reply_markup=kb, parse_mode="HTML")
+    await tg_screens.show_help_screen(
+        message, edit=edit, deps=_public_screens_deps()
+    )
 
 
 def _wizard_text(user_id: int) -> str:
@@ -2200,47 +2200,19 @@ def _zero_balance_kb() -> types.InlineKeyboardMarkup:
 async def show_main_menu(
     message: types.Message, *, user_id: int, edit: bool = False, ensure_kb: bool = False
 ):
-    if ensure_kb:
-        # Гарантируем постоянную нижнюю клавиатуру (если её сбросили).
-        try:
-            await message.answer("Меню открыто 👇", reply_markup=reply_menu_kb(user_id))
-        except Exception:
-            pass
-    last = _ws(user_id).get("last")
-    credits = credit_store.balance(user_id)
-    kb = main_menu_kb(show_repeat=bool(last), credits=credits)
-    if _cfg.IS_SELLER:
-        text = flow_copy.msg("seller_menu_title")
-    else:
-        import random as _random
-        _variants = flow_copy.MESSAGES.get("menu_title_variants") or [flow_copy.msg("menu_title")]
-        text = _random.choice(_variants)
-    try:
-        if edit:
-            await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-        else:
-            await message.answer(text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await tg_screens.show_main_menu(
+        message,
+        user_id=user_id,
+        edit=edit,
+        ensure_kb=ensure_kb,
+        deps=_public_screens_deps(),
+    )
 
 
 async def show_balance(message: types.Message, *, user_id: int, edit: bool = True):
-    credits = credit_store.balance(user_id)
-    text = flow_copy.msg("balance_screen", credits=credits, price=price_gen(1),
-                         vprice=video_price("omni-flash-4s", 1))
-    kb = types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [_menu_button("topup", "m:topup")],
-            [_menu_button("menu", "m:menu")],
-        ]
+    await tg_screens.show_balance(
+        message, user_id=user_id, edit=edit, deps=_public_screens_deps()
     )
-    try:
-        if edit:
-            await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-        else:
-            await message.answer(text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 async def _send_one_image(
