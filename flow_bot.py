@@ -1703,84 +1703,29 @@ _VID_CODE_FAMILY = {v: k for k, v in _VID_FAMILY_CODE.items()}
 # Frames/interpolation остаётся Veo-only.
 
 
-async def show_video_ingredients(message: types.Message, *, user_id: int, edit: bool = False):
-    st = wizard_state[user_id]
-    st["vstep"] = "ving"
-    st["vawait"] = "ving_photo"
-    st.setdefault("vmode", "ingredients")
-    st.setdefault("vmodel", VID_REF_DEFAULT_MODEL)
-    st.setdefault("vfmt", VID_DEFAULT_FMT)
-    st.setdefault("vcount", VID_DEFAULT_COUNT)
-    vfmt = st.get("vfmt", VID_DEFAULT_FMT)
-    vcount = st.get("vcount", VID_DEFAULT_COUNT)
-    model_id = st.get("vmodel", VID_REF_DEFAULT_MODEL)
-    n = len(st.get("ving_photos") or [])
-    text = flow_copy.msg(
-        "vid_ing_screen",
-        n=n,
-        model=L(f"vid_model_name:{model_id}"),
-        fmt=_VID_FMT_NAMES.get(vfmt, vfmt),
-        count=vcount,
-        price=video_price(model_id, vcount, "ingredients"),
-        credits=credit_store.balance(user_id),
+def _video_reference_screens_deps() -> tg_screens.VideoReferenceScreensDeps:
+    return tg_screens.VideoReferenceScreensDeps(
+        wizard_state=wizard_state,
+        credit_store=credit_store,
+        vid_edit=_vid_edit,
+        vid_default_fmt=VID_DEFAULT_FMT,
+        vid_default_count=VID_DEFAULT_COUNT,
+        vid_ref_default_model=VID_REF_DEFAULT_MODEL,
+        vid_frames_default_model=VID_FRAMES_DEFAULT_MODEL,
+        vid_fmt_names=_VID_FMT_NAMES,
     )
-    # Подпись к фото уже задаёт описание — показываем её и меняем подпись кнопки.
-    caption = st.get("vcaption_prompt")
-    if caption:
-        text += "\n\n" + flow_copy.msg(
-            "vid_ing_ready_with_caption", prompt=html.escape(caption[:300])
-        )
-    kb = ingredients_kb(n, vfmt, vcount, model_id, has_caption=bool(caption))
-    if edit:
-        await _vid_edit(message, text, kb, user_id, parse_mode="HTML")
-    else:
-        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
-        st["vmsg_id"] = sent.message_id
+
+
+async def show_video_ingredients(message: types.Message, *, user_id: int, edit: bool = False):
+    await tg_screens.show_video_ingredients(
+        message, user_id=user_id, edit=edit, deps=_video_reference_screens_deps()
+    )
 
 
 async def show_video_frames(message: types.Message, *, user_id: int, edit: bool = False):
-    st = wizard_state[user_id]
-    st["vstep"] = "vfrm"
-    st.setdefault("vmode", "frames")
-    st.setdefault("vmodel", VID_FRAMES_DEFAULT_MODEL)
-    st.setdefault("vfmt", VID_DEFAULT_FMT)
-    st.setdefault("vcount", VID_DEFAULT_COUNT)
-    vfmt = st.get("vfmt", VID_DEFAULT_FMT)
-    vcount = st.get("vcount", VID_DEFAULT_COUNT)
-    model_id = st.get("vmodel", VID_FRAMES_DEFAULT_MODEL)
-    has_start = bool(st.get("vfrm_start"))
-    has_end = bool(st.get("vfrm_end"))
-    text = flow_copy.msg(
-        "vid_frm_screen",
-        model=L(f"vid_model_name:{model_id}"),
-        start_mark="✅" if has_start else "⬜",
-        end_mark="✅" if has_end else "⬜",
-        fmt=_VID_FMT_NAMES.get(vfmt, vfmt),
-        count=vcount,
-        price=video_price(model_id, vcount, "frames"),
-        credits=credit_store.balance(user_id),
+    await tg_screens.show_video_frames(
+        message, user_id=user_id, edit=edit, deps=_video_reference_screens_deps()
     )
-    if not has_start:
-        text += "\n\n" + flow_copy.msg("vid_frm_send_photo_start")
-        st["vawait"] = "vfrm_start"
-    elif not has_end:
-        text += "\n\n" + flow_copy.msg("vid_frm_send_photo_end")
-        st["vawait"] = "vfrm_end"
-    else:
-        caption = st.get("vcaption_prompt")
-        if caption:
-            text += "\n\n" + flow_copy.msg(
-                "vid_frm_ready_next_with_caption", prompt=html.escape(caption[:300])
-            )
-        else:
-            text += "\n\n" + flow_copy.msg("vid_frm_ready_next")
-        st["vawait"] = None
-    kb = frames_kb(has_start, has_end, vfmt, vcount, model_id)
-    if edit:
-        await _vid_edit(message, text, kb, user_id, parse_mode="HTML")
-    else:
-        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
-        st["vmsg_id"] = sent.message_id
 
 
 # ── Новый видео wizard (prompt-first) ───────────────────────────────────

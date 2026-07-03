@@ -752,6 +752,23 @@ class BotMenuWiringTests(unittest.TestCase):
             self.assertIn(needle, self.source)
         self.assertNotIn("flow_bot", self.screens_source)
 
+    def test_video_reference_screens_moved_to_telegram_screens_module(self) -> None:
+        self.assertIn("tg_screens.VideoReferenceScreensDeps(", self.source)
+        for name in (
+            "async def show_video_ingredients",
+            "async def show_video_frames",
+        ):
+            self.assertIn(name, self.screens_source, name)
+        for needle in (
+            "wizard_state=wizard_state",
+            "credit_store=credit_store",
+            "vid_edit=_vid_edit",
+            "vid_ref_default_model=VID_REF_DEFAULT_MODEL",
+            "vid_frames_default_model=VID_FRAMES_DEFAULT_MODEL",
+        ):
+            self.assertIn(needle, self.source)
+        self.assertNotIn("flow_bot", self.screens_source)
+
     def test_admin_grant_restricted(self) -> None:
         # /grant moved to the admin_credits router (Phase 6); the admin gate
         # is preserved bit-exact via injected deps.admin_ids.
@@ -988,7 +1005,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('st["vawait"] = "vprompt"', block)
         self.assertIn("vid_frm_ask_prompt", block)
         self.assertNotIn("vid_frm_ask_prompt_with_caption", block)
-        self.assertIn("vid_frm_ready_next", self.source)
+        self.assertIn("vid_frm_ready_next", self.screens_source)
 
     def test_video_settings_plain_text_runs_video_before_image_fallback(self) -> None:
         self.assertIn("def _video_plain_text_ready", self.source)
@@ -1237,7 +1254,62 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("has_caption", block)
         self.assertIn("vid_ing_done_ready", block)
         # screen shows the pending caption like frames mode does
-        self.assertIn("vid_ing_ready_with_caption", self.source)
+        self.assertIn("vid_ing_ready_with_caption", self.screens_source)
+
+    def test_video_reference_screens_use_injected_state_and_escape_caption(self) -> None:
+        from channels.telegram import screens as tg_screens
+
+        events = []
+
+        class CreditStore:
+            def balance(self, user_id):
+                return 777
+
+        class Message:
+            async def answer(self, text, reply_markup=None, parse_mode=None):
+                events.append(("answer", text, reply_markup, parse_mode))
+                return SimpleNamespace(message_id=9001)
+
+        async def vid_edit(*args, **kwargs):
+            events.append(("edit", args, kwargs))
+
+        deps = tg_screens.VideoReferenceScreensDeps(
+            wizard_state={
+                7: {
+                    "ving_photos": [{"mediaId": "m1"}],
+                    "vcaption_prompt": "<tag>&",
+                }
+            },
+            credit_store=CreditStore(),
+            vid_edit=vid_edit,
+            vid_default_fmt="land",
+            vid_default_count=1,
+            vid_ref_default_model="omni-flash-4s",
+            vid_frames_default_model="veo-lite",
+            vid_fmt_names={"land": "16:9", "port": "9:16"},
+        )
+
+        asyncio.run(tg_screens.show_video_ingredients(Message(), user_id=7, deps=deps))
+        st = deps.wizard_state[7]
+        self.assertEqual(st["vstep"], "ving")
+        self.assertEqual(st["vawait"], "ving_photo")
+        self.assertEqual(st["vmsg_id"], 9001)
+        self.assertEqual(events[-1][3], "HTML")
+        self.assertIn("&lt;tag&gt;&amp;", events[-1][1])
+
+        events.clear()
+        deps.wizard_state[7] = {
+            "vfrm_start": {"mediaId": "s1"},
+            "vfrm_end": {"mediaId": "e1"},
+            "vcaption_prompt": "<go>&",
+        }
+        asyncio.run(tg_screens.show_video_frames(Message(), user_id=7, deps=deps))
+        st = deps.wizard_state[7]
+        self.assertEqual(st["vstep"], "vfrm")
+        self.assertIsNone(st["vawait"])
+        self.assertEqual(st["vmsg_id"], 9001)
+        self.assertEqual(events[-1][3], "HTML")
+        self.assertIn("&lt;go&gt;&amp;", events[-1][1])
 
     def test_video_retry_rehydrates_from_snapshot(self) -> None:
         # The retry button must re-run the SAME request, not report "expired".

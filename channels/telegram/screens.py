@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import html
 import random
-from collections.abc import Callable, MutableMapping
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from dataclasses import dataclass
 from typing import Any
 
 from aiogram import types
 
 import flow_copy
-from channels.telegram.keyboards import L, _menu_button, main_menu_kb
+from channels.telegram.keyboards import (
+    L,
+    _menu_button,
+    frames_kb,
+    ingredients_kb,
+    main_menu_kb,
+)
 from flow_core import action_callback_data, action_price, price_gen, video_price
 
 
@@ -43,6 +49,20 @@ class PublicScreensDeps:
     referral_tier2_bonus: int
     referral_tier3_bonus: int
     referral_ongoing_pct: float
+
+
+@dataclass(frozen=True)
+class VideoReferenceScreensDeps:
+    """Injected state and callbacks for video reference-mode screens."""
+
+    wizard_state: MutableMapping[int, MutableMapping[str, Any]]
+    credit_store: Any
+    vid_edit: Callable[..., Awaitable[Any]]
+    vid_default_fmt: str
+    vid_default_count: int
+    vid_ref_default_model: str
+    vid_frames_default_model: str
+    vid_fmt_names: Mapping[str, str]
 
 
 async def show_referral_screen(
@@ -128,6 +148,91 @@ async def show_balance(
             await message.answer(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def show_video_ingredients(
+    message: types.Message, *, user_id: int, edit: bool = False,
+    deps: VideoReferenceScreensDeps,
+) -> None:
+    st = deps.wizard_state[user_id]
+    st["vstep"] = "ving"
+    st["vawait"] = "ving_photo"
+    st.setdefault("vmode", "ingredients")
+    st.setdefault("vmodel", deps.vid_ref_default_model)
+    st.setdefault("vfmt", deps.vid_default_fmt)
+    st.setdefault("vcount", deps.vid_default_count)
+    vfmt = st.get("vfmt", deps.vid_default_fmt)
+    vcount = st.get("vcount", deps.vid_default_count)
+    model_id = st.get("vmodel", deps.vid_ref_default_model)
+    n = len(st.get("ving_photos") or [])
+    text = flow_copy.msg(
+        "vid_ing_screen",
+        n=n,
+        model=L(f"vid_model_name:{model_id}"),
+        fmt=deps.vid_fmt_names.get(vfmt, vfmt),
+        count=vcount,
+        price=video_price(model_id, vcount, "ingredients"),
+        credits=deps.credit_store.balance(user_id),
+    )
+    caption = st.get("vcaption_prompt")
+    if caption:
+        text += "\n\n" + flow_copy.msg(
+            "vid_ing_ready_with_caption", prompt=html.escape(caption[:300])
+        )
+    kb = ingredients_kb(n, vfmt, vcount, model_id, has_caption=bool(caption))
+    if edit:
+        await deps.vid_edit(message, text, kb, user_id, parse_mode="HTML")
+    else:
+        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        st["vmsg_id"] = sent.message_id
+
+
+async def show_video_frames(
+    message: types.Message, *, user_id: int, edit: bool = False,
+    deps: VideoReferenceScreensDeps,
+) -> None:
+    st = deps.wizard_state[user_id]
+    st["vstep"] = "vfrm"
+    st.setdefault("vmode", "frames")
+    st.setdefault("vmodel", deps.vid_frames_default_model)
+    st.setdefault("vfmt", deps.vid_default_fmt)
+    st.setdefault("vcount", deps.vid_default_count)
+    vfmt = st.get("vfmt", deps.vid_default_fmt)
+    vcount = st.get("vcount", deps.vid_default_count)
+    model_id = st.get("vmodel", deps.vid_frames_default_model)
+    has_start = bool(st.get("vfrm_start"))
+    has_end = bool(st.get("vfrm_end"))
+    text = flow_copy.msg(
+        "vid_frm_screen",
+        model=L(f"vid_model_name:{model_id}"),
+        start_mark="✅" if has_start else "⬜",
+        end_mark="✅" if has_end else "⬜",
+        fmt=deps.vid_fmt_names.get(vfmt, vfmt),
+        count=vcount,
+        price=video_price(model_id, vcount, "frames"),
+        credits=deps.credit_store.balance(user_id),
+    )
+    if not has_start:
+        text += "\n\n" + flow_copy.msg("vid_frm_send_photo_start")
+        st["vawait"] = "vfrm_start"
+    elif not has_end:
+        text += "\n\n" + flow_copy.msg("vid_frm_send_photo_end")
+        st["vawait"] = "vfrm_end"
+    else:
+        caption = st.get("vcaption_prompt")
+        if caption:
+            text += "\n\n" + flow_copy.msg(
+                "vid_frm_ready_next_with_caption", prompt=html.escape(caption[:300])
+            )
+        else:
+            text += "\n\n" + flow_copy.msg("vid_frm_ready_next")
+        st["vawait"] = None
+    kb = frames_kb(has_start, has_end, vfmt, vcount, model_id)
+    if edit:
+        await deps.vid_edit(message, text, kb, user_id, parse_mode="HTML")
+    else:
+        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        st["vmsg_id"] = sent.message_id
 
 
 async def show_gallery(message: types.Message, *, user_id: int, deps: ProfileScreensDeps) -> None:
