@@ -90,7 +90,16 @@ class RefactorBaselineTests(unittest.TestCase):
         self.assertIn('req.get("kind") == "video_ingredients"', block)
         self.assertIn("_backend_generate_images(req)", block)
 
-    def test_no_refactor_branch_runtime_entrypoints_yet(self) -> None:
-        """Phase 0 should not introduce MAX/runtime entrypoints."""
-        self.assertNotIn("MAX_ENABLED", self.flow_bot)
-        self.assertIsNone(re.search(r"channels[./\\\\]max", self.flow_bot))
+    def test_max_runtime_entrypoint_is_wired_but_guarded(self) -> None:
+        """Phase 11: MAX startup is wired into flow_bot but disabled by default.
+
+        (Supersedes the Phase-0 "no MAX entrypoints yet" guard now that the MAX
+        MVP runtime exists.) The wiring must go through the guarded helper, never
+        an unconditional start.
+        """
+        self.assertIn("def _maybe_start_max_bot", self.flow_bot)
+        self.assertIn("_maybe_start_max_bot()", self.flow_bot)
+        self.assertIn("from channels.max.runtime import run_max", self.flow_bot)
+        # run_max is a no-op unless MAX_ENABLED=1 (checked in channels/max/client.py),
+        # so flow_bot must not force-enable it.
+        self.assertNotIn('MAX_ENABLED"] = "1"', self.flow_bot)

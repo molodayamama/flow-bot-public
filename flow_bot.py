@@ -2036,6 +2036,25 @@ async def _backend_generate_video_ingredients(req: dict) -> dict:
     return await backend_service.generate_video_ingredients(_backend_generation_deps(), req)
 
 
+def _maybe_start_max_bot() -> None:
+    """Start the MAX bot polling loop as a background task when MAX_ENABLED=1.
+
+    No-op (and never crashes Telegram startup) when MAX is disabled or its
+    startup fails; text-to-image generation is shared via the backend service.
+    """
+    try:
+        from channels.max.runtime import run_max
+        from channels.max.generation_adapter import BackendGenerationService
+
+        service = BackendGenerationService(
+            generate_images=backend_service.generate_images,
+            deps=_backend_generation_deps(),
+        )
+        asyncio.create_task(run_max(service))
+    except Exception:
+        log.exception("MAX bot startup failed")
+
+
 async def _backend_generate(req: dict) -> dict:
     """Internal endpoint dispatcher by ``kind`` (image | i2i | video_ingredients)."""
     if req.get("kind") == "i2i":
@@ -5466,6 +5485,7 @@ async def _main_impl():
         asyncio.create_task(_daily_digest_loop())
         if not _cfg.IS_SELLER:
             asyncio.create_task(_video_pool_health_loop())
+            _maybe_start_max_bot()
         startup_state["polling"] = True
         _startup_set_phase("polling")
         await dp.start_polling(bot)

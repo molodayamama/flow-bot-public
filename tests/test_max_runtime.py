@@ -87,5 +87,24 @@ class RunTests(unittest.TestCase):
         self.assertGreaterEqual(fake.calls, 2)
 
 
+class FlowBotWiringTests(unittest.TestCase):
+    """flow_bot composition root must wire MAX startup (source-level, no import)."""
+
+    def setUp(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        self.src = (root / "flow_bot.py").read_text(encoding="utf-8")
+
+    def test_defines_and_calls_maybe_start_max_bot(self):
+        self.assertIn("def _maybe_start_max_bot", self.src)
+        self.assertIn("_maybe_start_max_bot()", self.src)
+
+    def test_builds_backend_generation_service_and_runs_max(self):
+        self.assertIn("from channels.max.runtime import run_max", self.src)
+        self.assertIn("BackendGenerationService(", self.src)
+        self.assertIn("generate_images=backend_service.generate_images", self.src)
+        self.assertIn("run_max(service)", self.src)
+
+
 if __name__ == "__main__":
     unittest.main()
