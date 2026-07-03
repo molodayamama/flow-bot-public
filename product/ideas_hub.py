@@ -7,6 +7,8 @@ aspect-format mapping. Channel-neutral, no local imports.
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 # Session-dict keys owned by the Ideas Hub sub-flows.
 _IDEAS_PHOTO_KEYS = ("ideas_photo_file_id", "ideas_photo_caption", "ideas_extra_prompt")
 _TP_STATE_KEYS = ("tp_tpl", "tp_step", "tp_answers", "tp_await")
@@ -45,3 +47,19 @@ def guided_image_fmt(answers: dict) -> str:
 
 def guided_video_fmt(answers: dict) -> str:
     return "port" if (answers or {}).get("format") in ("story", "avatar") else "land"
+
+
+def tp_store_answer(
+    st: dict, value: str, *, template_questions: Callable[[str], list[dict[str, Any]]]
+) -> None:
+    """Record the current template Q&A answer and advance the step.
+
+    ``template_questions(tid)`` returns the ordered question list for the active
+    template; injected so this module stays free of the templates library."""
+    tid = st.get("tp_tpl")
+    questions = template_questions(tid) if tid else []
+    step = st.get("tp_step", 0)
+    if step < len(questions):
+        st.setdefault("tp_answers", {})[questions[step]["key"]] = value
+    st["tp_step"] = step + 1
+    st["tp_await"] = None

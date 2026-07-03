@@ -10,7 +10,15 @@ from product.ideas_hub import (
     ideas_prompt_with_extra,
     guided_image_fmt,
     guided_video_fmt,
+    tp_store_answer,
 )
+
+
+_QUESTIONS = {"tpl1": [{"key": "q0"}, {"key": "q1"}]}
+
+
+def _tq(tid):
+    return _QUESTIONS.get(tid, [])
 
 
 class ClearTests(unittest.TestCase):
@@ -65,6 +73,27 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(guided_video_fmt({"format": "avatar"}), "port")
         self.assertEqual(guided_video_fmt({"format": "wide"}), "land")
         self.assertEqual(guided_video_fmt({}), "land")
+
+
+class TpStoreAnswerTests(unittest.TestCase):
+    def test_stores_answer_by_question_key_and_advances(self):
+        st = {"tp_tpl": "tpl1", "tp_step": 0, "tp_await": "q0"}
+        tp_store_answer(st, "hello", template_questions=_tq)
+        self.assertEqual(st["tp_answers"], {"q0": "hello"})
+        self.assertEqual(st["tp_step"], 1)
+        self.assertIsNone(st["tp_await"])
+
+    def test_step_beyond_questions_only_advances(self):
+        st = {"tp_tpl": "tpl1", "tp_step": 5}
+        tp_store_answer(st, "x", template_questions=_tq)
+        self.assertNotIn("tp_answers", st)
+        self.assertEqual(st["tp_step"], 6)
+
+    def test_no_template_id_advances_without_storing(self):
+        st = {"tp_step": 0}
+        tp_store_answer(st, "x", template_questions=_tq)
+        self.assertNotIn("tp_answers", st)
+        self.assertEqual(st["tp_step"], 1)
 
 
 if __name__ == "__main__":

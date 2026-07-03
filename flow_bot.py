@@ -3564,6 +3564,7 @@ from product.ideas_hub import (
     ideas_prompt_with_extra as _ideas_prompt_with_extra,
     guided_image_fmt as _guided_image_fmt,
     guided_video_fmt as _guided_video_fmt,
+    tp_store_answer as _ideas_tp_store_answer,
 )
 
 
@@ -3657,13 +3658,7 @@ async def _render_template_step(message: types.Message, *, user_id: int):
 
 
 def _tp_store_answer(st: dict, value: str):
-    tid = st.get("tp_tpl")
-    questions = prompts_lib.template_questions(tid) if tid else []
-    step = st.get("tp_step", 0)
-    if step < len(questions):
-        st.setdefault("tp_answers", {})[questions[step]["key"]] = value
-    st["tp_step"] = step + 1
-    st["tp_await"] = None
+    _ideas_tp_store_answer(st, value, template_questions=prompts_lib.template_questions)
 
 
 async def _template_photo_received(message: types.Message, *, user_id: int) -> None:
