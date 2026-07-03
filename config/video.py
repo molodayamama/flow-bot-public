@@ -6,7 +6,7 @@ re-exports these.
 
 from __future__ import annotations
 
-from flow_core import VIDEO_MODELS, video_price
+from flow_core import VIDEO_MODELS, video_price, video_model_meta, clamp_num_videos
 
 
 SELECT_STYLE = "success"  # green — Bot API 9.4 colour for the chosen wizard option
@@ -31,6 +31,28 @@ _VID_OMNI_DUR_MODEL = {4: "omni-flash-4s", 6: "omni-flash-6s",
 _VID_VEO_QUALITY_CYCLE = ["lite", "fast", "quality"]
 _VID_VEO_QUAL_MODEL = {"lite": "veo-lite", "fast": "veo-fast", "quality": "veo-quality"}
 _VID_VEO_QUAL_NAMES = {"lite": "Lite", "fast": "Fast", "quality": "Quality"}
+_VID_FMT_TO_ASPECT = {"land": "landscape", "port": "portrait"}
+
+
+def video_plain_text_ready(st: dict) -> bool:
+    """True when the text-to-video settings screen can accept a chat prompt."""
+    if st.get("vawait"):
+        return False
+    if st.get("vstep") != "vsettings":
+        return False
+    if st.get("vmode", "text") != "text":
+        return False
+    model_id = st.get("vmodel")
+    if not model_id or not video_model_meta(model_id):
+        return False
+    vfmt = st.get("vfmt")
+    if vfmt not in _VID_FMT_TO_ASPECT:
+        return False
+    try:
+        vcount = int(st.get("vcount"))
+    except (TypeError, ValueError):
+        return False
+    return clamp_num_videos(vcount) == vcount
 
 
 # ── new-video-wizard resolvers ───────────────────────────────────────────────

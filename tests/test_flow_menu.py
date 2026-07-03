@@ -1300,7 +1300,9 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("vid_frm_ready_next", self.screens_source)
 
     def test_video_settings_plain_text_runs_video_before_image_fallback(self) -> None:
-        self.assertIn("def _video_plain_text_ready", self.source)
+        # _video_plain_text_ready moved to config.video (Phase 11).
+        config_video_source = (PROJECT_ROOT / "config" / "video.py").read_text(encoding="utf-8")
+        self.assertIn("def video_plain_text_ready", config_video_source)
         source = self.plain_text_router_source
         start = source.index("async def handle_plain_text")
         video_branch = source.index("if _video_plain_text_ready(st):", start)
@@ -1420,9 +1422,10 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("actor_id=user_id", self.source)
 
     def test_video_plain_text_ready_is_narrow(self) -> None:
-        start = self.source.index("def _video_plain_text_ready")
-        end = self.source.index("async def show_video_ingredients", start)
-        block = self.source[start:end]
+        # Moved to config.video (Phase 11); body unchanged.
+        source = (PROJECT_ROOT / "config" / "video.py").read_text(encoding="utf-8")
+        start = source.index("def video_plain_text_ready")
+        block = source[start:]
         self.assertIn('st.get("vawait")', block)
         self.assertIn('st.get("vstep") != "vsettings"', block)
         self.assertIn('st.get("vmode", "text") != "text"', block)

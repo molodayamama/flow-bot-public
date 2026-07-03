@@ -206,6 +206,8 @@ from config.video import (
     nwiz_engine as _nwiz_engine,
     nwiz_model as _nwiz_model,
     nwiz_price as _nwiz_price,
+    _VID_FMT_TO_ASPECT,
+    video_plain_text_ready as _video_plain_text_ready,
 )
 
 
@@ -1353,7 +1355,6 @@ VID_DEFAULT_COUNT = 1
 # ключ, подтверждённый живым захватом (veo_3_1_interpolation_lite). Остальные
 # tiers — догадка по паттерну, пока не подтверждены живым прогоном.
 VID_FRAMES_DEFAULT_MODEL = "veo-lite"
-_VID_FMT_TO_ASPECT = {"land": "landscape", "port": "portrait"}
 
 # Правка ЗАГРУЖЕННОГО пользователем видео временно отключена: сервис нестабильно
 # отдаёт результат («Oops, something went wrong!» / видео недогружается) — судя по
@@ -1371,25 +1372,7 @@ UPLOAD_VIDEO_EDIT_ENABLED = _cfg.UPLOAD_VIDEO_EDIT_ENABLED
 TOPUP_TEST_PACKS_ENABLED = _cfg.TOPUP_TEST_PACKS_ENABLED
 
 
-def _video_plain_text_ready(st: dict) -> bool:
-    """True when the text-to-video settings screen can accept a chat prompt."""
-    if st.get("vawait"):
-        return False
-    if st.get("vstep") != "vsettings":
-        return False
-    if st.get("vmode", "text") != "text":
-        return False
-    model_id = st.get("vmodel")
-    if not model_id or not video_model_meta(model_id):
-        return False
-    vfmt = st.get("vfmt")
-    if vfmt not in _VID_FMT_TO_ASPECT:
-        return False
-    try:
-        vcount = int(st.get("vcount"))
-    except (TypeError, ValueError):
-        return False
-    return clamp_num_videos(vcount) == vcount
+# _video_plain_text_ready + _VID_FMT_TO_ASPECT live in config.video (imported).
 
 
 _VID_QUICKSTART_FAMILY = "omni-flash"
