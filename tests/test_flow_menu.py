@@ -1232,9 +1232,11 @@ class BotMenuWiringTests(unittest.TestCase):
     def test_stale_photo_edit_cleared_on_navigation(self) -> None:
         # Regression: photo upload sets pending_edits; navigating to generate/menu
         # must clear it so the next prompt is NOT applied as an edit of that photo.
-        self.assertIn("def _reset_image_flow", self.source)
-        reset_start = self.source.index("def _reset_image_flow")
-        self.assertIn("pending_edits.pop(user_id, None)", self.source[reset_start:reset_start + 600])
+        # _reset_image_flow moved to storage/session_state.py as reset_image_flow (Phase 11).
+        ss = (PROJECT_ROOT / "storage" / "session_state.py").read_text(encoding="utf-8")
+        self.assertIn("def reset_image_flow", ss)
+        reset_start = ss.index("def reset_image_flow")
+        self.assertIn("pending_edits.pop(user_id, None)", ss[reset_start:reset_start + 600])
         # The dangerous unconditional "old path" edit fallback is gone.
         self.assertNotIn("Старый путь (на случай pending_edits", self.source)
         self.assertIn("_reset_image_flow(user_id)", self.source + "\n" + self.start_router_source)

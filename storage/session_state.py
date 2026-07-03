@@ -7,6 +7,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from config.settings import DEFAULT_COUNT
+from flow_core import DEFAULT_IMAGE_MODEL, aspect_to_fmt
+
 # uid -> last request time (cooldown / rate-limit).
 user_last_request: dict[int, float] = defaultdict(float)
 # Users with a request "in flight" (uid -> start time) to stop parallel abuse.
@@ -54,3 +57,23 @@ def _vid_clear_reference_inputs(user_id: int) -> None:
     st = wizard_state[user_id]
     for key in ("ving_photos", "vfrm_start", "vfrm_end", "vcaption_prompt"):
         st.pop(key, None)
+
+
+def reset_image_flow(user_id: int, *, keep_last: bool = True) -> None:
+    """Сбросить незавершённый image-флоу: состояние визарда И ожидание правки.
+
+    ``pending_edits`` живёт отдельно от ``_ws``, поэтому ``_ws.clear()`` его не
+    трогает — без этого сброса загруженное для правки фото «залипает» и
+    следующий промпт уходит на правку старой картинки. ``keep_last`` сохраняет
+    настройки прошлой генерации как дефолты визарда.
+    """
+    st = _ws(user_id)
+    last = st.get("last") if keep_last else None
+    st.clear()
+    pending_edits.pop(user_id, None)
+    pending_photo_routes.pop(user_id, None)
+    if last:
+        st["last"] = last
+        st["count"] = last.get("count", DEFAULT_COUNT)
+        st["fmt"] = aspect_to_fmt(last.get("aspect", "landscape"))
+        st["imodel"] = last.get("imodel", DEFAULT_IMAGE_MODEL)

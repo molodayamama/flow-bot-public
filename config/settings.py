@@ -82,3 +82,7 @@ TOPUP_TEST_PACKS_ENABLED: bool = _env_any(
 # True (and re-verify via capture) to bring it back. Hot-patchable via admin,
 # so readers must use a live attribute read (config.settings.UPLOAD_VIDEO_EDIT_ENABLED).
 UPLOAD_VIDEO_EDIT_ENABLED: bool = False
+
+# Image wizard defaults (Phase 11: moved from flow_bot).
+DEFAULT_COUNT: int = 1
+DEFAULT_FMT: str = "land"

@@ -180,6 +180,7 @@ from generation import backend_service
 import metrics
 from mediautil import image_ext_from_bytes
 from textutil import _days_word, _short_prompt
+from storage.session_state import reset_image_flow as _reset_image_flow
 from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScenario
 import prompts_lib
 import config.settings as _cfg
@@ -218,6 +219,8 @@ import billing.robokassa as robokassa_billing
 # App/payment config extracted to config/settings.py (Phase 5 wave 2);
 # re-exported so flow_bot keeps its references unchanged.
 from config.settings import (
+    DEFAULT_COUNT,
+    DEFAULT_FMT,
     STARS_TO_RUB,
     ROBOKASSA_CARD_DISCOUNT_PCT,
     _env_any,
@@ -861,26 +864,6 @@ _referral_service = ReferralService(
 # _ws moved to storage/session_state.py (Phase 5); re-imported below.
 
 
-def _reset_image_flow(user_id: int, *, keep_last: bool = True) -> None:
-    """Сбросить незавершённый image-флоу: состояние визарда И ожидание правки.
-
-    ``pending_edits`` живёт отдельно от ``_ws``, поэтому ``_ws.clear()`` его не
-    трогает — без этого сброса загруженное для правки фото «залипает» и
-    следующий промпт уходит на правку старой картинки. ``keep_last`` сохраняет
-    настройки прошлой генерации как дефолты визарда.
-    """
-    st = _ws(user_id)
-    last = st.get("last") if keep_last else None
-    st.clear()
-    pending_edits.pop(user_id, None)
-    pending_photo_routes.pop(user_id, None)
-    if last:
-        st["last"] = last
-        st["count"] = last.get("count", DEFAULT_COUNT)
-        st["fmt"] = _aspect_to_fmt(last.get("aspect", "landscape"))
-        st["imodel"] = last.get("imodel", DEFAULT_IMAGE_MODEL)
-
-
 def _fmt_to_aspect(fmt: str) -> str:
     return fmt_to_aspect(fmt)
 
@@ -1188,8 +1171,7 @@ async def _save_pending_sku_item(message: types.Message, user_id: int, sku: str)
     return True
 
 
-DEFAULT_COUNT = 1
-DEFAULT_FMT = "land"
+# DEFAULT_COUNT / DEFAULT_FMT moved to config/settings.py (Phase 11); imported above.
 _FMT_NAMES = {"land": "16:9", "port": "9:16", "sq": "1:1", "f43": "4:3", "f34": "3:4"}
 
 
