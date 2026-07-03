@@ -466,6 +466,10 @@ class BotMenuWiringTests(unittest.TestCase):
         self.image_action_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "image_action.py"
         ).read_text(encoding="utf-8")
+        # Video wizard callback handler (v:) moved to its own router (Phase 6).
+        self.video_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "video.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         self.assertIn('F.data.startswith("m:")', self.menu_router_source)  # menu router
@@ -812,7 +816,8 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("def ingredients_kb(", self.kb_source)
         # Format/count callbacks re-render the active video screen by mode.
         self.assertIn("def _vid_rerender_settings", self.source)
-        self.assertIn("await _vid_rerender_settings(msg, user_id=user_id)", self.source)
+        # dispatch to _vid_rerender_settings lives in the video router (Phase 6).
+        self.assertIn("await deps.vid_rerender_settings(msg, user_id=user_id)", self.video_router_source)
 
     def test_model_picker_in_frames_and_ingredients(self) -> None:
         # Ingredients supports Omni + Veo; Frames stays Veo-only.
@@ -821,24 +826,26 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('VID_REF_DEFAULT_MODEL = "omni-flash-4s"', _vid_cfg)
         self.assertIn("VID_REF_VARIANTS = tuple(VIDEO_MODELS.keys())", _vid_cfg)
         self.assertIn('VID_FRAMES_VARIANTS = ("veo-lite", "veo-fast", "veo-quality")', _vid_cfg)
-        self.assertIn('data.startswith("v:vmod:")', self.source)
+        # v:vmod: dispatch lives in the video router (Phase 6).
+        self.assertIn('data.startswith("v:vmod:")', self.video_router_source)
 
     def test_ingredients_generation_enabled(self) -> None:
         # Ingredients now generates (reference-to-video), no longer fail-closed.
         self.assertIn("VIDEO_REFERENCE_ENDPOINT", self.source)
         self.assertIn("is_reference", self.source)
-        # done button leads to prompt/generation, not vid_gen_blocked.
-        done = self.source.index('if data == "v:ing:done":')
-        block = self.source[done:done + 1500]
+        # done button leads to prompt/generation, not vid_gen_blocked. v:ing:done
+        # dispatch lives in the video router (Phase 6).
+        done = self.video_router_source.index('if data == "v:ing:done":')
+        block = self.video_router_source[done:done + 1500]
         self.assertNotIn("vid_gen_blocked", block)
-        self.assertIn("_video_generate_and_send", block)
+        self.assertIn("deps.video_generate_and_send", block)
 
     def test_ingredients_minimum_is_one_photo(self) -> None:
         # Ingredients works from a single photo now (no 2-photo gate).
         ing = self.kb_source.index("def ingredients_kb")
         block = self.kb_source[ing:ing + 400]
         self.assertIn("if n >= 1:", block)
-        self.assertIn('if len(photos) < 1:', self.source)
+        self.assertIn('if len(photos) < 1:', self.video_router_source)
 
     def test_album_and_caption_support(self) -> None:
         # Grouped photos (album) → first=start, second=end; caption → prompt.
@@ -848,12 +855,13 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("vcaption_prompt", self.source)
 
     def test_frames_next_generates_from_saved_caption(self) -> None:
-        start = self.source.index('if data == "v:frm:go":')
-        end = self.source.index('if data == "v:frm:clear":')
-        block = self.source[start:end]
+        # v:frm:go / v:frm:clear dispatch lives in the video router (Phase 6).
+        start = self.video_router_source.index('if data == "v:frm:go":')
+        end = self.video_router_source.index('if data == "v:frm:clear":')
+        block = self.video_router_source[start:end]
         self.assertIn('caption = st.pop("vcaption_prompt", None)', block)
         self.assertIn("if caption:", block)
-        self.assertIn("_video_generate_and_send(msg, caption, user_id=user_id)", block)
+        self.assertIn("deps.video_generate_and_send(msg, caption, user_id=user_id)", block)
         self.assertIn('st["vawait"] = "vprompt"', block)
         self.assertIn("vid_frm_ask_prompt", block)
         self.assertNotIn("vid_frm_ask_prompt_with_caption", block)
@@ -1069,8 +1077,9 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("not ref.prompt_edited", self.kb_source)
         self.assertIn('callback_data=f"v:edit:{vtoken}"', self.kb_source)
         self.assertIn('callback_data=f"v:extend:{vtoken}"', self.kb_source)
-        self.assertIn('if data.startswith("v:edit:")', self.source)
-        self.assertIn('if data.startswith("v:extend:")', self.source)
+        # v:edit:/v:extend: dispatch lives in the video callback router (Phase 6).
+        self.assertIn('if data.startswith("v:edit:")', self.video_router_source)
+        self.assertIn('if data.startswith("v:extend:")', self.video_router_source)
         self.assertIn('st["vawait"] = "vedit_prompt"', self.source)
         self.assertIn('st["vawait"] = "vextend_prompt"', self.source)
         self.assertIn('unit_price_override=action_price("video_prompt_edit")', self.source)
@@ -1102,7 +1111,8 @@ class BotMenuWiringTests(unittest.TestCase):
     def test_video_retry_rehydrates_from_snapshot(self) -> None:
         # The retry button must re-run the SAME request, not report "expired".
         self.assertIn('st["vretry"]', self.source)
-        self.assertIn('snap = st.get("vretry")', self.source)
+        # v:retry / v:retrynew snapshot restore lives in the video router (Phase 6).
+        self.assertIn('snap = st.get("vretry")', self.video_router_source)
         clear = self.source[self.source.index("def _vid_clear"):][:400]
         self.assertIn('"vretry"', clear)  # snapshot survives the finally-clear
 
@@ -1112,8 +1122,9 @@ class BotMenuWiringTests(unittest.TestCase):
         # генерит с сохранёнными фото/настройками. Прочие сбои — обычный v:retry.
         self.assertIn('if error_type == "danger_filter"', self.source)
         self.assertIn('_menu_button("vid_retry_edit", "v:retrynew")', self.source)
-        self.assertIn('if data == "v:retrynew":', self.source)
-        self.assertIn('st["vawait"] = "vretry_prompt"', self.source)
+        # v:retrynew dispatch/state-set moved to the video router (Phase 6).
+        self.assertIn('if data == "v:retrynew":', self.video_router_source)
+        self.assertIn('st["vawait"] = "vretry_prompt"', self.video_router_source)
         self.assertIn('if st.get("vawait") == "vretry_prompt":', self.source)
         self.assertIn("vid_retry_edit", (PROJECT_ROOT / "flow_copy.py").read_text(encoding="utf-8"))
 
@@ -1391,7 +1402,8 @@ class BotMenuWiringTests(unittest.TestCase):
         # "✏️ Изменить" (v:nchange) must NOT call show_video_prompt_input, which
         # does _vid_clear and would drop the attached photo — it must keep state
         # and wait for a new prompt via vnchange instead.
-        nchange = self.source[self.source.index('if data == "v:nchange":'):][:700]
+        # v:nchange dispatch lives in the video router (Phase 6).
+        nchange = self.video_router_source[self.video_router_source.index('if data == "v:nchange":'):][:700]
         self.assertNotIn("show_video_prompt_input", nchange)
         self.assertIn('st["vawait"] = "vnchange"', nchange)
         # The vnchange text handler re-renders the wizard (keeps vphoto/vmode).
@@ -1531,9 +1543,12 @@ class BotMenuWiringTests(unittest.TestCase):
         ]
         self.assertNotIn("upload_image(", upload_video_block)
         # Uploaded-video edit is marked prompt_edited=True → extend stays blocked.
+        # on_video_action (v: callback handler) moved to
+        # channels/telegram/routers/video.py (Phase 6); the next function in
+        # flow_bot.py after _video_edit_uploaded is now _aspect_to_fmt.
         block = self.source[
             self.source.index("async def _video_edit_uploaded"):
-            self.source.index("async def on_video_action")
+            self.source.index("def _aspect_to_fmt")
         ]
         self.assertIn("prompt_edited=True", block)
         self.assertIn('video_operation="edit"', block)
@@ -1585,7 +1600,8 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('if ref.mode == "extend" and ref.scene_id and ref.project_id', self.source)
         # The new fragment button downloads the extend result media_id itself.
         self.assertIn("async def _video_segment_download", self.source)
-        self.assertIn("v:dl_seg:", self.source)
+        # v:dl_seg: dispatch lives in the video callback router (Phase 6).
+        self.assertIn("v:dl_seg:", self.video_router_source)
 
     def test_video_extend_result_keeps_source_media_id(self) -> None:
         start = self.source.index("vref = VideoRef(")

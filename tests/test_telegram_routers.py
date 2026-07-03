@@ -20,6 +20,7 @@ from channels.telegram.routers import marketplace as marketplace_router
 from channels.telegram.routers import onboarding as onboarding_router
 from channels.telegram.routers import menu as menu_router
 from channels.telegram.routers import photo_route as photo_route_router
+from channels.telegram.routers import video as video_router
 from channels.telegram.routers import video_upload as video_upload_router
 from channels.telegram.routers import wizard as wizard_router
 from flow_core import action_callback_data
@@ -1812,6 +1813,131 @@ class PhotoRouteRouterTests(unittest.TestCase):
 
     def test_photo_route_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(photo_route_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class RecordingVideoDeps:
+    def __init__(self, *, balance: int = 1000) -> None:
+        self.workspaces: dict[int, dict] = {}
+        self.balance_value = balance
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def workspace(self, user_id: int) -> dict:
+        return self.workspaces.setdefault(user_id, {})
+
+    def balance(self, user_id: int) -> int:
+        self.calls.append(("balance", (user_id,), {}))
+        return self.balance_value
+
+    def vid_clear(self, *args, **kwargs):
+        self.calls.append(("vid_clear", args, kwargs))
+
+    def nwiz_model(self, st) -> str:
+        self.calls.append(("nwiz_model", (st,), {}))
+        return "omni-flash-4s"
+
+    def nwiz_price(self, st) -> int:
+        self.calls.append(("nwiz_price", (st,), {}))
+        return 100
+
+    def _make_async(self, name):
+        async def renderer(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return None
+
+        return renderer
+
+
+def _video_deps(*, balance: int = 1000) -> tuple[video_router.VideoDeps, RecordingVideoDeps]:
+    rec = RecordingVideoDeps(balance=balance)
+    deps = video_router.VideoDeps(
+        workspace=rec.workspace,
+        vid_clear=rec.vid_clear,
+        show_main_menu=rec._make_async("show_main_menu"),
+        video_download=rec._make_async("video_download"),
+        video_segment_download=rec._make_async("video_segment_download"),
+        video_edit_start=rec._make_async("video_edit_start"),
+        video_extend_start=rec._make_async("video_extend_start"),
+        video_repeat_last=rec._make_async("video_repeat_last"),
+        show_new_video_wizard=rec._make_async("show_new_video_wizard"),
+        nwiz_text=lambda user_id: "styles text",
+        vid_edit=rec._make_async("vid_edit"),
+        nwiz_model=rec.nwiz_model,
+        nwiz_price=rec.nwiz_price,
+        video_generate_and_send=rec._make_async("video_generate_and_send"),
+        show_video_settings=rec._make_async("show_video_settings"),
+        show_video_variant=rec._make_async("show_video_variant"),
+        show_video_ingredients=rec._make_async("show_video_ingredients"),
+        show_video_frames=rec._make_async("show_video_frames"),
+        show_video_family=rec._make_async("show_video_family"),
+        vid_rerender_settings=rec._make_async("vid_rerender_settings"),
+        balance=rec.balance,
+        vid_frames_default_model="veo-lite",
+        vid_code_family={"omni": "omni-flash", "veo": "veo"},
+        vid_quickstart_family="omni-flash",
+        default_video_count=1,
+    )
+    return deps, rec
+
+
+class VideoRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _video_deps()
+        self.router = video_router.create_router(self.deps)
+        self.handler = self.router.callback_query.handlers[0].callback
+
+    def test_creates_v_callback_router(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        self.assertEqual(self.router.name, "tg-video")
+        self.assertEqual(len(self.router.callback_query.handlers), 1)
+        self.assertEqual(self.router.callback_query.handlers[0].callback.__name__, "on_video_action")
+
+    def test_busy_generation_blocks_non_download_buttons(self) -> None:
+        self.rec.workspaces[42] = {"vstep": "vgenerating"}
+        callback = FakeCallback("v:cancel")
+        run(self.handler(callback))
+        self.assertTrue(callback.answers)
+        self.assertEqual(callback.answers[-1][1], {"show_alert": True})
+        self.assertEqual(self.rec.calls, [])
+
+    def test_cancel_clears_video_and_shows_main_menu(self) -> None:
+        callback = FakeCallback("v:cancel")
+        run(self.handler(callback))
+        self.assertIn(("vid_clear", (42,), {}), self.rec.calls)
+        self.assertEqual(self.rec.calls[-1][0], "show_main_menu")
+        self.assertEqual(self.rec.calls[-1][2], {"user_id": 42, "edit": True})
+
+    def test_go_with_low_balance_shows_topup_instead_of_prompt_ask(self) -> None:
+        deps, rec = _video_deps(balance=0)
+        handler = video_router.create_router(deps).callback_query.handlers[0].callback
+        rec.workspaces[42] = {"vmodel": "omni-flash-4s", "vcount": 1}
+        callback = FakeCallback("v:go")
+        run(handler(callback))
+        self.assertEqual([c[0] for c in rec.calls if c[0] not in ("balance",)], ["vid_edit"])
+        self.assertNotIn("vawait", rec.workspaces[42])
+
+    def test_go_with_sufficient_balance_asks_for_prompt(self) -> None:
+        callback = FakeCallback("v:go")
+        self.rec.workspaces[42] = {"vmodel": "omni-flash-4s", "vcount": 1}
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42]["vawait"], "vprompt")
+        self.assertEqual(self.rec.workspaces[42]["vstep"], "vprompt")
+        self.assertTrue(callback.text_edits)
+
+    def test_family_ingredients_clears_and_shows_ingredients_screen(self) -> None:
+        callback = FakeCallback("v:fam:ing")
+        run(self.handler(callback))
+        st = self.rec.workspaces[42]
+        self.assertEqual(st["vmode"], "ingredients")
+        self.assertIn("vid_clear", [c[0] for c in self.rec.calls])
+        self.assertIn("show_video_ingredients", [c[0] for c in self.rec.calls])
+
+    def test_video_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.balance = None  # type: ignore[misc]
+
+    def test_video_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(video_router)
         self.assertNotIn("flow_bot", src)
 
 

@@ -27,7 +27,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Old routing table: dp-level prefix handlers in their registration order,
 # then the exact-match retry button, then the image-action catch-all whose
-# unknown branch silently acked everything else.
+# unknown branch silently acked everything else. Every prefix below has since
+# been extracted into its own router module (Phase 6 waves); the table still
+# maps prefix -> handler *function name* only, because each extraction kept
+# the original handler name unchanged, so `_match_handler` (which resolves by
+# `handler.callback.__name__`) keeps working regardless of dp-level vs
+# router-level registration. "v:" (on_video_action) was the last dp-level
+# group to move, into channels/telegram/routers/video.py.
 DP_PREFIX_ORDER = [
     ("mp:", "on_marketplace_action"),
     ("m:", "on_menu_action"),
@@ -50,6 +56,7 @@ _SOURCE_FILES = (
     "flow_bot.py",
     str(Path("channels") / "telegram" / "keyboards.py"),
     str(Path("channels") / "telegram" / "routers" / "marketplace.py"),
+    str(Path("channels") / "telegram" / "routers" / "video.py"),
     str(Path("channels") / "telegram" / "texts.py"),
     "prompts_lib.py",
 )
