@@ -1606,7 +1606,9 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('st["vretry"]', self.source)
         # v:retry / v:retrynew snapshot restore lives in the video router (Phase 6).
         self.assertIn('snap = st.get("vretry")', self.video_router_source)
-        clear = self.source[self.source.index("def _vid_clear"):][:400]
+        # _vid_clear moved to storage/session_state.py (Phase 11 core split).
+        ss = (PROJECT_ROOT / "storage" / "session_state.py").read_text(encoding="utf-8")
+        clear = ss[ss.index("def _vid_clear"):][:400]
         self.assertIn('"vretry"', clear)  # snapshot survives the finally-clear
 
     def test_moderation_block_offers_change_prompt_retry(self) -> None:
@@ -1945,7 +1947,9 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("_video_generate_and_send(message, text, user_id=user_id)", block)
         # Вход в «Оживить фото» чистит залипший image-визард (await/step), иначе он
         # перехватил бы промпт. Помощник зовётся из m:animate и an:img.
-        self.assertIn("def _clear_image_flow_keys", self.source)
+        # _clear_image_flow_keys moved to storage/session_state.py (Phase 11).
+        ss = (PROJECT_ROOT / "storage" / "session_state.py").read_text(encoding="utf-8")
+        self.assertIn("def _clear_image_flow_keys", ss)
         self.assertGreaterEqual(self.source.count("_clear_image_flow_keys(st)"), 2)
 
     def test_video_photo_wait_text_does_not_open_image_wizard(self) -> None:
@@ -2079,7 +2083,11 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("async def wait_video_ready", self.source)
 
     def test_video_prompt_edit_clears_reference_mode_inputs(self) -> None:
-        self.assertIn("def _vid_clear_reference_inputs", self.source)
+        # _vid_clear_reference_inputs moved to storage/session_state.py (Phase 11).
+        self.assertIn(
+            "def _vid_clear_reference_inputs",
+            (PROJECT_ROOT / "storage" / "session_state.py").read_text(encoding="utf-8"),
+        )
         start = self.source.index("async def _video_prompt_edit_and_send")
         end = self.source.index("async def _video_repeat_last")
         block = self.source[start:end]

@@ -25,3 +25,32 @@ wizard_state: dict[int, dict] = defaultdict(dict)
 def _ws(user_id: int) -> dict:
     """Per-user wizard state bucket (created on first access)."""
     return wizard_state[user_id]
+
+
+def _vid_clear(user_id: int) -> None:
+    """Очистить только видео-ключи (сохранив vlast для повтора и vretry для ретрая)."""
+    st = wizard_state[user_id]
+    keep = {k: st.get(k) for k in ("vlast", "vretry") if k in st}
+    for key in list(st):
+        if key.startswith("v") and key not in keep:
+            st.pop(key, None)
+    st.update(keep)
+
+
+def _clear_image_flow_keys(st: dict) -> None:
+    """Снять image-визард (await/step/pending_prompt), не трогая видео-ключи.
+
+    Нужно при входе в видео-из-фото («Оживить фото»): иначе залипший
+    ``step=="wizard"`` после прошлой генерации картинок перехватывал промпт из
+    чата и генерил картинки вместо видео.
+    """
+    st["await"] = None
+    st["step"] = None
+    st.pop("pending_prompt", None)
+
+
+def _vid_clear_reference_inputs(user_id: int) -> None:
+    """Drop mode-specific image/caption inputs before a plain text video run."""
+    st = wizard_state[user_id]
+    for key in ("ving_photos", "vfrm_start", "vfrm_end", "vcaption_prompt"):
+        st.pop(key, None)
