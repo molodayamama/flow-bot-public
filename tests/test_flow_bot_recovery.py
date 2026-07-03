@@ -24,8 +24,8 @@ class FlowBotRecoveryStaticTests(unittest.TestCase):
         self.assertIn("await self._ensure_browser_locked()", source)
 
     def test_generation_handler_catches_unexpected_client_errors(self) -> None:
-        source = (PROJECT_ROOT / "flow_bot.py").read_text(encoding="utf-8")
+        source = (PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py").read_text(encoding="utf-8")
 
-        self.assertIn('log.exception("Generation failed', source)  # may have extra args
+        self.assertIn('d.log.exception("Generation failed', source)  # may have extra args
         # Генерация роутится по аккаунту пула (multi-account).
-        self.assertIn("result = await _client_for_acc(acc_id).generate_images", source)
+        self.assertIn("d.client_for_acc(acc_id).generate_images", source)

@@ -187,6 +187,7 @@ from product import agent_prompts
 from product.video_delivery import video_delivery_bytes
 from product.streak import streak_note
 from channels.telegram.image_delivery import ImageDelivery, ImageDeliveryDeps
+from channels.telegram.generation_flow import GenerationFlow, GenerationFlowDeps
 from product.job_log import (
     ImageJobLogger,
     ms_since as _ms_since,
@@ -2503,161 +2504,9 @@ async def _do_generate_and_send(
     user_id: int,
     image_model: str = DEFAULT_IMAGE_MODEL,
 ) -> bool:
-    status_msg = await message.answer(flow_copy.msg("generating"))
-
-    async def update_status(text: str):
-        try:
-            await status_msg.edit_text(f"{text}\n📝 {_short_prompt(prompt, 80)}")
-        except Exception:
-            pass
-
-    # Фоновая анимация статусных фраз: меняется каждые 2.5 сек пока идёт генерация.
-    _img_phrases = flow_copy.MESSAGES.get("img_status_phrases") or []
-    _img_anim_stop = asyncio.Event()
-
-    async def _img_animate():
-        await asyncio.sleep(2.5)
-        for phrase in itertools.cycle(_img_phrases):
-            if _img_anim_stop.is_set():
-                return
-            try:
-                await status_msg.edit_text(f"{phrase}\n📝 {_short_prompt(prompt, 80)}")
-            except Exception:
-                pass
-            await asyncio.sleep(2.5)
-            if _img_anim_stop.is_set():
-                return
-
-    _img_anim_task = asyncio.create_task(_img_animate()) if _img_phrases else None
-
-    # Генерация с тихим фейловером: попытка 0 — основной аккаунт, попытка 1 — другой.
-    # 400 (prompt_rejected) = проблема юзера, не аккаунта — фейловер и кулдаун не нужны.
-    # asyncio.wait_for(timeout=70) на каждую попытку: не ждём 120с зависший аккаунт —
-    # фейловер стартует сразу, суммарное ожидание ≤ 140с вместо ≤ 240с.
-    _GEN_ATTEMPT_TIMEOUT = 70  # секунд на одну попытку
-    tried: set[str] = set()
-    acc_id: str | None = None
-    project_id: str | None = None
-    result: dict = {}
-    _uname = _username(message)
-
-    try:
-        for attempt in range(2):
-            acc_id = _account_for_image(user_id, exclude=tried if tried else None)
-            if acc_id is None:
-                await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
-                return False
-            tried.add(acc_id)
-            project_id = await ensure_user_project(user_id, account_id=acc_id)
-
-            def _log_failover(from_acc: str, reason: str) -> None:
-                metrics.log_event(
-                    "gen_failover", user_id=user_id, username=_uname,
-                    payload={"from_account": from_acc, "reason": reason[:120]},
-                )
-
-            # Notify user if this account is already at capacity — they'll wait in queue.
-            if not account_pool.has_image_capacity(acc_id):
-                try:
-                    await status_msg.edit_text(flow_copy.msg("high_load"))
-                except Exception:
-                    pass
-
-            async with account_pool.image_slot(acc_id):
-                # Slot acquired — credits already reserved by credit_gate above.
-                try:
-                    result = await asyncio.wait_for(
-                        _client_for_acc(acc_id).generate_images(
-                            prompt,
-                            aspect_ratio=aspect_ratio,
-                            num_images=num_images,
-                            progress_cb=update_status,
-                            project_id=project_id,
-                            image_model=image_model,
-                        ),
-                        timeout=_GEN_ATTEMPT_TIMEOUT,
-                    )
-                except asyncio.TimeoutError:
-                    log.warning("Generation timed out after %ds (account %s, attempt %d)",
-                                _GEN_ATTEMPT_TIMEOUT, acc_id, attempt)
-                    if account_pool.mark_failure(acc_id):
-                        _fire_owner_alert(
-                            f"⚠️ <b>Аккаунт кулдаун</b>\n"
-                            f"Аккаунт: <code>{acc_id}</code>\n"
-                            f"Причина: timeout ({_GEN_ATTEMPT_TIMEOUT}s, image)"
-                        )
-                    if attempt == 0:
-                        _log_failover(acc_id, "timeout")
-                        continue  # releases image_slot, then picks next account
-                    await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
-                    return False
-                except Exception:
-                    log.exception("Generation failed (account %s, attempt %d)", acc_id, attempt)
-                    if account_pool.mark_failure(acc_id):
-                        _fire_owner_alert(
-                            f"⚠️ <b>Аккаунт кулдаун</b>\n"
-                            f"Аккаунт: <code>{acc_id}</code>\n"
-                            f"Причина: exception (image)"
-                        )
-                    if attempt == 0:
-                        _log_failover(acc_id, "exception")
-                        continue  # releases image_slot, then picks next account
-                    await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
-                    return False
-
-                if "error" in result:
-                    if result.get("error_type") == "prompt_rejected":
-                        # 400 — проблема запроса, не аккаунта: не трогаем health, не фейловеримся
-                        await status_msg.edit_text(
-                            f"❌ {html.escape(str(result['error'])[:300])}",
-                            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                                [_menu_button("menu", "m:menu")],
-                            ]),
-                        )
-                        return False
-                    # Ошибка аккаунта — помечаем и пробуем другой (один раз)
-                    _mark_image_account_failure(acc_id, result)
-                    if attempt == 0:
-                        reason = str(result.get("error", ""))[:80]
-                        log.info("Тихий фейловер после ошибки аккаунта %s: %s", acc_id, reason)
-                        _log_failover(acc_id, reason)
-                        continue  # releases image_slot, then picks next account
-                    # Оба аккаунта не справились
-                    await status_msg.edit_text(
-                        f"❌ {html.escape(str(result['error'])[:300])}",
-                        reply_markup=_img_retry_kb(),
-                    )
-                    return False
-
-            break  # успех (image_slot released by exiting async with)
-        else:
-            await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
-            return False
-
-        pairs = result_pairs(result)
-
-        if not pairs:
-            log.warning(f"Пустой ответ: {str(result)[:500]}")
-            await status_msg.edit_text(
-                flow_copy.msg("nothing_returned"),
-                reply_markup=_img_retry_kb(),
-            )
-            return False
-
-        account_pool.mark_success(acc_id)
-        await update_status(flow_copy.msg("sending"))
-        await _send_result_pairs(
-            message, pairs, user_id=user_id, project_id=project_id,
-            prompt=prompt, aspect_ratio=aspect_ratio, emoji="🎨", account_id=acc_id,
-        )
-        await status_msg.delete()
-        streak_note = _streak_note(user_id)
-        await _after_result(message, user_id, streak_note=streak_note)
-        return True
-    finally:
-        _img_anim_stop.set()
-        if _img_anim_task:
-            _img_anim_task.cancel()
+    return await _generation_flow.do_generate_and_send(
+        message, prompt, num_images, aspect_ratio, user_id, image_model=image_model,
+    )
 
 
 def _streak_note(user_id: int) -> str | None:
@@ -2721,6 +2570,26 @@ def _mark_image_account_failure(account_id: str | None, result: dict | None = No
 
 def _mark_video_account_failure(account_id: str | None, result: dict | None = None) -> None:
     _account_failure_policy.mark_video_failure(account_id, result)
+
+
+# Image generate-and-send orchestration lives in channels.telegram.generation_flow;
+# bind it to the runtime singletons + sibling flows here.
+_generation_flow = GenerationFlow(GenerationFlowDeps(
+    username=_username,
+    account_for_image=_account_for_image,
+    ensure_user_project=ensure_user_project,
+    metrics=metrics,
+    account_pool=account_pool,
+    client_for_acc=_client_for_acc,
+    log=log,
+    fire_owner_alert=_fire_owner_alert,
+    img_retry_kb=_img_retry_kb,
+    menu_button=_menu_button,
+    mark_image_account_failure=_mark_image_account_failure,
+    send_result_pairs=_send_result_pairs,
+    after_result=_after_result,
+    streak_note=_streak_note,
+))
 
 
 async def _download_ref_image_bytes(ref: ImageRef) -> bytes | None:

@@ -373,12 +373,13 @@ class BotPoolWiringTests(unittest.TestCase):
             gblock.index("credit_gate("),
         )
         # Image: роутинг по аккаунту + health-отметки.
-        start = self.source.index("async def _do_generate_and_send")
-        block = self.source[start:start + 7000]
-        self.assertIn("acc_id = _account_for_image(user_id", block)  # may have exclude= kwarg
+        # do_generate_and_send moved to channels.telegram.generation_flow (Phase 11).
+        gen_flow = (PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py").read_text(encoding="utf-8")
+        block = gen_flow[gen_flow.index("async def do_generate_and_send"):]
+        self.assertIn("acc_id = d.account_for_image(user_id", block)  # may have exclude= kwarg
         self.assertIn('flow_copy.msg("accounts_unavailable")', block)
-        self.assertIn("account_pool.mark_failure(acc_id)", block)
-        self.assertIn("account_pool.mark_success(acc_id)", block)
+        self.assertIn("d.account_pool.mark_failure(acc_id)", block)
+        self.assertIn("d.account_pool.mark_success(acc_id)", block)
         # Video: правки/extend остаются на аккаунте исходного ролика.
         vstart = self.source.index("async def _do_video_generate_and_send")
         vblock = self.source[vstart:vstart + 13000]
@@ -629,10 +630,10 @@ class CapacityBotWiringTests(unittest.TestCase):
         self.assertIn('default_video_capacity=ACC_VIDEO_CAPACITY', self.source)
 
     def test_image_generation_wrapped_in_image_slot(self):
-        start = self.source.index("async def _do_generate_and_send")
-        block = self.source[start:start + 8000]
-        self.assertIn("account_pool.image_slot(acc_id)", block)
-        self.assertIn("async with account_pool.image_slot(acc_id):", block)
+        gen_flow = (PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py").read_text(encoding="utf-8")
+        block = gen_flow[gen_flow.index("async def do_generate_and_send"):]
+        self.assertIn("d.account_pool.image_slot(acc_id)", block)
+        self.assertIn("async with d.account_pool.image_slot(acc_id):", block)
 
     def test_video_generation_wrapped_in_video_slot(self):
         start = self.source.index("async def _do_video_generate_and_send")
@@ -641,9 +642,9 @@ class CapacityBotWiringTests(unittest.TestCase):
         self.assertIn("async with account_pool.video_slot(acc_id):", block)
 
     def test_high_load_message_shown_when_capacity_full(self):
-        start = self.source.index("async def _do_generate_and_send")
-        block = self.source[start:start + 8000]
-        self.assertIn('account_pool.has_image_capacity(acc_id)', block)
+        gen_flow = (PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py").read_text(encoding="utf-8")
+        block = gen_flow[gen_flow.index("async def do_generate_and_send"):]
+        self.assertIn('d.account_pool.has_image_capacity(acc_id)', block)
         self.assertIn('flow_copy.msg("high_load")', block)
 
     def test_status_command_shows_pool_capacity(self):
