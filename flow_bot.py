@@ -183,6 +183,7 @@ from textutil import _days_word, _short_prompt
 from storage.session_state import reset_image_flow as _reset_image_flow
 from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScenario
 from product import video_reference
+from product.streak import streak_note
 import prompts_lib
 import config.settings as _cfg
 
@@ -2717,23 +2718,9 @@ async def _do_generate_and_send(
 
 
 def _streak_note(user_id: int) -> str | None:
-    """Return a short streak congratulation if today is the user's first generation.
-
-    Returns ``None`` when the user already generated today (no-op call) or on
-    any error, so the caller can always safely prepend it to a message.
-    """
-    try:
-        current, _max, is_new_day = metrics.update_streak(user_id)
-        if not is_new_day:
-            return None
-        if current == 1:
-            return flow_copy.msg("streak_day_1")
-        if current in (3, 7, 14, 30):
-            return flow_copy.msg(f"streak_milestone_{current}")
-        days_word = _days_word(current)
-        return flow_copy.msg("streak_ongoing", n=current, days=days_word)
-    except Exception:
-        return None
+    # Streak congratulation copy lives in product.streak (channel-neutral);
+    # bind the runtime metrics reader here.
+    return streak_note(user_id, update_streak=metrics.update_streak)
 
 
 async def _after_result(message: types.Message, user_id: int, *, streak_note: str | None = None):
