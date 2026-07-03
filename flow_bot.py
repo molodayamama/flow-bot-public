@@ -320,6 +320,7 @@ from channels.telegram.routers import menu as tg_menu_router
 from channels.telegram.routers import onboarding as tg_onboarding_router
 from channels.telegram.routers import photo_route as tg_photo_route_router
 from channels.telegram.routers import image_retry as tg_image_retry_router
+from channels.telegram.routers import image_action as tg_image_action_router
 from channels.telegram.routers import ideas_hub as tg_ideas_hub_router
 from channels.telegram.routers import ideas_flow as tg_ideas_flow_router
 from channels.telegram.routers import agent as tg_agent_router
@@ -7458,105 +7459,6 @@ async def _start_robokassa_web_server() -> web.AppRunner | None:
     return await _start_web_server()
 
 
-def _is_action_callback(callback: types.CallbackQuery) -> bool:
-    """Precise routing filter for the image-action handler below.
-
-    Matches exactly the callbacks the old bare catch-all actually processed
-    (every flow_core.ACTION_PREFIXES prefix). Anything else now falls through
-    to the tail fallback router, which keeps the old silent-ack behaviour.
-    """
-    return parse_action_callback(callback.data or "") is not None
-
-
-@dp.callback_query(_is_action_callback)
-async def on_image_action(callback: types.CallbackQuery):
-    """Единый обработчик инлайн-кнопок под картинкой (edit/vary/regen/mix/up)."""
-    parsed = parse_action_callback(callback.data or "")
-    if parsed is None:
-        await callback.answer()
-        return
-    action, token = parsed
-    user_id = callback.from_user.id
-    ref = image_registry.get(token)
-    if ref is None or ref.user_id != user_id:
-        await callback.answer(
-            "Кнопка устарела. Сгенерируйте изображение заново.", show_alert=True
-        )
-        return
-
-    if action == "edit":
-        pending_edits[user_id] = token
-        st = _ws(user_id)
-        st["await"] = "edit"
-        st.pop("edit_as_gen", None)  # правка готовой картинки = тариф правки (15/20)
-        # Формат по умолчанию = формат исходной картинки; модель — последняя выбранная.
-        st["edit_fmt"] = _aspect_to_fmt(ref.aspect_ratio)
-        st.setdefault("edit_imodel", DEFAULT_IMAGE_MODEL)
-        await callback.answer()
-        await callback.message.answer(
-            flow_copy.msg("ask_edit_prompt"),
-            reply_markup=edit_settings_kb(st["edit_fmt"], st["edit_imodel"]),
-        )
-    elif action == "revary":
-        pending_edits[user_id] = token
-        _ws(user_id)["await"] = "revary"
-        await callback.answer()
-        await callback.message.answer(flow_copy.msg("ask_revary_prompt"))
-    elif action == "vary":
-        await callback.answer("Делаю вариации 🎲")
-        await _vary_and_send(callback.message, ref)
-    elif action == "regen":
-        await callback.answer("Генерирую ещё 🔄")
-        await _regen_and_send(callback.message, ref)
-    elif action == "up2x":
-        await callback.answer("Повышаю чёткость ✨")
-        await _enhance_and_send(callback.message, ref)
-    elif action == "realup":
-        await callback.answer("Увеличиваю разрешение 🔍")
-        await _real_upscale_and_send(callback.message, ref)
-    elif action == "skuadd":
-        if not _cfg.IS_SELLER:
-            await callback.answer()
-            return
-        photos = getattr(callback.message, "photo", None) or []
-        if not photos:
-            await callback.answer("Не нашёл файл картинки", show_alert=True)
-            return
-        st = _ws(user_id)
-        st["mp_sku_pending"] = {
-            "token": token,
-            "file_id": photos[-1].file_id,
-            "prompt": ref.prompt or "",
-            "platform": ref.platform or st.get("mp_platform", ""),
-        }
-        st["await"] = "mp_sku_name"
-        await callback.answer()
-        sent = await callback.message.answer(
-            "📦 В какой SKU добавить этот результат?",
-            reply_markup=_mp_sku_choice_kb(user_id),
-        )
-        _mp_stamp_message(user_id, sent)
-    elif action == "mpexport":
-        if not _cfg.IS_SELLER:
-            await callback.answer()
-            return
-        await callback.answer("Готовлю файл для маркетплейса ⬇️")
-        await _send_original_file(callback.message, ref, marketplace_export=True)
-    elif action in ("download", "upscale"):
-        await callback.answer("Готовлю файл ⬇️")
-        await _send_original_file(callback.message, ref)
-    elif action == "mix":
-        basket = mix_baskets[user_id]
-        if len(basket) >= MIX_MAX:
-            await callback.answer(f"В миксе уже {MIX_MAX}", show_alert=True)
-            return
-        basket.append(ref.source)
-        await callback.answer(f"Добавлено в микс: {len(basket)}")
-        if len(basket) >= 2:
-            await callback.message.answer(
-                f"🧩 В миксе {len(basket)} картинок. Пришлите `/mix ваш промпт`.",
-                parse_mode="Markdown",
-            )
 
 
 async def _upload_photo_source_from_message(
@@ -8886,6 +8788,28 @@ dp.include_router(
             show_prompt_history=_show_prompt_history,
             show_support_menu=_show_support_menu,
             show_my_tickets=_show_my_tickets,
+        )
+    )
+)
+dp.include_router(
+    tg_image_action_router.create_router(
+        tg_image_action_router.ImageActionDeps(
+            workspace=_ws,
+            image_registry=image_registry,
+            pending_edits=pending_edits,
+            mix_baskets=mix_baskets,
+            is_seller=lambda: _cfg.IS_SELLER,
+            aspect_to_fmt=_aspect_to_fmt,
+            edit_settings_kb=edit_settings_kb,
+            mp_sku_choice_kb=_mp_sku_choice_kb,
+            mp_stamp_message=_mp_stamp_message,
+            vary_and_send=_vary_and_send,
+            regen_and_send=_regen_and_send,
+            enhance_and_send=_enhance_and_send,
+            real_upscale_and_send=_real_upscale_and_send,
+            send_original_file=_send_original_file,
+            default_image_model=DEFAULT_IMAGE_MODEL,
+            mix_max=MIX_MAX,
         )
     )
 )

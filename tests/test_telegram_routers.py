@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import unittest
+from collections import defaultdict
 from types import SimpleNamespace
 
 from aiogram import Router
@@ -11,6 +12,7 @@ from channels.telegram.routers import animate as animate_router
 from channels.telegram.routers import agent as agent_router
 from channels.telegram.routers import commands as commands_router
 from channels.telegram.routers import edit_settings as edit_settings_router
+from channels.telegram.routers import image_action as image_action_router
 from channels.telegram.routers import ideas_flow as ideas_flow_router
 from channels.telegram.routers import image_retry as image_retry_router
 from channels.telegram.routers import ideas_hub as ideas_hub_router
@@ -19,6 +21,7 @@ from channels.telegram.routers import menu as menu_router
 from channels.telegram.routers import photo_route as photo_route_router
 from channels.telegram.routers import video_upload as video_upload_router
 from channels.telegram.routers import wizard as wizard_router
+from flow_core import action_callback_data
 
 
 def run(coro):
@@ -1296,6 +1299,177 @@ class EditSettingsRouterTests(unittest.TestCase):
 
     def test_edit_settings_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(edit_settings_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class RecordingImageActionDeps:
+    def __init__(self, *, seller: bool = True) -> None:
+        self.workspaces: dict[int, dict] = {}
+        self.registry: dict[str, object] = {}
+        self.pending_edits: dict[int, str] = {}
+        self.mix_baskets = defaultdict(list)
+        self.seller = seller
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def workspace(self, user_id: int) -> dict:
+        return self.workspaces.setdefault(user_id, {})
+
+    def is_seller(self) -> bool:
+        return self.seller
+
+    def aspect_to_fmt(self, aspect: str) -> str:
+        self.calls.append(("aspect_to_fmt", (aspect,), {}))
+        return "land"
+
+    def edit_settings_kb(self, *args, **kwargs):
+        self.calls.append(("edit_settings_kb", args, kwargs))
+        return SimpleNamespace(kind="edit-kb")
+
+    def mp_sku_choice_kb(self, *args, **kwargs):
+        self.calls.append(("mp_sku_choice_kb", args, kwargs))
+        return SimpleNamespace(kind="sku-kb")
+
+    def mp_stamp_message(self, *args, **kwargs):
+        self.calls.append(("mp_stamp_message", args, kwargs))
+
+    async def vary_and_send(self, *args, **kwargs):
+        self.calls.append(("vary_and_send", args, kwargs))
+
+    async def regen_and_send(self, *args, **kwargs):
+        self.calls.append(("regen_and_send", args, kwargs))
+
+    async def enhance_and_send(self, *args, **kwargs):
+        self.calls.append(("enhance_and_send", args, kwargs))
+
+    async def real_upscale_and_send(self, *args, **kwargs):
+        self.calls.append(("real_upscale_and_send", args, kwargs))
+
+    async def send_original_file(self, *args, **kwargs):
+        self.calls.append(("send_original_file", args, kwargs))
+
+
+def _image_action_deps(*, seller: bool = True) -> tuple[image_action_router.ImageActionDeps, RecordingImageActionDeps]:
+    rec = RecordingImageActionDeps(seller=seller)
+    deps = image_action_router.ImageActionDeps(
+        workspace=rec.workspace,
+        image_registry=rec.registry,
+        pending_edits=rec.pending_edits,
+        mix_baskets=rec.mix_baskets,
+        is_seller=rec.is_seller,
+        aspect_to_fmt=rec.aspect_to_fmt,
+        edit_settings_kb=rec.edit_settings_kb,
+        mp_sku_choice_kb=rec.mp_sku_choice_kb,
+        mp_stamp_message=rec.mp_stamp_message,
+        vary_and_send=rec.vary_and_send,
+        regen_and_send=rec.regen_and_send,
+        enhance_and_send=rec.enhance_and_send,
+        real_upscale_and_send=rec.real_upscale_and_send,
+        send_original_file=rec.send_original_file,
+        default_image_model="default-model",
+        mix_max=2,
+    )
+    return deps, rec
+
+
+class ImageActionRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _image_action_deps()
+        self.router = image_action_router.create_router(self.deps)
+        self.handler = self.router.callback_query.handlers[0].callback
+        self.ref = SimpleNamespace(
+            user_id=42,
+            aspect_ratio="landscape",
+            prompt="source prompt",
+            platform="wb",
+            source={"mediaId": "m1"},
+        )
+        self.rec.registry["tok"] = self.ref
+
+    def _callback(self, action: str, *, user_id: int = 42) -> FakeCallback:
+        return FakeCallback(action_callback_data(action, "tok"), user_id=user_id)
+
+    def test_creates_image_action_callback_router(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        self.assertEqual(self.router.name, "tg-image-action")
+        self.assertEqual(len(self.router.callback_query.handlers), 1)
+        self.assertEqual(self.router.callback_query.handlers[0].callback.__name__, "on_image_action")
+
+    def test_stale_or_wrong_owner_alerts_without_delegate_call(self) -> None:
+        callback = self._callback("edit", user_id=7)
+        run(self.handler(callback))
+        self.assertEqual(callback.answers[-1][1], {"show_alert": True})
+        self.assertEqual(self.rec.calls, [])
+
+    def test_edit_stores_pending_ref_and_opens_settings(self) -> None:
+        callback = self._callback("edit")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.pending_edits[42], "tok")
+        self.assertEqual(self.rec.workspaces[42]["await"], "edit")
+        self.assertEqual(self.rec.workspaces[42]["edit_fmt"], "land")
+        self.assertEqual(self.rec.workspaces[42]["edit_imodel"], "default-model")
+        self.assertEqual(self.rec.calls[-1][0], "edit_settings_kb")
+        self.assertTrue(callback.message_answers)
+
+    def test_image_operation_actions_delegate_to_injected_helpers(self) -> None:
+        for action, expected in (
+            ("vary", "vary_and_send"),
+            ("regen", "regen_and_send"),
+            ("up2x", "enhance_and_send"),
+            ("realup", "real_upscale_and_send"),
+        ):
+            with self.subTest(action=action):
+                self.rec.calls.clear()
+                callback = self._callback(action)
+                run(self.handler(callback))
+                self.assertEqual(self.rec.calls[-1][0], expected)
+                self.assertEqual(self.rec.calls[-1][1], (callback.message, self.ref))
+
+    def test_skuadd_seller_flow_sets_pending_sku_and_stamps_message(self) -> None:
+        callback = self._callback("skuadd")
+        callback.message.photo = [SimpleNamespace(file_id="photo-file")]
+        run(self.handler(callback))
+        st = self.rec.workspaces[42]
+        self.assertEqual(st["await"], "mp_sku_name")
+        self.assertEqual(st["mp_sku_pending"]["token"], "tok")
+        self.assertEqual(st["mp_sku_pending"]["file_id"], "photo-file")
+        self.assertEqual([c[0] for c in self.rec.calls[-2:]], ["mp_sku_choice_kb", "mp_stamp_message"])
+
+    def test_skuadd_is_ignored_when_seller_mode_disabled(self) -> None:
+        deps, rec = _image_action_deps(seller=False)
+        rec.registry["tok"] = self.ref
+        handler = image_action_router.create_router(deps).callback_query.handlers[0].callback
+        callback = FakeCallback(action_callback_data("skuadd", "tok"))
+        run(handler(callback))
+        self.assertTrue(callback.answers)
+        self.assertEqual(rec.calls, [])
+
+    def test_export_and_download_delegate_to_original_file_sender(self) -> None:
+        callback = self._callback("mpexport")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.calls[-1][0], "send_original_file")
+        self.assertEqual(self.rec.calls[-1][2], {"marketplace_export": True})
+        self.rec.calls.clear()
+        callback = self._callback("download")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.calls[-1][0], "send_original_file")
+        self.assertEqual(self.rec.calls[-1][2], {})
+
+    def test_mix_adds_sources_until_limit(self) -> None:
+        self.rec.mix_baskets[42] = [{"old": "source"}]
+        callback = self._callback("mix")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.mix_baskets[42], [{"old": "source"}, {"mediaId": "m1"}])
+        self.assertTrue(callback.message_answers)
+        callback = self._callback("mix")
+        run(self.handler(callback))
+        self.assertEqual(callback.answers[-1][1], {"show_alert": True})
+
+    def test_image_action_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.default_image_model = "x"  # type: ignore[misc]
+
+    def test_image_action_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(image_action_router)
         self.assertNotIn("flow_bot", src)
 
 

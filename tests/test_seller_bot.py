@@ -99,8 +99,9 @@ class SellerMenuTests(unittest.TestCase):
         menu_source = inspect.getsource(menu_router)
         self.assertIn('elif data == "m:mp":', menu_source)
         self.assertIn("deps.mp_stamp_message(user_id, msg)", menu_source)
-        action_source = inspect.getsource(flow_bot.on_image_action)
-        self.assertIn("_mp_stamp_message(user_id, sent)", action_source)
+        from channels.telegram.routers import image_action as image_action_router
+        action_source = inspect.getsource(image_action_router)
+        self.assertIn("deps.mp_stamp_message(user_id, sent)", action_source)
 
     def test_seller_confirm_after_photo_upload_is_active_message(self) -> None:
         import asyncio
@@ -468,10 +469,11 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn('if data == "mp:sku:delete"', source)
         self.assertIn("metrics.rename_seller_sku_project", inspect.getsource(flow_bot.handle_plain_text))
         self.assertIn("metrics.delete_seller_sku_project", source)
-        action_source = inspect.getsource(flow_bot.on_image_action)
+        from channels.telegram.routers import image_action as image_action_router
+        action_source = inspect.getsource(image_action_router)
         self.assertIn('elif action == "skuadd":', action_source)
         self.assertIn('st["mp_sku_pending"]', action_source)
-        self.assertIn("_mp_sku_choice_kb(user_id)", action_source)
+        self.assertIn("deps.mp_sku_choice_kb(user_id)", action_source)
 
     def test_sku_projects_keyboard_opens_items_and_creates_new(self) -> None:
         projects = [
@@ -526,7 +528,8 @@ class SellerMenuTests(unittest.TestCase):
         self.assertNotIn("sku:tok123", normal_cb)
 
     def test_seller_marketplace_export_action_uses_document_helper(self) -> None:
-        action_source = inspect.getsource(flow_bot.on_image_action)
+        from channels.telegram.routers import image_action as image_action_router
+        action_source = inspect.getsource(image_action_router)
         self.assertIn('elif action == "mpexport":', action_source)
         self.assertIn("marketplace_export=True", action_source)
         ref = flow_core.ImageRef(

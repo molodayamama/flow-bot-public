@@ -463,6 +463,9 @@ class BotMenuWiringTests(unittest.TestCase):
         self.menu_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "menu.py"
         ).read_text(encoding="utf-8")
+        self.image_action_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "image_action.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         self.assertIn('F.data.startswith("m:")', self.menu_router_source)  # menu router
@@ -740,7 +743,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("parse_upsample_response", self.source)
         # realup button lives under each generated image (restored by operator
         # request) and is wired via action_callback_data / action == "realup".
-        self.assertIn('elif action == "realup"', self.source)
+        self.assertIn('elif action == "realup"', self.image_action_router_source)
         # realup must NOT silently fall back to the prompt enhance anymore.
         real_start = self.source.index("async def _real_upscale_and_send")
         real_block = self.source[real_start:real_start + 900]
@@ -1976,7 +1979,11 @@ class BotImportSmokeTests(unittest.TestCase):
             importlib.reload(fb)
 
             self.assertGreaterEqual(len(fb.dp.message.handlers), 10)
-            self.assertGreaterEqual(len(fb.dp.callback_query.handlers), 3)
+            callback_handler_count = len(fb.dp.callback_query.handlers) + sum(
+                len(router.callback_query.handlers) for router in fb.dp.sub_routers
+            )
+            self.assertGreaterEqual(callback_handler_count, 12)
+            self.assertIn("tg-image-action", [router.name for router in fb.dp.sub_routers])
             self.assertEqual(len(fb.dp.pre_checkout_query.handlers), 1)
             # Keyboards build without error.
             fb.main_menu_kb()
