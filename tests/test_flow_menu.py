@@ -769,6 +769,81 @@ class BotMenuWiringTests(unittest.TestCase):
             self.assertIn(needle, self.source)
         self.assertNotIn("flow_bot", self.screens_source)
 
+    def test_video_settings_screens_moved_to_telegram_screens_module(self) -> None:
+        self.assertIn("tg_screens.VideoSettingsScreensDeps(", self.source)
+        for name in (
+            "def video_settings_text",
+            "async def show_video_family",
+            "async def show_video_variant",
+            "async def show_video_settings",
+        ):
+            self.assertIn(name, self.screens_source, name)
+        for needle in (
+            "vid_clear=_vid_clear",
+            "aspect_to_vfmt=_aspect_to_vfmt",
+            "vid_edit=_vid_edit",
+            "vid_default_count=VID_DEFAULT_COUNT",
+        ):
+            self.assertIn(needle, self.source)
+        self.assertNotIn("flow_bot", self.screens_source)
+
+    def test_video_settings_screens_use_injected_state(self) -> None:
+        from channels.telegram import screens as tg_screens
+
+        state = {
+            7: {
+                "vlast": {"aspect": "portrait", "count": 2},
+                "vretry": {"prompt": "old"},
+            }
+        }
+        events = []
+
+        class CreditStore:
+            def balance(self, user_id):
+                return 42
+
+        class Message:
+            async def answer(self, text, reply_markup=None, parse_mode=None):
+                events.append(("answer", text, reply_markup, parse_mode))
+                return SimpleNamespace(message_id=7001)
+
+        def vid_clear(user_id):
+            st = state[user_id]
+            keep = {k: st.get(k) for k in ("vlast", "vretry") if k in st}
+            st.clear()
+            st.update(keep)
+
+        async def vid_edit(*args, **kwargs):
+            events.append(("edit", args, kwargs))
+
+        deps = tg_screens.VideoSettingsScreensDeps(
+            wizard_state=state,
+            credit_store=CreditStore(),
+            vid_clear=vid_clear,
+            aspect_to_vfmt=lambda aspect: {"landscape": "land", "portrait": "port"}.get(aspect, "land"),
+            vid_edit=vid_edit,
+            vid_default_fmt="land",
+            vid_default_count=1,
+            vid_fmt_names={"land": "16:9", "port": "9:16"},
+        )
+
+        asyncio.run(tg_screens.show_video_family(Message(), user_id=7, edit=False, deps=deps))
+        self.assertEqual(state[7]["vstep"], "vfam")
+        self.assertEqual(state[7]["vfmt"], "port")
+        self.assertEqual(state[7]["vcount"], 2)
+        self.assertNotIn("vretry", state[7])
+        self.assertEqual(state[7]["vmsg_id"], 7001)
+
+        state[7]["vfamily"] = "veo"
+        asyncio.run(tg_screens.show_video_variant(Message(), user_id=7, deps=deps))
+        self.assertEqual(state[7]["vstep"], "vmodel")
+        self.assertEqual(events[-1][0], "edit")
+
+        state[7]["vmodel"] = "veo-lite"
+        asyncio.run(tg_screens.show_video_settings(Message(), user_id=7, deps=deps))
+        self.assertEqual(state[7]["vstep"], "vsettings")
+        self.assertEqual(events[-1][2].get("parse_mode"), "HTML")
+
     def test_marketplace_screens_moved_to_telegram_screens_module(self) -> None:
         self.assertIn("tg_screens.MarketplaceScreensDeps(", self.source)
         for name in (

@@ -21,6 +21,9 @@ from channels.telegram.keyboards import (
     frames_kb,
     ingredients_kb,
     main_menu_kb,
+    video_family_kb,
+    video_variant_kb,
+    video_wizard_kb,
 )
 from channels.telegram.texts import _MP_SERIES_COUNTS
 from flow_core import action_callback_data, action_price, price_gen, video_price
@@ -67,6 +70,20 @@ class VideoReferenceScreensDeps:
     vid_default_count: int
     vid_ref_default_model: str
     vid_frames_default_model: str
+    vid_fmt_names: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class VideoSettingsScreensDeps:
+    """Injected state and callbacks for legacy video settings screens."""
+
+    wizard_state: MutableMapping[int, MutableMapping[str, Any]]
+    credit_store: Any
+    vid_clear: Callable[[int], None]
+    aspect_to_vfmt: Callable[[str], str]
+    vid_edit: Callable[..., Awaitable[Any]]
+    vid_default_fmt: str
+    vid_default_count: int
     vid_fmt_names: Mapping[str, str]
 
 
@@ -250,6 +267,68 @@ async def show_video_frames(
     else:
         sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
         st["vmsg_id"] = sent.message_id
+
+
+def video_settings_text(user_id: int, *, deps: VideoSettingsScreensDeps) -> str:
+    st = deps.wizard_state[user_id]
+    model_id = st.get("vmodel", "")
+    vfmt = st.get("vfmt", deps.vid_default_fmt)
+    vcount = st.get("vcount", deps.vid_default_count)
+    model_name = L(f"vid_model_name:{model_id}") if model_id else model_id
+    return flow_copy.msg(
+        "vid_settings_screen",
+        model=model_name,
+        fmt=deps.vid_fmt_names.get(vfmt, vfmt),
+        count=vcount,
+        price=video_price(model_id, vcount),
+        credits=deps.credit_store.balance(user_id),
+    )
+
+
+async def show_video_family(
+    message: types.Message, *, user_id: int, edit: bool,
+    deps: VideoSettingsScreensDeps,
+) -> None:
+    deps.vid_clear(user_id)
+    st = deps.wizard_state[user_id]
+    st.pop("vretry", None)
+    st["vstep"] = "vfam"
+    st.setdefault("vfmt", deps.vid_default_fmt)
+    st.setdefault("vcount", deps.vid_default_count)
+    vlast = st.get("vlast")
+    if vlast:
+        st["vfmt"] = deps.aspect_to_vfmt(vlast.get("aspect", "landscape"))
+        st["vcount"] = vlast.get("count", deps.vid_default_count)
+    text = flow_copy.msg("vid_family_screen")
+    kb = video_family_kb()
+    if edit:
+        await deps.vid_edit(message, text, kb, user_id)
+    else:
+        sent = await message.answer(text, reply_markup=kb)
+        st["vmsg_id"] = sent.message_id
+
+
+async def show_video_variant(
+    message: types.Message, *, user_id: int, deps: VideoSettingsScreensDeps
+) -> None:
+    st = deps.wizard_state[user_id]
+    family = st.get("vfamily", "")
+    st["vstep"] = "vmodel"
+    text = flow_copy.msg("vid_variant_screen", family=family)
+    kb = video_variant_kb(family, st.get("vmodel"))
+    await deps.vid_edit(message, text, kb, user_id)
+
+
+async def show_video_settings(
+    message: types.Message, *, user_id: int, deps: VideoSettingsScreensDeps
+) -> None:
+    st = deps.wizard_state[user_id]
+    st["vstep"] = "vsettings"
+    st.setdefault("vfmt", deps.vid_default_fmt)
+    st.setdefault("vcount", deps.vid_default_count)
+    text = video_settings_text(user_id, deps=deps)
+    kb = video_wizard_kb(st["vfmt"], st["vcount"])
+    await deps.vid_edit(message, text, kb, user_id, parse_mode="HTML")
 
 
 def mp_confirm_screen(

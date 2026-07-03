@@ -1940,19 +1940,22 @@ async def show_new_video_wizard(message: types.Message, *, user_id: int, edit: b
 # ── конец нового wizard ──────────────────────────────────────────────────
 
 
+def _video_settings_screens_deps() -> tg_screens.VideoSettingsScreensDeps:
+    return tg_screens.VideoSettingsScreensDeps(
+        wizard_state=wizard_state,
+        credit_store=credit_store,
+        vid_clear=_vid_clear,
+        aspect_to_vfmt=_aspect_to_vfmt,
+        vid_edit=_vid_edit,
+        vid_default_fmt=VID_DEFAULT_FMT,
+        vid_default_count=VID_DEFAULT_COUNT,
+        vid_fmt_names=_VID_FMT_NAMES,
+    )
+
+
 def _vid_settings_text(user_id: int) -> str:
-    st = wizard_state[user_id]
-    model_id = st.get("vmodel", "")
-    vfmt = st.get("vfmt", VID_DEFAULT_FMT)
-    vcount = st.get("vcount", VID_DEFAULT_COUNT)
-    model_name = L(f"vid_model_name:{model_id}") if model_id else model_id
-    return flow_copy.msg(
-        "vid_settings_screen",
-        model=model_name,
-        fmt=_VID_FMT_NAMES.get(vfmt, vfmt),
-        count=vcount,
-        price=video_price(model_id, vcount),
-        credits=credit_store.balance(user_id),
+    return tg_screens.video_settings_text(
+        user_id, deps=_video_settings_screens_deps()
     )
 
 
@@ -1984,43 +1987,21 @@ async def _vid_rerender_settings(message: types.Message, *, user_id: int):
 
 
 async def show_video_family(message: types.Message, *, user_id: int, edit: bool):
-    _vid_clear(user_id)
-    st = wizard_state[user_id]
-    st.pop("vretry", None)  # свежий визард — забываем прошлый ретрай-снимок
-    st["vstep"] = "vfam"
-    st.setdefault("vfmt", VID_DEFAULT_FMT)
-    st.setdefault("vcount", VID_DEFAULT_COUNT)
-    # подставим прошлые настройки как дефолт, если повторяем
-    vlast = st.get("vlast")
-    if vlast:
-        st["vfmt"] = _aspect_to_vfmt(vlast.get("aspect", "landscape"))
-        st["vcount"] = vlast.get("count", VID_DEFAULT_COUNT)
-    text = flow_copy.msg("vid_family_screen")
-    kb = video_family_kb()
-    if edit:
-        await _vid_edit(message, text, kb, user_id)
-    else:
-        sent = await message.answer(text, reply_markup=kb)
-        st["vmsg_id"] = sent.message_id
+    await tg_screens.show_video_family(
+        message, user_id=user_id, edit=edit, deps=_video_settings_screens_deps()
+    )
 
 
 async def show_video_variant(message: types.Message, *, user_id: int):
-    st = wizard_state[user_id]
-    family = st.get("vfamily", "")
-    st["vstep"] = "vmodel"
-    text = flow_copy.msg("vid_variant_screen", family=family)
-    kb = video_variant_kb(family, st.get("vmodel"))
-    await _vid_edit(message, text, kb, user_id)
+    await tg_screens.show_video_variant(
+        message, user_id=user_id, deps=_video_settings_screens_deps()
+    )
 
 
 async def show_video_settings(message: types.Message, *, user_id: int):
-    st = wizard_state[user_id]
-    st["vstep"] = "vsettings"
-    st.setdefault("vfmt", VID_DEFAULT_FMT)
-    st.setdefault("vcount", VID_DEFAULT_COUNT)
-    text = _vid_settings_text(user_id)
-    kb = video_wizard_kb(st["vfmt"], st["vcount"])
-    await _vid_edit(message, text, kb, user_id, parse_mode="HTML")
+    await tg_screens.show_video_settings(
+        message, user_id=user_id, deps=_video_settings_screens_deps()
+    )
 
 
 def _aspect_to_vfmt(aspect: str) -> str:
