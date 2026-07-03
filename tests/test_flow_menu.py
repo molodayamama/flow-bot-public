@@ -1140,15 +1140,15 @@ class BotMenuWiringTests(unittest.TestCase):
         end = self.source.index("if gen_status != 200:", start)
         block = self.source[start:end]
         self.assertIn('"account_risk": "video_auth"', block)
-        self.assertIn('"account_risk": "video_recaptcha_403"', block)
+        self.assertIn('"account_risk": "unusual_activity" if unusual_403 else "video_recaptcha_403"', block)
 
         helper = self.source[
             self.source.index("def _mark_video_account_failure"):
             self.source.index("async def _download_ref_image_bytes")
         ]
-        # video_auth — кулдаун сразу; video_recaptcha_403 (стохастичный) —
+        # video_auth/unusual_activity — кулдаун сразу; video_recaptcha_403 (стохастичный) —
         # через счётчик fail (кулдаун только после серии).
-        self.assertIn('risk == "video_auth"', helper)
+        self.assertIn('risk in {"video_auth", "unusual_activity"}', helper)
         self.assertIn("account_pool.mark_cooldown(account_id)", helper)
         self.assertIn("account_pool.mark_failure(account_id)", helper)
         self.assertIn('risk == "video_recaptcha_403"', helper)
@@ -1161,6 +1161,9 @@ class BotMenuWiringTests(unittest.TestCase):
             self.source.index("async def _video_download")
         ]
         self.assertIn("_mark_video_account_failure(acc_id, result)", video)
+        self.assertIn('failover_reasons = {"video_auth", "video_recaptcha_403", "unusual_activity"}', video)
+        self.assertIn("force_reupload=True", video)
+        self.assertIn('final_type = (', video)
 
     def test_after_result_offers_video_balance_and_menu(self) -> None:
         block = self.source[self.source.index("async def _after_result"):][:700]

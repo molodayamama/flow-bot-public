@@ -394,6 +394,29 @@ try:
     MIN_READY_ACCOUNTS = max(1, int(os.getenv("MIN_READY_ACCOUNTS", "1")))
 except (TypeError, ValueError):
     MIN_READY_ACCOUNTS = 1
+try:
+    KEEP_WARM_IMAGE_ACCOUNTS = max(0, int(os.getenv("KEEP_WARM_IMAGE_ACCOUNTS", "1")))
+except (TypeError, ValueError):
+    KEEP_WARM_IMAGE_ACCOUNTS = 1
+try:
+    KEEP_WARM_VIDEO_ACCOUNTS = max(0, int(os.getenv("KEEP_WARM_VIDEO_ACCOUNTS", "1")))
+except (TypeError, ValueError):
+    KEEP_WARM_VIDEO_ACCOUNTS = 1
+try:
+    KEEP_WARM_ROTATE_SEC = max(30.0, float(os.getenv("KEEP_WARM_ROTATE_SEC", "60")))
+except (TypeError, ValueError):
+    KEEP_WARM_ROTATE_SEC = 60.0
+_KEEP_WARM_MIN_HOLD = max(
+    KEEP_WARM_ROTATE_SEC + PARK_CHECK_SEC + 10.0,
+    IDLE_PARK_SEC + PARK_CHECK_SEC + 10.0,
+)
+try:
+    KEEP_WARM_HOLD_SEC = max(
+        _KEEP_WARM_MIN_HOLD,
+        float(os.getenv("KEEP_WARM_HOLD_SEC", str(_KEEP_WARM_MIN_HOLD))),
+    )
+except (TypeError, ValueError):
+    KEEP_WARM_HOLD_SEC = _KEEP_WARM_MIN_HOLD
 TOKEN_TTL_SEC = 50 * 60  # обновлять Bearer каждые 50 минут
 GCREDITS_CACHE_SEC = max(60, int(os.getenv("GCREDITS_CACHE_SEC", "1800")))
 GCREDITS_SESSION_SNAPSHOT_TIMEOUT_SEC = 1.5
@@ -529,6 +552,8 @@ class SessionKeeper:
         self._parked = False
         self._last_use = 0.0
         self._park_task = None
+        self._keep_warm_until = 0.0
+        self._keep_warm_role = ""
         # Кэш баланса G-кредитов (см. get_g_credits) — не дёргаем Google на
         # каждый /admin_accounts, обновляем не чаще GCREDITS_CACHE_SEC.
         self._gcredits_cache: dict | None = None
@@ -668,6 +693,16 @@ class SessionKeeper:
     def _mark_use(self) -> None:
         self._last_use = time.time()
 
+    def keep_warm_for(self, seconds: float, role: str = "") -> None:
+        if seconds <= 0:
+            return
+        self._keep_warm_until = max(self._keep_warm_until, time.time() + float(seconds))
+        self._keep_warm_role = role or self._keep_warm_role
+        self._mark_use()
+
+    def _keep_warm_active(self) -> bool:
+        return self._keep_warm_until > time.time()
+
     def _on_flow_page(self) -> bool:
         try:
             return "labs.google" in (self._page.url or "")
@@ -712,6 +747,8 @@ class SessionKeeper:
     def _should_park(self) -> bool:
         """True if the tab is on Flow, idle past IDLE_PARK_SEC, and can be parked."""
         if IDLE_PARK_SEC <= 0 or self._parked or not self._browser_alive():
+            return False
+        if self._keep_warm_active():
             return False
         return (time.time() - self._last_use) >= IDLE_PARK_SEC
 
@@ -2836,6 +2873,12 @@ class FlowHttpClient:
 
             if status == 400:
                 log.warning(f"⚠️ Prompt rejected (400): {text[:300]}")
+                if "PUBLIC_ERROR_UNSAFE_GENERATION" in text or "unsafe_generation" in text.lower():
+                    return {
+                        "error": flow_copy.msg("prompt_rejected"),
+                        "error_type": "unsafe_generation",
+                        "failure": "unsafe_generation",
+                    }
                 return {"error": flow_copy.msg("prompt_rejected"), "error_type": "prompt_rejected"}
 
             log.error(f"❌ Неизвестный статус {status}: {text[:300]}")
@@ -3364,7 +3407,7 @@ class FlowHttpClient:
         if gen_status == 403:
             return _submit_meta({
                 "error": "Сервис отклонил запрос видео (403): низкий score/антифрод reCAPTCHA.",
-                "account_risk": "video_recaptcha_403",
+                "account_risk": "unusual_activity" if unusual_403 else "video_recaptcha_403",
                 "had_403": True,
                 "unusual_403": unusual_403,
             })
@@ -3372,6 +3415,20 @@ class FlowHttpClient:
             # TEMP (capture-driven): log the real API error body (no auth headers).
             log.warning("🎬 video %s non-200 status=%s body=%s",
                         endpoint_name, gen_status, gen_text[:300])
+            _not_found = (
+                gen_status == 404
+                and (
+                    "Requested entity was not found" in gen_text
+                    or '"status": "NOT_FOUND"' in gen_text
+                    or '"status":"NOT_FOUND"' in gen_text
+                )
+            )
+            if (is_reference or is_frames) and _not_found:
+                return _submit_meta({
+                    "error": flow_copy.msg("vid_gen_failed"),
+                    "failure": "reference_media_not_found",
+                    "error_type": "reference_media_not_found",
+                })
             return _submit_meta({"error": flow_copy.msg("service_error", status=gen_status)})
 
         try:
@@ -3719,6 +3776,8 @@ def _video_account_health_reason(account_id: str | None, model_id: str, min_cred
         return "missing_account"
     if not account_pool.is_reference_usable(account_id):
         return "account_unavailable"
+    if not account_pool.is_video_capable(account_id):
+        return "account_unavailable"
     score = (_video_scores_for_model(model_id, min_credits).get(account_id) or {})
     if score.get("proxy_failed"):
         return "proxy_check_failed"
@@ -3727,12 +3786,19 @@ def _video_account_health_reason(account_id: str | None, model_id: str, min_cred
     return None
 
 
-def _account_for_video(user_id: int, *, model_id: str = "omni-flash-4s", min_credits: int = 0) -> str | None:
+def _account_for_video(
+    user_id: int,
+    *,
+    model_id: str = "omni-flash-4s",
+    min_credits: int = 0,
+    exclude: set[str] | None = None,
+) -> str | None:
     """Аккаунт для видео-джобы — только среди video_capable, None — нет доступных."""
     return account_pool.pick_for_video(
         user_id,
         model_family=_video_family_for_model(model_id),
         health_scores=_video_scores_for_model(model_id, min_credits),
+        exclude=exclude,
     )
 
 
@@ -7706,11 +7772,13 @@ async def _generate_and_send(
     surcharge = image_model_extra(image_model) * max(1, num_images)
     started = time.monotonic()
     ok = False
+    error_info: dict = {}
     try:
         async with user_slot(user_id, message):
             async with credit_gate(user_id, action, message, num_images, surcharge=surcharge) as charge:
                 ok = await _do_generate_and_send(
-                    message, prompt, num_images, aspect_ratio, user_id, image_model=image_model
+                    message, prompt, num_images, aspect_ratio, user_id,
+                    image_model=image_model, error_info=error_info,
                 )
                 charge.ok = ok
     except RateLimited:
@@ -7729,7 +7797,10 @@ async def _generate_and_send(
         if action == "gen":
             metrics.log_event("wizard_completed", user_id=user_id, source=action)
             metrics.save_prompt_history(user_id, prompt)
-    _log_image_job(user_id, action, image_model, started, ok=ok, charged=charged)
+    _log_image_job(
+        user_id, action, image_model, started, ok=ok, charged=charged,
+        error=error_info.get("error_type"),
+    )
 
 
 def _ms_since(started: float) -> int:
@@ -7765,6 +7836,7 @@ async def _do_generate_and_send(
     aspect_ratio: str,
     user_id: int,
     image_model: str = DEFAULT_IMAGE_MODEL,
+    error_info: dict | None = None,
 ) -> bool:
     status_msg = await message.answer(flow_copy.msg("generating"))
 
@@ -7803,6 +7875,15 @@ async def _do_generate_and_send(
     project_id: str | None = None
     result: dict = {}
     _uname = _username(message)
+
+    def _remember_error(value: str | None = None, data: dict | None = None) -> None:
+        if error_info is None:
+            return
+        reason = value
+        if not reason and isinstance(data, dict):
+            reason = data.get("error_type") or data.get("failure") or data.get("account_risk")
+        if reason:
+            error_info["error_type"] = str(reason)
 
     try:
         for attempt in range(2):
@@ -7852,6 +7933,7 @@ async def _do_generate_and_send(
                     if attempt == 0:
                         _log_failover(acc_id, "timeout")
                         continue  # releases image_slot, then picks next account
+                    _remember_error("timeout")
                     await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
                     return False
                 except Exception:
@@ -7865,11 +7947,13 @@ async def _do_generate_and_send(
                     if attempt == 0:
                         _log_failover(acc_id, "exception")
                         continue  # releases image_slot, then picks next account
+                    _remember_error("exception")
                     await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
                     return False
 
                 if "error" in result:
-                    if result.get("error_type") == "prompt_rejected":
+                    if result.get("error_type") in {"prompt_rejected", "unsafe_generation"}:
+                        _remember_error(data=result)
                         # 400 — проблема запроса, не аккаунта: не трогаем health, не фейловеримся
                         await status_msg.edit_text(
                             f"❌ {html.escape(str(result['error'])[:300])}",
@@ -7890,10 +7974,12 @@ async def _do_generate_and_send(
                         f"❌ {html.escape(str(result['error'])[:300])}",
                         reply_markup=_img_retry_kb(),
                     )
+                    _remember_error(data=result)
                     return False
 
             break  # успех (image_slot released by exiting async with)
         else:
+            _remember_error("gen_failed")
             await status_msg.edit_text(flow_copy.msg("gen_failed"), reply_markup=_img_retry_kb())
             return False
 
@@ -7905,6 +7991,7 @@ async def _do_generate_and_send(
                 flow_copy.msg("nothing_returned"),
                 reply_markup=_img_retry_kb(),
             )
+            _remember_error("empty_response")
             return False
 
         account_pool.mark_success(acc_id)
@@ -8128,7 +8215,7 @@ def _mark_video_account_failure(account_id: str | None, result: dict | None = No
     if not account_id:
         return
     risk = (result or {}).get("account_risk")
-    if risk == "video_auth":
+    if risk in {"video_auth", "unusual_activity"}:
         # Auth/bearer — кулдаун сразу (запросы всё равно не пройдут до фикса).
         if account_pool.mark_cooldown(account_id):
             log.warning("Video account %s cooled down after provider account-risk signal", account_id)
@@ -8190,6 +8277,30 @@ async def _download_ref_image_bytes(ref: ImageRef) -> bytes | None:
     return None
 
 
+async def _download_source_image_bytes(source: dict | None) -> bytes | None:
+    source = source if isinstance(source, dict) else {}
+    tg_file_id = source.get("_tg_file_id")
+    if isinstance(tg_file_id, str) and tg_file_id:
+        try:
+            buf = await bot.download(tg_file_id)
+            return buf.read() if hasattr(buf, "read") else bytes(buf)
+        except Exception:
+            log.exception("download failover tg source failed")
+
+    url = download_url(source)
+    if not url:
+        return None
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url, timeout=aiohttp.ClientTimeout(total=60)) as r:
+                if r.status == 200:
+                    return await r.read()
+                log.warning("download failover source returned HTTP %s", r.status)
+    except Exception:
+        log.exception("download failover source failed")
+    return None
+
+
 async def _reupload_ref_for_edit_failover(
     ref: ImageRef,
     user_id: int,
@@ -8230,6 +8341,58 @@ async def _reupload_ref_for_edit_failover(
         aspect_ratio=ref.aspect_ratio,
         account_id=acc_id,
     )
+
+
+async def _reupload_refs_for_edit_failover(
+    refs: list[ImageRef],
+    user_id: int,
+    *,
+    current_account_id: str | None,
+) -> list[ImageRef] | None:
+    clean_refs = [ref for ref in refs[:MAX_INGREDIENTS] if isinstance(ref, ImageRef)]
+    if not clean_refs:
+        return None
+    excluded = {
+        ref.account_id for ref in clean_refs
+        if isinstance(ref.account_id, str) and ref.account_id
+    }
+    if current_account_id:
+        excluded.add(current_account_id)
+    acc_id = _account_for_image(
+        user_id, prefer_image_only=True, exclude=excluded or None,
+    )
+    if not acc_id or acc_id in excluded:
+        return None
+
+    project_id = await ensure_user_project(user_id, account_id=acc_id)
+    out: list[ImageRef] = []
+    for idx, ref in enumerate(clean_refs, 1):
+        data = await _download_ref_image_bytes(ref)
+        if not data:
+            return None
+        try:
+            source = await _keeper_for_acc(acc_id).upload_image(
+                data, filename=f"failover_{user_id}_{idx}.png", project_id=project_id,
+            )
+        except Exception:
+            log.exception("failover upload_image failed")
+            return None
+        if not source or not source.get("mediaId"):
+            return None
+        source.setdefault("_project_id", project_id)
+        source.setdefault("_account_id", acc_id)
+        if isinstance(ref.source, dict) and ref.source.get("_tg_file_id"):
+            source.setdefault("_tg_file_id", ref.source["_tg_file_id"])
+        upload_project = source.pop("_project_id", None) or project_id
+        out.append(ImageRef(
+            user_id=user_id,
+            project_id=upload_project,
+            source=source,
+            prompt=ref.prompt,
+            aspect_ratio=ref.aspect_ratio,
+            account_id=acc_id,
+        ))
+    return out
 
 
 def _build_image_inputs_for_refs(refs: list[ImageRef], capture: dict | None) -> list[dict]:
@@ -8374,16 +8537,14 @@ async def _do_edit_and_send(
     if "error" in result:
         if _is_rate_limit_error(result):
             _mark_image_account_failure(ref.account_id, result)
-            if source_refs and len(source_refs) > 1:
-                await status_msg.edit_text(flow_copy.msg("image_edit_rate_limited"))
-                return False
             log.info("image_edit failover: аккаунт %s ушёл в кулдаун, пробую другой", ref.account_id)
-            failover_ref = await _reupload_ref_for_edit_failover(
-                ref, user_id, current_account_id=ref.account_id,
+            failover_refs = await _reupload_refs_for_edit_failover(
+                source_refs or [ref], user_id, current_account_id=ref.account_id,
             )
+            failover_ref = failover_refs[0] if failover_refs else None
             failover_inputs = (
-                build_image_inputs(failover_ref.source, load_edit_capture(EDIT_CAPTURE_FILE))
-                if failover_ref else []
+                _build_image_inputs_for_refs(failover_refs, load_edit_capture(EDIT_CAPTURE_FILE))
+                if failover_refs else []
             )
             if failover_ref and failover_inputs:
                 try:
@@ -11394,11 +11555,10 @@ async def _reupload_reference_source(
     """Re-upload a reference photo to another account from its stored Telegram
     file id. Returns the new source dict (with _account_id/_project_id) or None."""
     tg_file_id = src.get("_tg_file_id") if isinstance(src, dict) else None
-    if not tg_file_id:
+    data = await _download_source_image_bytes(src)
+    if not data:
         return None
     try:
-        buf = await bot.download(tg_file_id)
-        data = buf.read() if hasattr(buf, "read") else bytes(buf)
         new_src = await _keeper_for_acc(acc_id).upload_image(
             data, filename=f"tg_{user_id}.png", project_id=project_id
         )
@@ -11407,33 +11567,51 @@ async def _reupload_reference_source(
         return None
     if not new_src or not new_src.get("mediaId"):
         return None
-    new_src.setdefault("_tg_file_id", tg_file_id)
+    if tg_file_id:
+        new_src.setdefault("_tg_file_id", tg_file_id)
     new_src.setdefault("_project_id", project_id)
     new_src.setdefault("_account_id", acc_id)
     return new_src
 
 
 async def _ensure_reference_on_healthy_account(
-    st: dict, vmode: str, *, user_id: int, model_id: str, min_credits: int
+    st: dict,
+    vmode: str,
+    *,
+    user_id: int,
+    model_id: str,
+    min_credits: int,
+    exclude: set[str] | None = None,
+    force_reupload: bool = False,
 ) -> str | None:
     """Pick a healthy account that holds the reference photo(s), re-uploading
     them transparently if the bound account isn't ready. Seamless: the user is
     never told that an account was unavailable. Returns None only if the whole
     pool is unusable for video."""
     sources = _video_reference_sources(st, vmode)
+    excluded = set(exclude or set())
     if not sources:
-        return _account_for_video(user_id, model_id=model_id, min_credits=min_credits)
+        return _account_for_video(
+            user_id, model_id=model_id, min_credits=min_credits, exclude=excluded
+        )
 
     bound = _video_reference_account_id(st, vmode)
-    if bound and not _video_account_health_reason(bound, model_id, min_credits):
+    if (
+        bound
+        and not force_reupload
+        and bound not in excluded
+        and not _video_account_health_reason(bound, model_id, min_credits)
+    ):
         return bound  # bound account is healthy — use the existing upload
 
-    target = _account_for_video(user_id, model_id=model_id, min_credits=min_credits)
+    target = _account_for_video(
+        user_id, model_id=model_id, min_credits=min_credits, exclude=excluded
+    )
     if target is None:
         # Whole pool unusable. Fall back to the bound account if it at least
         # has usable media there (better to try than to refuse).
-        return bound
-    if target == bound:
+        return None if force_reupload else bound
+    if target == bound and not force_reupload:
         return target
 
     project_id = await ensure_user_project(user_id, account_id=target)
@@ -11445,7 +11623,7 @@ async def _ensure_reference_on_healthy_account(
         if not new_src:
             # Can't move this photo (no file id / upload failed). Keep the bound
             # account if any — generation may still work there.
-            return bound or target
+            return None if force_reupload else (bound or target)
         reuploaded.append(new_src)
 
     if vmode == "ingredients":
@@ -11742,23 +11920,48 @@ async def _do_video_generate_and_send(
                     "🎬 gen failed: mode=%s model=%s aspect=%s err=%s",
                     vmode, model_id, aspect, str(result.get("error"))[:300],
                 )
-                _mark_video_account_failure(acc_id, result)
-                # Прозрачный фейловер на другой аккаунт для text-to-video (403/auth риски).
-                # Ingredients/frames используют account-bound media — фейловер там невозможен.
+                if _content_fail != "reference_media_not_found":
+                    _mark_video_account_failure(acc_id, result)
+                # Silent failover: retry account risks on another account; for
+                # reference video, re-upload the user's media before retrying.
                 _failover_risk = (result or {}).get("account_risk")
-                if (
-                    _failover_risk in {"video_auth", "video_recaptcha_403"}
-                    and vmode == "text"
-                    and video_operation == "generate"
-                    and not source_video
-                ):
-                    failover_acc = _account_for_video(user_id, model_id=model_id, min_credits=single_price)
-                    if failover_acc and failover_acc != acc_id:
-                        log.info("🔄 video failover: %s → %s", acc_id, failover_acc)
-                        acc_id = failover_acc
-                        video_project_id = await ensure_user_project(
-                            user_id, account_id=acc_id
+                failover_reasons = {"video_auth", "video_recaptcha_403", "unusual_activity"}
+                can_failover = video_operation == "generate" and not source_video
+                reference_failover = has_reference and (
+                    _content_fail == "reference_media_not_found"
+                    or _failover_risk in failover_reasons
+                )
+                text_failover = vmode == "text" and _failover_risk in failover_reasons
+                if can_failover and (text_failover or reference_failover):
+                    failed_acc = acc_id
+                    if reference_failover:
+                        failover_acc = await _ensure_reference_on_healthy_account(
+                            st,
+                            vmode,
+                            user_id=user_id,
+                            model_id=model_id,
+                            min_credits=single_price,
+                            exclude={failed_acc},
+                            force_reupload=True,
                         )
+                    else:
+                        failover_acc = _account_for_video(
+                            user_id,
+                            model_id=model_id,
+                            min_credits=single_price,
+                            exclude={failed_acc},
+                        )
+                    if failover_acc and failover_acc != failed_acc:
+                        log.info("🔄 video failover: %s → %s", failed_acc, failover_acc)
+                        acc_id = failover_acc
+                        video_project_id = (
+                            _video_reference_project_id(st, vmode)
+                            if reference_failover else None
+                        )
+                        if not video_project_id:
+                            video_project_id = await ensure_user_project(
+                                user_id, account_id=acc_id
+                            )
                         await update_status("⏳ Отправляю запрос на генерацию видео…")
                         # Acquire a fresh slot on the failover account.
                         async with account_pool.video_slot(acc_id):
@@ -11767,9 +11970,9 @@ async def _do_video_generate_and_send(
                                 model_key=model_key,
                                 aspect=aspect,
                                 project_id=video_project_id,
-                                reference_sources=None,
-                                start_source=None,
-                                end_source=None,
+                                reference_sources=st.get("ving_photos") if vmode == "ingredients" else None,
+                                start_source=st.get("vfrm_start") if vmode == "frames" else None,
+                                end_source=st.get("vfrm_end") if vmode == "frames" else None,
                                 operation=video_operation,
                                 source_media_id=None,
                                 source_workflow_id=None,
@@ -11784,9 +11987,16 @@ async def _do_video_generate_and_send(
                             pass
                         else:
                             log.warning("🎬 video failover also failed: %s", result.get("error"))
-                            _mark_video_account_failure(acc_id, result)
+                            if (result or {}).get("failure") != "reference_media_not_found":
+                                _mark_video_account_failure(acc_id, result)
                 if "error" in result:
-                    await _fail_retry(i)
+                    final_type = (
+                        (result or {}).get("error_type")
+                        or (result or {}).get("failure")
+                        or (result or {}).get("account_risk")
+                        or "video_gen_failed"
+                    )
+                    await _fail_retry(i, error_type=final_type)
                     return
 
             media_id = result["media_id"]
@@ -13730,6 +13940,89 @@ async def handle_plain_text(message: types.Message):
 # ТОЧКА ВХОДА
 # ───────────────────────────────────────────
 
+_keep_warm_cursor: dict[str, int] = {"image": 0, "video": 0}
+
+
+def _pick_keep_warm_accounts(
+    candidates: list[str],
+    role: str,
+    count: int,
+    *,
+    avoid: set[str] | None = None,
+) -> list[str]:
+    if count <= 0 or not candidates:
+        return []
+    avoid_set = set(avoid or set())
+    pool = [aid for aid in candidates if aid not in avoid_set]
+    if not pool:
+        pool = list(candidates)
+    if not pool:
+        return []
+    start = _keep_warm_cursor.get(role, 0) % len(pool)
+    ordered = pool[start:] + pool[:start]
+    picked = ordered[: min(count, len(ordered))]
+    _keep_warm_cursor[role] = _keep_warm_cursor.get(role, 0) + len(picked)
+    return picked
+
+
+def _keep_warm_image_candidates() -> list[str]:
+    available = [
+        aid for aid in account_pool.account_ids()
+        if account_pool.is_available(aid)
+    ]
+    image_only = [
+        aid for aid in available
+        if account_pool.is_image_only(aid)
+    ]
+    return image_only or available
+
+
+def _keep_warm_video_candidates() -> list[str]:
+    return [
+        aid for aid in account_pool.account_ids()
+        if account_pool.is_video_capable(aid)
+    ]
+
+
+async def _account_keep_warm_loop() -> None:
+    if KEEP_WARM_IMAGE_ACCOUNTS <= 0 and KEEP_WARM_VIDEO_ACCOUNTS <= 0:
+        return
+    await asyncio.sleep(5)
+    while True:
+        try:
+            selected: list[tuple[str, str]] = []
+            video_accounts = _pick_keep_warm_accounts(
+                _keep_warm_video_candidates(),
+                "video",
+                KEEP_WARM_VIDEO_ACCOUNTS,
+            )
+            selected.extend(("video", aid) for aid in video_accounts)
+            image_accounts = _pick_keep_warm_accounts(
+                _keep_warm_image_candidates(),
+                "image",
+                KEEP_WARM_IMAGE_ACCOUNTS,
+                avoid={aid for _, aid in selected},
+            )
+            selected.extend(("image", aid) for aid in image_accounts)
+
+            tasks = []
+            activated: list[str] = []
+            for role, acc_id in selected:
+                kp = keepers.get(acc_id)
+                if kp is None:
+                    continue
+                kp.keep_warm_for(KEEP_WARM_HOLD_SEC, role)
+                tasks.append(kp.get_session())
+                activated.append(f"{role}:{acc_id}")
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+                log.info("🔥 keep-warm active: %s", ", ".join(activated))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("_account_keep_warm_loop iteration failed", exc_info=True)
+        await asyncio.sleep(KEEP_WARM_ROTATE_SEC)
+
 
 def _install_shutdown_exception_filter() -> None:
     loop = asyncio.get_running_loop()
@@ -13763,6 +14056,7 @@ async def _main_impl():
 
     robokassa_runner = None
     warmup_tasks: list[asyncio.Task] = []
+    keep_warm_task: asyncio.Task | None = None
     try:
         _startup_set_phase("web_starting")
         try:
@@ -13875,6 +14169,7 @@ async def _main_impl():
         asyncio.create_task(_daily_digest_loop())
         if not IS_SELLER:
             asyncio.create_task(_video_pool_health_loop())
+            keep_warm_task = asyncio.create_task(_account_keep_warm_loop())
         startup_state["polling"] = True
         _startup_set_phase("polling")
         await dp.start_polling(bot)
@@ -13887,6 +14182,9 @@ async def _main_impl():
                 task.cancel()
         if warmup_tasks:
             await asyncio.gather(*warmup_tasks, return_exceptions=True)
+        if keep_warm_task is not None and not keep_warm_task.done():
+            keep_warm_task.cancel()
+            await asyncio.gather(keep_warm_task, return_exceptions=True)
         if robokassa_runner is not None:
             try:
                 await robokassa_runner.cleanup()

@@ -239,6 +239,13 @@ class AccountPoolTests(unittest.TestCase):
 
         self.assertEqual(picked, a2)
 
+    def test_video_picker_excludes_requested_accounts(self) -> None:
+        pool = self._pool(2)
+        a1, a2 = pool.account_ids()
+
+        self.assertEqual(pool.pick_for_video(42, exclude={a1}), a2)
+        self.assertIsNone(pool.pick_for_video(42, exclude={a1, a2}))
+
     def test_runtime_ready_blocks_warming_accounts(self) -> None:
         pool = self._pool(2)
         a1, a2 = pool.account_ids()
@@ -345,14 +352,14 @@ class BotPoolWiringTests(unittest.TestCase):
         )
         # Image: роутинг по аккаунту + health-отметки.
         start = self.source.index("async def _do_generate_and_send")
-        block = self.source[start:start + 7000]
+        block = self.source[start:self.source.index("async def _edit_and_send", start)]
         self.assertIn("acc_id = _account_for_image(user_id", block)  # may have exclude= kwarg
         self.assertIn('flow_copy.msg("accounts_unavailable")', block)
         self.assertIn("account_pool.mark_failure(acc_id)", block)
         self.assertIn("account_pool.mark_success(acc_id)", block)
         # Video: правки/extend остаются на аккаунте исходного ролика.
         vstart = self.source.index("async def _do_video_generate_and_send")
-        vblock = self.source[vstart:vstart + 13000]
+        vblock = self.source[vstart:self.source.index("async def _video_download", vstart)]
         self.assertIn("if source_video and source_video.account_id:", vblock)
         self.assertIn('flow_copy.msg("accounts_unavailable")', vblock)
         self.assertIn("_client_for_acc(acc_id).generate_video(", vblock)
@@ -384,6 +391,16 @@ class BotPoolWiringTests(unittest.TestCase):
         self.assertIn("account_pool.set_runtime_ready(acc_id, False, \"warming\")", block)
         self.assertIn("account_pool.set_disabled(acc_id, True)", block)
         self.assertIn("if ready_count < min_ready:", block)
+
+    def test_keep_warm_loop_is_started_and_cancelled(self) -> None:
+        self.assertIn("async def _account_keep_warm_loop", self.source)
+        self.assertIn("KEEP_WARM_IMAGE_ACCOUNTS", self.source)
+        self.assertIn("KEEP_WARM_VIDEO_ACCOUNTS", self.source)
+        self.assertIn("kp.keep_warm_for(KEEP_WARM_HOLD_SEC, role)", self.source)
+        start = self.source.index("async def _main_impl")
+        block = self.source[start:start + 8500]
+        self.assertIn("keep_warm_task = asyncio.create_task(_account_keep_warm_loop())", block)
+        self.assertIn("keep_warm_task.cancel()", block)
 
     def test_admin_pool_commands(self) -> None:
         self.assertIn('Command("acc_off")', self.source)
