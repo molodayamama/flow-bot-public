@@ -14,6 +14,7 @@ from channels.telegram.routers import image_retry as image_retry_router
 from channels.telegram.routers import ideas_hub as ideas_hub_router
 from channels.telegram.routers import onboarding as onboarding_router
 from channels.telegram.routers import photo_route as photo_route_router
+from channels.telegram.routers import video_upload as video_upload_router
 
 
 def run(coro):
@@ -590,6 +591,88 @@ class AgentRouterTests(unittest.TestCase):
 
     def test_agent_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(agent_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class RecordingVideoUploadDeps:
+    def __init__(self, *, enabled: bool = False) -> None:
+        self.enabled = enabled
+        self.workspaces: dict[int, dict] = {}
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def workspace(self, user_id: int) -> dict:
+        self.calls.append(("workspace", (user_id,), {}))
+        return self.workspaces.setdefault(user_id, {})
+
+    def upload_video_edit_enabled(self) -> bool:
+        self.calls.append(("upload_video_edit_enabled", (), {}))
+        return self.enabled
+
+    def vid_clear(self, user_id: int) -> None:
+        self.calls.append(("vid_clear", (user_id,), {}))
+        self.workspaces.setdefault(user_id, {}).clear()
+
+    async def edit_or_answer(self, *args, **kwargs):
+        self.calls.append(("edit_or_answer", args, kwargs))
+
+
+def _video_upload_deps(
+    *, enabled: bool = False,
+) -> tuple[video_upload_router.VideoUploadDeps, RecordingVideoUploadDeps]:
+    rec = RecordingVideoUploadDeps(enabled=enabled)
+    deps = video_upload_router.VideoUploadDeps(
+        workspace=rec.workspace,
+        upload_video_edit_enabled=rec.upload_video_edit_enabled,
+        vid_clear=rec.vid_clear,
+        edit_or_answer=rec.edit_or_answer,
+    )
+    return deps, rec
+
+
+class VideoUploadRouterTests(unittest.TestCase):
+    def test_creates_vu_callback_router(self) -> None:
+        deps, _ = _video_upload_deps()
+        router = video_upload_router.create_router(deps)
+        self.assertIsInstance(router, Router)
+        self.assertEqual(router.name, "tg-video-upload")
+        self.assertEqual(len(router.callback_query.handlers), 1)
+        self.assertEqual(router.callback_query.handlers[0].callback.__name__, "on_video_upload_action")
+
+    def test_start_disabled_alerts_without_state_change(self) -> None:
+        deps, rec = _video_upload_deps(enabled=False)
+        handler = video_upload_router.create_router(deps).callback_query.handlers[0].callback
+        callback = FakeCallback("vu:start")
+        run(handler(callback))
+        self.assertEqual(callback.answers[-1][1], {"show_alert": True})
+        self.assertNotIn("vmode", rec.workspaces[42])
+        self.assertFalse(any(c[0] == "edit_or_answer" for c in rec.calls))
+
+    def test_start_enabled_clears_video_state_and_asks_for_upload(self) -> None:
+        deps, rec = _video_upload_deps(enabled=True)
+        rec.workspaces[42] = {"old": "value"}
+        handler = video_upload_router.create_router(deps).callback_query.handlers[0].callback
+        callback = FakeCallback("vu:start")
+        run(handler(callback))
+        self.assertIn(("vid_clear", (42,), {}), rec.calls)
+        self.assertEqual(rec.workspaces[42]["vmode"], "edit")
+        self.assertEqual(rec.workspaces[42]["vawait"], "vu_video")
+        self.assertEqual(rec.calls[-1][0], "edit_or_answer")
+        self.assertTrue(callback.answers)
+
+    def test_unknown_video_upload_callback_is_acknowledged(self) -> None:
+        deps, _ = _video_upload_deps(enabled=True)
+        handler = video_upload_router.create_router(deps).callback_query.handlers[0].callback
+        callback = FakeCallback("vu:unknown")
+        run(handler(callback))
+        self.assertTrue(callback.answers)
+
+    def test_video_upload_deps_dataclass_is_frozen(self) -> None:
+        deps, _ = _video_upload_deps()
+        with self.assertRaises(Exception):
+            deps.workspace = None  # type: ignore[misc]
+
+    def test_video_upload_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(video_upload_router)
         self.assertNotIn("flow_bot", src)
 
 

@@ -322,6 +322,7 @@ from channels.telegram.routers import image_retry as tg_image_retry_router
 from channels.telegram.routers import ideas_hub as tg_ideas_hub_router
 from channels.telegram.routers import ideas_flow as tg_ideas_flow_router
 from channels.telegram.routers import agent as tg_agent_router
+from channels.telegram.routers import video_upload as tg_video_upload_router
 from channels.telegram.routers import fallback as tg_fallback_router
 
 from referrals.service import ReferralService
@@ -5755,31 +5756,6 @@ async def _agent_pick(callback: types.CallbackQuery, *, user_id: int, idx_str: s
     await rerender(callback.message, user_id=user_id, edit=True)
 
 
-@dp.callback_query(F.data.startswith("vu:"))
-async def on_video_upload_action(callback: types.CallbackQuery):
-    """«Изменить своё видео»: загрузка ролика и правка промптом (Extend запрещён)."""
-    user_id = callback.from_user.id
-    data = callback.data or ""
-    msg = callback.message
-    st = _ws(user_id)
-    if data == "vu:start":
-        if not _cfg.UPLOAD_VIDEO_EDIT_ENABLED:
-            # Фича временно выключена — гасим даже устаревшие кнопки.
-            await callback.answer(flow_copy.msg("vid_upload_disabled"), show_alert=True)
-            return
-        await callback.answer()
-        _vid_clear(user_id)
-        st["vmode"] = "edit"
-        st["vawait"] = "vu_video"
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [_menu_button("vid_back:fam", "v:back:fam")],
-            [_menu_button("cancel", "v:cancel")],
-        ])
-        await _edit_or_answer(msg, flow_copy.msg("vid_upload_ask"), kb)
-    else:
-        await callback.answer()
-
-
 @dp.message(F.video | F.document)
 async def handle_video_upload(message: types.Message):
     """Приём пользовательского видео для режима «Изменить своё видео»."""
@@ -9155,6 +9131,16 @@ dp.include_router(
             video_edit=_vid_edit,
             edit_or_answer=_edit_or_answer,
             agent_edit_instruction=_agent_edit_instruction,
+        )
+    )
+)
+dp.include_router(
+    tg_video_upload_router.create_router(
+        tg_video_upload_router.VideoUploadDeps(
+            workspace=_ws,
+            upload_video_edit_enabled=lambda: _cfg.UPLOAD_VIDEO_EDIT_ENABLED,
+            vid_clear=_vid_clear,
+            edit_or_answer=_edit_or_answer,
         )
     )
 )

@@ -448,6 +448,9 @@ class BotMenuWiringTests(unittest.TestCase):
         self.ideas_flow_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "ideas_flow.py"
         ).read_text(encoding="utf-8")
+        self.video_upload_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "video_upload.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         for needle in (
@@ -1487,7 +1490,7 @@ class BotMenuWiringTests(unittest.TestCase):
         _settings_src = (PROJECT_ROOT / "config" / "settings.py").read_text(encoding="utf-8")
         self.assertIn("UPLOAD_VIDEO_EDIT_ENABLED: bool = False", _settings_src)
         self.assertIn("if _cfg.UPLOAD_VIDEO_EDIT_ENABLED else []", self.kb_source)   # кнопка в семействе
-        self.assertIn("if not _cfg.UPLOAD_VIDEO_EDIT_ENABLED:", self.source)      # колбэк vu:start
+        self.assertIn("if not deps.upload_video_edit_enabled():", self.video_upload_router_source)  # колбэк vu:start
         self.assertIn("vid_upload_disabled", flow_copy.MESSAGES)
         # handle_video_upload игнорирует видео, пока фича выключена.
         self.assertIn(
@@ -1495,8 +1498,8 @@ class BotMenuWiringTests(unittest.TestCase):
             self.source,
         )
         # Реализация (на случай возврата фичи) на месте: колбэк + хендлер + правка.
-        self.assertIn('"vu:start"', self.source)
-        self.assertIn('@dp.callback_query(F.data.startswith("vu:"))', self.source)
+        self.assertIn('"vu:start"', self.video_upload_router_source)
+        self.assertIn('@router.callback_query(F.data.startswith("vu:"))', self.video_upload_router_source)
         self.assertIn("@dp.message(F.video | F.document)", self.source)
         self.assertIn("_account_for_video(user_id)", self.source)
         self.assertIn("_keeper_for_acc(acc_id).upload_video(", self.source)
