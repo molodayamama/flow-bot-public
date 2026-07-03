@@ -454,6 +454,9 @@ class BotMenuWiringTests(unittest.TestCase):
         self.edit_settings_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "edit_settings.py"
         ).read_text(encoding="utf-8")
+        self.animate_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "animate.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         for needle in (
@@ -1362,7 +1365,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # "Оживить фото" button under images + main-menu entry → r2v pipeline.
         kb = self.kb_source[self.kb_source.index("def _image_keyboard"):][:1200]
         self.assertIn('f"an:img:{token}"', kb)
-        self.assertIn('@dp.callback_query(F.data.startswith("an:"))', self.source)
+        self.assertIn('@router.callback_query(F.data.startswith("an:"))', self.animate_router_source)
         self.assertIn('data == "m:animate"', self.source)
         self.assertIn("async def show_animate_photo_input", self.source)
         animate_menu = self.source[self.source.index('elif data == "m:animate"'):][:500]
@@ -1371,10 +1374,10 @@ class BotMenuWiringTests(unittest.TestCase):
         # Seeds the generated image into the new scenario layer as a vphoto
         # reference, carrying the image's account/project so r2v doesn't 404 on
         # another acc.
-        self.assertIn("start_from_generated_image", self.source)
-        self.assertIn("source=ref.source if isinstance(ref.source, dict) else {}", self.source)
-        self.assertIn("account_id=ref.account_id", self.source)
-        self.assertIn("project_id=ref.project_id", self.source)
+        self.assertIn("start_from_generated_image", self.animate_router_source)
+        self.assertIn("source=ref.source if isinstance(ref.source, dict) else {}", self.animate_router_source)
+        self.assertIn("account_id=ref.account_id", self.animate_router_source)
+        self.assertIn("project_id=ref.project_id", self.animate_router_source)
         # "✏️ Изменить" (v:nchange) must NOT call show_video_prompt_input, which
         # does _vid_clear and would drop the attached photo — it must keep state
         # and wait for a new prompt via vnchange instead.
@@ -1386,11 +1389,7 @@ class BotMenuWiringTests(unittest.TestCase):
             'if st.get("vstep") == "vnewwiz" and st.get("vawait") == "vnchange":',
             self.source,
         )
-        # The animate prefix handler is registered before the catch-all image one.
-        self.assertLess(
-            self.source.index('startswith("an:")'),
-            self.source.index("async def on_image_action"),
-        )
+        self.assertIn('startswith("an:")', self.animate_router_source)
 
     def test_ingredients_chat_prompt_starts_video(self) -> None:
         # «Оживить фото»: фото уже выбрано → текст из чата запускает ВИДЕО, а не

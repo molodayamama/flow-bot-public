@@ -322,6 +322,9 @@ class BotPoolWiringTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = (PROJECT_ROOT / "flow_bot.py").read_text(encoding="utf-8")
+        cls.animate_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "animate.py"
+        ).read_text(encoding="utf-8")
 
     def test_pool_globals_built_from_env(self) -> None:
         self.assertIn('FLOW_ACCOUNTS_RAW = os.getenv("FLOW_ACCOUNTS", "")', self.source)
@@ -381,8 +384,8 @@ class BotPoolWiringTests(unittest.TestCase):
         # «Оживить фото» под сгенерированной картинкой должно унести r2v на тот же
         # аккаунт/проект, где живёт медиа; иначе reference media → 404 на другом
         # аккаунте пула. Источник обогащается _account_id/_project_id из ImageRef.
-        start = self.source.index('if data.startswith("an:img:")')
-        block = self.source[start:start + 1200]
+        start = self.animate_router_source.index('if data.startswith("an:img:")')
+        block = self.animate_router_source[start:start + 1200]
         self.assertIn("start_from_generated_image", block)
         self.assertIn("source=ref.source if isinstance(ref.source, dict) else {}", block)
         self.assertIn("account_id=ref.account_id", block)

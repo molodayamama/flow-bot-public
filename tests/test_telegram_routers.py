@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from aiogram import Router
 
+from channels.telegram.routers import animate as animate_router
 from channels.telegram.routers import agent as agent_router
 from channels.telegram.routers import commands as commands_router
 from channels.telegram.routers import edit_settings as edit_settings_router
@@ -269,6 +270,91 @@ class OnboardingRouterTests(unittest.TestCase):
 
     def test_onboarding_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(onboarding_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class FakeAnimateScenario:
+    def __init__(self, rec) -> None:
+        self.rec = rec
+
+    async def start_from_generated_image(self, *args, **kwargs):
+        self.rec.calls.append(("start_from_generated_image", args, kwargs))
+
+
+class RecordingAnimateDeps:
+    def __init__(self) -> None:
+        self.registry: dict[str, object] = {}
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def animate_photo_scenario(self):
+        self.calls.append(("animate_photo_scenario", (), {}))
+        return FakeAnimateScenario(self)
+
+    def context_factory(self, message, user_id: int):
+        self.calls.append(("context_factory", (message, user_id), {}))
+        return {"message": message, "user_id": user_id}
+
+
+def _animate_deps() -> tuple[animate_router.AnimateDeps, RecordingAnimateDeps]:
+    rec = RecordingAnimateDeps()
+    deps = animate_router.AnimateDeps(
+        image_registry=rec.registry,
+        animate_photo_scenario=rec.animate_photo_scenario,
+        context_factory=rec.context_factory,
+    )
+    return deps, rec
+
+
+class AnimateRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _animate_deps()
+        self.router = animate_router.create_router(self.deps)
+        self.handler = self.router.callback_query.handlers[0].callback
+
+    def test_creates_an_callback_router(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        self.assertEqual(self.router.name, "tg-animate")
+        self.assertEqual(len(self.router.callback_query.handlers), 1)
+        self.assertEqual(self.router.callback_query.handlers[0].callback.__name__, "on_animate_action")
+
+    def test_generated_image_starts_animate_scenario(self) -> None:
+        self.rec.registry["tok"] = SimpleNamespace(
+            user_id=42,
+            source={"mediaId": "m1"},
+            account_id="acc1",
+            project_id="proj1",
+        )
+        callback = FakeCallback("an:img:tok")
+        run(self.handler(callback))
+        self.assertTrue(callback.answers)
+        self.assertEqual([c[0] for c in self.rec.calls], [
+            "animate_photo_scenario",
+            "context_factory",
+            "start_from_generated_image",
+        ])
+        start = self.rec.calls[-1]
+        self.assertEqual(start[2]["source"], {"mediaId": "m1"})
+        self.assertEqual(start[2]["account_id"], "acc1")
+        self.assertEqual(start[2]["project_id"], "proj1")
+
+    def test_generated_image_wrong_owner_expires(self) -> None:
+        self.rec.registry["tok"] = SimpleNamespace(user_id=7, source={}, account_id=None, project_id=None)
+        callback = FakeCallback("an:img:tok")
+        run(self.handler(callback))
+        self.assertEqual(callback.answers[-1][1], {"show_alert": True})
+        self.assertFalse(self.rec.calls)
+
+    def test_unknown_animate_callback_is_acknowledged(self) -> None:
+        callback = FakeCallback("an:unknown")
+        run(self.handler(callback))
+        self.assertTrue(callback.answers)
+
+    def test_animate_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.image_registry = None  # type: ignore[misc]
+
+    def test_animate_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(animate_router)
         self.assertNotIn("flow_bot", src)
 
 

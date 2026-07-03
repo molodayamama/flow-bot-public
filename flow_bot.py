@@ -324,6 +324,7 @@ from channels.telegram.routers import ideas_flow as tg_ideas_flow_router
 from channels.telegram.routers import agent as tg_agent_router
 from channels.telegram.routers import video_upload as tg_video_upload_router
 from channels.telegram.routers import edit_settings as tg_edit_settings_router
+from channels.telegram.routers import animate as tg_animate_router
 from channels.telegram.routers import fallback as tg_fallback_router
 
 from referrals.service import ReferralService
@@ -5366,29 +5367,6 @@ async def _prepare_photo_video_from_file_id(
     return True
 
 
-@dp.callback_query(F.data.startswith("an:"))
-async def on_animate_action(callback: types.CallbackQuery):
-    """«Оживить фото»: взять сгенерированную картинку как референс для нового video wizard."""
-    data = callback.data or ""
-    user_id = callback.from_user.id
-    msg = callback.message
-    if data.startswith("an:img:"):
-        token = data.split(":", 2)[2]
-        ref = image_registry.get(token)
-        if ref is None or ref.user_id != user_id:
-            await callback.answer(flow_copy.msg("expired"), show_alert=True)
-            return
-        await callback.answer()
-        await _animate_photo_scenario().start_from_generated_image(
-            _TelegramAnimatePhotoContext(msg, user_id),
-            source=ref.source if isinstance(ref.source, dict) else {},
-            account_id=ref.account_id,
-            project_id=ref.project_id,
-        )
-        return
-    await callback.answer()
-
-
 # ── «Идеи и шаблоны»: готовые шаблоны (tp:) + подбор по шагам (gp:) ────
 
 _IDEAS_PHOTO_KEYS = ("ideas_photo_file_id", "ideas_photo_caption", "ideas_extra_prompt")
@@ -9076,6 +9054,15 @@ dp.include_router(
             edit_settings_kb=edit_settings_kb,
             default_fmt=DEFAULT_FMT,
             default_image_model=DEFAULT_IMAGE_MODEL,
+        )
+    )
+)
+dp.include_router(
+    tg_animate_router.create_router(
+        tg_animate_router.AnimateDeps(
+            image_registry=image_registry,
+            animate_photo_scenario=_animate_photo_scenario,
+            context_factory=lambda msg, user_id: _TelegramAnimatePhotoContext(msg, user_id),
         )
     )
 )
