@@ -10,6 +10,7 @@ from aiogram import Router
 
 from channels.telegram.routers import animate as animate_router
 from channels.telegram.routers import agent as agent_router
+from channels.telegram.routers import admin_accounts as admin_accounts_router
 from channels.telegram.routers import commands as commands_router
 from channels.telegram.routers import edit_settings as edit_settings_router
 from channels.telegram.routers import generation_commands as generation_commands_router
@@ -2039,6 +2040,142 @@ class GenerationCommandsRouterTests(unittest.TestCase):
 
     def test_generation_commands_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(generation_commands_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class FakeAccountPool:
+    def __init__(self, known: set[str] | None = None) -> None:
+        self.known = known or {"acc1"}
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def set_disabled(self, acc_id: str, value: bool) -> bool:
+        self.calls.append(("set_disabled", (acc_id, value), {}))
+        return acc_id in self.known
+
+    def set_video_allowed(self, acc_id: str, value: bool) -> bool:
+        self.calls.append(("set_video_allowed", (acc_id, value), {}))
+        return acc_id in self.known
+
+    def account_ids(self):
+        return sorted(self.known)
+
+
+class RecordingAdminAccountsDeps:
+    def __init__(self, *, admin: bool = True, owner: bool = True) -> None:
+        self.admin = admin
+        self.owner = owner
+        self.account_pool = FakeAccountPool()
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def admin_only(self, message) -> bool:
+        self.calls.append(("admin_only", (message,), {}))
+        return self.admin
+
+    def owner_only(self, message) -> bool:
+        self.calls.append(("owner_only", (message,), {}))
+        return self.owner
+
+    def log_event(self, *args, **kwargs):
+        self.calls.append(("log_event", args, kwargs))
+
+    def render_admin_help(self) -> str:
+        self.calls.append(("render_admin_help", (), {}))
+        return "help text"
+
+
+class FakeMessage:
+    def __init__(self, text: str, user_id: int = 7) -> None:
+        self.text = text
+        self.from_user = SimpleNamespace(id=user_id)
+        self.answers: list[tuple[tuple, dict]] = []
+
+    async def answer(self, *args, **kwargs):
+        self.answers.append((args, kwargs))
+
+
+def _admin_accounts_deps(*, admin: bool = True, owner: bool = True) -> tuple[
+    admin_accounts_router.AdminAccountsDeps, RecordingAdminAccountsDeps
+]:
+    rec = RecordingAdminAccountsDeps(admin=admin, owner=owner)
+    deps = admin_accounts_router.AdminAccountsDeps(
+        admin_only=rec.admin_only,
+        owner_only=rec.owner_only,
+        account_pool=rec.account_pool,
+        log_event=rec.log_event,
+        render_admin_help=rec.render_admin_help,
+    )
+    return deps, rec
+
+
+class AdminAccountsRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _admin_accounts_deps()
+        self.router = admin_accounts_router.create_router(self.deps)
+
+    def test_creates_router_with_five_command_handlers(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        handlers = self.router.message.handlers
+        self.assertEqual(len(handlers), 5)
+        self.assertEqual(self.router.callback_query.handlers, [])
+        matched = [_handler_commands(h) for h in handlers]
+        for expected in ({"acc_off"}, {"acc_on"}, {"acc_vid_off"}, {"acc_vid_on"}, {"admin_help"}):
+            self.assertIn(expected, matched)
+
+    def _call(self, command: str, text: str):
+        for handler in self.router.message.handlers:
+            if _handler_commands(handler) == {command}:
+                message = FakeMessage(text)
+                run(handler.callback(message))
+                return message
+        raise AssertionError(f"no handler for {command}")
+
+    def test_non_admin_is_denied_without_pool_mutation(self) -> None:
+        deps, rec = _admin_accounts_deps(admin=False)
+        router = admin_accounts_router.create_router(deps)
+        for handler in router.message.handlers:
+            if _handler_commands(handler) == {"acc_off"}:
+                message = FakeMessage("/acc_off acc1")
+                run(handler.callback(message))
+                break
+        self.assertEqual(rec.account_pool.calls, [])
+        self.assertTrue(message.answers)
+
+    def test_acc_off_disables_known_account_and_logs(self) -> None:
+        message = self._call("acc_off", "/acc_off acc1")
+        self.assertIn(("set_disabled", ("acc1", True), {}), self.rec.account_pool.calls)
+        self.assertEqual(
+            [c[0] for c in self.rec.calls if c[0] == "log_event"],
+            ["log_event"],
+        )
+        self.assertIn("acc1", message.answers[-1][0][0])
+
+    def test_acc_on_unknown_account_lists_known_ids(self) -> None:
+        message = self._call("acc_on", "/acc_on nope")
+        self.assertIn("nope", "".join(str(a) for a in self.rec.account_pool.calls))
+        self.assertIn("acc1", message.answers[-1][0][0])
+
+    def test_admin_help_is_owner_gated(self) -> None:
+        deps, rec = _admin_accounts_deps(owner=False)
+        router = admin_accounts_router.create_router(deps)
+        for handler in router.message.handlers:
+            if _handler_commands(handler) == {"admin_help"}:
+                message = FakeMessage("/admin_help")
+                run(handler.callback(message))
+                break
+        self.assertEqual([c[0] for c in rec.calls if c[0] == "render_admin_help"], [])
+        self.assertTrue(message.answers)
+
+    def test_admin_help_owner_renders_help(self) -> None:
+        message = self._call("admin_help", "/admin_help")
+        self.assertEqual(message.answers[-1][0][0], "help text")
+        self.assertIn(("render_admin_help", (), {}), self.rec.calls)
+
+    def test_admin_accounts_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.account_pool = None  # type: ignore[misc]
+
+    def test_admin_accounts_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(admin_accounts_router)
         self.assertNotIn("flow_bot", src)
 
 

@@ -325,6 +325,11 @@ class BotPoolWiringTests(unittest.TestCase):
         cls.animate_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "animate.py"
         ).read_text(encoding="utf-8")
+        # /acc_off /acc_on /acc_vid_off /acc_vid_on moved to their own router
+        # (Phase 6).
+        cls.admin_accounts_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "admin_accounts.py"
+        ).read_text(encoding="utf-8")
 
     def test_pool_globals_built_from_env(self) -> None:
         self.assertIn('FLOW_ACCOUNTS_RAW = os.getenv("FLOW_ACCOUNTS", "")', self.source)
@@ -405,8 +410,9 @@ class BotPoolWiringTests(unittest.TestCase):
         self.assertIn("if ready_count < min_ready:", block)
 
     def test_admin_pool_commands(self) -> None:
-        self.assertIn('Command("acc_off")', self.source)
-        self.assertIn('Command("acc_on")', self.source)
+        # /acc_off and /acc_on live in the admin_accounts router (Phase 6).
+        self.assertIn('Command("acc_off")', self.admin_accounts_router_source)
+        self.assertIn('Command("acc_on")', self.admin_accounts_router_source)
         self.assertIn("account_pool.status()", self.source)
 
     def test_flow_jobs_log_real_account(self) -> None:

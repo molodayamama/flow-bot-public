@@ -331,6 +331,7 @@ from channels.telegram.routers import animate as tg_animate_router
 from channels.telegram.routers import wizard as tg_wizard_router
 from channels.telegram.routers import video as tg_video_router
 from channels.telegram.routers import generation_commands as tg_generation_commands_router
+from channels.telegram.routers import admin_accounts as tg_admin_accounts_router
 from channels.telegram.routers import fallback as tg_fallback_router
 
 from referrals.service import ReferralService
@@ -2763,85 +2764,6 @@ async def cmd_admin_accounts(message: types.Message):
     await message.answer(text, parse_mode="HTML")
 
 
-@dp.message(Command("acc_off"))
-async def cmd_acc_off(message: types.Message):
-    """Ручное отключение аккаунта пула: /acc_off <id> (admin)."""
-    if not _admin_only(message):
-        await message.answer(flow_copy.msg("admin_denied"))
-        return
-    parts = (message.text or "").split()
-    acc_id = parts[1] if len(parts) > 1 else ""
-    if account_pool.set_disabled(acc_id, True):
-        metrics.log_event("account_disabled", user_id=message.from_user.id,
-                          payload={"account": acc_id})
-        await message.answer(f"⛔ Аккаунт {html.escape(acc_id)} отключён.")
-    else:
-        await message.answer(
-            "Не нашёл такой аккаунт. Известные: " + ", ".join(account_pool.account_ids())
-        )
-
-
-@dp.message(Command("acc_on"))
-async def cmd_acc_on(message: types.Message):
-    """Включить аккаунт пула обратно: /acc_on <id> (admin)."""
-    if not _admin_only(message):
-        await message.answer(flow_copy.msg("admin_denied"))
-        return
-    parts = (message.text or "").split()
-    acc_id = parts[1] if len(parts) > 1 else ""
-    if account_pool.set_disabled(acc_id, False):
-        metrics.log_event("account_enabled", user_id=message.from_user.id,
-                          payload={"account": acc_id})
-        await message.answer(f"✅ Аккаунт {html.escape(acc_id)} включён.")
-    else:
-        await message.answer(
-            "Не нашёл такой аккаунт. Известные: " + ", ".join(account_pool.account_ids())
-        )
-
-
-@dp.message(Command("acc_vid_off"))
-async def cmd_acc_vid_off(message: types.Message):
-    """Запретить видео на аккаунте пула: /acc_vid_off <id> (admin)."""
-    if not _admin_only(message):
-        await message.answer(flow_copy.msg("admin_denied"))
-        return
-    parts = (message.text or "").split()
-    acc_id = parts[1] if len(parts) > 1 else ""
-    if account_pool.set_video_allowed(acc_id, False):
-        metrics.log_event("account_video_disabled", user_id=message.from_user.id,
-                          payload={"account": acc_id})
-        await message.answer(
-            f"🖼 Аккаунт <b>{html.escape(acc_id)}</b>: только картинки. "
-            f"Видео-запросы пойдут на другой аккаунт.",
-            parse_mode="HTML",
-        )
-    else:
-        await message.answer(
-            "Не нашёл такой аккаунт. Известные: " + ", ".join(account_pool.account_ids())
-        )
-
-
-@dp.message(Command("acc_vid_on"))
-async def cmd_acc_vid_on(message: types.Message):
-    """Вернуть видео на аккаунт пула: /acc_vid_on <id> (admin)."""
-    if not _admin_only(message):
-        await message.answer(flow_copy.msg("admin_denied"))
-        return
-    parts = (message.text or "").split()
-    acc_id = parts[1] if len(parts) > 1 else ""
-    if account_pool.set_video_allowed(acc_id, True):
-        metrics.log_event("account_video_enabled", user_id=message.from_user.id,
-                          payload={"account": acc_id})
-        await message.answer(
-            f"🎬 Аккаунт <b>{html.escape(acc_id)}</b>: видео снова разрешено.",
-            parse_mode="HTML",
-        )
-    else:
-        await message.answer(
-            "Не нашёл такой аккаунт. Известные: " + ", ".join(account_pool.account_ids())
-        )
-
-
 @dp.message(Command("admin_refs"))
 async def cmd_admin_refs(message: types.Message):
     if not _admin_only(message):
@@ -3012,15 +2934,6 @@ def _render_admin_help() -> str:
         lines = "\n".join(f"  <code>{cmd}</code> — {desc}" for cmd, desc in rows)
         blocks.append(f"<b>{title}</b>\n{lines}")
     return "\n\n".join(blocks)
-
-
-@dp.message(Command("admin_help"))
-async def cmd_admin_help(message: types.Message):
-    """Справочник команд (синтаксис + описание). Только для OWNER_ID из .env."""
-    if not _owner_only(message):
-        await message.answer(flow_copy.msg("admin_denied"))
-        return
-    await message.answer(_render_admin_help(), parse_mode="HTML")
 
 
 # Метрики: действие → имя события запроса / тип операции для flow_jobs.
@@ -8035,6 +7948,17 @@ dp.include_router(
             show_ideas_root=_show_ideas_root,
             generate_and_send=_generate_and_send,
             mix_and_send=_mix_and_send,
+        )
+    )
+)
+dp.include_router(
+    tg_admin_accounts_router.create_router(
+        tg_admin_accounts_router.AdminAccountsDeps(
+            admin_only=_admin_only,
+            owner_only=_owner_only,
+            account_pool=account_pool,
+            log_event=metrics.log_event,
+            render_admin_help=_render_admin_help,
         )
     )
 )

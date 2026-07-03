@@ -474,6 +474,12 @@ class BotMenuWiringTests(unittest.TestCase):
         self.generation_commands_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "generation_commands.py"
         ).read_text(encoding="utf-8")
+        # /acc_off /acc_on /acc_vid_off /acc_vid_on /admin_help moved to their
+        # own router (Phase 6); _render_admin_help/_HELP_SECTIONS stay in
+        # flow_bot.py and are injected into the router.
+        self.admin_accounts_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "admin_accounts.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         self.assertIn('F.data.startswith("m:")', self.menu_router_source)  # menu router
@@ -1317,13 +1323,14 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_admin_help_is_owner_gated(self) -> None:
         # /admin_help — справочник команд, доступен ТОЛЬКО владельцам (OWNER_ID).
-        self.assertIn('Command("admin_help")', self.source)
+        # The handler itself moved to the admin_accounts router (Phase 6).
+        self.assertIn('Command("admin_help")', self.admin_accounts_router_source)
         self.assertIn("def _owner_only", self.source)
         self.assertIn("message.from_user.id in OWNER_IDS", self.source)
-        start = self.source.index("async def cmd_admin_help")
-        block = self.source[start:start + 400]
-        self.assertIn("if not _owner_only(message):", block)
-        self.assertNotIn("_admin_only(message)", block)  # не путать админ/владелец
+        start = self.admin_accounts_router_source.index("async def cmd_admin_help")
+        block = self.admin_accounts_router_source[start:start + 400]
+        self.assertIn("if not deps.owner_only(message):", block)
+        self.assertNotIn("deps.admin_only(message)", block)  # не путать админ/владелец
         # Справочник перечисляет и пользовательские, и админские команды.
         self.assertIn("_HELP_SECTIONS", self.source)
         for cmd in ("/grant", "/refund", "/admin_channels", "/img", "/admin_help"):
