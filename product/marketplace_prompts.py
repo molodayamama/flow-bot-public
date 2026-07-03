@@ -7,7 +7,7 @@ the constants themselves are a later relocation). No flow_bot import.
 
 from __future__ import annotations
 
-from channels.telegram.keyboards import (
+from product.marketplace import (
     _MP_PLAT_NAMES,
     _mp_platform_format_label,
     _mp_platform_guidance,

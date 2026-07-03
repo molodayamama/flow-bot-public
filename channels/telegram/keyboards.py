@@ -90,27 +90,18 @@ def reply_menu_kb(
 
 
 # --- Marketplace render data + keyboards (Phase 5: moved from flow_bot) ---
+from product.marketplace import (  # seller-domain data (Phase 11)
+    _MP_PLAT_NAMES,
+    _MP_PLATFORM_FMT,
+    _MP_PLATFORM_SIZE,
+    _MP_PLATFORM_GUIDANCE,
+    _MP_NICHES,
+    _mp_platform_fmt,
+    _mp_platform_format_label,
+    _mp_platform_guidance,
+    _mp_niche_guidance,
+)
 
-_MP_PLAT_NAMES = {"wb": "Wildberries", "ozon": "Ozon", "ym": "Яндекс Маркет"}
-
-_MP_PLATFORM_FMT = {"wb": "f34", "ozon": "f34", "ym": "sq"}
-
-_MP_PLATFORM_SIZE = {"wb": "1080x1440", "ozon": "1080x1440", "ym": "1000x1000"}
-
-_MP_PLATFORM_GUIDANCE = {
-    "wb": (
-        "Wildberries: вертикальная 3:4 карточка, товар крупно; "
-        "оставь верхнюю зону под короткий заголовок или выгоду."
-    ),
-    "ozon": (
-        "Ozon: чистая светлая композиция, аккуратный белый или светло-серый фон, "
-        "понятная зона под преимущества без визуального шума."
-    ),
-    "ym": (
-        "Яндекс Маркет: квадратная 1:1 карточка, товар по центру, умеренные подписи; "
-        "важное не прижимать к краям."
-    ),
-}
 
 _MP_JOB_LABELS = {
     "whitebg": "белый фон для каталога",
@@ -119,17 +110,7 @@ _MP_JOB_LABELS = {
     "cover": "обложка / главный слайд",
     "bg": "заменить фон",
 }
-def _mp_platform_fmt(platform: str) -> str:
-    return _MP_PLATFORM_FMT.get(platform, "f34")
 
-def _mp_platform_format_label(platform: str) -> str:
-    fmt = _mp_platform_fmt(platform)
-    name = {"f34": "3:4", "sq": "1:1"}.get(fmt, fmt)
-    size = _MP_PLATFORM_SIZE.get(platform)
-    return f"{name} ({size})" if size else name
-
-def _mp_platform_guidance(platform: str) -> str:
-    return _MP_PLATFORM_GUIDANCE.get(platform, _MP_PLATFORM_GUIDANCE["wb"])
 
 def _mp_jobs_text(platform: str) -> str:
     plat = platform if platform in _MP_PLAT_NAMES else "wb"
@@ -175,35 +156,6 @@ def mp_series_kb(platform: str) -> types.InlineKeyboardMarkup:
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
-_MP_NICHES = {
-    "clothes": (
-        "Одежда",
-        "показать посадку, фактуру ткани, сезонность и размер; уместны модель, flat lay и детали швов",
-    ),
-    "beauty": (
-        "Косметика",
-        "чистый премиальный свет, текстура продукта, оттенок, состав/эффект и аккуратные макро-детали",
-    ),
-    "electronics": (
-        "Электроника",
-        "выделить экран/разъёмы/комплектацию, сценарий использования, масштаб и ощущение надёжности",
-    ),
-    "kids": (
-        "Детские товары",
-        "мягкие светлые сцены, безопасность, возраст, комплектация и доверие для родителей",
-    ),
-    "food": (
-        "Еда",
-        "аппетитный свет, свежесть, упаковка, состав/вкус и аккуратная сервировка без лишнего шума",
-    ),
-}
-
-def _mp_niche_guidance(niche: str | None) -> str:
-    item = _MP_NICHES.get((niche or "").strip())
-    if not item:
-        return ""
-    label, guidance = item
-    return f"{label}: {guidance}"
 
 def _mp_niche_kb() -> types.InlineKeyboardMarkup:
     B = types.InlineKeyboardButton
