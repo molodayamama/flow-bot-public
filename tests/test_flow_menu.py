@@ -485,6 +485,11 @@ class BotMenuWiringTests(unittest.TestCase):
         self.admin_reports_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "admin_reports.py"
         ).read_text(encoding="utf-8")
+        # /promo /addpromo /grant /refund (credit-mutating) moved to their own
+        # router (Phase 6, wave E).
+        self.admin_credits_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "admin_credits.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         self.assertIn('F.data.startswith("m:")', self.menu_router_source)  # menu router
@@ -658,15 +663,19 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('callback_data=f"m:robo:{pid}"', self.kb_source)
 
     def test_admin_grant_restricted(self) -> None:
-        self.assertIn('@dp.message(Command("grant"))', self.source)
-        self.assertIn("async def cmd_grant", self.source)
-        self.assertIn("ADMIN_IDS", self.source)
-        self.assertIn("message.from_user.id not in ADMIN_IDS", self.source)
-        self.assertIn("credit_store.add(target, amount)", self.source)
+        # /grant moved to the admin_credits router (Phase 6); the admin gate
+        # is preserved bit-exact via injected deps.admin_ids.
+        self.assertIn('@router.message(Command("grant"))', self.admin_credits_router_source)
+        self.assertIn("async def cmd_grant", self.admin_credits_router_source)
+        self.assertIn("admin_ids=ADMIN_IDS", self.source)  # wiring injects the real set
+        self.assertIn("message.from_user.id not in deps.admin_ids", self.admin_credits_router_source)
+        self.assertIn("deps.credit_store.add(target, amount)", self.admin_credits_router_source)
 
     def test_status_diagnostics_restricted_to_admins(self) -> None:
+        # cmd_status stays in flow_bot (keeper internals); /promo moved to the
+        # admin_credits router, so the block now ends at the admin-gate defs.
         start = self.source.index('@dp.message(Command("status"))')
-        end = self.source.index('@dp.message(Command("promo"))', start)
+        end = self.source.index("def _admin_only", start)
         block = self.source[start:end]
         self.assertIn("message.from_user.id not in ADMIN_IDS", block)
         self.assertIn('flow_copy.msg("admin_denied")', block)
@@ -2014,7 +2023,12 @@ class BotImportSmokeTests(unittest.TestCase):
             fb = importlib.import_module("flow_bot")
             importlib.reload(fb)
 
-            self.assertGreaterEqual(len(fb.dp.message.handlers), 10)
+            # Message handlers live both on dp and on extracted routers
+            # (Phase 6); count them together, same as callbacks below.
+            message_handler_count = len(fb.dp.message.handlers) + sum(
+                len(router.message.handlers) for router in fb.dp.sub_routers
+            )
+            self.assertGreaterEqual(message_handler_count, 10)
             callback_handler_count = len(fb.dp.callback_query.handlers) + sum(
                 len(router.callback_query.handlers) for router in fb.dp.sub_routers
             )

@@ -11,6 +11,7 @@ from aiogram import Router
 from channels.telegram.routers import animate as animate_router
 from channels.telegram.routers import agent as agent_router
 from channels.telegram.routers import admin_accounts as admin_accounts_router
+from channels.telegram.routers import admin_credits as admin_credits_router
 from channels.telegram.routers import admin_reports as admin_reports_router
 from channels.telegram.routers import commands as commands_router
 from channels.telegram.routers import edit_settings as edit_settings_router
@@ -2402,6 +2403,270 @@ class AdminReportsRouterTests(unittest.TestCase):
 
     def test_admin_reports_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(admin_reports_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class FakeCreditStore:
+    """In-memory credit store recording every mutation."""
+
+    def __init__(self, balances: dict[int, int] | None = None) -> None:
+        self.balances: dict[int, int] = dict(balances or {})
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def add(self, user_id: int, amount: int) -> int:
+        self.calls.append(("add", (user_id, amount), {}))
+        self.balances[user_id] = self.balances.get(user_id, 0) + amount
+        return self.balances[user_id]
+
+    def balance(self, user_id: int) -> int:
+        self.calls.append(("balance", (user_id,), {}))
+        return self.balances.get(user_id, 0)
+
+    def charge(self, user_id: int, amount: int) -> int:
+        self.calls.append(("charge", (user_id, amount), {}))
+        self.balances[user_id] = self.balances.get(user_id, 0) - amount
+        return self.balances[user_id]
+
+
+class FakePaymentStore:
+    def __init__(self, records: list[dict] | None = None) -> None:
+        self.records = records or []
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def find_by_charge(self, charge_id: str):
+        self.calls.append(("find_by_charge", (charge_id,), {}))
+        for rec in self.records:
+            if rec["charge_id"] == charge_id:
+                return rec
+        return None
+
+    def last_for_user(self, user_id: int):
+        self.calls.append(("last_for_user", (user_id,), {}))
+        for rec in reversed(self.records):
+            if rec["user_id"] == user_id:
+                return rec
+        return None
+
+    def mark_refunded(self, charge_id: str):
+        self.calls.append(("mark_refunded", (charge_id,), {}))
+        for rec in self.records:
+            if rec["charge_id"] == charge_id:
+                rec["refunded"] = True
+
+
+class FakeCreditsMetrics:
+    def __init__(self, *, promo_credits: int | None = None) -> None:
+        self.promo_credits = promo_credits
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def redeem_promo(self, code: str, user_id: int):
+        self.calls.append(("redeem_promo", (code, user_id), {}))
+        return self.promo_credits
+
+    def log_event(self, *args, **kwargs):
+        self.calls.append(("log_event", args, kwargs))
+
+    def create_promo_code(self, *args, **kwargs):
+        self.calls.append(("create_promo_code", args, kwargs))
+        return True
+
+    def mark_user_blocked(self, user_id: int):
+        self.calls.append(("mark_user_blocked", (user_id,), {}))
+
+
+class FakeBot:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    async def send_message(self, *args, **kwargs):
+        self.calls.append(("send_message", args, kwargs))
+
+    async def refund_star_payment(self, *args, **kwargs):
+        self.calls.append(("refund_star_payment", args, kwargs))
+
+
+class RecordingAdminCreditsDeps:
+    def __init__(
+        self,
+        *,
+        admin_ids: set[int] | None = None,
+        owner_ids: set[int] | None = None,
+        promo_credits: int | None = None,
+        payments: list[dict] | None = None,
+        balances: dict[int, int] | None = None,
+    ) -> None:
+        self.admin_ids = admin_ids if admin_ids is not None else {7}
+        self.owner_ids = owner_ids if owner_ids is not None else {7}
+        self.metrics = FakeCreditsMetrics(promo_credits=promo_credits)
+        self.credit_store = FakeCreditStore(balances)
+        self.payment_store = FakePaymentStore(payments)
+        self.bot = FakeBot()
+        self.workspaces: dict[int, dict] = {}
+        self.calls: list[tuple[str, tuple, dict]] = []
+        self.log = SimpleNamespace(
+            info=lambda *a, **k: self.calls.append(("log.info", a, k)),
+            exception=lambda *a, **k: self.calls.append(("log.exception", a, k)),
+        )
+
+    def workspace(self, user_id: int) -> dict:
+        return self.workspaces.setdefault(user_id, {})
+
+    def username(self, message) -> str | None:
+        return "tester"
+
+    async def send_owner_alert(self, text: str):
+        self.calls.append(("send_owner_alert", (text,), {}))
+
+    def clawback_referral_rewards(self, *args, **kwargs):
+        self.calls.append(("clawback_referral_rewards", args, kwargs))
+
+
+def _admin_credits_deps(**kwargs) -> tuple[
+    admin_credits_router.AdminCreditsDeps, RecordingAdminCreditsDeps
+]:
+    rec = RecordingAdminCreditsDeps(**kwargs)
+    deps = admin_credits_router.AdminCreditsDeps(
+        workspace=rec.workspace,
+        admin_ids=rec.admin_ids,
+        owner_ids=rec.owner_ids,
+        metrics=rec.metrics,
+        credit_store=rec.credit_store,
+        payment_store=rec.payment_store,
+        bot=rec.bot,
+        username=rec.username,
+        send_owner_alert=rec.send_owner_alert,
+        clawback_referral_rewards=rec.clawback_referral_rewards,
+        log=rec.log,
+    )
+    return deps, rec
+
+
+class AdminCreditsRouterTests(unittest.TestCase):
+    def _call(self, router, command: str, text: str):
+        for handler in router.message.handlers:
+            if _handler_commands(handler) == {command}:
+                message = FakeMessage(text)
+                run(handler.callback(message))
+                return message
+        raise AssertionError(f"no handler for {command}")
+
+    def test_creates_router_with_four_command_handlers(self) -> None:
+        deps, _ = _admin_credits_deps()
+        router = admin_credits_router.create_router(deps)
+        self.assertIsInstance(router, Router)
+        handlers = router.message.handlers
+        self.assertEqual(len(handlers), 4)
+        self.assertEqual(router.callback_query.handlers, [])
+        matched = [_handler_commands(h) for h in handlers]
+        for expected in ({"promo"}, {"addpromo"}, {"grant"}, {"refund"}):
+            self.assertIn(expected, matched)
+
+    def test_grant_and_refund_deny_non_admin_without_credit_mutation(self) -> None:
+        for command, text in (("grant", "/grant 55 100"), ("refund", "/refund 55")):
+            with self.subTest(command=command):
+                deps, rec = _admin_credits_deps(admin_ids=set(), owner_ids=set())
+                router = admin_credits_router.create_router(deps)
+                message = self._call(router, command, text)
+                self.assertEqual(len(message.answers), 1)
+                self.assertEqual(rec.credit_store.calls, [])
+                self.assertEqual(rec.payment_store.calls, [])
+                self.assertEqual(rec.bot.calls, [])
+                self.assertEqual(rec.metrics.calls, [])
+
+    def test_addpromo_denies_non_owner_without_promo_creation(self) -> None:
+        deps, rec = _admin_credits_deps(owner_ids=set())
+        router = admin_credits_router.create_router(deps)
+        message = self._call(router, "addpromo", "/addpromo CODE 50")
+        self.assertEqual(len(message.answers), 1)
+        self.assertEqual(rec.metrics.calls, [])
+
+    def test_grant_bad_syntax_is_rejected_without_mutation(self) -> None:
+        for text in ("/grant", "/grant abc 10", "/grant 55 xyz", "/grant 55 0", "/grant 55 -5"):
+            with self.subTest(text=text):
+                deps, rec = _admin_credits_deps()
+                router = admin_credits_router.create_router(deps)
+                message = self._call(router, "grant", text)
+                self.assertEqual(len(message.answers), 1)
+                self.assertEqual(rec.credit_store.calls, [])
+                self.assertEqual(rec.bot.calls, [])
+
+    def test_grant_adds_credits_and_notifies_target(self) -> None:
+        deps, rec = _admin_credits_deps()
+        router = admin_credits_router.create_router(deps)
+        message = self._call(router, "grant", "/grant 55 100")
+        self.assertIn(("add", (55, 100), {}), rec.credit_store.calls)
+        self.assertEqual(rec.credit_store.balances[55], 100)
+        # Target is not the admin -> gets a Telegram notification.
+        self.assertEqual(rec.bot.calls[-1][0], "send_message")
+        self.assertEqual(rec.bot.calls[-1][1][0], 55)
+        self.assertTrue(message.answers)
+
+    def test_refund_returns_stars_charges_credits_and_claws_back(self) -> None:
+        payments = [{
+            "user_id": 55, "charge_id": "chg_1", "credits": 100,
+            "stars": 50, "refunded": False,
+        }]
+        deps, rec = _admin_credits_deps(payments=payments, balances={55: 60})
+        router = admin_credits_router.create_router(deps)
+        message = self._call(router, "refund", "/refund 55")
+        self.assertIn(("refund_star_payment", (), {
+            "user_id": 55, "telegram_payment_charge_id": "chg_1",
+        }), rec.bot.calls)
+        self.assertIn(("mark_refunded", ("chg_1",), {}), rec.payment_store.calls)
+        # Clawback never goes below zero: balance 60 < credited 100 -> take 60.
+        self.assertIn(("charge", (55, 60), {}), rec.credit_store.calls)
+        self.assertIn(("clawback_referral_rewards", (55, "chg_1"), {}), rec.calls)
+        self.assertIn(
+            "credits_refunded",
+            [c[1][0] for c in rec.metrics.calls if c[0] == "log_event"],
+        )
+        self.assertTrue(message.answers)
+
+    def test_refund_already_refunded_is_a_noop(self) -> None:
+        payments = [{
+            "user_id": 55, "charge_id": "chg_1", "credits": 100,
+            "stars": 50, "refunded": True,
+        }]
+        deps, rec = _admin_credits_deps(payments=payments, balances={55: 60})
+        router = admin_credits_router.create_router(deps)
+        message = self._call(router, "refund", "/refund 55")
+        self.assertEqual(len(message.answers), 1)
+        self.assertEqual(rec.bot.calls, [])
+        self.assertEqual(rec.credit_store.calls, [])
+
+    def test_promo_unknown_code_gives_no_credits(self) -> None:
+        deps, rec = _admin_credits_deps(promo_credits=None)
+        router = admin_credits_router.create_router(deps)
+        message = self._call(router, "promo", "/promo NOPE")
+        self.assertIn(("redeem_promo", ("NOPE", 7), {}), rec.metrics.calls)
+        self.assertEqual(rec.credit_store.calls, [])
+        self.assertEqual(len(message.answers), 1)
+
+    def test_promo_valid_code_credits_and_logs(self) -> None:
+        deps, rec = _admin_credits_deps(promo_credits=30)
+        router = admin_credits_router.create_router(deps)
+        message = self._call(router, "promo", "/promo WELCOME")
+        self.assertIn(("add", (7, 30), {}), rec.credit_store.calls)
+        self.assertIn(
+            "promo_redeemed",
+            [c[1][0] for c in rec.metrics.calls if c[0] == "log_event"],
+        )
+        self.assertTrue(message.answers)
+
+    def test_promo_without_code_sets_await_state(self) -> None:
+        deps, rec = _admin_credits_deps()
+        router = admin_credits_router.create_router(deps)
+        self._call(router, "promo", "/promo")
+        self.assertEqual(rec.workspaces[7]["await"], "promo")
+        self.assertEqual(rec.credit_store.calls, [])
+
+    def test_admin_credits_deps_dataclass_is_frozen(self) -> None:
+        deps, _ = _admin_credits_deps()
+        with self.assertRaises(Exception):
+            deps.credit_store = None  # type: ignore[misc]
+
+    def test_admin_credits_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(admin_credits_router)
         self.assertNotIn("flow_bot", src)
 
 
