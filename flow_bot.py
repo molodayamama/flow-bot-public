@@ -184,6 +184,7 @@ from storage.session_state import reset_image_flow as _reset_image_flow
 from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScenario
 from product import video_reference
 from product import agent_prompts
+from product.video_delivery import video_delivery_bytes
 from product.streak import streak_note
 from product.job_log import (
     ImageJobLogger,
@@ -3908,25 +3909,11 @@ def _aspect_to_fmt(aspect: str) -> str:
 async def _video_delivery_bytes(
     ref: VideoRef, *, fetched_bytes: bytes | None = None
 ) -> tuple[bytes | None, bool]:
-    """Fetch bytes for delivery.
-
-    For an Extend result the default is the FULL stitched video (the service's
-    own server-side concatenation). ``ref.media_id`` is only the newly added
-    segment, so we fall back to it (is_full=False) if stitching is unavailable.
-    Returns ``(bytes, is_full)``.
-    """
-    if ref.mode == "extend" and ref.scene_id and ref.project_id:
-        full_bytes = await _client_for_acc(ref.account_id).fetch_full_extended_video(
-            ref.scene_id, ref.project_id
-        )
-        if full_bytes:
-            return full_bytes, True
-        log.warning("full stitched video unavailable; falling back to extension segment")
-
-    video_bytes = fetched_bytes
-    if video_bytes is None:
-        video_bytes = await _client_for_acc(ref.account_id).fetch_video_bytes(ref.media_id)
-    return video_bytes, False
+    # Byte-fetch logic lives in product.video_delivery (channel-neutral);
+    # bind the per-account client accessor + logger here.
+    return await video_delivery_bytes(
+        ref, client_for_acc=_client_for_acc, log=log, fetched_bytes=fetched_bytes,
+    )
 
 
 async def _repeat_last(callback: types.CallbackQuery, user_id: int):

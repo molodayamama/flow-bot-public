@@ -2124,10 +2124,12 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertNotIn("asyncio.create_subprocess_exec", self.source)
         self.assertNotIn("segment_media_id", self.source)
         # Default extend delivery = the service's server-side stitched full video.
-        self.assertIn("async def _video_delivery_bytes", self.source)
+        # Byte-fetch logic moved to product.video_delivery (Phase 11).
+        delivery_source = (PROJECT_ROOT / "product" / "video_delivery.py").read_text(encoding="utf-8")
+        self.assertIn("async def video_delivery_bytes", delivery_source)
         self.assertIn("async def fetch_full_extended_video", self.source)
-        self.assertIn("full_bytes = await _client_for_acc(ref.account_id).fetch_full_extended_video", self.source)
-        self.assertIn('if ref.mode == "extend" and ref.scene_id and ref.project_id', self.source)
+        self.assertIn("full_bytes = await client_for_acc(ref.account_id).fetch_full_extended_video", delivery_source)
+        self.assertIn('if ref.mode == "extend" and ref.scene_id and ref.project_id', delivery_source)
         # The new fragment button downloads the extend result media_id itself.
         self.assertIn("async def _video_segment_download", self.source)
         # v:dl_seg: dispatch lives in the video callback router (Phase 6).

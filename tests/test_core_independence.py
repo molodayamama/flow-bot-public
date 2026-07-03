@@ -33,6 +33,7 @@ CORE_MODULES = [
     "product.ideas_hub",
     "product.agent_prompts",
     "product.job_log",
+    "product.video_delivery",
     "config.video",
     "storage.session_state",
     "billing.credit_gate",
