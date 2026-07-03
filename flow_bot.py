@@ -3570,44 +3570,17 @@ async def _prepare_photo_video_from_file_id(
 
 
 # ── «Идеи и шаблоны»: готовые шаблоны (tp:) + подбор по шагам (gp:) ────
-
-_IDEAS_PHOTO_KEYS = ("ideas_photo_file_id", "ideas_photo_caption", "ideas_extra_prompt")
-_TP_STATE_KEYS = ("tp_tpl", "tp_step", "tp_answers", "tp_await")
-_GP_STATE_KEYS = ("gp_step", "gp_answers", "gp_extra_prompt")
-
-
-def _ideas_clear(st: dict, *, clear_photo: bool = False) -> None:
-    for k in (*_TP_STATE_KEYS, *_GP_STATE_KEYS):
-        st.pop(k, None)
-    if clear_photo:
-        for k in _IDEAS_PHOTO_KEYS:
-            st.pop(k, None)
-    st.pop("ideas_mode", None)
-
-
-def _ideas_has_photo(st: dict) -> bool:
-    return bool(st.get("ideas_photo_file_id"))
-
-
-def _ideas_prompt_with_extra(prompt: str, st: dict) -> str:
-    extra = (st.get("gp_extra_prompt") or st.get("ideas_extra_prompt") or "").strip()
-    if not extra:
-        return prompt
-    base = (prompt or "high quality image").strip()
-    return f"{base}. User note for the attached photo/reference: {extra}"
-
-
-def _guided_image_fmt(answers: dict) -> str:
-    fmt = (answers or {}).get("format")
-    if fmt == "story":
-        return "port"
-    if fmt in ("square", "avatar"):
-        return "sq"
-    return "land"
-
-
-def _guided_video_fmt(answers: dict) -> str:
-    return "port" if (answers or {}).get("format") in ("story", "avatar") else "land"
+# Pure session-state helpers + key sets live in product.ideas_hub.
+from product.ideas_hub import (
+    _IDEAS_PHOTO_KEYS,
+    _TP_STATE_KEYS,
+    _GP_STATE_KEYS,
+    ideas_clear as _ideas_clear,
+    ideas_has_photo as _ideas_has_photo,
+    ideas_prompt_with_extra as _ideas_prompt_with_extra,
+    guided_image_fmt as _guided_image_fmt,
+    guided_video_fmt as _guided_video_fmt,
+)
 
 
 async def _show_ideas_root(message: types.Message, *, user_id: int, edit: bool):

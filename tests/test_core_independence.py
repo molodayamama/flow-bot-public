@@ -30,6 +30,7 @@ CORE_MODULES = [
     "product.marketplace_prompts",
     "product.video_reference",
     "product.streak",
+    "product.ideas_hub",
     "config.video",
     "storage.session_state",
     "billing.credit_gate",

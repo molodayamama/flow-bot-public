@@ -1469,7 +1469,13 @@ class BotMenuWiringTests(unittest.TestCase):
         # «Изменить моё фото» — оно становится основой, к которой применяется
         # собранный промпт шаблона как правка (запрос оператора).
         self.assertIn("async def _template_photo_received", self.source)
-        self.assertIn('_IDEAS_PHOTO_KEYS = ("ideas_photo_file_id", "ideas_photo_caption", "ideas_extra_prompt")', self.source)
+        # Photo-key set moved to product.ideas_hub (Phase 11); flow_bot imports it.
+        self.assertIn("_IDEAS_PHOTO_KEYS", self.source)
+        ideas_hub_source = (PROJECT_ROOT / "product" / "ideas_hub.py").read_text(encoding="utf-8")
+        self.assertIn(
+            '_IDEAS_PHOTO_KEYS = ("ideas_photo_file_id", "ideas_photo_caption", "ideas_extra_prompt")',
+            ideas_hub_source,
+        )
         # handle_photo перехватывает фото внутри любой ветки «Идей».
         self.assertIn('if st.get("tp_tpl") or "gp_step" in st or st.get("ideas_mode") in (', self.photo_input_router_source)
         for mode in ('"root"', '"templates"', '"guided"'):
