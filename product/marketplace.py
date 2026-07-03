@@ -11,6 +11,8 @@ _MP_PLATFORM_FMT = {"wb": "f34", "ozon": "f34", "ym": "sq"}
 
 _MP_PLATFORM_SIZE = {"wb": "1080x1440", "ozon": "1080x1440", "ym": "1000x1000"}
 
+_MP_SERIES_COUNTS = (3, 5, 8)  # seller-selectable slide-series sizes
+
 _MP_PLATFORM_GUIDANCE = {
     "wb": (
         "Wildberries: вертикальная 3:4 карточка, товар крупно; "

@@ -13,7 +13,7 @@ from product.marketplace import (
     _mp_platform_guidance,
     _mp_niche_guidance,
 )
-from channels.telegram.texts import _MP_SERIES_COUNTS
+from product.marketplace import _MP_SERIES_COUNTS
 
 
 _MP_JOB_SEED = {

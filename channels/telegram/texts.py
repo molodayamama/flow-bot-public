@@ -26,7 +26,7 @@ _MP_JOB_OUTCOMES = {
     "cover": "главный слайд с крупным товаром и цепляющим ракурсом.",
     "bg": "аккуратный новый фон без лишних деталей.",
 }
-_MP_SERIES_COUNTS = (3, 5, 8)
+from product.marketplace import _MP_SERIES_COUNTS
 _MP_SERIES_LABELS = {
     3: "мини-серия",
     5: "стандартная серия",
