@@ -445,6 +445,9 @@ class BotMenuWiringTests(unittest.TestCase):
         self.ideas_hub_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "ideas_hub.py"
         ).read_text(encoding="utf-8")
+        self.ideas_flow_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "ideas_flow.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         for needle in (
@@ -1013,7 +1016,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("await _template_photo_received(message, user_id=user_id)", self.source)
         receive = self.source[
             self.source.index("async def _template_photo_received"):
-            self.source.index('@dp.callback_query(F.data.startswith("tp:"))')
+            self.source.index("async def _render_guided_step")
         ]
         self.assertIn('st["ideas_photo_file_id"] = message.photo[-1].file_id', receive)
         self.assertNotIn("upload_image(", receive)
@@ -1433,13 +1436,13 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("import prompts_lib", self.source)
         self.assertIn('data == "m:ideas"', self.source)
         self.assertIn('@router.callback_query(F.data.startswith("ih:"))', self.ideas_hub_router_source)
-        self.assertIn('@dp.callback_query(F.data.startswith("tp:"))', self.source)
-        self.assertIn('@dp.callback_query(F.data.startswith("gp:"))', self.source)
+        self.assertIn('@router.callback_query(F.data.startswith("tp:"))', self.ideas_flow_router_source)
+        self.assertIn('@router.callback_query(F.data.startswith("gp:"))', self.ideas_flow_router_source)
         self.assertIn("prompts_lib.compose_template_prompt(", self.source)
         self.assertIn("prompts_lib.compose_guided_prompt(", self.source)
         # Composed prompt feeds the existing wizard via pending_prompt.
         self.assertIn('st["pending_prompt"] = prompt', self.source)
-        self.assertIn('"template_opened"', self.source)
+        self.assertIn('"template_opened"', self.ideas_flow_router_source)
         self.assertIn('"template_used"', self.source)
         # Free-text Q&A answers are captured in the text handler.
         self.assertIn('st.get("tp_await") == "text"', self.source)
@@ -1460,8 +1463,7 @@ class BotMenuWiringTests(unittest.TestCase):
             self.assertIn(key, flow_copy.MESSAGES)
         # New prefixes register before the catch-all image handler.
         for pfx in ('startswith("tp:")', 'startswith("gp:")'):
-            self.assertLess(self.source.index(pfx),
-                            self.source.index("async def on_image_action"), pfx)
+            self.assertIn(pfx, self.ideas_flow_router_source)
         self.assertIn('startswith("ih:")', self.ideas_hub_router_source)
 
     def test_prompts_lib_templates_complete(self) -> None:

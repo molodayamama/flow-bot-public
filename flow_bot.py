@@ -320,6 +320,7 @@ from channels.telegram.routers import onboarding as tg_onboarding_router
 from channels.telegram.routers import photo_route as tg_photo_route_router
 from channels.telegram.routers import image_retry as tg_image_retry_router
 from channels.telegram.routers import ideas_hub as tg_ideas_hub_router
+from channels.telegram.routers import ideas_flow as tg_ideas_flow_router
 from channels.telegram.routers import fallback as tg_fallback_router
 
 from referrals.service import ReferralService
@@ -5563,56 +5564,6 @@ async def _template_photo_received(message: types.Message, *, user_id: int) -> N
         await _show_ideas_root(message, user_id=user_id, edit=False)
 
 
-@dp.callback_query(F.data.startswith("tp:"))
-async def on_template_action(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    data = callback.data or ""
-    msg = callback.message
-    st = _ws(user_id)
-    if data.startswith("tp:tpl:"):
-        tid = data.split(":", 2)[2]
-        if not prompts_lib.get_template(tid):
-            await callback.answer(flow_copy.msg("expired"), show_alert=True)
-            return
-        st["tp_tpl"] = tid
-        st["tp_step"] = 0
-        st["tp_answers"] = {}
-        st["ideas_mode"] = "templates"
-        metrics.log_event("template_opened", user_id=user_id, source="ideas",
-                          payload={"template": tid})
-        await callback.answer()
-        await _render_template_step(msg, user_id=user_id)
-        return
-    if not st.get("tp_tpl"):
-        await callback.answer(flow_copy.msg("expired"), show_alert=True)
-        await _show_ideas_root(msg, user_id=user_id, edit=True)
-        return
-    if data.startswith("tp:ans:"):
-        idx = int(data.split(":")[2])
-        questions = prompts_lib.template_questions(st["tp_tpl"])
-        step = st.get("tp_step", 0)
-        opts = questions[step]["options"] if step < len(questions) else []
-        value = opts[idx]["value"] if 0 <= idx < len(opts) else ""
-        _tp_store_answer(st, value)
-        await callback.answer()
-        await _render_template_step(msg, user_id=user_id)
-    elif data == "tp:skip":
-        _tp_store_answer(st, "")
-        await callback.answer()
-        await _render_template_step(msg, user_id=user_id)
-    elif data == "tp:back":
-        st["tp_step"] = max(0, st.get("tp_step", 0) - 1)
-        st["tp_await"] = None
-        await callback.answer()
-        await _render_template_step(msg, user_id=user_id)
-    elif data == "tp:cancel":
-        _ideas_clear(st, clear_photo=True)
-        await callback.answer("Отменено")
-        await _show_ideas_root(msg, user_id=user_id, edit=True)
-    else:
-        await callback.answer()
-
-
 async def _render_guided_step(message: types.Message, *, user_id: int):
     st = _ws(user_id)
     steps = prompts_lib.guided_steps()
@@ -5868,38 +5819,6 @@ async def on_agent_action(callback: types.CallbackQuery):
         return
 
     await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("gp:"))
-async def on_guided_picker_action(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    data = callback.data or ""
-    msg = callback.message
-    st = _ws(user_id)
-    if "gp_step" not in st:
-        await callback.answer(flow_copy.msg("expired"), show_alert=True)
-        await _show_ideas_root(msg, user_id=user_id, edit=True)
-        return
-    if data.startswith("gp:opt:"):
-        idx = int(data.split(":")[2])
-        step = st.get("gp_step", 0)
-        steps = prompts_lib.guided_steps()
-        opts = steps[step]["options"] if step < len(steps) else []
-        if 0 <= idx < len(opts):
-            st.setdefault("gp_answers", {})[steps[step]["key"]] = opts[idx]["value"]
-        st["gp_step"] = step + 1
-        await callback.answer()
-        await _render_guided_step(msg, user_id=user_id)
-    elif data == "gp:back":
-        st["gp_step"] = max(0, st.get("gp_step", 0) - 1)
-        await callback.answer()
-        await _render_guided_step(msg, user_id=user_id)
-    elif data == "gp:cancel":
-        _ideas_clear(st, clear_photo=True)
-        await callback.answer("Отменено")
-        await _show_ideas_root(msg, user_id=user_id, edit=True)
-    else:
-        await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("vu:"))
@@ -9274,6 +9193,19 @@ dp.include_router(
             show_ideas_root=_show_ideas_root,
             edit_or_answer=_edit_or_answer,
             render_guided_step=_render_guided_step,
+        )
+    )
+)
+dp.include_router(
+    tg_ideas_flow_router.create_router(
+        tg_ideas_flow_router.IdeasFlowDeps(
+            workspace=_ws,
+            ideas_clear=_ideas_clear,
+            tp_store_answer=_tp_store_answer,
+            show_ideas_root=_show_ideas_root,
+            render_template_step=_render_template_step,
+            render_guided_step=_render_guided_step,
+            log_event=metrics.log_event,
         )
     )
 )

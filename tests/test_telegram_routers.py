@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from aiogram import Router
 
 from channels.telegram.routers import commands as commands_router
+from channels.telegram.routers import ideas_flow as ideas_flow_router
 from channels.telegram.routers import image_retry as image_retry_router
 from channels.telegram.routers import ideas_hub as ideas_hub_router
 from channels.telegram.routers import onboarding as onboarding_router
@@ -328,6 +329,124 @@ class IdeasHubRouterTests(unittest.TestCase):
 
     def test_ideas_hub_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(ideas_hub_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class RecordingIdeasFlowDeps:
+    def __init__(self) -> None:
+        self.workspaces: dict[int, dict] = {}
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def workspace(self, user_id: int) -> dict:
+        return self.workspaces.setdefault(user_id, {})
+
+    def ideas_clear(self, st: dict, *, clear_photo: bool = False) -> None:
+        self.calls.append(("ideas_clear", (st,), {"clear_photo": clear_photo}))
+        st.clear()
+
+    def tp_store_answer(self, st: dict, value: str) -> None:
+        self.calls.append(("tp_store_answer", (st, value), {}))
+        st.setdefault("answers", []).append(value)
+
+    def log_event(self, *args, **kwargs) -> None:
+        self.calls.append(("log_event", args, kwargs))
+
+    def _make_async(self, name):
+        async def renderer(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return None
+
+        return renderer
+
+
+def _ideas_flow_deps() -> tuple[ideas_flow_router.IdeasFlowDeps, RecordingIdeasFlowDeps]:
+    rec = RecordingIdeasFlowDeps()
+    deps = ideas_flow_router.IdeasFlowDeps(
+        workspace=rec.workspace,
+        ideas_clear=rec.ideas_clear,
+        tp_store_answer=rec.tp_store_answer,
+        show_ideas_root=rec._make_async("show_ideas_root"),
+        render_template_step=rec._make_async("render_template_step"),
+        render_guided_step=rec._make_async("render_guided_step"),
+        log_event=rec.log_event,
+    )
+    return deps, rec
+
+
+class IdeasFlowRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _ideas_flow_deps()
+        self.router = ideas_flow_router.create_router(self.deps)
+        self.template_handler = self.router.callback_query.handlers[0].callback
+        self.guided_handler = self.router.callback_query.handlers[1].callback
+
+    def test_creates_tp_and_gp_callback_router(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        self.assertEqual(self.router.name, "tg-ideas-flow")
+        self.assertEqual([h.callback.__name__ for h in self.router.callback_query.handlers], [
+            "on_template_action",
+            "on_guided_picker_action",
+        ])
+
+    def test_template_open_initializes_state_and_logs(self) -> None:
+        callback = FakeCallback("tp:tpl:product_card")
+        run(self.template_handler(callback))
+        st = self.rec.workspaces[42]
+        self.assertEqual(st["tp_tpl"], "product_card")
+        self.assertEqual(st["tp_step"], 0)
+        self.assertEqual(st["tp_answers"], {})
+        self.assertEqual(st["ideas_mode"], "templates")
+        self.assertEqual(self.rec.calls[-1][0], "render_template_step")
+        self.assertTrue(any(c[0] == "log_event" for c in self.rec.calls))
+
+    def test_template_answer_stores_choice_and_renders_next_step(self) -> None:
+        self.rec.workspaces[42] = {"tp_tpl": "product_card", "tp_step": 0}
+        callback = FakeCallback("tp:ans:0")
+        run(self.template_handler(callback))
+        self.assertEqual(self.rec.calls[-2][0], "tp_store_answer")
+        self.assertEqual(self.rec.calls[-1][0], "render_template_step")
+
+    def test_template_missing_state_expires_to_root(self) -> None:
+        callback = FakeCallback("tp:ans:0")
+        run(self.template_handler(callback))
+        self.assertEqual(callback.answers[-1][1], {"show_alert": True})
+        self.assertEqual(self.rec.calls[-1][0], "show_ideas_root")
+
+    def test_template_cancel_clears_state_and_opens_root(self) -> None:
+        self.rec.workspaces[42] = {"tp_tpl": "product_card", "tp_step": 1}
+        callback = FakeCallback("tp:cancel")
+        run(self.template_handler(callback))
+        self.assertEqual(self.rec.calls[-2][0], "ideas_clear")
+        self.assertEqual(self.rec.calls[-1][0], "show_ideas_root")
+
+    def test_guided_option_advances_state_and_renders(self) -> None:
+        self.rec.workspaces[42] = {"gp_step": 0, "gp_answers": {}}
+        callback = FakeCallback("gp:opt:0")
+        run(self.guided_handler(callback))
+        st = self.rec.workspaces[42]
+        self.assertEqual(st["gp_step"], 1)
+        self.assertTrue(st["gp_answers"])
+        self.assertEqual(self.rec.calls[-1][0], "render_guided_step")
+
+    def test_guided_missing_state_expires_to_root(self) -> None:
+        callback = FakeCallback("gp:opt:0")
+        run(self.guided_handler(callback))
+        self.assertEqual(callback.answers[-1][1], {"show_alert": True})
+        self.assertEqual(self.rec.calls[-1][0], "show_ideas_root")
+
+    def test_guided_cancel_clears_state_and_opens_root(self) -> None:
+        self.rec.workspaces[42] = {"gp_step": 1, "gp_answers": {"x": "y"}}
+        callback = FakeCallback("gp:cancel")
+        run(self.guided_handler(callback))
+        self.assertEqual(self.rec.calls[-2][0], "ideas_clear")
+        self.assertEqual(self.rec.calls[-1][0], "show_ideas_root")
+
+    def test_ideas_flow_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.workspace = None  # type: ignore[misc]
+
+    def test_ideas_flow_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(ideas_flow_router)
         self.assertNotIn("flow_bot", src)
 
 
