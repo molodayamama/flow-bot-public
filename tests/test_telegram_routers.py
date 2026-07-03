@@ -12,6 +12,7 @@ from channels.telegram.routers import animate as animate_router
 from channels.telegram.routers import agent as agent_router
 from channels.telegram.routers import commands as commands_router
 from channels.telegram.routers import edit_settings as edit_settings_router
+from channels.telegram.routers import generation_commands as generation_commands_router
 from channels.telegram.routers import image_action as image_action_router
 from channels.telegram.routers import ideas_flow as ideas_flow_router
 from channels.telegram.routers import image_retry as image_retry_router
@@ -1938,6 +1939,106 @@ class VideoRouterTests(unittest.TestCase):
 
     def test_video_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(video_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class RecordingGenerationCommandsDeps:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def reset_image_flow(self, *args, **kwargs):
+        self.calls.append(("reset_image_flow", args, kwargs))
+
+    def vid_clear(self, *args, **kwargs):
+        self.calls.append(("vid_clear", args, kwargs))
+
+    async def show_ideas_root(self, *args, **kwargs):
+        self.calls.append(("show_ideas_root", args, kwargs))
+
+    async def generate_and_send(self, *args, **kwargs):
+        self.calls.append(("generate_and_send", args, kwargs))
+
+    async def mix_and_send(self, *args, **kwargs):
+        self.calls.append(("mix_and_send", args, kwargs))
+
+
+def _generation_commands_deps() -> tuple[
+    generation_commands_router.GenerationCommandsDeps, RecordingGenerationCommandsDeps
+]:
+    rec = RecordingGenerationCommandsDeps()
+    deps = generation_commands_router.GenerationCommandsDeps(
+        reset_image_flow=rec.reset_image_flow,
+        vid_clear=rec.vid_clear,
+        show_ideas_root=rec.show_ideas_root,
+        generate_and_send=rec.generate_and_send,
+        mix_and_send=rec.mix_and_send,
+    )
+    return deps, rec
+
+
+class GenerationCommandsRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _generation_commands_deps()
+        self.router = generation_commands_router.create_router(self.deps)
+
+    def test_creates_router_with_seven_command_handlers(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        handlers = self.router.message.handlers
+        self.assertEqual(len(handlers), 7)
+        self.assertEqual(self.router.callback_query.handlers, [])
+        matched = [_handler_commands(h) for h in handlers]
+        for expected in ({"ideas"}, {"img"}, {"one"}, {"portrait"}, {"square"}, {"imgn"}, {"mix"}):
+            self.assertIn(expected, matched)
+
+    def _call(self, command: str, text: str, user_id: int = 42):
+        for handler in self.router.message.handlers:
+            if _handler_commands(handler) == {command}:
+                message = SimpleNamespace(from_user=SimpleNamespace(id=user_id), text=text)
+                run(handler.callback(message))
+                return message
+        raise AssertionError(f"no handler for {command}")
+
+    def test_ideas_resets_state_and_shows_root(self) -> None:
+        self._call("ideas", "/ideas")
+        self.assertEqual(
+            [c[0] for c in self.rec.calls],
+            ["reset_image_flow", "vid_clear", "show_ideas_root"],
+        )
+        name, args, kwargs = self.rec.calls[-1]
+        self.assertEqual(kwargs, {"user_id": 42, "edit": False})
+
+    def test_img_generates_four_images_from_prompt(self) -> None:
+        self._call("img", "/img a cat")
+        name, args, kwargs = self.rec.calls[-1]
+        self.assertEqual(name, "generate_and_send")
+        self.assertEqual(args[1], "a cat")
+        self.assertEqual(kwargs, {"num_images": 4})
+
+    def test_portrait_and_square_set_aspect_ratio(self) -> None:
+        self._call("portrait", "/portrait a dog")
+        self.assertEqual(self.rec.calls[-1][2], {"num_images": 2, "aspect_ratio": "portrait"})
+        self._call("square", "/square a dog")
+        self.assertEqual(self.rec.calls[-1][2], {"num_images": 2, "aspect_ratio": "square"})
+
+    def test_imgn_parses_explicit_count_and_prompt(self) -> None:
+        self._call("imgn", "/imgn 3 a fox")
+        name, args, kwargs = self.rec.calls[-1]
+        self.assertEqual(name, "generate_and_send")
+        self.assertEqual(args[1], "a fox")
+        self.assertEqual(kwargs, {"num_images": 3})
+
+    def test_mix_delegates_to_mix_and_send(self) -> None:
+        self._call("mix", "/mix combine these")
+        name, args, kwargs = self.rec.calls[-1]
+        self.assertEqual(name, "mix_and_send")
+        self.assertEqual(args[1], "combine these")
+
+    def test_generation_commands_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.generate_and_send = None  # type: ignore[misc]
+
+    def test_generation_commands_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(generation_commands_router)
         self.assertNotIn("flow_bot", src)
 
 

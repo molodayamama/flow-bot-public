@@ -509,6 +509,11 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.image_action_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "image_action.py"
         ).read_text(encoding="utf-8")
+        # /imgn and other image slash commands moved to their own router
+        # (Phase 6).
+        self.generation_commands_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "generation_commands.py"
+        ).read_text(encoding="utf-8")
 
     def test_edit_button_and_callback_handler_present(self) -> None:
         # Labels now come from flow_copy; the edit button uses the "edit" action.
@@ -525,17 +530,19 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         # 1) ingredients/mix, 2) square aspect, 3) original download, 4) count, 5) vary.
         for needle in (
             "build_ingredients_inputs",          # #1 ingredients
-            'aspect_ratio="square"',             # #2 square
             "async def _send_original_file",     # #3 full-quality download
             "answer_document",                   # #3 document (no Telegram compression)
             "download_url",                      # #3 best fetchable URL
             "clamp_num_images",                  # #4 flexible count
-            'Command("imgn")',                   # #4 /imgn command
             "async def _vary_and_send",          # #5 variations
             "async def _regen_and_send",         # "ещё" regen
             "mix_baskets",                       # mix basket state
         ):
             self.assertIn(needle, self.source, needle)
+        # /square and /imgn commands moved to the generation-commands router
+        # (Phase 6).
+        self.assertIn('aspect_ratio="square"', self.generation_commands_router_source)  # #2 square
+        self.assertIn('Command("imgn")', self.generation_commands_router_source)
 
     def test_callback_actions_use_ref_user_not_bot(self) -> None:
         # In callbacks message.from_user is the bot; new images must be owned by

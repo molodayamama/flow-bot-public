@@ -330,6 +330,7 @@ from channels.telegram.routers import edit_settings as tg_edit_settings_router
 from channels.telegram.routers import animate as tg_animate_router
 from channels.telegram.routers import wizard as tg_wizard_router
 from channels.telegram.routers import video as tg_video_router
+from channels.telegram.routers import generation_commands as tg_generation_commands_router
 from channels.telegram.routers import fallback as tg_fallback_router
 
 from referrals.service import ReferralService
@@ -2405,14 +2406,6 @@ dp.include_router(
 )
 
 
-@dp.message(Command("ideas"))
-async def cmd_ideas(message: types.Message):
-    user_id = message.from_user.id
-    _reset_image_flow(user_id)
-    _vid_clear(user_id)
-    await _show_ideas_root(message, user_id=user_id, edit=False)
-
-
 @dp.message(Command("status"))
 async def cmd_status(message: types.Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -3810,50 +3803,6 @@ async def _send_result_pairs(
             account_id=account_id,
         )
         await asyncio.sleep(0.3)
-
-
-@dp.message(Command("img"))
-async def cmd_img(message: types.Message):
-    prompt = " ".join(message.text.split()[1:]).strip()
-    await _generate_and_send(message, prompt, num_images=4)
-
-
-@dp.message(Command("one"))
-async def cmd_one(message: types.Message):
-    prompt = " ".join(message.text.split()[1:]).strip()
-    await _generate_and_send(message, prompt, num_images=1)
-
-
-@dp.message(Command("portrait"))
-async def cmd_portrait(message: types.Message):
-    prompt = " ".join(message.text.split()[1:]).strip()
-    await _generate_and_send(message, prompt, num_images=2, aspect_ratio="portrait")
-
-
-@dp.message(Command("square"))
-async def cmd_square(message: types.Message):
-    prompt = " ".join(message.text.split()[1:]).strip()
-    await _generate_and_send(message, prompt, num_images=2, aspect_ratio="square")
-
-
-@dp.message(Command("imgn"))
-async def cmd_imgn(message: types.Message):
-    """`/imgn N <промпт>` — N изображений (1–8)."""
-    parts = message.text.split()
-    n = clamp_num_images(parts[1]) if len(parts) > 1 else 4
-    # Если первый аргумент был числом — это счётчик, иначе он часть промпта.
-    if len(parts) > 1 and parts[1].lstrip("-").isdigit():
-        prompt = " ".join(parts[2:]).strip()
-    else:
-        prompt = " ".join(parts[1:]).strip()
-    await _generate_and_send(message, prompt, num_images=n)
-
-
-@dp.message(Command("mix"))
-async def cmd_mix(message: types.Message):
-    """`/mix <промпт>` — собрать картинку из выбранных «ингредиентов»."""
-    prompt = " ".join(message.text.split()[1:]).strip()
-    await _mix_and_send(message, prompt)
 
 
 def _is_rate_limit_error(result: dict) -> bool:
@@ -8075,6 +8024,17 @@ dp.include_router(
             vid_code_family=_VID_CODE_FAMILY,
             vid_quickstart_family=_VID_QUICKSTART_FAMILY,
             default_video_count=VID_DEFAULT_COUNT,
+        )
+    )
+)
+dp.include_router(
+    tg_generation_commands_router.create_router(
+        tg_generation_commands_router.GenerationCommandsDeps(
+            reset_image_flow=_reset_image_flow,
+            vid_clear=_vid_clear,
+            show_ideas_root=_show_ideas_root,
+            generate_and_send=_generate_and_send,
+            mix_and_send=_mix_and_send,
         )
     )
 )

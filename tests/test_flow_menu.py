@@ -470,6 +470,10 @@ class BotMenuWiringTests(unittest.TestCase):
         self.video_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "video.py"
         ).read_text(encoding="utf-8")
+        # /ideas + image slash commands moved to their own router (Phase 6).
+        self.generation_commands_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "generation_commands.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         self.assertIn('F.data.startswith("m:")', self.menu_router_source)  # menu router
@@ -597,10 +601,11 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_public_help_ideas_referral_commands_wired(self) -> None:
         # /help and /referral handlers live in the extracted commands router;
-        # /ideas still lives in flow_bot (its renderer is defined later there).
+        # /ideas moved to the generation-commands router (Phase 6), its
+        # renderer (_show_ideas_root) stays defined in flow_bot.
         for command in ('Command("help")', 'Command("referral", "ref")'):
             self.assertIn(command, self.commands_router_source)
-        self.assertIn('Command("ideas")', self.source)
+        self.assertIn('Command("ideas")', self.generation_commands_router_source)
         self.assertIn("async def _show_help_screen", self.source)
         self.assertIn("async def _show_referral_screen", self.source)
         self.assertIn("_show_ideas_root(message, user_id=user_id, edit=False)", self.source)
