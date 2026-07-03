@@ -146,8 +146,9 @@ Server migration/cutover:
   exists on the destination and is readable by nginx; do not print its contents.
 - Verify local proxy/listener exposure with `ss -ltnp`; VNC ports must not be
   exposed publicly unless the operator explicitly asks for interactive VNC.
-- Verify the intended services only:
-  `systemctl is-active geminifree-bot geminifree-seller-bot`.
+- Verify the intended deploy-managed service only:
+  `systemctl is-active geminifree-bot`. Seller is outside the current deploy
+  helper and should be checked separately when seller work resumes.
 - Verify startup journal reaches Telegram polling and has no fresh
   `Traceback`, `ERROR`, `CRITICAL`, `exception`, or restart loop.
 - Do not run media generation, paid/captcha diagnostics, Google re-login, or
@@ -157,8 +158,9 @@ NL-only deployment:
 
 - The project no longer ships FI/NL DNS failover tooling. `photozhab.ru` and
   `pay.photozhab.ru` are expected to run on NL (`192.0.2.10`) only.
-- Verify the intended NL services:
-  `systemctl is-active geminifree-bot geminifree-seller-bot`.
+- Verify the intended NL deploy-managed service:
+  `systemctl is-active geminifree-bot`. Seller is outside the current deploy
+  helper and should be checked separately when seller work resumes.
 - Verify no old failover timer is installed or active:
   `systemctl is-enabled geminifree-failover.timer` should be absent/disabled,
   and `systemctl is-active geminifree-failover.timer` should be inactive/failed.

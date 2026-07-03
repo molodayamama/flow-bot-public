@@ -624,7 +624,7 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("metrics.save_seller_profile(user_id, niche=niche_id)", source)
         self.assertIn('"mp_niche_saved"', source)
 
-    def test_seller_service_templates_are_wired_for_separate_env(self) -> None:
+    def test_seller_service_templates_exist_but_deploy_is_bot_only(self) -> None:
         root = PROJECT_ROOT
         flow_source = (root / "flow_bot.py").read_text(encoding="utf-8")
         deploy_script = (root / "deploy.sh").read_text(encoding="utf-8")
@@ -635,10 +635,18 @@ class SellerMenuTests(unittest.TestCase):
 
         self.assertIn('ENV_FILE = os.getenv("ENV_FILE", ".env") or ".env"', flow_source)
         self.assertIn("load_dotenv(ENV_FILE)", flow_source)
-        self.assertIn("geminifree-seller-bot", deploy_script)
+        self.assertNotIn("geminifree-seller-bot", deploy_script)
+        self.assertNotIn(".env.seller", deploy_script)
         self.assertIn("Skipping $unit (unit is not installed)", deploy_script)
-        self.assertIn("Skipping $unit (missing $required_env)", deploy_script)
-        self.assertIn("restart_if_installed geminifree-seller-bot /opt/geminifree/.env.seller", deploy_script)
+        self.assertIn('git pull --ff-only origin main', deploy_script)
+        self.assertIn('git diff --name-only "$before" "$after"', deploy_script)
+        self.assertIn('^deploy/photozhab/', deploy_script)
+        self.assertIn('/opt/geminifree/.venv/bin/python -m py_compile', deploy_script)
+        self.assertIn('systemctl restart "$unit"', deploy_script)
+        self.assertIn("restart_if_installed geminifree-bot", deploy_script)
+        self.assertNotIn("sleep 3", deploy_script)
+        self.assertNotIn('systemctl stop "$unit"', deploy_script)
+        self.assertNotIn('systemctl start "$unit"', deploy_script)
         self.assertIn("ENV_FILE=/opt/geminifree/.env.seller", seller_unit)
         self.assertIn("/usr/local/bin/geminifree-seller-bot-run", seller_unit)
         self.assertIn("/opt/geminifree/.env.seller", seller_runner)
