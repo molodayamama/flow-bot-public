@@ -9,6 +9,7 @@ from aiogram import Router
 
 from channels.telegram.routers import commands as commands_router
 from channels.telegram.routers import image_retry as image_retry_router
+from channels.telegram.routers import ideas_hub as ideas_hub_router
 from channels.telegram.routers import onboarding as onboarding_router
 from channels.telegram.routers import photo_route as photo_route_router
 
@@ -254,6 +255,79 @@ class OnboardingRouterTests(unittest.TestCase):
 
     def test_onboarding_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(onboarding_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class RecordingIdeasHubDeps:
+    def __init__(self) -> None:
+        self.workspaces: dict[int, dict] = {}
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def workspace(self, user_id: int) -> dict:
+        self.calls.append(("workspace", (user_id,), {}))
+        return self.workspaces.setdefault(user_id, {})
+
+    def _make_async(self, name):
+        async def renderer(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return None
+
+        return renderer
+
+
+def _ideas_hub_deps() -> tuple[ideas_hub_router.IdeasHubDeps, RecordingIdeasHubDeps]:
+    rec = RecordingIdeasHubDeps()
+    deps = ideas_hub_router.IdeasHubDeps(
+        workspace=rec.workspace,
+        show_ideas_root=rec._make_async("show_ideas_root"),
+        edit_or_answer=rec._make_async("edit_or_answer"),
+        render_guided_step=rec._make_async("render_guided_step"),
+    )
+    return deps, rec
+
+
+class IdeasHubRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _ideas_hub_deps()
+        self.router = ideas_hub_router.create_router(self.deps)
+        self.handler = self.router.callback_query.handlers[0].callback
+
+    def test_creates_ih_callback_router(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        self.assertEqual(self.router.name, "tg-ideas-hub")
+        self.assertEqual(len(self.router.callback_query.handlers), 1)
+        self.assertEqual(self.router.callback_query.handlers[0].callback.__name__, "on_ideas_hub_action")
+
+    def test_root_delegates_to_ideas_root(self) -> None:
+        callback = FakeCallback("ih:root")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.calls[-1][0], "show_ideas_root")
+        self.assertEqual(self.rec.calls[-1][1], (callback.message,))
+        self.assertEqual(self.rec.calls[-1][2], {"user_id": 42, "edit": True})
+
+    def test_templates_sets_mode_and_edits_picker(self) -> None:
+        callback = FakeCallback("ih:templates")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42]["ideas_mode"], "templates")
+        self.assertEqual(self.rec.calls[-1][0], "edit_or_answer")
+        self.assertEqual(self.rec.calls[-1][1][0], callback.message)
+        self.assertEqual(self.rec.calls[-1][2], {"parse_mode": "HTML"})
+
+    def test_guided_sets_initial_state_and_renders_step(self) -> None:
+        callback = FakeCallback("ih:guided")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42]["ideas_mode"], "guided")
+        self.assertEqual(self.rec.workspaces[42]["gp_step"], 0)
+        self.assertEqual(self.rec.workspaces[42]["gp_answers"], {})
+        self.assertEqual(self.rec.calls[-1][0], "render_guided_step")
+        self.assertEqual(self.rec.calls[-1][2], {"user_id": 42})
+
+    def test_ideas_hub_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.workspace = None  # type: ignore[misc]
+
+    def test_ideas_hub_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(ideas_hub_router)
         self.assertNotIn("flow_bot", src)
 
 

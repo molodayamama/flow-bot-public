@@ -442,6 +442,9 @@ class BotMenuWiringTests(unittest.TestCase):
         self.photo_route_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "photo_route.py"
         ).read_text(encoding="utf-8")
+        self.ideas_hub_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "ideas_hub.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         for needle in (
@@ -1010,7 +1013,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("await _template_photo_received(message, user_id=user_id)", self.source)
         receive = self.source[
             self.source.index("async def _template_photo_received"):
-            self.source.index('@dp.callback_query(F.data.startswith("ih:"))')
+            self.source.index('@dp.callback_query(F.data.startswith("tp:"))')
         ]
         self.assertIn('st["ideas_photo_file_id"] = message.photo[-1].file_id', receive)
         self.assertNotIn("upload_image(", receive)
@@ -1429,7 +1432,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # Menu entry + hub root + both branches (templates Q&A, guided picker).
         self.assertIn("import prompts_lib", self.source)
         self.assertIn('data == "m:ideas"', self.source)
-        self.assertIn('@dp.callback_query(F.data.startswith("ih:"))', self.source)
+        self.assertIn('@router.callback_query(F.data.startswith("ih:"))', self.ideas_hub_router_source)
         self.assertIn('@dp.callback_query(F.data.startswith("tp:"))', self.source)
         self.assertIn('@dp.callback_query(F.data.startswith("gp:"))', self.source)
         self.assertIn("prompts_lib.compose_template_prompt(", self.source)
@@ -1456,9 +1459,10 @@ class BotMenuWiringTests(unittest.TestCase):
         ):
             self.assertIn(key, flow_copy.MESSAGES)
         # New prefixes register before the catch-all image handler.
-        for pfx in ('startswith("ih:")', 'startswith("tp:")', 'startswith("gp:")'):
+        for pfx in ('startswith("tp:")', 'startswith("gp:")'):
             self.assertLess(self.source.index(pfx),
                             self.source.index("async def on_image_action"), pfx)
+        self.assertIn('startswith("ih:")', self.ideas_hub_router_source)
 
     def test_prompts_lib_templates_complete(self) -> None:
         import prompts_lib

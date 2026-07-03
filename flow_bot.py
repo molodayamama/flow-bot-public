@@ -319,6 +319,7 @@ from channels.telegram.routers import commands as tg_commands_router
 from channels.telegram.routers import onboarding as tg_onboarding_router
 from channels.telegram.routers import photo_route as tg_photo_route_router
 from channels.telegram.routers import image_retry as tg_image_retry_router
+from channels.telegram.routers import ideas_hub as tg_ideas_hub_router
 from channels.telegram.routers import fallback as tg_fallback_router
 
 from referrals.service import ReferralService
@@ -5562,28 +5563,6 @@ async def _template_photo_received(message: types.Message, *, user_id: int) -> N
         await _show_ideas_root(message, user_id=user_id, edit=False)
 
 
-@dp.callback_query(F.data.startswith("ih:"))
-async def on_ideas_hub_action(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    data = callback.data or ""
-    msg = callback.message
-    await callback.answer()
-    if data == "ih:root":
-        await _show_ideas_root(msg, user_id=user_id, edit=True)
-    elif data == "ih:templates":
-        _ws(user_id)["ideas_mode"] = "templates"
-        await _edit_or_answer(
-            msg, flow_copy.msg("ideas_templates_title"), _templates_picker_kb(),
-            parse_mode="HTML",
-        )
-    elif data == "ih:guided":
-        st = _ws(user_id)
-        st["ideas_mode"] = "guided"
-        st["gp_step"] = 0
-        st["gp_answers"] = {}
-        await _render_guided_step(msg, user_id=user_id)
-
-
 @dp.callback_query(F.data.startswith("tp:"))
 async def on_template_action(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -9288,6 +9267,16 @@ async def _video_pool_health_loop() -> None:
 # included above this line. Preserves the old dp-level catch-all behaviour
 # for unknown callbacks: expired/legacy buttons get a silent ack instead of
 # an endless spinner.
+dp.include_router(
+    tg_ideas_hub_router.create_router(
+        tg_ideas_hub_router.IdeasHubDeps(
+            workspace=_ws,
+            show_ideas_root=_show_ideas_root,
+            edit_or_answer=_edit_or_answer,
+            render_guided_step=_render_guided_step,
+        )
+    )
+)
 dp.include_router(
     tg_onboarding_router.create_router(
         tg_onboarding_router.OnboardingDeps(
