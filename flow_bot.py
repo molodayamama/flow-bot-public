@@ -559,6 +559,19 @@ DEFAULT_ACCOUNT_ID = FLOW_ACCOUNTS[0].id
 keeper = keepers[DEFAULT_ACCOUNT_ID]
 client = clients[DEFAULT_ACCOUNT_ID]
 
+# Video account routing/health scoring moved to accounts/routing.py (Phase 11
+# core split). Instantiated with the live pool + keepers so runtime state stays
+# visible; the flow_bot-level names below stay as thin backward-compatible
+# delegates.
+from accounts.routing import VideoAccountRouter
+
+_video_router = VideoAccountRouter(
+    account_pool=account_pool,
+    keepers=keepers,
+    metrics=metrics,
+    video_model_meta=video_model_meta,
+)
+
 # Operator-raised local gost proxies (admin ISP-proxy onboarding). Consumer-only:
 # the seller bot has no account pool / admin panel. None disables the routes.
 local_proxy_sup = None
@@ -618,47 +631,24 @@ def _account_for_image(
 
 
 def _cached_gcredits_hints() -> dict:
-    hints = {}
-    for acc_id, kp in keepers.items():
-        cached = getattr(kp, "_gcredits_cache", None)
-        if isinstance(cached, dict):
-            hints[acc_id] = dict(cached)
-    return hints
+    return _video_router.cached_gcredits_hints()
 
 
 def _video_family_for_model(model_id: str) -> str:
-    meta = video_model_meta(model_id)
-    return str((meta or {}).get("family") or "unknown")
+    return _video_router.family_for_model(model_id)
 
 
 def _video_scores_for_model(model_id: str, min_credits: int = 0) -> dict:
-    return metrics.report_video_account_scores(
-        model_family=_video_family_for_model(model_id),
-        credit_hints=_cached_gcredits_hints(),
-        min_credits=int(min_credits or 0),
-    )
+    return _video_router.scores_for_model(model_id, min_credits)
 
 
 def _video_account_health_reason(account_id: str | None, model_id: str, min_credits: int = 0) -> str | None:
-    if not account_id:
-        return "missing_account"
-    if not account_pool.is_reference_usable(account_id):
-        return "account_unavailable"
-    score = (_video_scores_for_model(model_id, min_credits).get(account_id) or {})
-    if score.get("proxy_failed"):
-        return "proxy_check_failed"
-    if score.get("recent_unusual_403"):
-        return "recent_public_error_unusual_activity"
-    return None
+    return _video_router.account_health_reason(account_id, model_id, min_credits)
 
 
 def _account_for_video(user_id: int, *, model_id: str = "omni-flash-4s", min_credits: int = 0) -> str | None:
     """Аккаунт для видео-джобы — только среди video_capable, None — нет доступных."""
-    return account_pool.pick_for_video(
-        user_id,
-        model_family=_video_family_for_model(model_id),
-        health_scores=_video_scores_for_model(model_id, min_credits),
-    )
+    return _video_router.account_for_video(user_id, model_id=model_id, min_credits=min_credits)
 
 
 def _keeper_for_acc(account_id: str | None) -> SessionKeeper:
