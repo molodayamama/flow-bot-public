@@ -94,8 +94,15 @@ def _attachment_ids(message: Mapping[str, Any], attachment_type: str) -> list[st
             continue
         payload = item.get("payload")
         if isinstance(payload, Mapping):
-            file_id = payload.get("file_id") or payload.get("id")
-            if file_id:
-                result.append(str(file_id))
+            # Prefer a downloadable URL (needed to fetch bytes for photo edit /
+            # animate); fall back to token/file id so callers still get a ref.
+            ref = (
+                payload.get("url")
+                or payload.get("token")
+                or payload.get("file_id")
+                or payload.get("id")
+            )
+            if ref:
+                result.append(str(ref))
     return result
 

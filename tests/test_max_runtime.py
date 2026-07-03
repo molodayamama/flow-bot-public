@@ -103,7 +103,14 @@ class FlowBotWiringTests(unittest.TestCase):
         self.assertIn("from channels.max.runtime import run_max", self.src)
         self.assertIn("BackendGenerationService(", self.src)
         self.assertIn("generate_images=backend_service.generate_images", self.src)
-        self.assertIn("run_max(service)", self.src)
+        self.assertIn("run_max(service, client=client)", self.src)
+
+    def test_wires_photo_bridge_backend_fns(self):
+        # edit/animate need i2i + video + a downloader threaded from the client.
+        self.assertIn("generate_i2i=backend_service.generate_i2i", self.src)
+        self.assertIn("generate_video_ingredients=backend_service.generate_video_ingredients", self.src)
+        self.assertIn("download_bytes=_download", self.src)
+        self.assertIn("client.get_file_bytes(PlatformFile(", self.src)
 
 
 if __name__ == "__main__":

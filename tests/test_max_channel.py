@@ -68,6 +68,23 @@ class MaxChannelTests(unittest.TestCase):
         self.assertEqual(event.text, "prompt")
         self.assertEqual(event.photo_file_ids, ("photo-1",))
 
+    def test_parse_photo_prefers_downloadable_url(self) -> None:
+        # When an image attachment carries a url, the parser captures it (the
+        # photo bridge needs a downloadable ref, not just a file id).
+        update = {
+            "update_type": "message_created",
+            "message": {
+                "id": "msg-2",
+                "chat_id": "chat-1",
+                "sender": {"user_id": "u1"},
+                "attachments": [
+                    {"type": "image", "payload": {"url": "https://cdn/p.png", "file_id": "photo-9"}}
+                ],
+            },
+        }
+        event = webhook.parse_update(update)
+        self.assertEqual(event.photo_file_ids, ("https://cdn/p.png",))
+
     def test_parse_fake_callback_update(self) -> None:
         update = {
             "update_type": "callback",

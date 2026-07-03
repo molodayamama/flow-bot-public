@@ -2040,17 +2040,35 @@ def _maybe_start_max_bot() -> None:
     """Start the MAX bot polling loop as a background task when MAX_ENABLED=1.
 
     No-op (and never crashes Telegram startup) when MAX is disabled or its
-    startup fails; text-to-image generation is shared via the backend service.
+    startup fails. Shares the same generation backend + account pool as Telegram;
+    photo edit/animate download the incoming MAX photo and feed it to i2i/video.
     """
     try:
+        from channels.base import PlatformFile
+        from channels.max.client import MaxBotClient, max_config_from_env
         from channels.max.runtime import run_max
         from channels.max.generation_adapter import BackendGenerationService
 
+        config = max_config_from_env()
+        if not config.enabled:
+            return
+        client = MaxBotClient(
+            token=config.bot_token,
+            base_url=config.api_base_url,
+            ca_bundle=config.ca_bundle,
+        )
+
+        async def _download(url: str) -> bytes:
+            return await client.get_file_bytes(PlatformFile(file_id="", url=url))
+
         service = BackendGenerationService(
             generate_images=backend_service.generate_images,
+            generate_i2i=backend_service.generate_i2i,
+            generate_video_ingredients=backend_service.generate_video_ingredients,
+            download_bytes=_download,
             deps=_backend_generation_deps(),
         )
-        asyncio.create_task(run_max(service))
+        asyncio.create_task(run_max(service, client=client))
     except Exception:
         log.exception("MAX bot startup failed")
 

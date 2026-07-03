@@ -66,17 +66,75 @@ class AdapterTests(unittest.TestCase):
         run(svc.create_image(internal_user_id=1, prompt="x"))
         self.assertEqual(captured["aspect"], "landscape")
 
-    def test_edit_photo_returns_graceful_error(self):
+    def test_edit_photo_without_bridge_returns_graceful_error(self):
         out = run(self._service(lambda d, r: None).edit_photo(
-            internal_user_id=1, prompt="x", photo_file_id="f"
+            internal_user_id=1, prompt="x", photo_file_id="http://u/p.png"
         ))
         self.assertIn("error", out)
         self.assertTrue(out["error"])
 
-    def test_animate_photo_returns_graceful_error(self):
+    def test_animate_photo_without_bridge_returns_graceful_error(self):
         out = run(self._service(lambda d, r: None).animate_photo(
-            internal_user_id=1, prompt="x", photo_file_id="f"
+            internal_user_id=1, prompt="x", photo_file_id="http://u/p.png"
         ))
+        self.assertIn("error", out)
+
+
+class PhotoBridgeTests(unittest.TestCase):
+    def _bridged(self, *, i2i=None, video=None, downloaded=b"IMG"):
+        seen = {}
+
+        async def _dl(url):
+            seen["url"] = url
+            return downloaded
+
+        async def _i2i(deps, req):
+            seen["i2i_req"] = req
+            return {"images": [{"url": "http://u/e.png"}]}
+
+        async def _video(deps, req):
+            seen["video_req"] = req
+            return {"videos": [{"url": "http://u/v.mp4"}]}
+
+        svc = BackendGenerationService(
+            generate_images=lambda d, r: None,
+            deps=_Deps(),
+            generate_i2i=i2i or _i2i,
+            generate_video_ingredients=video or _video,
+            download_bytes=_dl,
+        )
+        return svc, seen
+
+    def test_edit_photo_downloads_and_calls_i2i_with_b64(self):
+        import base64
+        svc, seen = self._bridged(downloaded=b"RAWBYTES")
+        out = run(svc.edit_photo(
+            internal_user_id=9, prompt="brighten", photo_file_id="https://cdn/p.png"
+        ))
+        self.assertEqual(out, {"images": [{"url": "http://u/e.png"}]})
+        self.assertEqual(seen["url"], "https://cdn/p.png")
+        self.assertEqual(seen["i2i_req"]["image_b64"], base64.b64encode(b"RAWBYTES").decode())
+        self.assertEqual(seen["i2i_req"]["prompt"], "brighten")
+        self.assertEqual(seen["i2i_req"]["user_id"], 9)
+
+    def test_animate_photo_downloads_and_calls_video(self):
+        svc, seen = self._bridged()
+        out = run(svc.animate_photo(
+            internal_user_id=3, prompt="spin", photo_file_id="https://cdn/p.png"
+        ))
+        self.assertEqual(out, {"videos": [{"url": "http://u/v.mp4"}]})
+        self.assertIn("image_b64", seen["video_req"])
+
+    def test_non_url_photo_ref_is_graceful_error(self):
+        # a token/file-id ref (not http) can't be downloaded here
+        svc, seen = self._bridged()
+        out = run(svc.edit_photo(internal_user_id=1, prompt="x", photo_file_id="token123"))
+        self.assertIn("error", out)
+        self.assertNotIn("url", seen)  # download never attempted
+
+    def test_empty_download_is_graceful_error(self):
+        svc, seen = self._bridged(downloaded=b"")
+        out = run(svc.edit_photo(internal_user_id=1, prompt="x", photo_file_id="https://cdn/p.png"))
         self.assertIn("error", out)
 
 
