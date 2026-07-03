@@ -171,6 +171,9 @@ from flow_core import (
     FlowAccount,
     parse_flow_accounts,
     AccountPool,
+    fmt_to_aspect,
+    aspect_to_fmt,
+    aspect_to_vfmt,
 )
 import flow_copy
 from generation import backend_service
@@ -874,13 +877,7 @@ def _reset_image_flow(user_id: int, *, keep_last: bool = True) -> None:
 
 
 def _fmt_to_aspect(fmt: str) -> str:
-    return {
-        "land": "landscape",
-        "port": "portrait",
-        "sq": "square",
-        "f43": "landscape_43",
-        "f34": "portrait_34",
-    }.get(fmt, "landscape")
+    return fmt_to_aspect(fmt)
 
 # Per-user Flow project lifecycle + auto-disable circuit breaker moved to
 # accounts/projects.py (Phase 11 core split). The manager owns the failure
@@ -1808,7 +1805,7 @@ async def show_video_settings(message: types.Message, *, user_id: int):
 
 
 def _aspect_to_vfmt(aspect: str) -> str:
-    return {"landscape": "land", "portrait": "port"}.get(aspect, "land")
+    return aspect_to_vfmt(aspect)
 
 
 def _robokassa_configured() -> bool:
@@ -4183,13 +4180,7 @@ async def _video_edit_uploaded(message: types.Message, prompt: str, *, user_id: 
 
 
 def _aspect_to_fmt(aspect: str) -> str:
-    return {
-        "landscape": "land",
-        "portrait": "port",
-        "square": "sq",
-        "landscape_43": "f43",
-        "portrait_34": "f34",
-    }.get(aspect, "land")
+    return aspect_to_fmt(aspect)
 
 
 async def _video_delivery_bytes(

@@ -141,6 +141,31 @@ def aspect_code(aspect_ratio: str) -> str:
     return ASPECT_MAP.get((aspect_ratio or "").strip().lower(), "IMAGE_ASPECT_RATIO_LANDSCAPE")
 
 
+# Platform-neutral format <-> aspect mappings (Phase 11 core split). "fmt" is the
+# short UI code (land/port/sq/f43/f34); "aspect" is the friendly name used by the
+# provider layer; "vfmt" is the video short code (only land/port supported).
+_FMT_TO_ASPECT = {
+    "land": "landscape",
+    "port": "portrait",
+    "sq": "square",
+    "f43": "landscape_43",
+    "f34": "portrait_34",
+}
+_ASPECT_TO_FMT = {v: k for k, v in _FMT_TO_ASPECT.items()}
+
+
+def fmt_to_aspect(fmt: str) -> str:
+    return _FMT_TO_ASPECT.get(fmt, "landscape")
+
+
+def aspect_to_fmt(aspect: str) -> str:
+    return _ASPECT_TO_FMT.get(aspect, "land")
+
+
+def aspect_to_vfmt(aspect: str) -> str:
+    return {"landscape": "land", "portrait": "port"}.get(aspect, "land")
+
+
 # ── response parsing ──────────────────────────────────────────────────
 
 
