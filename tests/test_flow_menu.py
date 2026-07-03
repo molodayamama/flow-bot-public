@@ -752,6 +752,85 @@ class BotMenuWiringTests(unittest.TestCase):
             self.assertIn(needle, self.source)
         self.assertNotIn("flow_bot", self.screens_source)
 
+    def test_image_wizard_screens_moved_to_telegram_screens_module(self) -> None:
+        self.assertIn("tg_screens.ImageWizardScreensDeps(", self.source)
+        for name in (
+            "async def show_edit_confirm",
+            "def wizard_text",
+            "async def show_wizard",
+            "def prompt_picker_text",
+            "async def show_prompt_picker",
+        ):
+            self.assertIn(name, self.screens_source, name)
+        for needle in (
+            "workspace=_ws",
+            "edit_or_answer=_edit_or_answer",
+            "quick_ideas=tuple(_QUICK_IDEAS)",
+            "default_image_model=DEFAULT_IMAGE_MODEL",
+        ):
+            self.assertIn(needle, self.source)
+        self.assertNotIn("flow_bot", self.screens_source)
+
+    def test_image_wizard_screens_use_injected_state(self) -> None:
+        from channels.telegram import screens as tg_screens
+
+        state = {
+            7: {
+                "pending_prompt": "<cat>&",
+                "edit_instruction": "<fix>&",
+                "edit_as_gen": True,
+            }
+        }
+        events = []
+
+        class CreditStore:
+            def balance(self, user_id):
+                return 99
+
+        class Message:
+            async def answer(self, text, reply_markup=None, parse_mode=None):
+                events.append(("answer", text, reply_markup, parse_mode))
+                return SimpleNamespace(message_id=707)
+
+        async def edit_or_answer(*args, **kwargs):
+            events.append(("edit_or_answer", args, kwargs))
+
+        def log_event(*args, **kwargs):
+            events.append(("log_event", args, kwargs))
+
+        deps = tg_screens.ImageWizardScreensDeps(
+            workspace=lambda user_id: state[user_id],
+            credit_store=CreditStore(),
+            log_event=log_event,
+            edit_or_answer=edit_or_answer,
+            quick_ideas=("first <idea>", "second", "third", "fourth"),
+            default_count=1,
+            default_fmt="land",
+            default_image_model="nb2",
+            fmt_names={"land": "16:9"},
+        )
+
+        text = tg_screens.wizard_text(7, deps=deps)
+        self.assertIn("&lt;cat&gt;&amp;", text)
+        self.assertIn("99", text)
+
+        asyncio.run(tg_screens.show_wizard(Message(), user_id=7, edit=True, deps=deps))
+        self.assertEqual(state[7]["step"], "wizard")
+        self.assertEqual(events[-1][0], "edit_or_answer")
+        self.assertEqual(events[-1][2].get("parse_mode"), "HTML")
+
+        asyncio.run(tg_screens.show_edit_confirm(Message(), user_id=7, edit=False, deps=deps))
+        self.assertEqual(events[-1][0], "answer")
+        self.assertIn("&lt;fix&gt;&amp;", events[-1][1])
+        self.assertEqual(events[-1][3], "HTML")
+
+        state[7].pop("ideas_pool", None)
+        asyncio.run(tg_screens.show_prompt_picker(Message(), user_id=7, edit=False, deps=deps))
+        self.assertEqual(state[7]["step"], "prompt_picker")
+        self.assertIn("ideas_pool", state[7])
+        self.assertEqual(state[7]["picker_msg_id"], 707)
+        self.assertTrue(any(event[0] == "log_event" for event in events))
+
     def test_video_reference_screens_moved_to_telegram_screens_module(self) -> None:
         self.assertIn("tg_screens.VideoReferenceScreensDeps(", self.source)
         for name in (
@@ -1543,7 +1622,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("import html", self.source)
         self.assertIn('parse_mode="HTML"', self.source)
         # every echoed user prompt on an HTML screen is escaped
-        self.assertIn("html.escape(pending", self.source)
+        self.assertIn("html.escape(pending", self.source + "\n" + self.screens_source)
         self.assertIn("html.escape(caption", self.source + "\n" + self.screens_source)
 
     def test_ingredients_diagnostic_logging_present(self) -> None:
@@ -1566,6 +1645,8 @@ class BotMenuWiringTests(unittest.TestCase):
             + self.payments_router_source
             + "\n"
             + self.start_router_source
+            + "\n"
+            + self.screens_source
         )
         for ev in (
             '"user_started"', '"image_requested"', '"image_success"', '"image_failed"',

@@ -1360,31 +1360,24 @@ _QUICK_IDEAS: list[str] = [
 ]
 
 
+def _image_wizard_screens_deps() -> tg_screens.ImageWizardScreensDeps:
+    return tg_screens.ImageWizardScreensDeps(
+        workspace=_ws,
+        credit_store=credit_store,
+        log_event=metrics.log_event,
+        edit_or_answer=_edit_or_answer,
+        quick_ideas=tuple(_QUICK_IDEAS),
+        default_count=DEFAULT_COUNT,
+        default_fmt=DEFAULT_FMT,
+        default_image_model=DEFAULT_IMAGE_MODEL,
+        fmt_names=_FMT_NAMES,
+    )
+
+
 async def show_edit_confirm(message: types.Message, *, user_id: int, edit: bool):
-    """Экран подтверждения правки фото с кнопками «Улучшить запрос» / «Применить»."""
-    st = _ws(user_id)
-    instr = (st.get("edit_instruction") or "").strip()
-    as_gen = bool(st.get("edit_as_gen"))
-    if as_gen:
-        header = "🎨 <b>Создать изображение</b>"
-        tail = "Сгенерировать по фото и запросу — или улучшить запрос (3 варианта)?"
-    else:
-        header = "✏️ <b>Правка фото</b>"
-        tail = "Применить как есть — или улучшить запрос (3 варианта)?"
-    text = (
-        f"{header}\n\n"
-        f"<blockquote>{html.escape(instr[:300])}</blockquote>\n"
-        f"{tail}"
+    await tg_screens.show_edit_confirm(
+        message, user_id=user_id, edit=edit, deps=_image_wizard_screens_deps()
     )
-    kb = edit_confirm_kb(
-        st.get("edit_fmt", DEFAULT_FMT),
-        st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
-        as_generation=as_gen,
-    )
-    if edit:
-        await _edit_or_answer(message, text, kb, parse_mode="HTML")
-    else:
-        await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 def _balance_reply_label(user_id: int | None = None) -> str:
@@ -1410,24 +1403,7 @@ async def _show_help_screen(message: types.Message, *, edit: bool) -> None:
 
 
 def _wizard_text(user_id: int) -> str:
-    st = _ws(user_id)
-    count = st.get("count", DEFAULT_COUNT)
-    fmt = st.get("fmt", DEFAULT_FMT)
-    imodel = st.get("imodel", DEFAULT_IMAGE_MODEL)
-    total_price = price_gen(count) + image_model_extra(imodel) * count
-    settings = flow_copy.msg(
-        "wizard_screen",
-        count=count,
-        fmt=_FMT_NAMES.get(fmt, fmt),
-        price=total_price,
-        credits=credit_store.balance(user_id),
-    )
-    # Промпт — в blockquote вверху, чтобы сразу бросался в глаза.
-    pending = st.get("pending_prompt")
-    if pending:
-        prompt_block = flow_copy.msg("wizard_prompt_note", prompt=html.escape(pending))
-        return prompt_block + settings
-    return settings
+    return tg_screens.wizard_text(user_id, deps=_image_wizard_screens_deps())
 
 
 async def _edit_or_answer(
@@ -1451,18 +1427,9 @@ async def _edit_or_answer(
 
 
 async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
-    """Шаг 2 визарда: настройки (количество/формат/модель) + промпт уже задан."""
-    st = _ws(user_id)
-    st.setdefault("count", DEFAULT_COUNT)
-    st.setdefault("fmt", DEFAULT_FMT)
-    st.setdefault("imodel", DEFAULT_IMAGE_MODEL)
-    st["step"] = "wizard"
-    kb = wizard_kb(st["count"], st["fmt"], st["imodel"], show_improve=True)
-    text = _wizard_text(user_id)
-    if edit:
-        await _edit_or_answer(message, text, kb, parse_mode="HTML")
-    else:
-        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await tg_screens.show_wizard(
+        message, user_id=user_id, edit=edit, deps=_image_wizard_screens_deps()
+    )
 
 
 async def _boost_prompt_with_gemini(prompt: str) -> str | None:
@@ -1498,53 +1465,14 @@ async def _boost_prompt_with_gemini(prompt: str) -> str | None:
         return None
 
 
-_IDEA_EMOJIS = ["🌺", "🌙", "🎭", "🦋", "🌊", "🎪", "⚡", "🌿", "🔮", "🎯"]
-
-
 def _prompt_picker_text(ideas: list[str]) -> str:
-    """Текст экрана с идеями (шаг 1 визарда).
-
-    Каждая идея обёрнута в <code> (tap-to-copy) и предваряется эмодзи.
-    """
-    lines = [
-        "✨ <b>Что рисуем?</b>\n",
-        "Опиши идею текстом или выбери готовый сюжет ниже — "
-        "нажми на него, скопируй и отправь 👇\n",
-    ]
-    # Идеи внутри одной цитаты (blockquote) — выглядит аккуратнее; каждая
-    # строка остаётся <code>, то есть копируется по клику.
-    quoted = []
-    for i, idea in enumerate(ideas[:3]):
-        emoji = _IDEA_EMOJIS[i % len(_IDEA_EMOJIS)]
-        quoted.append(f"<code>{emoji} {html.escape(idea)}</code>")
-    lines.append("<blockquote>" + "\n".join(quoted) + "</blockquote>")
-    return "\n".join(lines)
+    return tg_screens.prompt_picker_text(ideas)
 
 
 async def show_prompt_picker(message: types.Message, *, user_id: int, edit: bool):
-    """Шаг 1 визарда: список идей в тексте + ввод своего промпта."""
-    import random as _random
-    st = _ws(user_id)
-    st.setdefault("count", DEFAULT_COUNT)
-    st.setdefault("fmt", DEFAULT_FMT)
-    st.setdefault("imodel", DEFAULT_IMAGE_MODEL)
-    st["step"] = "prompt_picker"
-    # Инициализируем или переиспользуем перемешанный пул идей
-    if "ideas_pool" not in st:
-        pool = list(_QUICK_IDEAS)
-        _random.shuffle(pool)
-        st["ideas_pool"] = pool
-        st["ideas_offset"] = 0
-    offset = st.get("ideas_offset", 0)
-    ideas = st["ideas_pool"][offset:offset + 3]
-    text = _prompt_picker_text(ideas)
-    kb = _prompt_picker_kb(ideas)
-    if edit:
-        await _edit_or_answer(message, text, kb, parse_mode="HTML")
-    else:
-        metrics.log_event("wizard_started", user_id=user_id, source="image")
-        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
-        st["picker_msg_id"] = sent.message_id
+    await tg_screens.show_prompt_picker(
+        message, user_id=user_id, edit=edit, deps=_image_wizard_screens_deps()
+    )
 
 
 # ── видео-визард (кнопочный UX, префикс v:) ────────────────────────────

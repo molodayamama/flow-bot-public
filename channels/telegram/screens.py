@@ -17,16 +17,25 @@ from channels.telegram.keyboards import (
     _MP_PLAT_NAMES,
     _menu_button,
     _mp_platform_format_label,
+    _prompt_picker_kb,
     _slides_word,
+    edit_confirm_kb,
     frames_kb,
     ingredients_kb,
     main_menu_kb,
     video_family_kb,
     video_variant_kb,
     video_wizard_kb,
+    wizard_kb,
 )
 from channels.telegram.texts import _MP_SERIES_COUNTS
-from flow_core import action_callback_data, action_price, price_gen, video_price
+from flow_core import (
+    action_callback_data,
+    action_price,
+    image_model_extra,
+    price_gen,
+    video_price,
+)
 
 
 @dataclass(frozen=True)
@@ -57,6 +66,21 @@ class PublicScreensDeps:
     referral_tier2_bonus: int
     referral_tier3_bonus: int
     referral_ongoing_pct: float
+
+
+@dataclass(frozen=True)
+class ImageWizardScreensDeps:
+    """Injected state and stores for image wizard screens."""
+
+    workspace: Callable[[int], MutableMapping[str, Any]]
+    credit_store: Any
+    log_event: Callable[..., Any]
+    edit_or_answer: Callable[..., Awaitable[Any]]
+    quick_ideas: tuple[str, ...]
+    default_count: int
+    default_fmt: str
+    default_image_model: str
+    fmt_names: Mapping[str, str]
 
 
 @dataclass(frozen=True)
@@ -97,6 +121,9 @@ class MarketplaceScreensDeps:
     brand_kit: Callable[[int], str]
     niche_label: Callable[[int], str]
     stamp_message: Callable[[int, Any], None]
+
+
+_IDEA_EMOJIS = ["🌺", "🌙", "🎭", "🦋", "🌊", "🎪", "⚡", "🌿", "🔮", "🎯"]
 
 
 async def show_referral_screen(
@@ -182,6 +209,114 @@ async def show_balance(
             await message.answer(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def show_edit_confirm(
+    message: types.Message, *, user_id: int, edit: bool,
+    deps: ImageWizardScreensDeps,
+) -> None:
+    st = deps.workspace(user_id)
+    instr = (st.get("edit_instruction") or "").strip()
+    as_gen = bool(st.get("edit_as_gen"))
+    if as_gen:
+        header = "🎨 <b>Создать изображение</b>"
+        tail = "Сгенерировать по фото и запросу — или улучшить запрос (3 варианта)?"
+    else:
+        header = "✏️ <b>Правка фото</b>"
+        tail = "Применить как есть — или улучшить запрос (3 варианта)?"
+    text = (
+        f"{header}\n\n"
+        f"<blockquote>{html.escape(instr[:300])}</blockquote>\n"
+        f"{tail}"
+    )
+    kb = edit_confirm_kb(
+        st.get("edit_fmt", deps.default_fmt),
+        st.get("edit_imodel", deps.default_image_model),
+        as_generation=as_gen,
+    )
+    if edit:
+        await deps.edit_or_answer(message, text, kb, parse_mode="HTML")
+    else:
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+def wizard_text(user_id: int, *, deps: ImageWizardScreensDeps) -> str:
+    st = deps.workspace(user_id)
+    count = st.get("count", deps.default_count)
+    fmt = st.get("fmt", deps.default_fmt)
+    imodel = st.get("imodel", deps.default_image_model)
+    total_price = price_gen(count) + image_model_extra(imodel) * count
+    settings = flow_copy.msg(
+        "wizard_screen",
+        count=count,
+        fmt=deps.fmt_names.get(fmt, fmt),
+        price=total_price,
+        credits=deps.credit_store.balance(user_id),
+    )
+    pending = st.get("pending_prompt")
+    if pending:
+        prompt_block = flow_copy.msg("wizard_prompt_note", prompt=html.escape(pending))
+        return prompt_block + settings
+    return settings
+
+
+async def show_wizard(
+    message: types.Message, *, user_id: int, edit: bool,
+    deps: ImageWizardScreensDeps,
+) -> None:
+    st = deps.workspace(user_id)
+    st.setdefault("count", deps.default_count)
+    st.setdefault("fmt", deps.default_fmt)
+    st.setdefault("imodel", deps.default_image_model)
+    st["step"] = "wizard"
+    kb = wizard_kb(st["count"], st["fmt"], st["imodel"], show_improve=True)
+    text = wizard_text(user_id, deps=deps)
+    if edit:
+        await deps.edit_or_answer(message, text, kb, parse_mode="HTML")
+    else:
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+def prompt_picker_text(ideas: list[str]) -> str:
+    """Render prompt ideas as copyable code lines."""
+
+    lines = [
+        "✨ <b>Что рисуем?</b>\n",
+        "Опиши идею текстом или выбери готовый сюжет ниже — "
+        "нажми на него, скопируй и отправь 👇\n",
+    ]
+    quoted = []
+    for i, idea in enumerate(ideas[:3]):
+        emoji = _IDEA_EMOJIS[i % len(_IDEA_EMOJIS)]
+        quoted.append(f"<code>{emoji} {html.escape(idea)}</code>")
+    lines.append("<blockquote>" + "\n".join(quoted) + "</blockquote>")
+    return "\n".join(lines)
+
+
+async def show_prompt_picker(
+    message: types.Message, *, user_id: int, edit: bool,
+    deps: ImageWizardScreensDeps,
+) -> None:
+    st = deps.workspace(user_id)
+    st.setdefault("count", deps.default_count)
+    st.setdefault("fmt", deps.default_fmt)
+    st.setdefault("imodel", deps.default_image_model)
+    st["step"] = "prompt_picker"
+    if "ideas_pool" not in st:
+        pool = list(deps.quick_ideas)
+        random.shuffle(pool)
+        st["ideas_pool"] = pool
+        st["ideas_offset"] = 0
+    offset = st.get("ideas_offset", 0)
+    ideas = st["ideas_pool"][offset:offset + 3]
+    text = prompt_picker_text(ideas)
+    kb = _prompt_picker_kb(ideas)
+    if edit:
+        await deps.edit_or_answer(message, text, kb, parse_mode="HTML")
+    else:
+        deps.log_event("wizard_started", user_id=user_id, source="image")
+        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        st["picker_msg_id"] = sent.message_id
 
 
 async def show_video_ingredients(
