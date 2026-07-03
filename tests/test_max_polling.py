@@ -34,7 +34,7 @@ class _FakeHandler:
     def __init__(self):
         self.events = []
 
-    async def handle_update(self, event):
+    async def handle(self, event):
         self.events.append(event)
 
 

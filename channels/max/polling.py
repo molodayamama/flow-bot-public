@@ -26,7 +26,7 @@ class _UpdatesClient(Protocol):
 
 
 class _Handler(Protocol):
-    async def handle_update(self, event: Any) -> None:
+    async def handle(self, event: Any) -> None:
         ...
 
 
@@ -67,7 +67,7 @@ async def poll_once(
         if event is None:
             continue
         try:
-            await handler.handle_update(event)
+            await handler.handle(event)
         except Exception:
             log.exception("MAX update handling failed")
     return next_marker if next_marker is not None else marker
