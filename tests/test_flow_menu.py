@@ -480,8 +480,12 @@ class BotMenuWiringTests(unittest.TestCase):
         self.admin_accounts_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "admin_accounts.py"
         ).read_text(encoding="utf-8")
+        # /status moved to its own admin diagnostics router (Phase 6).
+        self.admin_status_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "admin_status.py"
+        ).read_text(encoding="utf-8")
         # /admin_today .. /admin_cohort read-only reports moved to their own
-        # router (Phase 6); cmd_status stays in flow_bot.py (keeper internals).
+        # router (Phase 6).
         self.admin_reports_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "admin_reports.py"
         ).read_text(encoding="utf-8")
@@ -678,13 +682,18 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("deps.credit_store.add(target, amount)", self.admin_credits_router_source)
 
     def test_status_diagnostics_restricted_to_admins(self) -> None:
-        # cmd_status stays in flow_bot (keeper internals); /promo moved to the
-        # admin_credits router, so the block now ends at the admin-gate defs.
-        start = self.source.index('@dp.message(Command("status"))')
-        end = self.source.index("def _admin_only", start)
-        block = self.source[start:end]
-        self.assertIn("message.from_user.id not in ADMIN_IDS", block)
-        self.assertIn('flow_copy.msg("admin_denied")', block)
+        self.assertIn('@router.message(Command("status"))', self.admin_status_router_source)
+        self.assertIn("async def cmd_status", self.admin_status_router_source)
+        self.assertIn("message.from_user.id not in deps.admin_ids", self.admin_status_router_source)
+        self.assertIn('flow_copy.msg("admin_denied")', self.admin_status_router_source)
+        for needle in (
+            "admin_ids=ADMIN_IDS",
+            "keeper=keeper",
+            "account_pool=account_pool",
+            "metrics=metrics",
+            "bearer_timestamp=lambda: keeper._bearer_ts",
+        ):
+            self.assertIn(needle, self.source)
 
         help_start = self.source.index("_HELP_SECTIONS")
         help_end = self.source.index("def _render_admin_help", help_start)

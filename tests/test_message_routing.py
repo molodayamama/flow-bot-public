@@ -39,12 +39,10 @@ from aiogram.types import Chat, Document, Message, PhotoSize, User, Video
 
 import flow_bot
 
-# Protected dp-level message handlers that must NOT be extracted (payments,
-# media catch-alls, /start deep-links). cmd_status stays by design too
-# (keeper-internals closure, see HANDOFF session 23).
+# Protected dp-level message handlers that must NOT be extracted yet:
+# payments, media catch-alls, and /start deep-links.
 EXPECTED_DP_LEVEL = [
     "cmd_start",
-    "cmd_status",
     "on_successful_payment",
     "handle_photo",
     "handle_plain_text",
@@ -69,7 +67,7 @@ _PHOTO = [PhotoSize(file_id="p", file_unique_id="pu", width=10, height=10)]
 # The pinned routing table: description -> (Message kwargs, expected handler).
 ROUTING_TABLE = {
     "text /start": (dict(text="/start"), "dp:cmd_start"),
-    "text /status": (dict(text="/status"), "dp:cmd_status"),
+    "text /status": (dict(text="/status"), "tg-admin-status:cmd_status"),
     "text /menu": (dict(text="/menu"), "tg-public-commands:cmd_menu"),
     "text /img": (dict(text="/img cat"), "tg-generation-commands:cmd_img"),
     "text /grant": (dict(text="/grant 1 10"), "tg-admin-credits:cmd_grant"),
@@ -134,7 +132,8 @@ class MessageRoutingRegressionTests(unittest.TestCase):
         video_idx = names.index("tg-video-upload-input")
         for command_router in (
             "tg-public-commands", "tg-generation-commands",
-            "tg-admin-accounts", "tg-admin-reports", "tg-admin-credits",
+            "tg-admin-accounts", "tg-admin-status",
+            "tg-admin-reports", "tg-admin-credits",
         ):
             self.assertLess(names.index(command_router), video_idx, command_router)
         # And still above the tail callback fallback.

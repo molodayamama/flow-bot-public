@@ -13,6 +13,7 @@ from channels.telegram.routers import agent as agent_router
 from channels.telegram.routers import admin_accounts as admin_accounts_router
 from channels.telegram.routers import admin_credits as admin_credits_router
 from channels.telegram.routers import admin_reports as admin_reports_router
+from channels.telegram.routers import admin_status as admin_status_router
 from channels.telegram.routers import commands as commands_router
 from channels.telegram.routers import edit_settings as edit_settings_router
 from channels.telegram.routers import generation_commands as generation_commands_router
@@ -2179,6 +2180,177 @@ class AdminAccountsRouterTests(unittest.TestCase):
 
     def test_admin_accounts_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(admin_accounts_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class FakeStatusKeeper:
+    def __init__(self, rec) -> None:
+        self.rec = rec
+
+    async def get_session(self):
+        self.rec.calls.append(("get_session", (), {}))
+        return {
+            "bearer": "token-present",
+            "project_id": "proj1",
+            "cookies": {"a": "b", "c": "d"},
+        }
+
+    async def get_capmonster_balance(self):
+        self.rec.calls.append(("get_capmonster_balance", (), {}))
+        return "12.3"
+
+    async def get_2captcha_balance(self):
+        self.rec.calls.append(("get_2captcha_balance", (), {}))
+        return "4.5"
+
+
+class FakeStatusPool:
+    def __init__(self, rec) -> None:
+        self.rec = rec
+
+    def status(self):
+        self.rec.calls.append(("pool.status", (), {}))
+        return [{
+            "id": "acc1",
+            "disabled": False,
+            "cooldown_left": 0,
+            "video_allowed": True,
+            "active_image_jobs": 1,
+            "image_capacity": 2,
+            "active_video_jobs": 0,
+            "video_capacity": 1,
+            "users": 3,
+        }]
+
+
+class FakeStatusMetrics:
+    def __init__(self, rec, *, raise_video_health: bool = False) -> None:
+        self.rec = rec
+        self.raise_video_health = raise_video_health
+
+    def report_video_health(self, windows):
+        self.rec.calls.append(("report_video_health", (windows,), {}))
+        if self.raise_video_health:
+            raise RuntimeError("boom")
+        return {
+            "windows": {
+                "1h": [{
+                    "account": "acc1",
+                    "success_rate": 0.5,
+                    "avg_attempts_before_200": 2.0,
+                    "video_attempts": 4,
+                    "video_403": 1,
+                    "video_success": 2,
+                    "video_success_after_retry": 1,
+                    "video_final_fail": 1,
+                }],
+                "24h": [],
+            }
+        }
+
+
+class RecordingAdminStatusDeps:
+    def __init__(
+        self,
+        *,
+        admin_ids: set[int] | None = None,
+        raise_video_health: bool = False,
+        capmonster_key: str | None = "cap-key",
+        twocaptcha_key: str | None = "two-key",
+    ) -> None:
+        self.admin_ids = admin_ids if admin_ids is not None else {7}
+        self.calls: list[tuple[str, tuple, dict]] = []
+        self.keeper = FakeStatusKeeper(self)
+        self.account_pool = FakeStatusPool(self)
+        self.metrics = FakeStatusMetrics(self, raise_video_health=raise_video_health)
+        self.capmonster_key = capmonster_key
+        self.twocaptcha_key = twocaptcha_key
+
+    def captcha_provider(self) -> str:
+        self.calls.append(("captcha_provider", (), {}))
+        return "auto"
+
+    def get_capmonster_key(self) -> str | None:
+        self.calls.append(("capmonster_key", (), {}))
+        return self.capmonster_key
+
+    def get_twocaptcha_key(self) -> str | None:
+        self.calls.append(("twocaptcha_key", (), {}))
+        return self.twocaptcha_key
+
+    def now(self) -> float:
+        return 1_000.0
+
+    def bearer_timestamp(self) -> float:
+        return 700.0
+
+
+def _admin_status_deps(**kwargs) -> tuple[
+    admin_status_router.AdminStatusDeps, RecordingAdminStatusDeps
+]:
+    rec = RecordingAdminStatusDeps(**kwargs)
+    deps = admin_status_router.AdminStatusDeps(
+        admin_ids=rec.admin_ids,
+        keeper=rec.keeper,
+        account_pool=rec.account_pool,
+        metrics=rec.metrics,
+        captcha_provider=rec.captcha_provider,
+        capmonster_key=rec.get_capmonster_key,
+        twocaptcha_key=rec.get_twocaptcha_key,
+        time=rec.now,
+        bearer_timestamp=rec.bearer_timestamp,
+    )
+    return deps, rec
+
+
+class AdminStatusRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _admin_status_deps()
+        self.router = admin_status_router.create_router(self.deps)
+        self.handler = self.router.message.handlers[0].callback
+
+    def test_creates_single_status_handler(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        self.assertEqual(self.router.name, "tg-admin-status")
+        self.assertEqual(len(self.router.message.handlers), 1)
+        self.assertEqual(self.router.callback_query.handlers, [])
+        self.assertEqual(_handler_commands(self.router.message.handlers[0]), {"status"})
+
+    def test_non_admin_is_denied_without_diagnostics(self) -> None:
+        deps, rec = _admin_status_deps(admin_ids=set())
+        router = admin_status_router.create_router(deps)
+        message = FakeMessage("/status")
+        run(router.message.handlers[0].callback(message))
+        self.assertEqual(len(message.answers), 1)
+        self.assertEqual(rec.calls, [])
+
+    def test_admin_status_composes_session_pool_and_video_health(self) -> None:
+        message = FakeMessage("/status")
+        run(self.handler(message))
+        text = message.answers[-1][0][0]
+        kwargs = message.answers[-1][1]
+        self.assertEqual(kwargs, {"parse_mode": "HTML"})
+        for needle in ("Bearer", "Project ID", "Cookies", "CapMonster", "2captcha", "acc1", "1h", "403"):
+            self.assertIn(needle, text)
+        self.assertIn(("get_session", (), {}), self.rec.calls)
+        self.assertIn(("pool.status", (), {}), self.rec.calls)
+        self.assertIn(("report_video_health", ((1, 24),), {}), self.rec.calls)
+
+    def test_video_health_failure_falls_back_without_failing_status(self) -> None:
+        deps, _ = _admin_status_deps(raise_video_health=True)
+        router = admin_status_router.create_router(deps)
+        message = FakeMessage("/status")
+        run(router.message.handlers[0].callback(message))
+        text = message.answers[-1][0][0]
+        self.assertIn("Bearer", text)
+        self.assertIn("Project ID", text)
+
+    def test_admin_status_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.keeper = None  # type: ignore[misc]
+
+    def test_admin_status_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(admin_status_router)
         self.assertNotIn("flow_bot", src)
 
 

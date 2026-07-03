@@ -330,6 +330,9 @@ class BotPoolWiringTests(unittest.TestCase):
         cls.admin_accounts_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "admin_accounts.py"
         ).read_text(encoding="utf-8")
+        cls.admin_status_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "admin_status.py"
+        ).read_text(encoding="utf-8")
 
     def test_pool_globals_built_from_env(self) -> None:
         self.assertIn('FLOW_ACCOUNTS_RAW = os.getenv("FLOW_ACCOUNTS", "")', self.source)
@@ -413,7 +416,8 @@ class BotPoolWiringTests(unittest.TestCase):
         # /acc_off and /acc_on live in the admin_accounts router (Phase 6).
         self.assertIn('Command("acc_off")', self.admin_accounts_router_source)
         self.assertIn('Command("acc_on")', self.admin_accounts_router_source)
-        self.assertIn("account_pool.status()", self.source)
+        self.assertIn("account_pool=account_pool", self.source)
+        self.assertIn("deps.account_pool.status()", self.admin_status_router_source)
 
     def test_flow_jobs_log_real_account(self) -> None:
         # Метрики flow_jobs пишут фактический аккаунт джобы, не статичный ярлык.
@@ -609,6 +613,9 @@ class CapacityBotWiringTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = (PROJECT_ROOT / "flow_bot.py").read_text(encoding="utf-8")
+        cls.admin_status_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "admin_status.py"
+        ).read_text(encoding="utf-8")
 
     def test_acc_capacity_env_vars_present(self):
         self.assertIn('ACC_IMAGE_CAPACITY', self.source)
@@ -637,8 +644,8 @@ class CapacityBotWiringTests(unittest.TestCase):
         self.assertIn('flow_copy.msg("high_load")', block)
 
     def test_status_command_shows_pool_capacity(self):
-        start = self.source.index("async def cmd_status")
-        block = self.source[start:start + 2000]
+        start = self.admin_status_router_source.index("async def cmd_status")
+        block = self.admin_status_router_source[start:start + 2200]
         self.assertIn("active_image_jobs", block)
         self.assertIn("active_video_jobs", block)
         self.assertIn("image_capacity", block)

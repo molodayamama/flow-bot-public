@@ -332,6 +332,7 @@ from channels.telegram.routers import wizard as tg_wizard_router
 from channels.telegram.routers import video as tg_video_router
 from channels.telegram.routers import generation_commands as tg_generation_commands_router
 from channels.telegram.routers import admin_accounts as tg_admin_accounts_router
+from channels.telegram.routers import admin_status as tg_admin_status_router
 from channels.telegram.routers import admin_reports as tg_admin_reports_router
 from channels.telegram.routers import admin_credits as tg_admin_credits_router
 from channels.telegram.routers import video_upload_input as tg_video_upload_input_router
@@ -2410,77 +2411,21 @@ dp.include_router(
 )
 
 
-@dp.message(Command("status"))
-async def cmd_status(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer(flow_copy.msg("admin_denied"))
-        return
-
-    session = await keeper.get_session()
-    bearer = "✅" if session["bearer"] else "❌"
-    project = "✅" if session["project_id"] else "❌"
-    cookies = "✅" if session["cookies"] else "❌"
-    age_min = int((time.time() - keeper._bearer_ts) / 60)
-
-    captcha_parts = [f"провайдер: {CAPTCHA_PROVIDER}"]
-    if CAPMONSTER_KEY:
-        captcha_parts.append(f"CapMonster: {await keeper.get_capmonster_balance()}")
-    if TWOCAPTCHA_KEY:
-        captcha_parts.append(f"2captcha: {await keeper.get_2captcha_balance()}")
-    captcha_line = ", ".join(captcha_parts)
-
-    pool_lines = []
-    for s in account_pool.status():
-        if s["disabled"]:
-            icon = "🔒"
-        elif s["cooldown_left"]:
-            icon = f"❄️{s['cooldown_left']}s"
-        else:
-            icon = "✅"
-        vid_icon = "🎬" if s["video_allowed"] else "🖼"
-        pool_lines.append(
-            f"  {icon}{vid_icon} <code>{s['id']}</code>: "
-            f"img {s['active_image_jobs']}/{s['image_capacity']} "
-            f"vid {s['active_video_jobs']}/{s['video_capacity']} "
-            f"users={s['users']}"
+dp.include_router(
+    tg_admin_status_router.create_router(
+        tg_admin_status_router.AdminStatusDeps(
+            admin_ids=ADMIN_IDS,
+            keeper=keeper,
+            account_pool=account_pool,
+            metrics=metrics,
+            captcha_provider=lambda: CAPTCHA_PROVIDER,
+            capmonster_key=lambda: CAPMONSTER_KEY,
+            twocaptcha_key=lambda: TWOCAPTCHA_KEY,
+            time=time.time,
+            bearer_timestamp=lambda: keeper._bearer_ts,
         )
-    pool_section = "\n".join(pool_lines) or "  (нет аккаунтов)"
-
-    # Видео-здоровье по аккаунтам (из video_outcome событий).
-    vh_lines = []
-    try:
-        vh = metrics.report_video_health((1, 24))
-        for win in ("1h", "24h"):
-            rows = vh.get("windows", {}).get(win, [])
-            if not rows:
-                continue
-            vh_lines.append(f"  <u>{win}</u>:")
-            for r in rows:
-                sr = r["success_rate"]
-                avg = r["avg_attempts_before_200"]
-                vh_lines.append(
-                    f"    <code>{r['account']}</code>: "
-                    f"att={r['video_attempts']} 403={r['video_403']} "
-                    f"ok={r['video_success']}(↻{r['video_success_after_retry']}) "
-                    f"fail={r['video_final_fail']} "
-                    f"avg={avg if avg is not None else '—'} "
-                    f"sr={int(sr * 100) if sr is not None else '—'}%"
-                )
-    except Exception:
-        pass
-    vh_section = "\n".join(vh_lines) or "  (нет видео-событий)"
-
-    await message.answer(
-        f"🔧 <b>Состояние бота</b>\n\n"
-        f"Bearer токен: {bearer} (возраст: {age_min} мин)\n"
-        f"Project ID:   {project} ({session['project_id'] or '—'})\n"
-        f"Cookies:      {cookies} ({len(session['cookies'])} шт)\n"
-        f"Капча:        {captcha_line}\n\n"
-        f"<b>Пул аккаунтов:</b>\n{pool_section}\n\n"
-        f"<b>Видео-здоровье:</b>\n{vh_section}\n",
-        parse_mode="HTML",
     )
-
+)
 
 # ── админ-метрики (только для ADMIN_IDS; read-only) ───────────────────
 
