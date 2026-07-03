@@ -1096,54 +1096,21 @@ _MP_JOB_SEED = {
 _MP_PRODUCT_PHOTO_JOBS = frozenset(_MP_JOB_SEED)
 
 
+def _marketplace_screens_deps() -> tg_screens.MarketplaceScreensDeps:
+    return tg_screens.MarketplaceScreensDeps(
+        workspace=_ws,
+        metrics=metrics,
+        credit_store=credit_store,
+        brand_kit=_mp_brand_kit,
+        niche_label=_mp_niche_label,
+        stamp_message=_mp_stamp_message,
+    )
+
+
 def _mp_confirm_screen(user_id: int):
-    """Экран подтверждения перед генерацией: задача, площадка, бренд-кит, ниша,
-    ЦЕНА, баланс — чтобы селлер видел стоимость и контекст до списания."""
-    st = _ws(user_id)
-    plat = st.get("mp_platform", "wb")
-    plat_name = _MP_PLAT_NAMES.get(plat, plat)
-    format_label = _mp_platform_format_label(plat)
-    kind = st.get("mp_pending_kind", "photo")
-    try:
-        brand = _mp_brand_kit(user_id)
-    except Exception:
-        brand = ""
-    try:
-        niche = _mp_niche_label(user_id)
-    except Exception:
-        niche = ""
-    caption = (st.get("mp_pending_caption") or "").strip()
-    try:
-        credits = credit_store.balance(user_id)
-    except Exception:
-        credits = 0
-    if kind == "series":
-        count = st.get("mp_series_count", 3)
-        if count not in _MP_SERIES_COUNTS:
-            count = 3
-        price = action_price("mp_series", count)
-        job_label = f"серия · {count} {_slides_word(count)}"
-    else:
-        job = st.get("mp_preset", "whitebg")
-        price = action_price("edit")
-        job_label = _MP_JOB_LABELS.get(job, job)
-    lines = [
-        f"🛒 <b>{html.escape(plat_name)}</b> · {html.escape(job_label)}",
-        "📎 Фото товара принято.",
-        "",
-        f"🎨 Бренд-кит: {html.escape(brand) if brand else '— (не задан)'}",
-        f"🏷️ Ниша: {html.escape(niche) if niche else '— (не задана)'}",
-    ]
-    if caption:
-        lines.append(f"📝 Пожелание: {html.escape(caption[:150])}")
-    lines.append(f"📐 Формат: {html.escape(format_label)}")
-    lines.append(f"💰 Стоимость: <b>{price} кр</b> · Баланс: {credits} кр")
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=f"✅ Создать · {price} кр", callback_data="mp:create")],
-        [types.InlineKeyboardButton(text="✏️ Сменить задачу", callback_data="m:mp")],
-        [_menu_button("cancel", "m:menu")],
-    ])
-    return "\n".join(lines), kb
+    return tg_screens.mp_confirm_screen(
+        user_id, deps=_marketplace_screens_deps()
+    )
 
 
 def _mp_job_instruction(
@@ -1233,57 +1200,27 @@ def _mp_series_prompt(
 
 
 def _mp_sku_projects(user_id: int, limit: int = 12) -> list[dict]:
-    projects = metrics.list_seller_sku_projects(user_id, limit=limit)
-    _ws(user_id)["mp_sku_project_choices"] = [str(p.get("sku") or "") for p in projects]
-    return projects
+    return tg_screens.mp_sku_projects(
+        user_id, limit=limit, deps=_marketplace_screens_deps()
+    )
 
 
 def _mp_sku_projects_text(user_id: int, projects: list[dict] | None = None) -> str:
-    projects = _mp_sku_projects(user_id) if projects is None else projects
-    if not projects:
-        return (
-            "📦 <b>Мои товары (SKU)</b>\n\n"
-            "Пока здесь пусто. Создай SKU сейчас или добавь результат кнопкой "
-            "«➕ В серию SKU» под готовой карточкой."
-        )
-    lines = ["📦 <b>Мои товары (SKU)</b>\n\nНажми на SKU ниже, чтобы открыть рабочее пространство."]
-    for item in projects:
-        sku = html.escape(str(item.get("sku") or "SKU"))
-        count = int(item.get("items") or 0)
-        platform = item.get("platform") or ""
-        platform_line = f" · {html.escape(platform)}" if platform else ""
-        updated = (item.get("updated_at") or "")[:16]
-        update_line = f", обновлено {updated}" if updated else ""
-        lines.append(f"• <b>{sku}</b>{platform_line}: {count} {_slides_word(count)}{update_line}")
-    lines.append("\nДобавляй текущую или последнюю карточку внутри нужного SKU.")
-    return "\n".join(lines)
+    return tg_screens.mp_sku_projects_text(
+        user_id, projects, deps=_marketplace_screens_deps()
+    )
 
 
 def _mp_sku_projects_kb(user_id: int, projects: list[dict] | None = None) -> types.InlineKeyboardMarkup:
-    B = types.InlineKeyboardButton
-    projects = _mp_sku_projects(user_id) if projects is None else projects
-    _ws(user_id)["mp_sku_project_choices"] = [str(p.get("sku") or "") for p in projects]
-    rows: list[list[types.InlineKeyboardButton]] = []
-    for idx, item in enumerate(projects):
-        sku = str(item.get("sku") or "SKU")
-        count = int(item.get("items") or 0)
-        rows.append([B(text=f"📦 {sku[:42]} · {count} {_slides_word(count)}", callback_data=f"mp:sku:open:{idx}")])
-    rows.append([B(text="➕ Новый SKU", callback_data="mp:sku:new")])
-    rows.append([B(text="◀️ Маркетплейсы", callback_data="m:mp")])
-    rows.append([_menu_button("menu", "m:menu")])
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+    return tg_screens.mp_sku_projects_kb(
+        user_id, projects, deps=_marketplace_screens_deps()
+    )
 
 
 async def _show_sku_projects(message: types.Message, *, user_id: int, edit: bool) -> None:
-    projects = _mp_sku_projects(user_id)
-    text = _mp_sku_projects_text(user_id, projects)
-    kb = _mp_sku_projects_kb(user_id, projects)
-    if edit:
-        await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-        _mp_stamp_message(user_id, message)
-    else:
-        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
-        _mp_stamp_message(user_id, sent)
+    await tg_screens.show_sku_projects(
+        message, user_id=user_id, edit=edit, deps=_marketplace_screens_deps()
+    )
 
 
 def _mp_sku_choice_kb(user_id: int) -> types.InlineKeyboardMarkup:

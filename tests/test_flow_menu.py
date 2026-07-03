@@ -769,6 +769,26 @@ class BotMenuWiringTests(unittest.TestCase):
             self.assertIn(needle, self.source)
         self.assertNotIn("flow_bot", self.screens_source)
 
+    def test_marketplace_screens_moved_to_telegram_screens_module(self) -> None:
+        self.assertIn("tg_screens.MarketplaceScreensDeps(", self.source)
+        for name in (
+            "def mp_confirm_screen",
+            "def mp_sku_projects",
+            "def mp_sku_projects_text",
+            "def mp_sku_projects_kb",
+            "async def show_sku_projects",
+        ):
+            self.assertIn(name, self.screens_source, name)
+        for needle in (
+            "workspace=_ws",
+            "credit_store=credit_store",
+            "brand_kit=_mp_brand_kit",
+            "niche_label=_mp_niche_label",
+            "stamp_message=_mp_stamp_message",
+        ):
+            self.assertIn(needle, self.source)
+        self.assertNotIn("flow_bot", self.screens_source)
+
     def test_admin_grant_restricted(self) -> None:
         # /grant moved to the admin_credits router (Phase 6); the admin gate
         # is preserved bit-exact via injected deps.admin_ids.
@@ -1449,7 +1469,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('parse_mode="HTML"', self.source)
         # every echoed user prompt on an HTML screen is escaped
         self.assertIn("html.escape(pending", self.source)
-        self.assertIn("html.escape(caption", self.source)
+        self.assertIn("html.escape(caption", self.source + "\n" + self.screens_source)
 
     def test_ingredients_diagnostic_logging_present(self) -> None:
         self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source

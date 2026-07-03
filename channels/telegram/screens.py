@@ -13,11 +13,16 @@ from aiogram import types
 import flow_copy
 from channels.telegram.keyboards import (
     L,
+    _MP_JOB_LABELS,
+    _MP_PLAT_NAMES,
     _menu_button,
+    _mp_platform_format_label,
+    _slides_word,
     frames_kb,
     ingredients_kb,
     main_menu_kb,
 )
+from channels.telegram.texts import _MP_SERIES_COUNTS
 from flow_core import action_callback_data, action_price, price_gen, video_price
 
 
@@ -63,6 +68,18 @@ class VideoReferenceScreensDeps:
     vid_ref_default_model: str
     vid_frames_default_model: str
     vid_fmt_names: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class MarketplaceScreensDeps:
+    """Injected state and stores for marketplace seller screens."""
+
+    workspace: Callable[[int], MutableMapping[str, Any]]
+    metrics: Any
+    credit_store: Any
+    brand_kit: Callable[[int], str]
+    niche_label: Callable[[int], str]
+    stamp_message: Callable[[int, Any], None]
 
 
 async def show_referral_screen(
@@ -233,6 +250,136 @@ async def show_video_frames(
     else:
         sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
         st["vmsg_id"] = sent.message_id
+
+
+def mp_confirm_screen(
+    user_id: int, *, deps: MarketplaceScreensDeps
+) -> tuple[str, types.InlineKeyboardMarkup]:
+    st = deps.workspace(user_id)
+    plat = st.get("mp_platform", "wb")
+    plat_name = _MP_PLAT_NAMES.get(plat, plat)
+    format_label = _mp_platform_format_label(plat)
+    kind = st.get("mp_pending_kind", "photo")
+    try:
+        brand = deps.brand_kit(user_id)
+    except Exception:
+        brand = ""
+    try:
+        niche = deps.niche_label(user_id)
+    except Exception:
+        niche = ""
+    caption = (st.get("mp_pending_caption") or "").strip()
+    try:
+        credits = deps.credit_store.balance(user_id)
+    except Exception:
+        credits = 0
+    if kind == "series":
+        count = st.get("mp_series_count", 3)
+        if count not in _MP_SERIES_COUNTS:
+            count = 3
+        price = action_price("mp_series", count)
+        job_label = f"серия · {count} {_slides_word(count)}"
+    else:
+        job = st.get("mp_preset", "whitebg")
+        price = action_price("edit")
+        job_label = _MP_JOB_LABELS.get(job, job)
+    lines = [
+        f"🛒 <b>{html.escape(plat_name)}</b> · {html.escape(job_label)}",
+        "📎 Фото товара принято.",
+        "",
+        f"🎨 Бренд-кит: {html.escape(brand) if brand else '— (не задан)'}",
+        f"🏷️ Ниша: {html.escape(niche) if niche else '— (не задана)'}",
+    ]
+    if caption:
+        lines.append(f"📝 Пожелание: {html.escape(caption[:150])}")
+    lines.append(f"📐 Формат: {html.escape(format_label)}")
+    lines.append(f"💰 Стоимость: <b>{price} кр</b> · Баланс: {credits} кр")
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=f"✅ Создать · {price} кр", callback_data="mp:create")],
+        [types.InlineKeyboardButton(text="✏️ Сменить задачу", callback_data="m:mp")],
+        [_menu_button("cancel", "m:menu")],
+    ])
+    return "\n".join(lines), kb
+
+
+def mp_sku_projects(
+    user_id: int, limit: int = 12, *, deps: MarketplaceScreensDeps
+) -> list[dict]:
+    projects = deps.metrics.list_seller_sku_projects(user_id, limit=limit)
+    deps.workspace(user_id)["mp_sku_project_choices"] = [
+        str(p.get("sku") or "") for p in projects
+    ]
+    return projects
+
+
+def mp_sku_projects_text(
+    user_id: int, projects: list[dict] | None = None, *,
+    deps: MarketplaceScreensDeps,
+) -> str:
+    projects = mp_sku_projects(user_id, deps=deps) if projects is None else projects
+    if not projects:
+        return (
+            "📦 <b>Мои товары (SKU)</b>\n\n"
+            "Пока здесь пусто. Создай SKU сейчас или добавь результат кнопкой "
+            "«➕ В серию SKU» под готовой карточкой."
+        )
+    lines = [
+        "📦 <b>Мои товары (SKU)</b>\n\n"
+        "Нажми на SKU ниже, чтобы открыть рабочее пространство."
+    ]
+    for item in projects:
+        sku = html.escape(str(item.get("sku") or "SKU"))
+        count = int(item.get("items") or 0)
+        platform = item.get("platform") or ""
+        platform_line = f" · {html.escape(platform)}" if platform else ""
+        updated = (item.get("updated_at") or "")[:16]
+        update_line = f", обновлено {updated}" if updated else ""
+        lines.append(
+            f"• <b>{sku}</b>{platform_line}: {count} "
+            f"{_slides_word(count)}{update_line}"
+        )
+    lines.append("\nДобавляй текущую или последнюю карточку внутри нужного SKU.")
+    return "\n".join(lines)
+
+
+def mp_sku_projects_kb(
+    user_id: int, projects: list[dict] | None = None, *,
+    deps: MarketplaceScreensDeps,
+) -> types.InlineKeyboardMarkup:
+    B = types.InlineKeyboardButton
+    projects = mp_sku_projects(user_id, deps=deps) if projects is None else projects
+    deps.workspace(user_id)["mp_sku_project_choices"] = [
+        str(p.get("sku") or "") for p in projects
+    ]
+    rows: list[list[types.InlineKeyboardButton]] = []
+    for idx, item in enumerate(projects):
+        sku = str(item.get("sku") or "SKU")
+        count = int(item.get("items") or 0)
+        rows.append([
+            B(
+                text=f"📦 {sku[:42]} · {count} {_slides_word(count)}",
+                callback_data=f"mp:sku:open:{idx}",
+            )
+        ])
+    rows.append([B(text="➕ Новый SKU", callback_data="mp:sku:new")])
+    rows.append([B(text="◀️ Маркетплейсы", callback_data="m:mp")])
+    rows.append([_menu_button("menu", "m:menu")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def show_sku_projects(
+    message: types.Message, *, user_id: int, edit: bool,
+    deps: MarketplaceScreensDeps,
+) -> None:
+    projects = mp_sku_projects(user_id, deps=deps)
+    text = mp_sku_projects_text(user_id, projects, deps=deps)
+    kb = mp_sku_projects_kb(user_id, projects, deps=deps)
+    if edit:
+        await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        deps.stamp_message(user_id, message)
+    else:
+        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        deps.stamp_message(user_id, sent)
 
 
 async def show_gallery(message: types.Message, *, user_id: int, deps: ProfileScreensDeps) -> None:
