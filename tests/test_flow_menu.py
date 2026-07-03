@@ -733,7 +733,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # must clear it so the next prompt is NOT applied as an edit of that photo.
         self.assertIn("def _reset_image_flow", self.source)
         reset_start = self.source.index("def _reset_image_flow")
-        self.assertIn("pending_edits.pop(user_id, None)", self.source[reset_start:reset_start + 600])
+        self.assertIn("_clear_pending_edit(user_id)", self.source[reset_start:reset_start + 700])
         # The dangerous unconditional "old path" edit fallback is gone.
         self.assertNotIn("Старый путь (на случай pending_edits", self.source)
         self.assertIn("_reset_image_flow(user_id)", self.source)
@@ -773,11 +773,17 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('if len(photos) < 1:', self.source)
 
     def test_album_and_caption_support(self) -> None:
-        # Grouped photos (album) → first=start, second=end; caption → prompt.
+        # Grouped photos (album) -> first=start, second=end; caption -> prompt.
         self.assertIn("async def _handle_album_photos", self.source)
         self.assertIn("message.media_group_id", self.source)
+        self.assertIn("def _should_buffer_photo_album", self.source)
+        self.assertIn("_album_caption(messages)", self.source)
         self.assertIn('st["vfrm_start"] = sources[0]', self.source)
         self.assertIn("vcaption_prompt", self.source)
+        self.assertIn("_prepare_photo_edit_from_file_ids", self.source)
+        self.assertIn("_prepare_photo_video_from_file_ids", self.source)
+        self.assertIn("_offer_photo_album_route_choice", self.source)
+        self.assertIn("file_ids[:MAX_INGREDIENTS]", self.source)
 
     def test_frames_next_generates_from_saved_caption(self) -> None:
         start = self.source.index('if data == "v:frm:go":')
@@ -880,13 +886,21 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('F.data.startswith("pr:")', self.source)
         self.assertIn('"pr:img"', self.source)
         self.assertIn('"pr:vid"', self.source)
+        self.assertIn('"file_ids": clean_ids', self.source)
         start = self.source.index("async def handle_photo")
         block = self.source[start:start + 13000]
         self.assertIn("await _offer_photo_route_choice(message, user_id=user_id, caption=caption)", block)
         self.assertIn("await _prepare_photo_edit_from_file_id(", block)
-        self.assertIn("_prepare_photo_video_from_file_id(", self.source)
+        self.assertIn("_prepare_photo_video_from_file_ids(", self.source)
         # The old fallback edited immediately when a caption was attached.
         self.assertNotIn("await _edit_and_send(message, ref, caption", block)
+
+    def test_new_video_wizard_supports_album_photos(self) -> None:
+        self.assertIn("def _nwiz_photo_sources", self.source)
+        self.assertIn('st["vphotos"] = sources[:MAX_INGREDIENTS]', self.source)
+        self.assertIn('st["ving_photos"] = photo_sources', self.source)
+        self.assertIn('st["vmode"] = "ingredients" if photo_sources else "text"', self.source)
+        self.assertIn('st.pop("vphotos", None)', self.source)
 
     def test_create_image_photo_caption_stops_at_edit_confirm(self) -> None:
         start = self.source.index("async def handle_photo")

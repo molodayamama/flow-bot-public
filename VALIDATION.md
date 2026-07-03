@@ -31,6 +31,9 @@ Use for documentation, packaging, and pure refactors.
 Notes:
 
 - `python -m py_compile` is an assumption because Python version is not pinned.
+- In a clean worktree without local `.env`, the full offline unit suite may need
+  an explicitly fake Telegram token, for example:
+  `$env:TELEGRAM_TOKEN = '123456789:REDACTED'; python -m unittest discover -s tests -p "test_*.py"`.
 - Secret scans must not print secret values in command output or final reports.
   Use file-only output such as `rg -l` / `--files-with-matches`, or a dedicated
   redaction tool. Do not use `rg -n`, `-o`, `-C`, `-A`, or `-B` for secret

@@ -581,10 +581,18 @@ class FlowBotWiringStaticTests(unittest.TestCase):
 
     def test_pending_edit_routing_in_plain_text_handler(self) -> None:
         self.assertIn("pending_edits", self.source)
-        self.assertIn("token = pending_edits.get(user_id)", self.source)
+        self.assertIn("pending_edit_groups", self.source)
+        self.assertIn("refs = _pending_edit_refs(user_id)", self.source)
         self.assertIn("ok = await _edit_and_send", self.source)
         self.assertIn("if ok:", self.source)
-        self.assertIn("pending_edits.pop(user_id, None)", self.source)
+        self.assertIn("_clear_pending_edit(user_id)", self.source)
+
+    def test_album_image_refs_use_multi_image_inputs(self) -> None:
+        self.assertIn("def _build_image_inputs_for_refs", self.source)
+        self.assertIn("build_ingredients_inputs([ref.source for ref in clean_refs], capture)", self.source)
+        self.assertIn("refs: list[ImageRef] | None = None", self.source)
+        self.assertIn("refs=refs", self.source)
+        self.assertIn("refs=last.get(\"refs\")", self.source)
 
     def test_edit_rate_limit_keeps_context_copy(self) -> None:
         self.assertIn("def _is_rate_limit_error", self.source)
