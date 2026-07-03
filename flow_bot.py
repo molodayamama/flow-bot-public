@@ -1711,6 +1711,10 @@ _image_delivery = ImageDelivery(ImageDeliveryDeps(
     log=log,
     referral_link=_referral_link,
     bot_username=lambda: BOT_USERNAME,
+    credit_store=credit_store,
+    menu_button=_menu_button,
+    invite_button=_invite_button,
+    first_referral_cta_text=_first_referral_cta_text,
 ))
 
 
@@ -2663,26 +2667,7 @@ def _streak_note(user_id: int) -> str | None:
 
 
 async def _after_result(message: types.Message, user_id: int, *, streak_note: str | None = None):
-    """Короткое меню после результата: создать ещё · видео · друг · меню."""
-    B = types.InlineKeyboardButton
-    kb = types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [_menu_button("gen", "m:gen"), _menu_button("vid_gen", "m:vid")],
-            [_invite_button(user_id)],
-            [_menu_button("menu", "m:menu")],
-        ]
-    )
-    text = streak_note or flow_copy.msg("after_image_screen",
-                                        credits=credit_store.balance(user_id))
-    if streak_note:
-        text = f"{streak_note}\n\n{flow_copy.msg('after_image_screen', credits=credit_store.balance(user_id))}"
-    cta = _first_referral_cta_text(user_id)
-    if cta:
-        text = f"{text}\n\n{cta}"
-    try:
-        await message.answer(text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        pass
+    await _image_delivery.after_result(message, user_id, streak_note=streak_note)
 
 
 async def _send_result_pairs(

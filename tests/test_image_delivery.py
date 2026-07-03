@@ -5,7 +5,13 @@ from __future__ import annotations
 import asyncio
 import unittest
 
+from aiogram.types import InlineKeyboardButton
+
 from channels.telegram.image_delivery import ImageDelivery, ImageDeliveryDeps
+
+
+def _btn(cb):
+    return InlineKeyboardButton(text="x", callback_data=cb)
 
 
 def run(coro):
@@ -60,7 +66,12 @@ class _Message:
         return _SentPhoto()
 
 
-def _deps(is_seller=False, keeper=None, registry=None, metrics=None):
+class _CreditStore:
+    def balance(self, _uid):
+        return 42
+
+
+def _deps(is_seller=False, keeper=None, registry=None, metrics=None, cta=None):
     return ImageDeliveryDeps(
         keeper_for_acc=lambda _acc: keeper or _Keeper(),
         image_registry=registry or _Registry(),
@@ -72,7 +83,19 @@ def _deps(is_seller=False, keeper=None, registry=None, metrics=None):
         log=_NullLog(),
         referral_link=lambda uid: f"https://t.me/bot?start=r{uid}",
         bot_username=lambda: "photozhab_bot",
+        credit_store=_CreditStore(),
+        menu_button=lambda key, cb: _btn(cb),
+        invite_button=lambda uid: _btn("invite"),
+        first_referral_cta_text=lambda uid: cta,
     )
+
+
+class _AnswerMessage:
+    def __init__(self):
+        self.answers = []
+
+    async def answer(self, text, *, reply_markup=None, parse_mode=None):
+        self.answers.append(text)
 
 
 class SendOneImageTests(unittest.TestCase):
@@ -121,6 +144,27 @@ class SendResultPairsTests(unittest.TestCase):
             msg, [("u", {})], user_id=1, project_id=None, prompt="p", aspect_ratio="square", emoji="✨",
         ))
         self.assertNotIn("Создай своё", msg.sent[0]["caption"])
+
+
+class AfterResultTests(unittest.TestCase):
+    def test_streak_prefixed_and_balance_shown(self):
+        msg = _AnswerMessage()
+        d = ImageDelivery(_deps())
+        run(d.after_result(msg, 5, streak_note="🔥 3 дня подряд"))
+        self.assertIn("🔥 3 дня подряд", msg.answers[0])
+        self.assertIn("42", msg.answers[0])  # credit balance rendered
+
+    def test_no_streak_just_after_screen(self):
+        msg = _AnswerMessage()
+        d = ImageDelivery(_deps())
+        run(d.after_result(msg, 5))
+        self.assertNotIn("подряд", msg.answers[0])
+
+    def test_referral_cta_appended(self):
+        msg = _AnswerMessage()
+        d = ImageDelivery(_deps(cta="Позови друга →"))
+        run(d.after_result(msg, 5))
+        self.assertIn("Позови друга →", msg.answers[0])
 
 
 if __name__ == "__main__":

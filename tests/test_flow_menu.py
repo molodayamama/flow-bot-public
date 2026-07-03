@@ -1741,10 +1741,12 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("_mark_video_account_failure(acc_id, result)", video)
 
     def test_after_result_offers_video_balance_and_menu(self) -> None:
-        block = self.source[self.source.index("async def _after_result"):][:700]
+        # after_result moved to channels.telegram.image_delivery (Phase 11).
+        source = (PROJECT_ROOT / "channels" / "telegram" / "image_delivery.py").read_text(encoding="utf-8")
+        block = source[source.index("async def after_result"):][:700]
         for cb in ('"m:gen"', '"m:vid"', '"m:menu"'):
             self.assertIn(cb, block)
-        self.assertIn("_invite_button", block)      # Позвать друга
+        self.assertIn("invite_button", block)      # Позвать друга
         self.assertIn("after_image_screen", block)
         self.assertIn("credit_store.balance", block)
 

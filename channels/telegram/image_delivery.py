@@ -16,8 +16,10 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import aiohttp
+from aiogram import types
 from aiogram.types import BufferedInputFile
 
+import flow_copy
 from flow_core import ImageRef
 from textutil import _short_prompt
 
@@ -34,6 +36,11 @@ class ImageDeliveryDeps:
     log: Any
     referral_link: Callable[[int], str]
     bot_username: Callable[[], str]
+    # after-result menu deps
+    credit_store: Any
+    menu_button: Callable[..., Any]
+    invite_button: Callable[[int], Any]
+    first_referral_cta_text: Callable[[int], str | None]
 
 
 class ImageDelivery:
@@ -93,6 +100,26 @@ class ImageDelivery:
                             )
         except Exception as e2:
             d.log.error(f"Повторная ошибка отправки фото {index}/{total}: {e2}")
+
+    async def after_result(self, message, user_id: int, *, streak_note: str | None = None) -> None:
+        """Короткое меню после результата: создать ещё · видео · друг · меню."""
+        d = self._d
+        kb = types.InlineKeyboardMarkup(
+            inline_keyboard=[
+                [d.menu_button("gen", "m:gen"), d.menu_button("vid_gen", "m:vid")],
+                [d.invite_button(user_id)],
+                [d.menu_button("menu", "m:menu")],
+            ]
+        )
+        after = flow_copy.msg("after_image_screen", credits=d.credit_store.balance(user_id))
+        text = f"{streak_note}\n\n{after}" if streak_note else after
+        cta = d.first_referral_cta_text(user_id)
+        if cta:
+            text = f"{text}\n\n{cta}"
+        try:
+            await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            pass
 
     async def send_result_pairs(
         self, message, pairs: list, *, user_id: int, project_id: str | None,
