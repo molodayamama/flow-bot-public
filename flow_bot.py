@@ -2415,71 +2415,10 @@ async def _generate_and_send(
     action: str = "gen",
     image_model: str = DEFAULT_IMAGE_MODEL,
 ):
-    user_id = actor_id or message.from_user.id
-
-    if not prompt or len(prompt) < 3:
-        await message.answer(flow_copy.msg("prompt_too_short"))
-        return
-
-    # Запоминаем настройки для «🔁 Повторить».
-    _ws(user_id)["last"] = {
-        "prompt": prompt, "count": num_images, "aspect": aspect_ratio, "imodel": image_model,
-    }
-    # Снимок для кнопки «Повторить запрос» при ошибке (action нужен credit_gate).
-    _ws(user_id)["img_retry"] = {
-        "prompt": prompt, "num_images": num_images,
-        "aspect_ratio": aspect_ratio, "image_model": image_model, "action": action,
-    }
-
-    # Селлер-бот не держит свой пул — генерация идёт в основной процесс через
-    # общий backend (SELLER_BOT_PLAN.md §A). Кредиты списываются с seller-кошелька.
-    if _cfg.IS_SELLER:
-        await _seller_generate_and_send(
-            message, prompt, num_images=num_images, aspect_ratio=aspect_ratio,
-            user_id=user_id, action=action, image_model=image_model,
-        )
-        return
-
-    # Весь пул аккаунтов недоступен — отказ ДО credit_gate (ничего не списываем,
-    # без цикла «списали-вернули»). Внутри _do_generate_and_send есть та же
-    # проверка (защита остальных входов), но здесь она до денег.
-    if _account_for_image(user_id) is None:
-        await message.answer(flow_copy.msg("accounts_unavailable"))
-        return
-
-    metrics.log_event(_IMG_REQUEST_EVENT.get(action, "image_requested"),
-                      user_id=user_id, username=_username(message), source=action,
-                      payload={"count": num_images, "model": image_model})
-
-    # Премиум-модель (Nano Banana Pro) добавляет наценку на каждую картинку.
-    surcharge = image_model_extra(image_model) * max(1, num_images)
-    started = time.monotonic()
-    ok = False
-    try:
-        async with user_slot(user_id, message):
-            async with credit_gate(user_id, action, message, num_images, surcharge=surcharge) as charge:
-                ok = await _do_generate_and_send(
-                    message, prompt, num_images, aspect_ratio, user_id, image_model=image_model
-                )
-                charge.ok = ok
-    except RateLimited:
-        _log_image_job(user_id, action, image_model, started, ok=False, error="user_busy")
-        return
-    except NotEnoughCredits:
-        metrics.log_event("image_failed", user_id=user_id, source=action,
-                          payload={"reason": "insufficient_credits"})
-        return
-    charged = (action_price(action, num_images) + surcharge) if ok else 0
-    metrics.log_event("image_success" if ok else "image_failed",
-                      user_id=user_id, source=action)
-    if ok:
-        metrics.log_event("credits_charged", user_id=user_id, source=action,
-                          payload={"amount": charged, "action": action})
-        if action == "gen":
-            metrics.log_event("wizard_completed", user_id=user_id, source=action)
-            metrics.save_prompt_history(user_id, prompt)
-    _log_image_job(user_id, action, image_model, started, ok=ok, charged=charged)
-
+    await _generation_flow.generate_and_send(
+        message, prompt, num_images=num_images, aspect_ratio=aspect_ratio,
+        actor_id=actor_id, action=action, image_model=image_model,
+    )
 
 # Image-job logging + timing helpers live in product.job_log (channel-neutral);
 # bind the logger to the runtime metrics/pool here.
@@ -2575,6 +2514,14 @@ def _mark_video_account_failure(account_id: str | None, result: dict | None = No
 # Image generate-and-send orchestration lives in channels.telegram.generation_flow;
 # bind it to the runtime singletons + sibling flows here.
 _generation_flow = GenerationFlow(GenerationFlowDeps(
+    workspace=_ws,
+    is_seller=lambda: _cfg.IS_SELLER,
+    seller_generate_and_send=_seller_generate_and_send,
+    user_slot=user_slot,
+    credit_gate=credit_gate,
+    rate_limited_error=RateLimited,
+    not_enough_credits_error=NotEnoughCredits,
+    image_request_event=_IMG_REQUEST_EVENT,
     username=_username,
     account_for_image=_account_for_image,
     ensure_user_project=ensure_user_project,
@@ -2589,6 +2536,7 @@ _generation_flow = GenerationFlow(GenerationFlowDeps(
     send_result_pairs=_send_result_pairs,
     after_result=_after_result,
     streak_note=_streak_note,
+    log_image_job=_log_image_job,
 ))
 
 

@@ -366,15 +366,15 @@ class BotPoolWiringTests(unittest.TestCase):
 
     def test_generation_paths_route_and_mark_health(self) -> None:
         # Image: отказ ДО credit_gate (без цикла «списали-вернули») при пустом пуле.
-        gstart = self.source.index("async def _generate_and_send")
-        gblock = self.source[gstart:self.source.index("async def _do_generate_and_send", gstart)]
+        gen_flow = (PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py").read_text(encoding="utf-8")
+        gstart = gen_flow.index("async def generate_and_send")
+        gblock = gen_flow[gstart:gen_flow.index("async def do_generate_and_send", gstart)]
         self.assertLess(
             gblock.index('flow_copy.msg("accounts_unavailable")'),
             gblock.index("credit_gate("),
         )
         # Image: роутинг по аккаунту + health-отметки.
         # do_generate_and_send moved to channels.telegram.generation_flow (Phase 11).
-        gen_flow = (PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py").read_text(encoding="utf-8")
         block = gen_flow[gen_flow.index("async def do_generate_and_send"):]
         self.assertIn("acc_id = d.account_for_image(user_id", block)  # may have exclude= kwarg
         self.assertIn('flow_copy.msg("accounts_unavailable")', block)

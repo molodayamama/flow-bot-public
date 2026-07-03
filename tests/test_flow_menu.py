@@ -1779,6 +1779,8 @@ class BotMenuWiringTests(unittest.TestCase):
             + self.start_router_source
             + "\n"
             + self.screens_source
+            + "\n"
+            + (PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py").read_text(encoding="utf-8")
         )
         for ev in (
             '"user_started"', '"image_requested"', '"image_success"', '"image_failed"',

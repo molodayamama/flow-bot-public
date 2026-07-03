@@ -12,13 +12,14 @@ from __future__ import annotations
 import asyncio
 import html
 import itertools
+import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from aiogram import types
 
 import flow_copy
-from flow_core import DEFAULT_IMAGE_MODEL, result_pairs
+from flow_core import DEFAULT_IMAGE_MODEL, action_price, image_model_extra, result_pairs
 from textutil import _short_prompt
 
 _GEN_ATTEMPT_TIMEOUT = 70  # seconds per attempt
@@ -26,6 +27,14 @@ _GEN_ATTEMPT_TIMEOUT = 70  # seconds per attempt
 
 @dataclass(frozen=True)
 class GenerationFlowDeps:
+    workspace: Callable[[int], dict]
+    is_seller: Callable[[], bool]
+    seller_generate_and_send: Callable[..., Awaitable[Any]]
+    user_slot: Callable[..., Any]
+    credit_gate: Callable[..., Any]
+    rate_limited_error: type[BaseException]
+    not_enough_credits_error: type[BaseException]
+    image_request_event: dict[str, str]
     username: Callable[[Any], str]
     account_for_image: Callable[..., str | None]
     ensure_user_project: Callable[..., Awaitable[str | None]]
@@ -40,11 +49,89 @@ class GenerationFlowDeps:
     send_result_pairs: Callable[..., Awaitable[None]]
     after_result: Callable[..., Awaitable[None]]
     streak_note: Callable[[int], str | None]
+    log_image_job: Callable[..., None]
 
 
 class GenerationFlow:
     def __init__(self, deps: GenerationFlowDeps) -> None:
         self._d = deps
+
+    async def generate_and_send(
+        self,
+        message,
+        prompt: str,
+        num_images: int = 4,
+        aspect_ratio: str = "landscape",
+        actor_id: int | None = None,
+        action: str = "gen",
+        image_model: str = DEFAULT_IMAGE_MODEL,
+    ) -> None:
+        d = self._d
+        user_id = actor_id or message.from_user.id
+
+        if not prompt or len(prompt) < 3:
+            await message.answer(flow_copy.msg("prompt_too_short"))
+            return
+
+        ws = d.workspace(user_id)
+        ws["last"] = {
+            "prompt": prompt, "count": num_images, "aspect": aspect_ratio, "imodel": image_model,
+        }
+        ws["img_retry"] = {
+            "prompt": prompt, "num_images": num_images,
+            "aspect_ratio": aspect_ratio, "image_model": image_model, "action": action,
+        }
+
+        if d.is_seller():
+            await d.seller_generate_and_send(
+                message, prompt, num_images=num_images, aspect_ratio=aspect_ratio,
+                user_id=user_id, action=action, image_model=image_model,
+            )
+            return
+
+        if d.account_for_image(user_id) is None:
+            await message.answer(flow_copy.msg("accounts_unavailable"))
+            return
+
+        d.metrics.log_event(
+            d.image_request_event.get(action, "image_requested"),
+            user_id=user_id, username=d.username(message), source=action,
+            payload={"count": num_images, "model": image_model},
+        )
+
+        surcharge = image_model_extra(image_model) * max(1, num_images)
+        started = time.monotonic()
+        ok = False
+        try:
+            async with d.user_slot(user_id, message):
+                async with d.credit_gate(
+                    user_id, action, message, num_images, surcharge=surcharge
+                ) as charge:
+                    ok = await self.do_generate_and_send(
+                        message, prompt, num_images, aspect_ratio, user_id,
+                        image_model=image_model,
+                    )
+                    charge.ok = ok
+        except d.rate_limited_error:
+            d.log_image_job(user_id, action, image_model, started, ok=False, error="user_busy")
+            return
+        except d.not_enough_credits_error:
+            d.metrics.log_event(
+                "image_failed", user_id=user_id, source=action,
+                payload={"reason": "insufficient_credits"},
+            )
+            return
+
+        charged = (action_price(action, num_images) + surcharge) if ok else 0
+        d.metrics.log_event("image_success" if ok else "image_failed",
+                            user_id=user_id, source=action)
+        if ok:
+            d.metrics.log_event("credits_charged", user_id=user_id, source=action,
+                                payload={"amount": charged, "action": action})
+            if action == "gen":
+                d.metrics.log_event("wizard_completed", user_id=user_id, source=action)
+                d.metrics.save_prompt_history(user_id, prompt)
+        d.log_image_job(user_id, action, image_model, started, ok=ok, charged=charged)
 
     async def do_generate_and_send(
         self, message, prompt: str, num_images: int, aspect_ratio: str, user_id: int,
