@@ -321,6 +321,7 @@ from channels.telegram.routers import photo_route as tg_photo_route_router
 from channels.telegram.routers import image_retry as tg_image_retry_router
 from channels.telegram.routers import ideas_hub as tg_ideas_hub_router
 from channels.telegram.routers import ideas_flow as tg_ideas_flow_router
+from channels.telegram.routers import agent as tg_agent_router
 from channels.telegram.routers import fallback as tg_fallback_router
 
 from referrals.service import ReferralService
@@ -5754,73 +5755,6 @@ async def _agent_pick(callback: types.CallbackQuery, *, user_id: int, idx_str: s
     await rerender(callback.message, user_id=user_id, edit=True)
 
 
-@dp.callback_query(F.data.startswith("ag:"))
-async def on_agent_action(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    data = callback.data or ""
-    msg = callback.message
-    st = _ws(user_id)
-
-    # ── Video wizard (vprompt) ──
-    if data.startswith("ag:vpick:"):
-        await _agent_pick(callback, user_id=user_id, idx_str=data.split(":")[2],
-                          prompt_key="vprompt", rerender=show_new_video_wizard)
-        return
-    if data == "ag:vkeep":
-        st.pop("ag_variants", None)
-        await callback.answer()
-        await show_new_video_wizard(msg, user_id=user_id, edit=True)
-        return
-    if data == "ag:vimprove":
-        await _agent_improve_flow(
-            callback, user_id=user_id, prompt_key="vprompt", source="video",
-            pick_prefix="ag:vpick:", keep_data="ag:vkeep",
-            rerender=show_new_video_wizard,
-            edit_fn=lambda m, t, kb, **kw: _vid_edit(m, t, kb, user_id, **kw),
-            empty_prompt_msg="Сначала опишите видео",
-        )
-        return
-
-    # ── Image wizard (pending_prompt) ──
-    if data.startswith("ag:pick:"):
-        await _agent_pick(callback, user_id=user_id, idx_str=data.split(":")[2],
-                          prompt_key="pending_prompt", rerender=show_wizard)
-        return
-    if data == "ag:keep":
-        st.pop("ag_variants", None)
-        await callback.answer()
-        await show_wizard(msg, user_id=user_id, edit=True)
-        return
-    if data == "ag:improve":
-        await _agent_improve_flow(
-            callback, user_id=user_id, prompt_key="pending_prompt", source="image",
-            pick_prefix="ag:pick:", keep_data="ag:keep", rerender=show_wizard,
-            edit_fn=_edit_or_answer, empty_prompt_msg="Сначала опиши картинку",
-        )
-        return
-
-    # ── Edit-my-photo confirm (edit_instruction) ──
-    if data.startswith("ag:epick:"):
-        await _agent_pick(callback, user_id=user_id, idx_str=data.split(":")[2],
-                          prompt_key="edit_instruction", rerender=show_edit_confirm)
-        return
-    if data == "ag:ekeep":
-        st.pop("ag_variants", None)
-        await callback.answer()
-        await show_edit_confirm(msg, user_id=user_id, edit=True)
-        return
-    if data == "ag:eimprove":
-        await _agent_improve_flow(
-            callback, user_id=user_id, prompt_key="edit_instruction", source="edit",
-            pick_prefix="ag:epick:", keep_data="ag:ekeep", rerender=show_edit_confirm,
-            edit_fn=_edit_or_answer, empty_prompt_msg="Сначала напиши, что изменить",
-            instruction_fn=_agent_edit_instruction,
-        )
-        return
-
-    await callback.answer()
-
-
 @dp.callback_query(F.data.startswith("vu:"))
 async def on_video_upload_action(callback: types.CallbackQuery):
     """«Изменить своё видео»: загрузка ролика и правка промптом (Extend запрещён)."""
@@ -9206,6 +9140,21 @@ dp.include_router(
             render_template_step=_render_template_step,
             render_guided_step=_render_guided_step,
             log_event=metrics.log_event,
+        )
+    )
+)
+dp.include_router(
+    tg_agent_router.create_router(
+        tg_agent_router.AgentDeps(
+            workspace=_ws,
+            agent_pick=_agent_pick,
+            agent_improve_flow=_agent_improve_flow,
+            show_new_video_wizard=show_new_video_wizard,
+            show_wizard=show_wizard,
+            show_edit_confirm=show_edit_confirm,
+            video_edit=_vid_edit,
+            edit_or_answer=_edit_or_answer,
+            agent_edit_instruction=_agent_edit_instruction,
         )
     )
 )

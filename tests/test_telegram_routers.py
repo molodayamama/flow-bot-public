@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from aiogram import Router
 
+from channels.telegram.routers import agent as agent_router
 from channels.telegram.routers import commands as commands_router
 from channels.telegram.routers import ideas_flow as ideas_flow_router
 from channels.telegram.routers import image_retry as image_retry_router
@@ -447,6 +448,148 @@ class IdeasFlowRouterTests(unittest.TestCase):
 
     def test_ideas_flow_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(ideas_flow_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class RecordingAgentDeps:
+    def __init__(self) -> None:
+        self.workspaces: dict[int, dict] = {}
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def workspace(self, user_id: int) -> dict:
+        self.calls.append(("workspace", (user_id,), {}))
+        return self.workspaces.setdefault(user_id, {})
+
+    async def agent_pick(self, *args, **kwargs):
+        self.calls.append(("agent_pick", args, kwargs))
+
+    async def agent_improve_flow(self, *args, **kwargs):
+        self.calls.append(("agent_improve_flow", args, kwargs))
+
+    async def video_edit(self, *args, **kwargs):
+        self.calls.append(("video_edit", args, kwargs))
+
+    async def edit_or_answer(self, *args, **kwargs):
+        self.calls.append(("edit_or_answer", args, kwargs))
+
+    def agent_edit_instruction(self, prompt: str) -> str:
+        self.calls.append(("agent_edit_instruction", (prompt,), {}))
+        return f"edit:{prompt}"
+
+    def _make_async(self, name):
+        async def renderer(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return None
+
+        return renderer
+
+
+def _agent_deps() -> tuple[agent_router.AgentDeps, RecordingAgentDeps]:
+    rec = RecordingAgentDeps()
+    deps = agent_router.AgentDeps(
+        workspace=rec.workspace,
+        agent_pick=rec.agent_pick,
+        agent_improve_flow=rec.agent_improve_flow,
+        show_new_video_wizard=rec._make_async("show_new_video_wizard"),
+        show_wizard=rec._make_async("show_wizard"),
+        show_edit_confirm=rec._make_async("show_edit_confirm"),
+        video_edit=rec.video_edit,
+        edit_or_answer=rec.edit_or_answer,
+        agent_edit_instruction=rec.agent_edit_instruction,
+    )
+    return deps, rec
+
+
+class AgentRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _agent_deps()
+        self.router = agent_router.create_router(self.deps)
+        self.handler = self.router.callback_query.handlers[0].callback
+
+    def test_creates_ag_callback_router(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        self.assertEqual(self.router.name, "tg-agent")
+        self.assertEqual(len(self.router.callback_query.handlers), 1)
+        self.assertEqual(self.router.callback_query.handlers[0].callback.__name__, "on_agent_action")
+
+    def test_video_pick_delegates_to_agent_pick(self) -> None:
+        callback = FakeCallback("ag:vpick:2")
+        run(self.handler(callback))
+        name, args, kwargs = self.rec.calls[-1]
+        self.assertEqual(name, "agent_pick")
+        self.assertEqual(args, (callback,))
+        self.assertEqual(kwargs["user_id"], 42)
+        self.assertEqual(kwargs["idx_str"], "2")
+        self.assertEqual(kwargs["prompt_key"], "vprompt")
+
+    def test_video_keep_clears_variants_and_renders_wizard(self) -> None:
+        self.rec.workspaces[42] = {"ag_variants": [{"prompt": "x"}]}
+        callback = FakeCallback("ag:vkeep")
+        run(self.handler(callback))
+        self.assertNotIn("ag_variants", self.rec.workspaces[42])
+        self.assertEqual(self.rec.calls[-1][0], "show_new_video_wizard")
+        self.assertEqual(self.rec.calls[-1][2], {"user_id": 42, "edit": True})
+
+    def test_video_improve_delegates_with_video_edit_adapter(self) -> None:
+        callback = FakeCallback("ag:vimprove")
+        run(self.handler(callback))
+        name, args, kwargs = self.rec.calls[-1]
+        self.assertEqual(name, "agent_improve_flow")
+        self.assertEqual(args, (callback,))
+        self.assertEqual(kwargs["prompt_key"], "vprompt")
+        self.assertEqual(kwargs["source"], "video")
+        run(kwargs["edit_fn"](callback.message, "body", "kb", parse_mode="HTML"))
+        self.assertEqual(self.rec.calls[-1][0], "video_edit")
+        self.assertEqual(self.rec.calls[-1][1], (callback.message, "body", "kb", 42))
+
+    def test_image_pick_and_keep_delegate_to_image_wizard(self) -> None:
+        callback = FakeCallback("ag:pick:1")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.calls[-1][0], "agent_pick")
+        self.assertEqual(self.rec.calls[-1][2]["prompt_key"], "pending_prompt")
+
+        self.rec.workspaces[42] = {"ag_variants": [{"prompt": "x"}]}
+        callback = FakeCallback("ag:keep")
+        run(self.handler(callback))
+        self.assertNotIn("ag_variants", self.rec.workspaces[42])
+        self.assertEqual(self.rec.calls[-1][0], "show_wizard")
+
+    def test_image_improve_uses_edit_or_answer(self) -> None:
+        callback = FakeCallback("ag:improve")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.calls[-1][0], "agent_improve_flow")
+        self.assertEqual(self.rec.calls[-1][2]["prompt_key"], "pending_prompt")
+        self.assertIs(self.rec.calls[-1][2]["edit_fn"], self.deps.edit_or_answer)
+
+    def test_edit_pick_keep_and_improve_delegate_to_edit_confirm(self) -> None:
+        callback = FakeCallback("ag:epick:0")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.calls[-1][0], "agent_pick")
+        self.assertEqual(self.rec.calls[-1][2]["prompt_key"], "edit_instruction")
+
+        self.rec.workspaces[42] = {"ag_variants": [{"prompt": "x"}]}
+        callback = FakeCallback("ag:ekeep")
+        run(self.handler(callback))
+        self.assertNotIn("ag_variants", self.rec.workspaces[42])
+        self.assertEqual(self.rec.calls[-1][0], "show_edit_confirm")
+
+        callback = FakeCallback("ag:eimprove")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.calls[-1][0], "agent_improve_flow")
+        self.assertEqual(self.rec.calls[-1][2]["prompt_key"], "edit_instruction")
+        self.assertIs(self.rec.calls[-1][2]["instruction_fn"], self.deps.agent_edit_instruction)
+
+    def test_unknown_agent_callback_is_acknowledged(self) -> None:
+        callback = FakeCallback("ag:unknown")
+        run(self.handler(callback))
+        self.assertTrue(callback.answers)
+
+    def test_agent_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.workspace = None  # type: ignore[misc]
+
+    def test_agent_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(agent_router)
         self.assertNotIn("flow_bot", src)
 
 
