@@ -17,6 +17,7 @@ from channels.telegram.routers import ideas_hub as ideas_hub_router
 from channels.telegram.routers import onboarding as onboarding_router
 from channels.telegram.routers import photo_route as photo_route_router
 from channels.telegram.routers import video_upload as video_upload_router
+from channels.telegram.routers import wizard as wizard_router
 
 
 def run(coro):
@@ -355,6 +356,164 @@ class AnimateRouterTests(unittest.TestCase):
 
     def test_animate_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(animate_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class RecordingWizardDeps:
+    def __init__(self) -> None:
+        self.workspaces: dict[int, dict] = {}
+        self.calls: list[tuple[str, tuple, dict]] = []
+        self.boost_result: str | None = "boosted"
+
+    def workspace(self, user_id: int) -> dict:
+        self.calls.append(("workspace", (user_id,), {}))
+        return self.workspaces.setdefault(user_id, {})
+
+    def clamp_num_images(self, raw: str) -> int:
+        self.calls.append(("clamp_num_images", (raw,), {}))
+        return int(raw)
+
+    def image_model_meta(self, model: str):
+        self.calls.append(("image_model_meta", (model,), {}))
+        return {"id": model} if model == "model-ok" else None
+
+    def reset_image_flow(self, *args, **kwargs):
+        self.calls.append(("reset_image_flow", args, kwargs))
+        self.workspaces.setdefault(args[0], {}).clear()
+
+    async def boost_prompt_with_gemini(self, prompt: str) -> str | None:
+        self.calls.append(("boost_prompt_with_gemini", (prompt,), {}))
+        return self.boost_result
+
+    async def generate_and_send(self, *args, **kwargs):
+        self.calls.append(("generate_and_send", args, kwargs))
+
+    def fmt_to_aspect(self, fmt: str) -> str:
+        self.calls.append(("fmt_to_aspect", (fmt,), {}))
+        return {"port": "portrait", "land": "landscape"}.get(fmt, fmt)
+
+    def log_event(self, *args, **kwargs):
+        self.calls.append(("log_event", args, kwargs))
+
+    def _make_async(self, name):
+        async def renderer(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return None
+
+        return renderer
+
+
+def _wizard_deps() -> tuple[wizard_router.WizardDeps, RecordingWizardDeps]:
+    rec = RecordingWizardDeps()
+    deps = wizard_router.WizardDeps(
+        workspace=rec.workspace,
+        clamp_num_images=rec.clamp_num_images,
+        image_model_meta=rec.image_model_meta,
+        reset_image_flow=rec.reset_image_flow,
+        show_main_menu=rec._make_async("show_main_menu"),
+        show_wizard=rec._make_async("show_wizard"),
+        show_prompt_picker=rec._make_async("show_prompt_picker"),
+        boost_prompt_with_gemini=rec.boost_prompt_with_gemini,
+        generate_and_send=rec.generate_and_send,
+        fmt_to_aspect=rec.fmt_to_aspect,
+        log_event=rec.log_event,
+        quick_ideas=("idea1", "idea2", "idea3"),
+        default_count=1,
+        default_fmt="land",
+        default_image_model="default-model",
+    )
+    return deps, rec
+
+
+class WizardRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _wizard_deps()
+        self.router = wizard_router.create_router(self.deps)
+        self.handler = self.router.callback_query.handlers[0].callback
+
+    def test_creates_w_callback_router(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        self.assertEqual(self.router.name, "tg-wizard")
+        self.assertEqual(len(self.router.callback_query.handlers), 1)
+        self.assertEqual(self.router.callback_query.handlers[0].callback.__name__, "on_wizard_action")
+
+    def test_cancel_clears_state_and_opens_menu(self) -> None:
+        self.rec.workspaces[42] = {"pending_prompt": "x"}
+        callback = FakeCallback("w:cancel")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42], {})
+        self.assertEqual(self.rec.calls[-1][0], "show_main_menu")
+
+    def test_count_format_and_model_choices_rerender_wizard(self) -> None:
+        for data, expected in (
+            ("w:cnt:3", ("count", 3)),
+            ("w:fmt:port", ("fmt", "port")),
+            ("w:imodel:model-ok", ("imodel", "model-ok")),
+        ):
+            with self.subTest(data=data):
+                callback = FakeCallback(data)
+                run(self.handler(callback))
+                self.assertEqual(self.rec.workspaces[42][expected[0]], expected[1])
+                self.assertEqual(self.rec.calls[-1][0], "show_wizard")
+
+    def test_history_choice_resets_flow_and_sets_pending_prompt(self) -> None:
+        self.rec.workspaces[42] = {"_hist_cache": ["old prompt"]}
+        callback = FakeCallback("w:hist:0")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42]["pending_prompt"], "old prompt")
+        self.assertIn(("reset_image_flow", (42,), {"keep_last": True}), self.rec.calls)
+        self.assertEqual(self.rec.calls[-1][0], "show_wizard")
+
+    def test_idea_choice_and_next_page(self) -> None:
+        self.rec.workspaces[42] = {"ideas_pool": ["a", "b", "c"], "ideas_offset": 0}
+        callback = FakeCallback("w:idea:1")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42]["pending_prompt"], "b")
+        self.assertEqual(self.rec.calls[-1][0], "show_wizard")
+
+        callback = FakeCallback("w:idea:next")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42]["ideas_offset"], 0)
+        self.assertEqual(self.rec.calls[-1][0], "show_prompt_picker")
+
+    def test_boost_prompt_updates_prompt_and_logs(self) -> None:
+        self.rec.workspaces[42] = {"pending_prompt": "draft"}
+        callback = FakeCallback("w:boost_prompt")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42]["pending_prompt"], "boosted")
+        self.assertTrue(any(c[0] == "log_event" for c in self.rec.calls))
+        self.assertEqual(self.rec.calls[-1][0], "show_wizard")
+
+    def test_go_with_pending_prompt_generates_image(self) -> None:
+        self.rec.workspaces[42] = {
+            "pending_prompt": "draw",
+            "count": 2,
+            "fmt": "port",
+            "imodel": "model-ok",
+        }
+        callback = FakeCallback("w:go")
+        run(self.handler(callback))
+        self.assertIsNone(self.rec.workspaces[42]["pending_prompt"])
+        gen = next(c for c in self.rec.calls if c[0] == "generate_and_send")
+        self.assertEqual(gen[1], (callback.message, "draw"))
+        self.assertEqual(gen[2]["num_images"], 2)
+        self.assertEqual(gen[2]["aspect_ratio"], "portrait")
+        self.assertEqual(gen[2]["actor_id"], 42)
+        self.assertEqual(gen[2]["image_model"], "model-ok")
+
+    def test_go_without_pending_prompt_asks_for_prompt(self) -> None:
+        callback = FakeCallback("w:go")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42]["await"], "prompt")
+        self.assertEqual(self.rec.workspaces[42]["step"], "prompt")
+        self.assertTrue(callback.text_edits)
+
+    def test_wizard_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.workspace = None  # type: ignore[misc]
+
+    def test_wizard_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(wizard_router)
         self.assertNotIn("flow_bot", src)
 
 

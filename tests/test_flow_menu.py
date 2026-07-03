@@ -457,17 +457,20 @@ class BotMenuWiringTests(unittest.TestCase):
         self.animate_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "animate.py"
         ).read_text(encoding="utf-8")
+        self.wizard_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "wizard.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         for needle in (
             'F.data.startswith("m:")',     # menu router
-            'F.data.startswith("w:")',     # wizard router
             "async def on_menu_action",
-            "async def on_wizard_action",
-            'data == "w:go"',              # one "generate" button
-            'st["await"] = "prompt"',       # wizard waits for prompt
         ):
             self.assertIn(needle, self.source, needle)
+        self.assertIn('F.data.startswith("w:")', self.wizard_router_source)  # wizard router
+        self.assertIn("async def on_wizard_action", self.wizard_router_source)
+        self.assertIn('data == "w:go"', self.wizard_router_source)
+        self.assertIn('st["await"] = "prompt"', self.wizard_router_source)
         self.assertIn("def wizard_kb", self.kb_source)   # single-screen count+format
 
     def test_main_menu_has_animate_under_video_with_source_price(self) -> None:
@@ -1522,7 +1525,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # Uploaded-video edit is marked prompt_edited=True → extend stays blocked.
         block = self.source[
             self.source.index("async def _video_edit_uploaded"):
-            self.source.index("async def on_wizard_action")
+            self.source.index("async def on_video_action")
         ]
         self.assertIn("prompt_edited=True", block)
         self.assertIn('video_operation="edit"', block)

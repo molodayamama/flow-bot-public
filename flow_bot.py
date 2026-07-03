@@ -325,6 +325,7 @@ from channels.telegram.routers import agent as tg_agent_router
 from channels.telegram.routers import video_upload as tg_video_upload_router
 from channels.telegram.routers import edit_settings as tg_edit_settings_router
 from channels.telegram.routers import animate as tg_animate_router
+from channels.telegram.routers import wizard as tg_wizard_router
 from channels.telegram.routers import fallback as tg_fallback_router
 
 from referrals.service import ReferralService
@@ -5852,120 +5853,6 @@ async def _video_edit_uploaded(message: types.Message, prompt: str, *, user_id: 
     )
 
 
-@dp.callback_query(F.data.startswith("w:"))
-async def on_wizard_action(callback: types.CallbackQuery):
-    """Один экран визарда: меняем количество/формат и жмём «Сгенерировать»."""
-    user_id = callback.from_user.id
-    data = callback.data or ""
-    st = _ws(user_id)
-    msg = callback.message
-
-    if data == "w:cancel":
-        await callback.answer("Отменено")
-        st.clear()
-        await show_main_menu(msg, user_id=user_id, edit=True)
-        return
-    if data.startswith("w:cnt:"):
-        st["count"] = clamp_num_images(data.split(":")[2])
-        await callback.answer()
-        await show_wizard(msg, user_id=user_id, edit=True)
-        return
-    if data.startswith("w:fmt:"):
-        st["fmt"] = data.split(":")[2]
-        await callback.answer()
-        await show_wizard(msg, user_id=user_id, edit=True)
-        return
-    if data.startswith("w:imodel:"):
-        choice = data.split(":")[2]
-        if image_model_meta(choice):
-            st["imodel"] = choice
-        await callback.answer()
-        await show_wizard(msg, user_id=user_id, edit=True)
-        return
-    if data.startswith("w:hist:"):
-        try:
-            idx = int(data.split(":")[2])
-        except (IndexError, ValueError):
-            await callback.answer()
-            return
-        cache = st.get("_hist_cache", [])
-        if 0 <= idx < len(cache):
-            chosen = cache[idx]
-            _reset_image_flow(user_id, keep_last=True)
-            st["pending_prompt"] = chosen
-            await callback.answer(f"📋 {chosen[:40]}", show_alert=False)
-            await show_wizard(msg, user_id=user_id, edit=False)
-        else:
-            await callback.answer()
-        return
-    if data == "w:idea:next":
-        pool = st.get("ideas_pool", [])
-        offset = st.get("ideas_offset", 0) + 3
-        if offset + 3 > len(pool):
-            # Конец пула — перемешиваем заново
-            import random as _random
-            pool = list(_QUICK_IDEAS)
-            _random.shuffle(pool)
-            st["ideas_pool"] = pool
-            offset = 0
-        st["ideas_offset"] = offset
-        await callback.answer()
-        await show_prompt_picker(msg, user_id=user_id, edit=True)
-        return
-    if data.startswith("w:idea:"):
-        try:
-            idx = int(data.split(":")[2])
-        except (IndexError, ValueError):
-            await callback.answer()
-            return
-        pool = st.get("ideas_pool", [])
-        offset = st.get("ideas_offset", 0)
-        idea = pool[offset + idx] if 0 <= offset + idx < len(pool) else None
-        if idea:
-            st["pending_prompt"] = idea
-            await callback.answer(f"💡 {idea[:40]}", show_alert=False)
-        await show_wizard(msg, user_id=user_id, edit=True)
-        return
-    if data == "w:boost_prompt":
-        pending = st.get("pending_prompt")
-        if not pending:
-            await callback.answer("Сначала введи запрос", show_alert=True)
-            return
-        await callback.answer("✨ Улучшаю промпт…")
-        improved = await _boost_prompt_with_gemini(pending)
-        if improved:
-            st["pending_prompt"] = improved
-            metrics.log_event("prompt_boosted", user_id=user_id)
-            await show_wizard(msg, user_id=user_id, edit=True)
-        else:
-            await callback.answer("Не удалось улучшить — попробуй позже", show_alert=True)
-        return
-    if data == "w:change_prompt":
-        st.pop("pending_prompt", None)
-        await callback.answer()
-        await show_prompt_picker(msg, user_id=user_id, edit=True)
-        return
-    if data == "w:go":
-        pending = st.get("pending_prompt")
-        if pending:
-            # Промпт уже прислан в чат — генерируем сразу с выбранными
-            # количеством, форматом и моделью; второй раз текст не спрашиваем.
-            st["pending_prompt"] = None
-            count = st.get("count", DEFAULT_COUNT)
-            fmt = st.get("fmt", DEFAULT_FMT)
-            await callback.answer()
-            await _generate_and_send(
-                callback.message, pending, num_images=count,
-                aspect_ratio=_fmt_to_aspect(fmt), actor_id=user_id,
-                image_model=st.get("imodel", DEFAULT_IMAGE_MODEL),
-            )
-            return
-        st["await"] = "prompt"
-        st["step"] = "prompt"
-        await callback.answer()
-        await msg.edit_text(flow_copy.msg("ask_prompt"))
-        return
-    await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("v:"))
@@ -9063,6 +8950,27 @@ dp.include_router(
             image_registry=image_registry,
             animate_photo_scenario=_animate_photo_scenario,
             context_factory=lambda msg, user_id: _TelegramAnimatePhotoContext(msg, user_id),
+        )
+    )
+)
+dp.include_router(
+    tg_wizard_router.create_router(
+        tg_wizard_router.WizardDeps(
+            workspace=_ws,
+            clamp_num_images=clamp_num_images,
+            image_model_meta=image_model_meta,
+            reset_image_flow=_reset_image_flow,
+            show_main_menu=show_main_menu,
+            show_wizard=show_wizard,
+            show_prompt_picker=show_prompt_picker,
+            boost_prompt_with_gemini=_boost_prompt_with_gemini,
+            generate_and_send=_generate_and_send,
+            fmt_to_aspect=_fmt_to_aspect,
+            log_event=metrics.log_event,
+            quick_ideas=_QUICK_IDEAS,
+            default_count=DEFAULT_COUNT,
+            default_fmt=DEFAULT_FMT,
+            default_image_model=DEFAULT_IMAGE_MODEL,
         )
     )
 )
