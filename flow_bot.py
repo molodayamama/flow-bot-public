@@ -882,9 +882,20 @@ def _fmt_to_aspect(fmt: str) -> str:
         "f34": "portrait_34",
     }.get(fmt, "landscape")
 
-# Авто-отключение per-user проектов после серии неудач (откат на общий проект).
-_project_creation_failures = 0
-_per_user_projects_enabled = PER_USER_PROJECTS
+# Per-user Flow project lifecycle + auto-disable circuit breaker moved to
+# accounts/projects.py (Phase 11 core split). The manager owns the failure
+# counter/enabled flag as instance state; flow_bot keeps thin delegates below.
+from accounts.projects import ProjectManager
+
+_project_mgr = ProjectManager(
+    project_store=project_store,
+    account_for=_account_for,
+    keeper_for_acc=_keeper_for_acc,
+    default_account_id=DEFAULT_ACCOUNT_ID,
+    max_failures=PROJECT_CREATION_MAX_FAILURES,
+    per_user_enabled=PER_USER_PROJECTS,
+    log=log,
+)
 
 # parse_result / result_pairs импортированы из flow_core (общая логика разбора).
 
@@ -978,8 +989,7 @@ async def credit_gate(
 
 
 def _project_key(account_id: str, user_id: int) -> str:
-    """Ключ проекта в сторе: проект юзера живёт на конкретном аккаунте пула."""
-    return f"{account_id}:{user_id}"
+    return ProjectManager.project_key(account_id, user_id)
 
 
 async def ensure_user_project(user_id: int, *, account_id: str | None = None) -> str | None:
@@ -994,41 +1004,7 @@ async def ensure_user_project(user_id: int, *, account_id: str | None = None) ->
     чтобы генерация всё равно работала. После ``PROJECT_CREATION_MAX_FAILURES``
     неудач подряд фича отключается на сессию, чтобы не висеть на каждом запросе.
     """
-    global _project_creation_failures, _per_user_projects_enabled
-
-    acc_id = account_id or _account_for(user_id) or DEFAULT_ACCOUNT_ID
-    key = _project_key(acc_id, user_id)
-    existing = project_store.get(key)
-    if existing:
-        return existing
-    if acc_id == DEFAULT_ACCOUNT_ID:
-        legacy = project_store.get(user_id)  # записи времён одного аккаунта
-        if legacy:
-            project_store.set(key, legacy)
-            return legacy
-    if not _per_user_projects_enabled:
-        return None
-
-    try:
-        pid = await _keeper_for_acc(acc_id).create_new_project()
-    except Exception:
-        log.exception("create_new_project failed")
-        pid = None
-
-    if pid:
-        _project_creation_failures = 0
-        project_store.set(key, pid)
-        log.info(f"📋 Пользователю {user_id} выдан проект {pid} (аккаунт {acc_id})")
-        return pid
-
-    _project_creation_failures += 1
-    if _project_creation_failures >= PROJECT_CREATION_MAX_FAILURES:
-        _per_user_projects_enabled = False
-        log.warning(
-            "⚠️ Per-user проекты отключены после %d неудач — работаю на общем проекте сессии.",
-            _project_creation_failures,
-        )
-    return None
+    return await _project_mgr.ensure(user_id, account_id=account_id)
 
 
 # ── меню и визард (кнопочный UX) ──────────────────────────────────────

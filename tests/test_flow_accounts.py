@@ -354,12 +354,15 @@ class BotPoolWiringTests(unittest.TestCase):
         self.assertIn("api_proxy_url=acc.api_proxy_url", self.source)
 
     def test_projects_are_per_account_with_legacy_migration(self) -> None:
+        # flow_bot keeps thin delegates; the sticky/legacy logic moved to
+        # accounts/projects.py::ProjectManager (Phase 11 core split).
         self.assertIn("def _project_key(account_id: str, user_id: int) -> str:", self.source)
-        start = self.source.index("async def ensure_user_project")
-        block = self.source[start:start + 2200]
-        self.assertIn("_project_key(acc_id, user_id)", block)
-        self.assertIn("legacy = project_store.get(user_id)", block)
-        self.assertIn("_keeper_for_acc(acc_id).create_new_project()", block)
+        self.assertIn("_project_mgr.ensure(user_id, account_id=account_id)", self.source)
+        pm = (PROJECT_ROOT / "accounts" / "projects.py").read_text(encoding="utf-8")
+        self.assertIn("def project_key(account_id: str, user_id: int) -> str:", pm)
+        self.assertIn("self.project_key(acc_id, user_id)", pm)
+        self.assertIn("legacy = self._store.get(user_id)", pm)
+        self.assertIn("self._keeper_for_acc(acc_id).create_new_project()", pm)
 
     def test_generation_paths_route_and_mark_health(self) -> None:
         # Image: отказ ДО credit_gate (без цикла «списали-вернули») при пустом пуле.

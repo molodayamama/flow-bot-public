@@ -698,9 +698,14 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertEqual(self.source.count("self._page.goto(FLOW_URL"), 1)
 
     def test_project_creation_has_failure_backoff(self) -> None:
-        self.assertIn("_per_user_projects_enabled", self.source)
-        self.assertIn("PROJECT_CREATION_MAX_FAILURES", self.source)
-        self.assertIn("PER_USER_PROJECTS", self.source)
+        # flow_bot wires the config into accounts/projects.py::ProjectManager,
+        # which owns the auto-disable breaker as instance state (Phase 11).
+        self.assertIn("max_failures=PROJECT_CREATION_MAX_FAILURES", self.source)
+        self.assertIn("per_user_enabled=PER_USER_PROJECTS", self.source)
+        pm = (PROJECT_ROOT / "accounts" / "projects.py").read_text(encoding="utf-8")
+        self.assertIn("self._failures += 1", pm)
+        self.assertIn("if self._failures >= self._max_failures:", pm)
+        self.assertIn("self._enabled = False", pm)
 
     def test_edit_shape_is_captured_not_guessed(self) -> None:
         self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
