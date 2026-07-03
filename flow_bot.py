@@ -2036,41 +2036,82 @@ async def _backend_generate_video_ingredients(req: dict) -> dict:
     return await backend_service.generate_video_ingredients(_backend_generation_deps(), req)
 
 
-def _maybe_start_max_bot() -> None:
-    """Start the MAX bot polling loop as a background task when MAX_ENABLED=1.
+def _build_max_runtime():
+    """Build (config, client, service) for MAX, or None when disabled/failed.
 
-    No-op (and never crashes Telegram startup) when MAX is disabled or its
-    startup fails. Shares the same generation backend + account pool as Telegram;
-    photo edit/animate download the incoming MAX photo and feed it to i2i/video.
+    Shared by the polling and webhook intake paths; the generation service uses
+    the same backend + account pool as Telegram, and photo edit/animate download
+    the incoming MAX photo and feed it to i2i/video.
+    """
+    from channels.base import PlatformFile
+    from channels.max.client import MaxBotClient, max_config_from_env
+    from channels.max.generation_adapter import BackendGenerationService
+
+    config = max_config_from_env()
+    if not config.enabled:
+        return None
+    client = MaxBotClient(
+        token=config.bot_token,
+        base_url=config.api_base_url,
+        ca_bundle=config.ca_bundle,
+    )
+
+    async def _download(url: str) -> bytes:
+        return await client.get_file_bytes(PlatformFile(file_id="", url=url))
+
+    service = BackendGenerationService(
+        generate_images=backend_service.generate_images,
+        generate_i2i=backend_service.generate_i2i,
+        generate_video_ingredients=backend_service.generate_video_ingredients,
+        download_bytes=_download,
+        deps=_backend_generation_deps(),
+    )
+    return config, client, service
+
+
+def _maybe_start_max_bot() -> None:
+    """Start MAX long-polling as a background task (poll mode, MAX_ENABLED=1).
+
+    No-op (never crashes Telegram startup) when MAX is disabled, in webhook mode,
+    or on any startup error. Webhook mode is mounted on the web server instead.
     """
     try:
-        from channels.base import PlatformFile
-        from channels.max.client import MaxBotClient, max_config_from_env
-        from channels.max.runtime import run_max
-        from channels.max.generation_adapter import BackendGenerationService
-
-        config = max_config_from_env()
-        if not config.enabled:
+        built = _build_max_runtime()
+        if built is None:
             return
-        client = MaxBotClient(
-            token=config.bot_token,
-            base_url=config.api_base_url,
-            ca_bundle=config.ca_bundle,
-        )
+        config, client, service = built
+        if config.mode == "webhook":
+            return  # webhook mode is registered on the web app, not polled
+        from channels.max.runtime import run_max
 
-        async def _download(url: str) -> bytes:
-            return await client.get_file_bytes(PlatformFile(file_id="", url=url))
-
-        service = BackendGenerationService(
-            generate_images=backend_service.generate_images,
-            generate_i2i=backend_service.generate_i2i,
-            generate_video_ingredients=backend_service.generate_video_ingredients,
-            download_bytes=_download,
-            deps=_backend_generation_deps(),
-        )
         asyncio.create_task(run_max(service, client=client))
     except Exception:
         log.exception("MAX bot startup failed")
+
+
+def _maybe_register_max_webhook(app) -> None:
+    """Mount the MAX webhook route on the web app when MAX_MODE=webhook.
+
+    No-op when MAX is disabled, not in webhook mode, or missing a webhook secret.
+    """
+    try:
+        built = _build_max_runtime()
+        if built is None:
+            return
+        config, client, service = built
+        if config.mode != "webhook":
+            return
+        if not config.webhook_secret:
+            log.warning("MAX webhook mode requires MAX_WEBHOOK_SECRET; skipping")
+            return
+        from channels.max.handler import MaxMvpBot
+        from channels.max.webhook_route import register_max_webhook
+
+        bot = MaxMvpBot(platform=client, service=service)
+        register_max_webhook(app, dispatch=bot.handle, secret=config.webhook_secret)
+        log.info("MAX webhook route registered")
+    except Exception:
+        log.exception("MAX webhook registration failed")
 
 
 async def _backend_generate(req: dict) -> dict:
@@ -5159,6 +5200,7 @@ async def _start_web_server() -> web.AppRunner:
         except Exception:
             log.exception("internal generation endpoint registration failed")
     _register_robokassa_routes(app)
+    _maybe_register_max_webhook(app)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, ROBOKASSA_WEB_HOST, ROBOKASSA_WEB_PORT)

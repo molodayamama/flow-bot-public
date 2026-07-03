@@ -27,6 +27,8 @@ MAX_API_BASE_URL_ENV = "MAX_API_BASE_URL"
 # Mozilla/certifi bundle; the operator points this at that CA (or installs it
 # system-wide). SSL verification is never disabled.
 MAX_CA_BUNDLE_ENV = "MAX_CA_BUNDLE"
+# Intake mode: "poll" (long-polling, default) or "webhook" (production).
+MAX_MODE_ENV = "MAX_MODE"
 DEFAULT_MAX_API_BASE_URL = "https://platform-api2.max.ru"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
@@ -38,17 +40,20 @@ class MaxConfig:
     webhook_secret: str = ""
     api_base_url: str = DEFAULT_MAX_API_BASE_URL
     ca_bundle: str = ""
+    mode: str = "poll"
 
 
 def max_config_from_env(env: Mapping[str, str] | None = None) -> MaxConfig:
     source = os.environ if env is None else env
     enabled = str(source.get(MAX_ENABLED_ENV, "0")).strip().lower() in _TRUE_VALUES
+    mode = str(source.get(MAX_MODE_ENV, "poll") or "poll").strip().lower()
     return MaxConfig(
         enabled=enabled,
         bot_token=str(source.get(MAX_BOT_TOKEN_ENV, "") or ""),
         webhook_secret=str(source.get(MAX_WEBHOOK_SECRET_ENV, "") or ""),
         api_base_url=str(source.get(MAX_API_BASE_URL_ENV, DEFAULT_MAX_API_BASE_URL) or DEFAULT_MAX_API_BASE_URL).rstrip("/"),
         ca_bundle=str(source.get(MAX_CA_BUNDLE_ENV, "") or ""),
+        mode="webhook" if mode == "webhook" else "poll",
     )
 
 

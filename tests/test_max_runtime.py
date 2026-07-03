@@ -112,6 +112,14 @@ class FlowBotWiringTests(unittest.TestCase):
         self.assertIn("download_bytes=_download", self.src)
         self.assertIn("client.get_file_bytes(PlatformFile(", self.src)
 
+    def test_registers_webhook_route_in_webhook_mode(self):
+        self.assertIn("def _maybe_register_max_webhook", self.src)
+        self.assertIn("_maybe_register_max_webhook(app)", self.src)
+        self.assertIn("from channels.max.webhook_route import register_max_webhook", self.src)
+        self.assertIn('config.mode == "webhook"', self.src)
+        # polling is skipped in webhook mode
+        self.assertIn('config.mode == "webhook":\n            return', self.src)
+
 
 if __name__ == "__main__":
     unittest.main()
