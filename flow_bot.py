@@ -316,6 +316,7 @@ from channels.telegram.texts import (
     _seller_history_text as _telegram_seller_history_text,
 )
 from channels.telegram.routers import commands as tg_commands_router
+from channels.telegram.routers import menu as tg_menu_router
 from channels.telegram.routers import onboarding as tg_onboarding_router
 from channels.telegram.routers import photo_route as tg_photo_route_router
 from channels.telegram.routers import image_retry as tg_image_retry_router
@@ -5139,130 +5140,6 @@ async def on_marketplace_action(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@dp.callback_query(F.data.startswith("m:"))
-async def on_menu_action(callback: types.CallbackQuery):
-    """Кнопки главного меню и экранов (генерация/баланс/пополнение/помощь)."""
-    user_id = callback.from_user.id
-    metrics.upsert_user(user_id, username=getattr(callback.from_user, "username", None),
-                        first_name=getattr(callback.from_user, "first_name", None))
-    data = callback.data or ""
-    msg = callback.message
-
-    if data == "m:gen":
-        await callback.answer()
-        _reset_image_flow(user_id)  # сбрасывает и pending_edits (залипшее фото)
-        await show_prompt_picker(msg, user_id=user_id, edit=True)
-    elif data == "m:vid":
-        await callback.answer()
-        pending_edits.pop(user_id, None)
-        pending_photo_routes.pop(user_id, None)
-        await show_video_prompt_input(msg, user_id=user_id, edit=True)
-    elif data == "m:animate":
-        # «Оживить фото» из меню = фото -> новый video wizard (Omni/Veo).
-        await callback.answer()
-        pending_edits.pop(user_id, None)
-        st = _ws(user_id)
-        _clear_image_flow_keys(st)  # чтобы промпт из чата ушёл в видео, а не в картинки
-        await show_animate_photo_input(msg, user_id=user_id, edit=True)
-    elif data == "m:mp":
-        await callback.answer()
-        _reset_image_flow(user_id)
-        _ws(user_id).setdefault("mp_platform", "wb")
-        await msg.edit_text(
-            _mp_jobs_text(_ws(user_id).get("mp_platform", "wb")),
-            reply_markup=mp_jobs_kb(_ws(user_id).get("mp_platform", "wb")),
-            parse_mode="HTML",
-        )
-        _mp_stamp_message(user_id, msg)
-    elif data == "m:ideas":
-        await callback.answer()
-        _reset_image_flow(user_id)
-        await _show_ideas_root(msg, user_id=user_id, edit=True)
-    elif data == "m:repeat":
-        await callback.answer("Повторяю 🔁")
-        await _repeat_last(callback, user_id)
-    elif data == "m:balance":
-        await callback.answer()
-        await show_balance(msg, user_id=user_id, edit=True)
-    elif data == "m:topup":
-        await callback.answer()
-        metrics.log_event("topup_opened", user_id=user_id, source="menu")
-        await msg.edit_text(
-            _topup_copy("topup_screen"),
-            reply_markup=topup_kb(is_admin=user_id in ADMIN_IDS),
-        )
-    elif data == "m:pay:stars":
-        await callback.answer()
-        await msg.edit_text(
-            _topup_copy("topup_stars_screen"),
-            reply_markup=topup_stars_kb(is_admin=user_id in ADMIN_IDS),
-        )
-    elif data == "m:pay:robo":
-        if not _robokassa_configured():
-            await callback.answer("Оплата по СБП/карте пока недоступна", show_alert=True)
-            return
-        await callback.answer()
-        await msg.edit_text(
-            _topup_copy("topup_robo_screen"),
-            reply_markup=topup_robo_kb(is_admin=user_id in ADMIN_IDS),
-        )
-    elif data.startswith("m:pack:"):
-        await _start_topup(callback, user_id, data.split(":", 2)[2])
-    elif data.startswith("m:robo:"):
-        await _start_robokassa_topup(callback, user_id, data.split(":", 2)[2])
-    elif data == "m:help":
-        await callback.answer()
-        await _show_help_screen(msg, edit=True)
-    elif data == "m:invite":
-        await callback.answer()
-        await _show_referral_screen(msg, user_id=user_id, edit=True)
-    elif data == "m:myphoto":
-        await callback.answer()
-        _reset_image_flow(user_id, keep_last=False)
-        _ws(user_id)["await"] = "photo"
-        await msg.edit_text(flow_copy.msg("ask_photo"))
-    elif data == "m:menu":
-        await callback.answer()
-        pending_edits.pop(user_id, None)
-        pending_photo_routes.pop(user_id, None)
-        _ws(user_id)["await"] = None
-        await show_main_menu(msg, user_id=user_id, edit=True)
-    elif data == "m:profile":
-        await callback.answer()
-        await _show_profile_screen(msg, user_id=user_id, edit=True)
-    elif data == "m:gallery":
-        await callback.answer()
-        await _show_gallery(msg, user_id=user_id)
-    elif data == "m:history":
-        await callback.answer()
-        await _show_prompt_history(msg, user_id=user_id)
-    elif data == "m:support":
-        await callback.answer()
-        await _show_support_menu(msg, user_id=user_id, edit=True)
-    elif data == "m:support:new":
-        await callback.answer()
-        st = _ws(user_id)
-        st["support_await"] = True
-        cancel_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="◀️ Отмена", callback_data="m:support")],
-            [_menu_button("menu", "m:menu")],
-        ])
-        await msg.edit_text(flow_copy.msg("support_ask"), reply_markup=cancel_kb)
-    elif data == "m:support:my":
-        await callback.answer()
-        await _show_my_tickets(msg, user_id=user_id, edit=True)
-    elif data.startswith("m:sreply:"):
-        # Админ нажал «Ответить» под тикетом
-        if user_id in ADMIN_IDS:
-            ticket_id = int(data.split(":", 2)[2])
-            st = _ws(user_id)
-            st["admin_reply_ticket"] = ticket_id
-            await callback.answer()
-            await msg.reply(f"✏️ Введи ответ на тикет #{ticket_id}:")
-        else:
-            await callback.answer()
-    else:
-        await callback.answer()
 
 
 def _store_pending_photo_route(user_id: int, *, file_id: str, caption: str) -> None:
@@ -8971,6 +8848,44 @@ dp.include_router(
             default_count=DEFAULT_COUNT,
             default_fmt=DEFAULT_FMT,
             default_image_model=DEFAULT_IMAGE_MODEL,
+        )
+    )
+)
+dp.include_router(
+    tg_menu_router.create_router(
+        tg_menu_router.MenuDeps(
+            workspace=_ws,
+            pending_edits=pending_edits,
+            pending_photo_routes=pending_photo_routes,
+            admin_ids=ADMIN_IDS,
+            upsert_user=metrics.upsert_user,
+            log_event=metrics.log_event,
+            reset_image_flow=_reset_image_flow,
+            clear_image_flow_keys=_clear_image_flow_keys,
+            show_prompt_picker=show_prompt_picker,
+            show_video_prompt_input=show_video_prompt_input,
+            show_animate_photo_input=show_animate_photo_input,
+            mp_jobs_text=_mp_jobs_text,
+            mp_jobs_kb=mp_jobs_kb,
+            mp_stamp_message=_mp_stamp_message,
+            show_ideas_root=_show_ideas_root,
+            repeat_last=_repeat_last,
+            show_balance=show_balance,
+            topup_copy=_topup_copy,
+            topup_kb=topup_kb,
+            topup_stars_kb=topup_stars_kb,
+            topup_robo_kb=topup_robo_kb,
+            robokassa_configured=_robokassa_configured,
+            start_topup=_start_topup,
+            start_robokassa_topup=_start_robokassa_topup,
+            show_help_screen=_show_help_screen,
+            show_referral_screen=_show_referral_screen,
+            show_main_menu=show_main_menu,
+            show_profile_screen=_show_profile_screen,
+            show_gallery=_show_gallery,
+            show_prompt_history=_show_prompt_history,
+            show_support_menu=_show_support_menu,
+            show_my_tickets=_show_my_tickets,
         )
     )
 )

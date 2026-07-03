@@ -460,13 +460,13 @@ class BotMenuWiringTests(unittest.TestCase):
         self.wizard_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "wizard.py"
         ).read_text(encoding="utf-8")
+        self.menu_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "menu.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
-        for needle in (
-            'F.data.startswith("m:")',     # menu router
-            "async def on_menu_action",
-        ):
-            self.assertIn(needle, self.source, needle)
+        self.assertIn('F.data.startswith("m:")', self.menu_router_source)  # menu router
+        self.assertIn("async def on_menu_action", self.menu_router_source)
         self.assertIn('F.data.startswith("w:")', self.wizard_router_source)  # wizard router
         self.assertIn("async def on_wizard_action", self.wizard_router_source)
         self.assertIn('data == "w:go"', self.wizard_router_source)
@@ -624,7 +624,6 @@ class BotMenuWiringTests(unittest.TestCase):
         for needle in (
             "ROBOKASSA_HASH_ALGO",
             "ROBOKASSA_INC_CURR_LABEL",
-            'data.startswith("m:robo:")',
             "robokassa_payment_signature(",
             "robokassa_result_signature(",
             "async def robokassa_result",
@@ -632,6 +631,7 @@ class BotMenuWiringTests(unittest.TestCase):
             "await _start_robokassa_web_server()",
         ):
             self.assertIn(needle, self.source, needle)
+        self.assertIn('data.startswith("m:robo:")', self.menu_router_source)
         self.assertIn('callback_data=f"m:robo:{pid}"', self.kb_source)
 
     def test_admin_grant_restricted(self) -> None:
@@ -1246,6 +1246,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # Metrics import + init + key events + idempotent transaction recording.
         self.assertIn("import metrics", self.source)
         self.assertIn("metrics.init_db(", self.source)
+        metrics_sources = self.source + "\n" + self.menu_router_source
         for ev in (
             '"user_started"', '"image_requested"', '"image_success"', '"image_failed"',
             '"variations_requested"', '"upscale_requested"', '"image_edit_requested"',
@@ -1253,7 +1254,7 @@ class BotMenuWiringTests(unittest.TestCase):
             '"credits_charged"', '"credits_refunded"', '"topup_opened"',
             '"payment_success"', '"wizard_started"', '"wizard_completed"',
         ):
-            self.assertIn(ev, self.source, ev)
+            self.assertIn(ev, metrics_sources, ev)
         # Идемпотентность ДО зачисления: дубль доставки successful_payment не
         # зачисляет кредиты второй раз; сбой метрик-БД оплату не блокирует.
         self.assertIn("metrics.record_transaction_status(", self.source)
@@ -1327,7 +1328,8 @@ class BotMenuWiringTests(unittest.TestCase):
         # Reward orchestration moved to referrals/service.py (Phase 9).
         svc = (PROJECT_ROOT / "referrals" / "service.py").read_text(encoding="utf-8")
         self.assertIn('"referral_reward_paid"', svc)
-        self.assertIn('data == "m:invite"', self.source)
+        self.assertIn('data == "m:invite"', self.menu_router_source)
+        self.assertIn("deps.show_referral_screen", self.menu_router_source)
         self.assertIn("_invite_button(", self.source)
         self.assertIn("_clawback_referral_rewards(", self.source)
         # Reward must be applied only after a recorded (idempotent) payment.
@@ -1369,10 +1371,12 @@ class BotMenuWiringTests(unittest.TestCase):
         kb = self.kb_source[self.kb_source.index("def _image_keyboard"):][:1200]
         self.assertIn('f"an:img:{token}"', kb)
         self.assertIn('@router.callback_query(F.data.startswith("an:"))', self.animate_router_source)
-        self.assertIn('data == "m:animate"', self.source)
+        self.assertIn('data == "m:animate"', self.menu_router_source)
         self.assertIn("async def show_animate_photo_input", self.source)
-        animate_menu = self.source[self.source.index('elif data == "m:animate"'):][:500]
-        self.assertIn("show_animate_photo_input", animate_menu)
+        animate_menu = self.menu_router_source[
+            self.menu_router_source.index('elif data == "m:animate"'):
+        ][:500]
+        self.assertIn("deps.show_animate_photo_input", animate_menu)
         self.assertIn('"vanimate_photo"', self.source)
         # Seeds the generated image into the new scenario layer as a vphoto
         # reference, carrying the image's account/project so r2v doesn't 404 on
@@ -1442,7 +1446,8 @@ class BotMenuWiringTests(unittest.TestCase):
     def test_ideas_hub_wired(self) -> None:
         # Menu entry + hub root + both branches (templates Q&A, guided picker).
         self.assertIn("import prompts_lib", self.source)
-        self.assertIn('data == "m:ideas"', self.source)
+        self.assertIn('data == "m:ideas"', self.menu_router_source)
+        self.assertIn("deps.show_ideas_root", self.menu_router_source)
         self.assertIn('@router.callback_query(F.data.startswith("ih:"))', self.ideas_hub_router_source)
         self.assertIn('@router.callback_query(F.data.startswith("tp:"))', self.ideas_flow_router_source)
         self.assertIn('@router.callback_query(F.data.startswith("gp:"))', self.ideas_flow_router_source)

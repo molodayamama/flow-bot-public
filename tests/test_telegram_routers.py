@@ -15,6 +15,7 @@ from channels.telegram.routers import ideas_flow as ideas_flow_router
 from channels.telegram.routers import image_retry as image_retry_router
 from channels.telegram.routers import ideas_hub as ideas_hub_router
 from channels.telegram.routers import onboarding as onboarding_router
+from channels.telegram.routers import menu as menu_router
 from channels.telegram.routers import photo_route as photo_route_router
 from channels.telegram.routers import video_upload as video_upload_router
 from channels.telegram.routers import wizard as wizard_router
@@ -154,9 +155,11 @@ class FakeCallback:
         self.edits: list[dict] = []
         self.text_edits: list[tuple[tuple, dict]] = []
         self.message_answers: list[tuple[tuple, dict]] = []
+        self.replies: list[tuple[tuple, dict]] = []
         self.deletes: int = 0
         self.message.answer = self._message_answer
         self.message.delete = self._message_delete
+        self.message.reply = self._message_reply
 
     async def answer(self, *args, **kwargs):
         self.answers.append((args, kwargs))
@@ -172,6 +175,9 @@ class FakeCallback:
 
     async def _message_delete(self):
         self.deletes += 1
+
+    async def _message_reply(self, *args, **kwargs):
+        self.replies.append((args, kwargs))
 
 
 class RecordingOnboardingDeps:
@@ -514,6 +520,208 @@ class WizardRouterTests(unittest.TestCase):
 
     def test_wizard_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(wizard_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class RecordingMenuDeps:
+    def __init__(self) -> None:
+        self.workspaces: dict[int, dict] = {}
+        self.pending_edits: dict[int, object] = {}
+        self.pending_photo_routes: dict[int, object] = {}
+        self.admin_ids = {42}
+        self.calls: list[tuple[str, tuple, dict]] = []
+        self.robo_enabled = True
+
+    def workspace(self, user_id: int) -> dict:
+        self.calls.append(("workspace", (user_id,), {}))
+        return self.workspaces.setdefault(user_id, {})
+
+    def upsert_user(self, *args, **kwargs):
+        self.calls.append(("upsert_user", args, kwargs))
+
+    def log_event(self, *args, **kwargs):
+        self.calls.append(("log_event", args, kwargs))
+
+    def reset_image_flow(self, *args, **kwargs):
+        self.calls.append(("reset_image_flow", args, kwargs))
+        self.workspaces.setdefault(args[0], {}).clear()
+
+    def clear_image_flow_keys(self, st: dict):
+        self.calls.append(("clear_image_flow_keys", (st,), {}))
+        st.pop("pending_prompt", None)
+
+    def mp_jobs_text(self, platform: str) -> str:
+        self.calls.append(("mp_jobs_text", (platform,), {}))
+        return f"jobs:{platform}"
+
+    def mp_jobs_kb(self, platform: str):
+        self.calls.append(("mp_jobs_kb", (platform,), {}))
+        return f"kb:{platform}"
+
+    def mp_stamp_message(self, *args, **kwargs):
+        self.calls.append(("mp_stamp_message", args, kwargs))
+
+    def topup_copy(self, key: str) -> str:
+        self.calls.append(("topup_copy", (key,), {}))
+        return key
+
+    def topup_kb(self, *args, **kwargs):
+        self.calls.append(("topup_kb", args, kwargs))
+        return "topup-kb"
+
+    def topup_stars_kb(self, *args, **kwargs):
+        self.calls.append(("topup_stars_kb", args, kwargs))
+        return "stars-kb"
+
+    def topup_robo_kb(self, *args, **kwargs):
+        self.calls.append(("topup_robo_kb", args, kwargs))
+        return "robo-kb"
+
+    def robokassa_configured(self) -> bool:
+        self.calls.append(("robokassa_configured", (), {}))
+        return self.robo_enabled
+
+    async def start_topup(self, *args, **kwargs):
+        self.calls.append(("start_topup", args, kwargs))
+
+    async def start_robokassa_topup(self, *args, **kwargs):
+        self.calls.append(("start_robokassa_topup", args, kwargs))
+
+    def _make_async(self, name):
+        async def renderer(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return None
+
+        return renderer
+
+
+def _menu_deps() -> tuple[menu_router.MenuDeps, RecordingMenuDeps]:
+    rec = RecordingMenuDeps()
+    deps = menu_router.MenuDeps(
+        workspace=rec.workspace,
+        pending_edits=rec.pending_edits,
+        pending_photo_routes=rec.pending_photo_routes,
+        admin_ids=rec.admin_ids,
+        upsert_user=rec.upsert_user,
+        log_event=rec.log_event,
+        reset_image_flow=rec.reset_image_flow,
+        clear_image_flow_keys=rec.clear_image_flow_keys,
+        show_prompt_picker=rec._make_async("show_prompt_picker"),
+        show_video_prompt_input=rec._make_async("show_video_prompt_input"),
+        show_animate_photo_input=rec._make_async("show_animate_photo_input"),
+        mp_jobs_text=rec.mp_jobs_text,
+        mp_jobs_kb=rec.mp_jobs_kb,
+        mp_stamp_message=rec.mp_stamp_message,
+        show_ideas_root=rec._make_async("show_ideas_root"),
+        repeat_last=rec._make_async("repeat_last"),
+        show_balance=rec._make_async("show_balance"),
+        topup_copy=rec.topup_copy,
+        topup_kb=rec.topup_kb,
+        topup_stars_kb=rec.topup_stars_kb,
+        topup_robo_kb=rec.topup_robo_kb,
+        robokassa_configured=rec.robokassa_configured,
+        start_topup=rec.start_topup,
+        start_robokassa_topup=rec.start_robokassa_topup,
+        show_help_screen=rec._make_async("show_help_screen"),
+        show_referral_screen=rec._make_async("show_referral_screen"),
+        show_main_menu=rec._make_async("show_main_menu"),
+        show_profile_screen=rec._make_async("show_profile_screen"),
+        show_gallery=rec._make_async("show_gallery"),
+        show_prompt_history=rec._make_async("show_prompt_history"),
+        show_support_menu=rec._make_async("show_support_menu"),
+        show_my_tickets=rec._make_async("show_my_tickets"),
+    )
+    return deps, rec
+
+
+class MenuRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _menu_deps()
+        self.router = menu_router.create_router(self.deps)
+        self.handler = self.router.callback_query.handlers[0].callback
+
+    def test_creates_m_callback_router(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        self.assertEqual(self.router.name, "tg-menu")
+        self.assertEqual(len(self.router.callback_query.handlers), 1)
+        self.assertEqual(self.router.callback_query.handlers[0].callback.__name__, "on_menu_action")
+
+    def test_gen_resets_image_flow_and_opens_prompt_picker(self) -> None:
+        callback = FakeCallback("m:gen")
+        run(self.handler(callback))
+        self.assertIn(("reset_image_flow", (42,), {}), self.rec.calls)
+        self.assertEqual(self.rec.calls[-1][0], "show_prompt_picker")
+
+    def test_vid_clears_pending_photo_and_opens_video_prompt(self) -> None:
+        self.rec.pending_edits[42] = object()
+        self.rec.pending_photo_routes[42] = object()
+        callback = FakeCallback("m:vid")
+        run(self.handler(callback))
+        self.assertNotIn(42, self.rec.pending_edits)
+        self.assertNotIn(42, self.rec.pending_photo_routes)
+        self.assertEqual(self.rec.calls[-1][0], "show_video_prompt_input")
+
+    def test_marketplace_sets_default_platform_and_edits_jobs(self) -> None:
+        callback = FakeCallback("m:mp")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42]["mp_platform"], "wb")
+        self.assertTrue(callback.text_edits)
+        self.assertEqual(self.rec.calls[-1][0], "mp_stamp_message")
+
+    def test_topup_logs_and_uses_admin_keyboard(self) -> None:
+        callback = FakeCallback("m:topup")
+        run(self.handler(callback))
+        self.assertTrue(any(c[0] == "log_event" for c in self.rec.calls))
+        self.assertIn(("topup_kb", (), {"is_admin": True}), self.rec.calls)
+        self.assertTrue(callback.text_edits)
+
+    def test_robokassa_disabled_alerts(self) -> None:
+        self.rec.robo_enabled = False
+        callback = FakeCallback("m:pay:robo")
+        run(self.handler(callback))
+        self.assertEqual(callback.answers[-1][1], {"show_alert": True})
+
+    def test_pack_and_robo_pack_delegate_to_payment_helpers(self) -> None:
+        callback = FakeCallback("m:pack:basic")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.calls[-1][0], "start_topup")
+        self.assertEqual(self.rec.calls[-1][1], (callback, 42, "basic"))
+
+        callback = FakeCallback("m:robo:basic")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.calls[-1][0], "start_robokassa_topup")
+        self.assertEqual(self.rec.calls[-1][1], (callback, 42, "basic"))
+
+    def test_myphoto_and_menu_update_state(self) -> None:
+        callback = FakeCallback("m:myphoto")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42]["await"], "photo")
+        self.assertTrue(callback.text_edits)
+
+        self.rec.pending_edits[42] = object()
+        self.rec.pending_photo_routes[42] = object()
+        callback = FakeCallback("m:menu")
+        run(self.handler(callback))
+        self.assertIsNone(self.rec.workspaces[42]["await"])
+        self.assertEqual(self.rec.calls[-1][0], "show_main_menu")
+
+    def test_support_new_and_admin_reply_set_state(self) -> None:
+        callback = FakeCallback("m:support:new")
+        run(self.handler(callback))
+        self.assertTrue(self.rec.workspaces[42]["support_await"])
+        self.assertTrue(callback.text_edits)
+
+        callback = FakeCallback("m:sreply:77")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42]["admin_reply_ticket"], 77)
+        self.assertTrue(callback.replies)
+
+    def test_menu_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.workspace = None  # type: ignore[misc]
+
+    def test_menu_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(menu_router)
         self.assertNotIn("flow_bot", src)
 
 

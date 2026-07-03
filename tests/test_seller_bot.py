@@ -95,9 +95,10 @@ class SellerMenuTests(unittest.TestCase):
         source = inspect.getsource(flow_bot.on_marketplace_action)
         self.assertIn("_mp_is_stale_callback(user_id, callback)", source)
         self.assertIn("_mp_reject_stale_callback(callback)", source)
-        menu_source = inspect.getsource(flow_bot.on_menu_action)
+        from channels.telegram.routers import menu as menu_router
+        menu_source = inspect.getsource(menu_router)
         self.assertIn('elif data == "m:mp":', menu_source)
-        self.assertIn("_mp_stamp_message(user_id, msg)", menu_source)
+        self.assertIn("deps.mp_stamp_message(user_id, msg)", menu_source)
         action_source = inspect.getsource(flow_bot.on_image_action)
         self.assertIn("_mp_stamp_message(user_id, sent)", action_source)
 
