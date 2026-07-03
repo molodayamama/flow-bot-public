@@ -490,6 +490,12 @@ class BotMenuWiringTests(unittest.TestCase):
         self.admin_credits_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "admin_credits.py"
         ).read_text(encoding="utf-8")
+        # handle_video_upload (F.video | F.document message input) moved to its
+        # own router (Phase 6, wave F); distinct from video_upload.py which
+        # owns the vu: callbacks.
+        self.video_upload_input_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "video_upload_input.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         self.assertIn('F.data.startswith("m:")', self.menu_router_source)  # menu router
@@ -1546,17 +1552,18 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("if _cfg.UPLOAD_VIDEO_EDIT_ENABLED else []", self.kb_source)   # кнопка в семействе
         self.assertIn("if not deps.upload_video_edit_enabled():", self.video_upload_router_source)  # колбэк vu:start
         self.assertIn("vid_upload_disabled", flow_copy.MESSAGES)
-        # handle_video_upload игнорирует видео, пока фича выключена.
+        # handle_video_upload игнорирует видео, пока фича выключена. Хендлер
+        # переехал в message-input роутер (Phase 6, wave F).
         self.assertIn(
-            "if not _cfg.UPLOAD_VIDEO_EDIT_ENABLED or st.get(\"vawait\") != \"vu_video\":",
-            self.source,
+            "if not deps.upload_video_edit_enabled() or st.get(\"vawait\") != \"vu_video\":",
+            self.video_upload_input_router_source,
         )
         # Реализация (на случай возврата фичи) на месте: колбэк + хендлер + правка.
         self.assertIn('"vu:start"', self.video_upload_router_source)
         self.assertIn('@router.callback_query(F.data.startswith("vu:"))', self.video_upload_router_source)
-        self.assertIn("@dp.message(F.video | F.document)", self.source)
-        self.assertIn("_account_for_video(user_id)", self.source)
-        self.assertIn("_keeper_for_acc(acc_id).upload_video(", self.source)
+        self.assertIn("@router.message(F.video | F.document)", self.video_upload_input_router_source)
+        self.assertIn("deps.account_for_video(user_id)", self.video_upload_input_router_source)
+        self.assertIn("deps.keeper_for_acc(acc_id).upload_video(", self.video_upload_input_router_source)
         self.assertIn("async def _video_edit_uploaded", self.source)
         # The upload proxy contract (from the Flow web-app bundle): the PUT must
         # carry the resumable session URL + chunk headers, else it 400s.
@@ -1585,14 +1592,14 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("_VID_FMT_TO_ASPECT[fmt]", block)
         # The upload handler waits for server-side transcode before allowing the
         # edit (otherwise the edit job FAILs), and a caption sent together with
-        # the video starts the edit immediately instead of re-asking.
-        upload_handler = self.source[
-            self.source.index("async def handle_video_upload"):
-            self.source.index("async def _video_edit_uploaded")
+        # the video starts the edit immediately instead of re-asking. The
+        # handler lives in the video_upload_input router (Phase 6, wave F).
+        upload_handler = self.video_upload_input_router_source[
+            self.video_upload_input_router_source.index("async def handle_video_upload"):
         ]
-        self.assertIn("_client_for_acc(acc_id).wait_video_ready(", upload_handler)
+        self.assertIn("deps.client_for_acc(acc_id).wait_video_ready(", upload_handler)
         self.assertIn("message.caption", upload_handler)
-        self.assertIn("_video_edit_uploaded(message, caption, user_id=user_id)", upload_handler)
+        self.assertIn("deps.video_edit_uploaded(message, caption, user_id=user_id)", upload_handler)
         self.assertIn("async def wait_video_ready", self.source)
 
     def test_video_prompt_edit_clears_reference_mode_inputs(self) -> None:

@@ -334,6 +334,7 @@ from channels.telegram.routers import generation_commands as tg_generation_comma
 from channels.telegram.routers import admin_accounts as tg_admin_accounts_router
 from channels.telegram.routers import admin_reports as tg_admin_reports_router
 from channels.telegram.routers import admin_credits as tg_admin_credits_router
+from channels.telegram.routers import video_upload_input as tg_video_upload_input_router
 from channels.telegram.routers import fallback as tg_fallback_router
 
 from referrals.service import ReferralService
@@ -4667,81 +4668,6 @@ async def _agent_pick(callback: types.CallbackQuery, *, user_id: int, idx_str: s
     await rerender(callback.message, user_id=user_id, edit=True)
 
 
-@dp.message(F.video | F.document)
-async def handle_video_upload(message: types.Message):
-    """Приём пользовательского видео для режима «Изменить своё видео»."""
-    user_id = message.from_user.id
-    st = _ws(user_id)
-    if not _cfg.UPLOAD_VIDEO_EDIT_ENABLED or st.get("vawait") != "vu_video":
-        return  # видео ждём только в этом режиме (и пока фича включена) — иначе игнор
-    file_obj = message.video or message.document
-    if file_obj is None:
-        return
-    # Документы-картинки сюда не относим (для них есть обычный фото-флоу).
-    mime = (getattr(file_obj, "mime_type", "") or "")
-    if message.document and not mime.startswith("video"):
-        await message.answer(flow_copy.msg("vid_upload_need_video"))
-        return
-    status = await message.answer(flow_copy.msg("vid_upload_working"))
-    try:
-        buf = await bot.download(file_obj.file_id)
-        data = buf.read() if hasattr(buf, "read") else bytes(buf)
-    except Exception:
-        log.exception("download user video failed")
-        await status.edit_text(flow_copy.msg("vid_upload_failed"))
-        return
-    acc_id = _account_for_video(user_id)
-    if acc_id is None:
-        await status.edit_text(flow_copy.msg("accounts_unavailable"))
-        return
-    project_id = await ensure_user_project(user_id, account_id=acc_id)
-    source = await _keeper_for_acc(acc_id).upload_video(
-        data,
-        filename=f"tg_{user_id}.mp4",
-        project_id=project_id,
-        content_type=mime or "video/mp4",
-    )
-    if not source or not source.get("mediaId"):
-        await status.edit_text(flow_copy.msg("vid_upload_failed"))
-        return
-    # Транскод на стороне сервиса: без ожидания SUCCESSFUL правка падает FAILED.
-    source.setdefault("_account_id", acc_id)
-    ready_item = await _client_for_acc(acc_id).wait_video_ready(
-        source["mediaId"], source.get("_project_id") or project_id or ""
-    )
-    if ready_item is None:
-        await status.edit_text(flow_copy.msg("vid_upload_failed"))
-        return
-    # Реальная длительность клипа → endFrameIndex правки (кадры за концом клипа
-    # роняют edit-джобу). Сервер надёжнее Telegram (документы без duration).
-    source["duration_s"] = (
-        video_duration_from_poll_item(ready_item)
-        or float(getattr(file_obj, "duration", 0) or 0)
-        or None
-    )
-    if source["duration_s"] is None:
-        # endFrameIndex упадёт в дефолт 240: для клипа короче 8с правка уйдёт в
-        # FAILED на стороне сервиса — пусть причина будет видна в логах.
-        log.warning("🎬 upload: длительность не определена (ни poll, ни Telegram) — "
-                    "endFrameIndex возьмёт дефолт %s", video_edit_end_frame(None))
-    st["vu_source"] = source
-    metrics.log_event("video_upload_edit_started", user_id=user_id, source="upload")
-    try:
-        await status.delete()
-    except Exception:
-        pass
-    caption = (message.caption or "").strip()
-    if len(caption) >= 3:
-        # Видео пришло сразу с текстом правки — не переспрашиваем, генерируем.
-        st["vawait"] = None
-        await _video_edit_uploaded(message, caption, user_id=user_id)
-        return
-    st["vawait"] = "vu_edit_prompt"
-    await message.answer(
-        flow_copy.msg("vid_upload_ask_prompt", price=action_price("video_prompt_edit"))
-    )
-
-
 async def _video_edit_uploaded(message: types.Message, prompt: str, *, user_id: int) -> None:
     """Правка загруженного пользователем видео промптом (Extend недоступен)."""
     st = _ws(user_id)
@@ -7594,6 +7520,22 @@ dp.include_router(
             send_owner_alert=_send_owner_alert,
             clawback_referral_rewards=_clawback_referral_rewards,
             log=log,
+        )
+    )
+)
+dp.include_router(
+    tg_video_upload_input_router.create_router(
+        tg_video_upload_input_router.VideoUploadInputDeps(
+            workspace=_ws,
+            upload_video_edit_enabled=lambda: _cfg.UPLOAD_VIDEO_EDIT_ENABLED,
+            bot=bot,
+            log=log,
+            metrics=metrics,
+            account_for_video=_account_for_video,
+            ensure_user_project=ensure_user_project,
+            keeper_for_acc=_keeper_for_acc,
+            client_for_acc=_client_for_acc,
+            video_edit_uploaded=_video_edit_uploaded,
         )
     )
 )

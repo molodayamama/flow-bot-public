@@ -26,6 +26,7 @@ from channels.telegram.routers import menu as menu_router
 from channels.telegram.routers import photo_route as photo_route_router
 from channels.telegram.routers import video as video_router
 from channels.telegram.routers import video_upload as video_upload_router
+from channels.telegram.routers import video_upload_input as video_upload_input_router
 from channels.telegram.routers import wizard as wizard_router
 from flow_core import action_callback_data
 
@@ -2667,6 +2668,210 @@ class AdminCreditsRouterTests(unittest.TestCase):
 
     def test_admin_credits_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(admin_credits_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class FakeStatusMessage:
+    def __init__(self, rec) -> None:
+        self.rec = rec
+
+    async def edit_text(self, *args, **kwargs):
+        self.rec.calls.append(("status.edit_text", args, kwargs))
+
+    async def delete(self):
+        self.rec.calls.append(("status.delete", (), {}))
+
+
+class FakeUploadMessage:
+    def __init__(self, rec, *, video=None, document=None, caption=None, user_id: int = 7) -> None:
+        self.rec = rec
+        self.video = video
+        self.document = document
+        self.caption = caption
+        self.from_user = SimpleNamespace(id=user_id)
+        self.answers: list[tuple[tuple, dict]] = []
+
+    async def answer(self, *args, **kwargs):
+        self.answers.append((args, kwargs))
+        return FakeStatusMessage(self.rec)
+
+
+class FakeUploadKeeper:
+    def __init__(self, rec) -> None:
+        self.rec = rec
+
+    async def upload_video(self, data, **kwargs):
+        self.rec.calls.append(("upload_video", (len(data),), kwargs))
+        return dict(self.rec.upload_result) if self.rec.upload_result else self.rec.upload_result
+
+
+class FakeUploadClient:
+    def __init__(self, rec) -> None:
+        self.rec = rec
+
+    async def wait_video_ready(self, media_id, project_id):
+        self.rec.calls.append(("wait_video_ready", (media_id, project_id), {}))
+        return self.rec.ready_item
+
+
+class RecordingVideoUploadInputDeps:
+    def __init__(
+        self,
+        *,
+        enabled: bool = True,
+        acc_id: str | None = "acc1",
+        upload_result: dict | None = None,
+        ready_item: dict | None = None,
+    ) -> None:
+        self.enabled = enabled
+        self.acc_id = acc_id
+        self.upload_result = {"mediaId": "m1"} if upload_result is None else upload_result
+        self.ready_item = {"duration_seconds": 4} if ready_item is None else ready_item
+        self.workspaces: dict[int, dict] = {}
+        self.calls: list[tuple[str, tuple, dict]] = []
+        self.bot = SimpleNamespace(download=self._download)
+        self.log = SimpleNamespace(
+            exception=lambda *a, **k: self.calls.append(("log.exception", a, k)),
+            warning=lambda *a, **k: self.calls.append(("log.warning", a, k)),
+        )
+        self.metrics = SimpleNamespace(
+            log_event=lambda *a, **k: self.calls.append(("log_event", a, k)),
+        )
+
+    async def _download(self, file_id):
+        self.calls.append(("bot.download", (file_id,), {}))
+        return b"clip-bytes"
+
+    def workspace(self, user_id: int) -> dict:
+        return self.workspaces.setdefault(user_id, {})
+
+    def upload_video_edit_enabled(self) -> bool:
+        return self.enabled
+
+    def account_for_video(self, user_id: int):
+        self.calls.append(("account_for_video", (user_id,), {}))
+        return self.acc_id
+
+    async def ensure_user_project(self, user_id: int, *, account_id=None):
+        self.calls.append(("ensure_user_project", (user_id,), {"account_id": account_id}))
+        return "proj1"
+
+    def keeper_for_acc(self, acc_id):
+        return FakeUploadKeeper(self)
+
+    def client_for_acc(self, acc_id):
+        return FakeUploadClient(self)
+
+    async def video_edit_uploaded(self, *args, **kwargs):
+        self.calls.append(("video_edit_uploaded", args, kwargs))
+
+
+def _video_upload_input_deps(**kwargs) -> tuple[
+    video_upload_input_router.VideoUploadInputDeps, RecordingVideoUploadInputDeps
+]:
+    rec = RecordingVideoUploadInputDeps(**kwargs)
+    deps = video_upload_input_router.VideoUploadInputDeps(
+        workspace=rec.workspace,
+        upload_video_edit_enabled=rec.upload_video_edit_enabled,
+        bot=rec.bot,
+        log=rec.log,
+        metrics=rec.metrics,
+        account_for_video=rec.account_for_video,
+        ensure_user_project=rec.ensure_user_project,
+        keeper_for_acc=rec.keeper_for_acc,
+        client_for_acc=rec.client_for_acc,
+        video_edit_uploaded=rec.video_edit_uploaded,
+    )
+    return deps, rec
+
+
+def _fake_video(duration: int = 3):
+    return SimpleNamespace(file_id="vf1", mime_type="video/mp4", duration=duration)
+
+
+class VideoUploadInputRouterTests(unittest.TestCase):
+    def _handler(self, deps):
+        router = video_upload_input_router.create_router(deps)
+        return router.message.handlers[0].callback
+
+    def test_creates_message_input_router(self) -> None:
+        deps, _ = _video_upload_input_deps()
+        router = video_upload_input_router.create_router(deps)
+        self.assertIsInstance(router, Router)
+        self.assertEqual(router.name, "tg-video-upload-input")
+        self.assertEqual(len(router.message.handlers), 1)
+        self.assertEqual(router.callback_query.handlers, [])
+        self.assertEqual(router.message.handlers[0].callback.__name__, "handle_video_upload")
+
+    def test_disabled_feature_ignores_video_silently(self) -> None:
+        deps, rec = _video_upload_input_deps(enabled=False)
+        rec.workspaces[7] = {"vawait": "vu_video"}
+        message = FakeUploadMessage(rec, video=_fake_video())
+        run(self._handler(deps)(message))
+        self.assertEqual(message.answers, [])
+        self.assertEqual(rec.calls, [])
+
+    def test_wrong_await_state_ignores_video_silently(self) -> None:
+        deps, rec = _video_upload_input_deps(enabled=True)
+        rec.workspaces[7] = {"vawait": None}
+        message = FakeUploadMessage(rec, video=_fake_video())
+        run(self._handler(deps)(message))
+        self.assertEqual(message.answers, [])
+        self.assertEqual(rec.calls, [])
+
+    def test_non_video_document_is_rejected_without_download(self) -> None:
+        deps, rec = _video_upload_input_deps()
+        rec.workspaces[7] = {"vawait": "vu_video"}
+        doc = SimpleNamespace(file_id="df1", mime_type="image/png", duration=0)
+        message = FakeUploadMessage(rec, document=doc)
+        run(self._handler(deps)(message))
+        self.assertEqual(len(message.answers), 1)
+        self.assertNotIn("bot.download", [c[0] for c in rec.calls])
+
+    def test_video_with_caption_uploads_and_starts_edit(self) -> None:
+        deps, rec = _video_upload_input_deps()
+        rec.workspaces[7] = {"vawait": "vu_video"}
+        message = FakeUploadMessage(rec, video=_fake_video(), caption="make it fly")
+        run(self._handler(deps)(message))
+        names = [c[0] for c in rec.calls]
+        for step in ("bot.download", "account_for_video", "ensure_user_project",
+                     "upload_video", "wait_video_ready", "log_event", "video_edit_uploaded"):
+            self.assertIn(step, names, step)
+        st = rec.workspaces[7]
+        self.assertEqual(st["vu_source"]["mediaId"], "m1")
+        self.assertEqual(st["vu_source"]["_account_id"], "acc1")
+        self.assertIsNone(st["vawait"])
+        # Caption became the edit prompt directly.
+        edit_call = [c for c in rec.calls if c[0] == "video_edit_uploaded"][-1]
+        self.assertEqual(edit_call[1][1], "make it fly")
+        self.assertEqual(edit_call[2], {"user_id": 7})
+
+    def test_video_without_caption_asks_for_edit_prompt(self) -> None:
+        deps, rec = _video_upload_input_deps()
+        rec.workspaces[7] = {"vawait": "vu_video"}
+        message = FakeUploadMessage(rec, video=_fake_video())
+        run(self._handler(deps)(message))
+        self.assertEqual(rec.workspaces[7]["vawait"], "vu_edit_prompt")
+        self.assertNotIn("video_edit_uploaded", [c[0] for c in rec.calls])
+        # status message + ask-prompt reply
+        self.assertEqual(len(message.answers), 2)
+
+    def test_no_available_account_reports_and_stops(self) -> None:
+        deps, rec = _video_upload_input_deps(acc_id=None)
+        rec.workspaces[7] = {"vawait": "vu_video"}
+        message = FakeUploadMessage(rec, video=_fake_video())
+        run(self._handler(deps)(message))
+        names = [c[0] for c in rec.calls]
+        self.assertIn("status.edit_text", names)
+        self.assertNotIn("upload_video", names)
+
+    def test_video_upload_input_deps_dataclass_is_frozen(self) -> None:
+        deps, _ = _video_upload_input_deps()
+        with self.assertRaises(Exception):
+            deps.bot = None  # type: ignore[misc]
+
+    def test_video_upload_input_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(video_upload_input_router)
         self.assertNotIn("flow_bot", src)
 
 
