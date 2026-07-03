@@ -2062,7 +2062,8 @@ async def handle_users_get(request: web.Request) -> web.Response:
 
         sql_rows = (
             f"SELECT u.user_id, u.username, u.first_name, u.first_seen, u.last_active, "
-            f"       u.acq_channel, u.is_blocked, "
+            f"       COALESCE((SELECT a.channel FROM acquisitions a WHERE a.user_id=u.user_id LIMIT 1), "
+            f"                u.acq_channel) AS acq_channel, u.is_blocked, "
             f"       COALESCE(c.balance, 0) AS balance, "
             f"       COALESCE(c.granted, 0) AS granted, "
             f"       (SELECT COUNT(*) FROM transactions t WHERE t.user_id=u.user_id AND t.status='paid') AS payments_count, "

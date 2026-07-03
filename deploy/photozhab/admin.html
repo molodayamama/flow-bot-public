@@ -1093,8 +1093,8 @@ tr:hover td{background:var(--pz-surface-2)}
           <div class="section-title">Каналы привлечения</div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Канал</th><th>Юзеров</th><th>Платящих</th><th>Stars</th><th>₽</th></tr></thead>
-              <tbody id="channels-tbody"><tr><td colspan="5" style="color:var(--pz-faint);padding:16px;text-align:center">—</td></tr></tbody>
+              <thead><tr><th>Канал</th><th>Клики</th><th>Новые</th><th>Возврат</th><th>Только старт</th><th>Тыкали</th><th>Запрос</th><th>Успех</th><th>Платят</th><th>₽</th></tr></thead>
+              <tbody id="channels-tbody"><tr><td colspan="10" style="color:var(--pz-faint);padding:16px;text-align:center">—</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -1506,11 +1506,11 @@ let _logCache = [];
 let _logFilter = 'all';
 
 const _LOG_FILTER_MAP = {
-  'image':  e => (e.chip||'').includes('🖼') || (e.chip||'').includes('image'),
-  'video':  e => (e.chip||'').includes('🎬') || (e.chip||'').includes('video'),
-  'new':    e => (e.chip||'').includes('👤') || (e.chip||'').includes('new'),
-  'topup':  e => (e.chip||'').includes('💳') || (e.chip||'').includes('topup'),
-  'system': e => (e.chip||'').includes('failover') || (e.chip||'').includes('cooldown'),
+  'image':  e => e.kind === 'image' || (e.chip||'').includes('image'),
+  'video':  e => e.kind === 'video' || (e.chip||'').includes('video'),
+  'new':    e => e.kind === 'new' || (e.chip||'').includes('new'),
+  'topup':  e => e.kind === 'topup' || (e.chip||'').includes('topup'),
+  'system': e => e.kind === 'system' || (e.chip||'').includes('failover') || (e.chip||'').includes('cooldown'),
 };
 
 function setLogFilter(f) {
@@ -1525,11 +1525,12 @@ function renderLog(log) {
   _logCache = log;
   const filtered = _logFilter === 'all' ? log : log.filter(_LOG_FILTER_MAP[_logFilter] || (()=>true));
   document.getElementById('log-list').innerHTML = filtered.length ? filtered.map(e=>{
+    const logTime = e.created_at ? fmtTm(e.created_at) : (e.time || '—');
     const accBadge = e.account && e.account !== '—'
       ? `<span class="mono" style="font-size:12px;color:var(--pz-cyan);flex-shrink:0;background:rgba(84,215,214,.08);border:1px solid rgba(84,215,214,.2);border-radius:4px;padding:1px 6px;margin-right:4px">${esc(e.account)}</span>`
       : '';
     return `<div class="log-row">
-      <span class="log-time">${esc(e.time)}</span>
+      <span class="log-time">${esc(logTime)}</span>
       ${accBadge}
       <span class="log-text" style="font-size:13px">${esc(e.text)}</span>
       <span class="log-chip" style="background:rgba(${chipColor(e.color)},.12);color:var(--pz-${e.color||'muted'})">${esc(e.chip)}</span>
@@ -2321,7 +2322,7 @@ async function loadSupport() {
             <td class="mono" style="color:${(t.balance||0)>0?'var(--pz-lime)':'var(--pz-faint)'}">${fmt(t.balance||0)} кр.</td>
             <td>${t.last_error ? `<span class="badge badge-red" style="font-size:10px">${esc(t.last_error)}</span>` : '<span style="color:var(--pz-faint);font-size:12px">—</span>'}</td>
             <td style="font-size:13px;color:var(--pz-muted);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((t.message_text||'').slice(0,120))}</td>
-            <td style="font-size:12px;color:var(--pz-faint)">${(t.created_at||'').slice(0,16)}</td>
+            <td style="font-size:12px;color:var(--pz-faint)">${fmtDt(t.created_at)}</td>
             <td class="nowrap" style="white-space:nowrap">
               <button class="btn btn-ghost btn-sm" onclick="showTicket(${t.id})">Открыть</button>
               ${t.status !== 'closed' ? `<button class="btn btn-ghost btn-sm" style="margin-left:4px;color:var(--pz-faint)" onclick="setTicketStatus(${t.id},'closed')">Закрыть</button>` : ''}
@@ -2347,7 +2348,7 @@ async function showTicket(id) {
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:12px">
       <div>
         <div class="card-title">Тикет #${t.id}</div>
-        <div style="margin-top:4px">${_ticketStatusBadge(t.status)} ${_ticketKindBadge(t.kind)} <span style="font-size:12px;color:var(--pz-faint)">${(t.created_at||'').slice(0,16)}</span></div>
+        <div style="margin-top:4px">${_ticketStatusBadge(t.status)} ${_ticketKindBadge(t.kind)} <span style="font-size:12px;color:var(--pz-faint)">${fmtDt(t.created_at)}</span></div>
       </div>
     </div>
 
@@ -2375,7 +2376,7 @@ async function showTicket(id) {
         · ₽: ${((u.spend||{}).rub||0).toFixed(0)}
       </div>
       <div style="font-size:12px;color:var(--pz-faint);margin-top:4px">
-        Регистрация: ${(u.first_seen||'—').slice(0,16)} · Активен: ${(u.last_active||'—').slice(0,16)}
+        Регистрация: ${fmtDt(u.first_seen)} · Активен: ${fmtDt(u.last_active)}
       </div>
     </div>
 
@@ -2385,7 +2386,7 @@ async function showTicket(id) {
       <table>
         <thead><tr><th>Дата</th><th>Пакет</th><th>₽</th><th>Stars</th><th>Кредиты</th></tr></thead>
         <tbody>${pays.map(p=>`<tr>
-          <td style="font-size:11px;color:var(--pz-faint)">${(p.created_at||'').slice(0,16)}</td>
+          <td style="font-size:11px;color:var(--pz-faint)">${fmtDt(p.created_at)}</td>
           <td class="mono" style="font-size:12px">${esc(p.package_id||'—')}</td>
           <td class="mono" style="color:var(--pz-lime)">${(+(p.amount_rub||0)).toFixed(0)}</td>
           <td class="mono" style="color:var(--pz-warn)">${fmt(p.stars_amount||0)}</td>
@@ -2400,7 +2401,7 @@ async function showTicket(id) {
       <table>
         <thead><tr><th>Дата</th><th>Операция</th><th>Статус</th><th>Кр.</th></tr></thead>
         <tbody>${jobs.map(j=>`<tr>
-          <td style="font-size:11px;color:var(--pz-faint)">${(j.created_at||'').slice(11,19)}</td>
+          <td style="font-size:11px;color:var(--pz-faint)">${fmtTm(j.created_at)}</td>
           <td class="mono" style="font-size:12px">${esc(j.operation_type||'—')}</td>
           <td>${j.status==='success'?'<span class="badge badge-green">✓</span>':j.status?`<span class="badge badge-red">${esc(j.status)}</span>`:'<span class="badge badge-muted">—</span>'}</td>
           <td class="mono">${fmt(j.bot_credits_charged||0)}</td>
@@ -2463,6 +2464,29 @@ function toast(type, msg) {
 /* ── Utils ─────────────────────────────────────────── */
 function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function fmt(n){ return Number(n??0).toLocaleString('ru'); }
+const ADMIN_TZ = 'Asia/Yekaterinburg';
+const _dtFmt = new Intl.DateTimeFormat('ru-RU', {
+  timeZone: ADMIN_TZ, year:'2-digit', month:'2-digit', day:'2-digit',
+  hour:'2-digit', minute:'2-digit'
+});
+const _tmFmt = new Intl.DateTimeFormat('ru-RU', {
+  timeZone: ADMIN_TZ, hour:'2-digit', minute:'2-digit', second:'2-digit'
+});
+function parseUtcDate(s) {
+  if (!s) return null;
+  const raw = String(s).trim();
+  if (!raw) return null;
+  const d = new Date(raw.includes('T') ? (raw.endsWith('Z') ? raw : raw + 'Z') : raw.replace(' ', 'T') + 'Z');
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+function fmtDt(s) {
+  const d = parseUtcDate(s);
+  return d ? _dtFmt.format(d).replace(',', '') : '—';
+}
+function fmtTm(s) {
+  const d = parseUtcDate(s);
+  return d ? _tmFmt.format(d) : '—';
+}
 function chipColor(c){ return {lime:'200,242,95',cyan:'84,215,214',coral:'255,123,109',warn:'255,194,75'}[c]||'183,180,170'; }
 
 /* CAC calculator */
@@ -2763,8 +2787,8 @@ async function loadUsers(page=1) {
         <td class="mono" style="color:${u.balance>0?'var(--pz-lime)':'var(--pz-faint)'};font-weight:700">${fmt(u.balance)}</td>
         <td class="mono" style="color:var(--pz-faint)">${fmt(u.granted)}</td>
         <td>${u.acq_channel ? `<span class="badge badge-muted">${esc(u.acq_channel)}</span>` : '<span style="color:var(--pz-faint);font-size:12px">органика</span>'}</td>
-        <td style="font-size:12px;color:var(--pz-faint)">${u.last_active||'—'}</td>
-        <td style="font-size:12px;color:var(--pz-faint)">${u.first_seen||'—'}</td>
+        <td style="font-size:12px;color:var(--pz-faint)">${fmtDt(u.last_active)}</td>
+        <td style="font-size:12px;color:var(--pz-faint)">${fmtDt(u.first_seen)}</td>
         <td>${u.is_blocked?'<span class="badge badge-red">блок</span>':''}</td>
       </tr>
     `).join('')
@@ -2817,7 +2841,7 @@ function renderSellerDetail(s) {
   const eventHtml = events.length ? events.map(e => `
     <div class="seller-event">
       <div>${sellerEventBadge(e.event_name)}</div>
-      <div class="seller-event-meta">${esc(e.created_at || '—')}</div>
+      <div class="seller-event-meta">${fmtDt(e.created_at)}</div>
       <div>
         <span class="mono" style="color:var(--pz-cyan)">${esc(sellerSourceText(e.source))}</span>
         <span class="seller-event-meta" style="margin-left:8px">#${esc(e.id)}</span>
@@ -2890,8 +2914,8 @@ async function loadSellers() {
             <div class="mono" style="color:${Number(s.revenue_rub || 0)>0 || Number(s.revenue_stars || 0)>0 ? 'var(--pz-lime)' : 'var(--pz-faint)'}">${sellerRevenueText(s)}</div>
             <div style="font-size:11px;color:var(--pz-faint);margin-top:2px">${fmt(s.paid_count || 0)} оплат</div>
           </td>
-          <td style="font-size:12px;color:var(--pz-faint)">${esc(s.first_seen || '—')}</td>
-          <td style="font-size:12px;color:var(--pz-muted)">${esc(s.last_seen || '—')}</td>
+          <td style="font-size:12px;color:var(--pz-faint)">${fmtDt(s.first_seen)}</td>
+          <td style="font-size:12px;color:var(--pz-muted)">${fmtDt(s.last_seen)}</td>
           <td><button class="btn btn-ghost btn-sm" onclick="toggleSellerDetail(${Number(s.user_id)})">Детали</button></td>
         </tr>
       `;
@@ -2947,14 +2971,46 @@ async function loadReferrals() {
         </td>
         <td>${refStatusBadge(r.status)}</td>
         <td class="mono" style="color:${r.reward_credits>0?'var(--pz-lime)':'var(--pz-faint)'}">${r.reward_credits>0?fmt(r.reward_credits)+' кр.':'—'}</td>
-        <td style="font-size:12px;color:var(--pz-faint)">${r.created_at||'—'}</td>
-        <td style="font-size:12px;color:var(--pz-muted)">${r.rewarded_at||'—'}</td>
+        <td style="font-size:12px;color:var(--pz-faint)">${fmtDt(r.created_at)}</td>
+        <td style="font-size:12px;color:var(--pz-muted)">${fmtDt(r.rewarded_at)}</td>
       </tr>
     `).join('')
     : `<tr><td colspan="7" style="color:var(--pz-faint);text-align:center;padding:20px">Пока нет реферальных записей</td></tr>`;
 }
 
 /* ── Analytics ─────────────────────────────────────── */
+function seedStageLabel(stage) {
+  return {
+    started_only: 'только старт',
+    interacted: 'тыкал',
+    requested: 'запрос',
+    generated: 'успех',
+    paid: 'оплатил',
+  }[stage] || stage || '—';
+}
+function seedStageColor(stage) {
+  return {
+    started_only: 'var(--pz-faint)',
+    interacted: 'var(--pz-cyan)',
+    requested: 'var(--pz-warn)',
+    generated: 'var(--pz-lime)',
+    paid: 'var(--pz-lime)',
+  }[stage] || 'var(--pz-muted)';
+}
+function channelRecentUsers(c) {
+  const users = Array.isArray(c.recent_users) ? c.recent_users : [];
+  if (!users.length) return '<span style="color:var(--pz-faint)">последних пользователей нет</span>';
+  return users.map(u => {
+    const name = u.username ? '@' + esc(u.username) : (u.first_name ? esc(u.first_name) : 'id ' + esc(u.user_id));
+    const event = u.last_event ? `${esc(u.last_event)}${u.last_source ? ' · ' + esc(u.last_source) : ''}` : '—';
+    return `<span class="badge badge-muted" style="margin:2px 4px 2px 0;white-space:normal">
+      <b style="color:var(--pz-ink)">${name}</b>
+      <span style="color:${seedStageColor(u.stage)}"> · ${esc(seedStageLabel(u.stage))}</span>
+      <span style="color:var(--pz-faint)"> · ${fmtDt(u.last_active)} · ${event}</span>
+    </span>`;
+  }).join('');
+}
+
 async function loadAnalytics() {
   const [today, revenue, flow, channels, errors, activation, repeat, margin, refq] = await Promise.all([
     api('GET', '/analytics/today'),
@@ -3095,14 +3151,26 @@ async function loadAnalytics() {
   // Channels
   if (channels) {
     document.getElementById('channels-tbody').innerHTML = channels.channels.length
-      ? channels.channels.map(c=>`<tr>
+      ? channels.channels.map(c=>`
+        <tr>
           <td class="mono" style="color:var(--pz-cyan)">${esc(c.channel)}</td>
+          <td class="mono">${fmt(c.seed_clicks)}</td>
           <td class="mono">${fmt(c.users)}</td>
-          <td class="mono" style="color:var(--pz-warn)">${fmt(c.paid_users)}</td>
-          <td class="mono" style="color:var(--pz-warn)">${fmt(c.revenue_stars)}</td>
+          <td class="mono" style="color:${Number(c.returning_clicks||0)>0?'var(--pz-warn)':'var(--pz-faint)'}">${fmt(c.returning_clicks)}</td>
+          <td class="mono" style="color:${Number(c.started_only||0)>0?'var(--pz-faint)':'var(--pz-muted)'}">${fmt(c.started_only)}</td>
+          <td class="mono" style="color:${Number(c.interacted_users||0)>0?'var(--pz-cyan)':'var(--pz-faint)'}">${fmt(c.interacted_users)}</td>
+          <td class="mono" style="color:${Number(c.requested_users||0)>0?'var(--pz-warn)':'var(--pz-faint)'}">${fmt(c.requested_users)}</td>
+          <td class="mono" style="color:${Number(c.generated_users||0)>0?'var(--pz-lime)':'var(--pz-faint)'}">${fmt(c.generated_users)}</td>
+          <td class="mono" style="color:${Number(c.paid_users||0)>0?'var(--pz-lime)':'var(--pz-faint)'}">${fmt(c.paid_users)}</td>
           <td class="mono" style="color:var(--pz-lime)">${(+c.revenue_rub).toFixed(0)}₽</td>
+        </tr>
+        <tr>
+          <td colspan="10" style="font-size:12px;color:var(--pz-muted);padding-top:0">
+            <span style="color:var(--pz-faint);margin-right:8px">seed-ссылок: ${fmt(c.seed_links_created)}</span>
+            ${channelRecentUsers(c)}
+          </td>
         </tr>`).join('')
-      : `<tr><td colspan="5" style="color:var(--pz-faint);padding:12px;text-align:center">Нет данных по каналам</td></tr>`;
+      : `<tr><td colspan="10" style="color:var(--pz-faint);padding:12px;text-align:center">Нет данных по каналам</td></tr>`;
   }
 
   // Errors
@@ -3115,7 +3183,7 @@ async function loadAnalytics() {
       : `<tr><td colspan="2" style="color:var(--pz-lime);padding:12px;text-align:center">Ошибок нет 🎉</td></tr>`;
     document.getElementById('err-recent-tbody').innerHTML = errors.recent.length
       ? errors.recent.map(e=>`<tr>
-          <td style="font-size:11px;color:var(--pz-faint)">${esc((e.created_at||'').substring(11,19))}</td>
+          <td style="font-size:11px;color:var(--pz-faint)">${fmtTm(e.created_at)}</td>
           <td class="mono" style="font-size:12px;color:var(--pz-cyan)">${esc(e.account_id||'—')}</td>
           <td class="mono" style="font-size:12px">${esc(e.operation_type||'—')}</td>
           <td class="mono" style="font-size:12px;color:var(--pz-muted)">${esc(e.model||'—')}</td>

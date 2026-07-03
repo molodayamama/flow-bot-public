@@ -983,7 +983,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertNotIn("upload_image(", receive)
         # При завершении шаблона с фото — идём в штатные экраны настроек image/video.
         start = self.source.index("async def _render_template_step")
-        block = self.source[start:start + 3000]
+        block = self.source[start:start + 5000]
         self.assertIn('ideas_photo_file_id = st.get("ideas_photo_file_id")', block)
         self.assertIn("await _prepare_photo_video_from_file_id(", block)
         self.assertIn("elif ideas_photo_file_id:", block)
@@ -1189,7 +1189,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("import metrics", self.source)
         self.assertIn("metrics.init_db(", self.source)
         for ev in (
-            '"user_started"', '"image_requested"', '"image_success"', '"image_failed"',
+            '"user_started"', '"new_user"', '"image_requested"', '"image_success"', '"image_failed"',
             '"variations_requested"', '"upscale_requested"', '"image_edit_requested"',
             '"video_requested"', '"video_success"', '"video_failed"',
             '"credits_charged"', '"credits_refunded"', '"topup_opened"',
@@ -1228,11 +1228,16 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("parse_channel_seed(payload)", self.source)
         self.assertIn("metrics.record_acquisition(", self.source)
         self.assertIn('"acquired_from_channel"', self.source)
+        self.assertIn('"channel_seed_clicked"', self.source)
+        self.assertIn('"channel_seed_created"', self.source)
+        self.assertIn('"channel_seed_returning"', self.source)
+        self.assertIn('"new_user"', self.source)
         # Атрибуция стоит внутри cmd_start (рядом с рефералкой), не где попало.
         start = self.source.index("async def cmd_start")
-        block = self.source[start:start + 3000]
+        block = self.source[start:start + 5000]
+        self.assertLess(block.index("is_new = not metrics.user_exists(user_id)"), block.index("metrics.upsert_user("))
         self.assertIn("channel = parse_channel_seed(payload)", block)
-        self.assertIn("metrics.record_acquisition(user_id=user_id, channel=channel)", block)
+        self.assertIn("if is_new and metrics.record_acquisition(user_id=user_id, channel=channel):", block)
         # Админ-отчёт по каналам читает report_channels и умеет выдавать ссылку.
         self.assertIn("metrics.report_channels()", self.source)
         self.assertIn("?start={CHANNEL_PARAM_PREFIX}{slug}", self.source)
@@ -1624,6 +1629,24 @@ class LandingStaticContentTests(unittest.TestCase):
             self.admin.index('id="tab-adcalc"')
         ]
         self.assertNotIn("CAC-калькулятор", analytics)
+
+    def test_admin_seed_analytics_and_timezone_are_visible(self) -> None:
+        for needle in (
+            "const ADMIN_TZ = 'Asia/Yekaterinburg'",
+            "function fmtDt",
+            "function fmtTm",
+            "const logTime = e.created_at ? fmtTm(e.created_at)",
+            "e.kind === 'new'",
+            "function channelRecentUsers",
+            "seed_links_created",
+            "seed_clicks",
+            "returning_clicks",
+            "started_only",
+            "interacted_users",
+            "requested_users",
+            "generated_users",
+        ):
+            self.assertIn(needle, self.admin)
 
     def test_admin_demo_copy_matches_current_bot_copy(self) -> None:
         self.assertNotIn("удобным способом", self.admin)

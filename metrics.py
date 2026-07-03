@@ -632,6 +632,12 @@ def record_acquisition(*, user_id: int, channel: str) -> bool:
                 "INSERT OR IGNORE INTO acquisitions (user_id, channel) VALUES (?, ?)",
                 (user_id, channel),
             )
+            if cur.rowcount > 0:
+                conn.execute(
+                    "UPDATE users SET acq_channel=COALESCE(acq_channel, ?), "
+                    "updated_at=datetime('now') WHERE user_id=?",
+                    (channel, user_id),
+                )
             conn.commit()
             return cur.rowcount > 0
     except Exception:  # noqa: BLE001
@@ -1099,8 +1105,8 @@ def report_today() -> dict:
 
             new_users = _scalar(
                 conn,
-                f"SELECT COUNT(DISTINCT user_id) FROM events "
-                f"WHERE event_name='user_started' AND user_id IS NOT NULL AND {ev_today}",
+                "SELECT COUNT(*) FROM users "
+                "WHERE date(first_seen,'localtime') = date('now','localtime')",
             ) or 0
             active_users = _scalar(
                 conn,
@@ -1918,6 +1924,29 @@ def report_video_account_scores(
         return {}
 
 
+_SEED_PASSIVE_EVENTS = {
+    "user_started",
+    "new_user",
+    "acquired_from_channel",
+    "channel_seed_clicked",
+    "channel_seed_created",
+    "channel_seed_new",
+    "channel_seed_returning",
+}
+
+
+def _seed_user_stage(*, paid: bool, generated: bool, requested: bool, interacted: bool) -> str:
+    if paid:
+        return "paid"
+    if generated:
+        return "generated"
+    if requested:
+        return "requested"
+    if interacted:
+        return "interacted"
+    return "started_only"
+
+
 def report_channels() -> dict:
     """Атрибуция трафика по рекламным каналам (deep-link ``seed_<канал>``).
 
@@ -1930,30 +1959,162 @@ def report_channels() -> dict:
         with _LOCK:
             conn = _conn()
             total_acquired = _scalar(conn, "SELECT COUNT(*) FROM acquisitions") or 0
-            channels = [
-                {
-                    "channel": r["channel"],
-                    "users": int(r["users"]),
-                    "paid_users": int(r["paid_users"]),
-                    "revenue_stars": int(r["revenue_stars"] or 0),
-                    "revenue_rub": float(r["revenue_rub"] or 0.0),
-                }
-                for r in _rows(
-                    conn,
-                    "SELECT a.channel AS channel, "
-                    "COUNT(DISTINCT a.user_id) AS users, "
-                    "COUNT(DISTINCT CASE WHEN t.status='paid' THEN t.user_id END) AS paid_users, "
-                    "COALESCE(SUM(CASE WHEN t.status='paid' THEN t.stars_amount END),0) AS revenue_stars, "
-                    "COALESCE(SUM(CASE WHEN t.status='paid' THEN t.amount_rub END),0) AS revenue_rub "
-                    "FROM acquisitions a "
-                    "LEFT JOIN transactions t ON t.user_id = a.user_id "
-                    "GROUP BY a.channel ORDER BY users DESC, revenue_stars DESC",
+            by_channel: dict[str, dict] = {}
+
+            def bucket(channel: str | None) -> dict | None:
+                channel = (channel or "").strip()
+                if not channel:
+                    return None
+                if channel not in by_channel:
+                    by_channel[channel] = {
+                        "channel": channel,
+                        "seed_links_created": 0,
+                        "seed_clicks": 0,
+                        "unique_click_users": 0,
+                        "returning_clicks": 0,
+                        "users": 0,
+                        "started_only": 0,
+                        "interacted_users": 0,
+                        "requested_users": 0,
+                        "generated_users": 0,
+                        "paid_users": 0,
+                        "revenue_stars": 0,
+                        "revenue_rub": 0.0,
+                        "recent_users": [],
+                    }
+                return by_channel[channel]
+
+            for r in _rows(
+                conn,
+                "SELECT a.channel AS channel, "
+                "COUNT(DISTINCT a.user_id) AS users, "
+                "COUNT(DISTINCT CASE WHEN t.status='paid' THEN t.user_id END) AS paid_users, "
+                "COALESCE(SUM(CASE WHEN t.status='paid' THEN t.stars_amount END),0) AS revenue_stars, "
+                "COALESCE(SUM(CASE WHEN t.status='paid' THEN t.amount_rub END),0) AS revenue_rub "
+                "FROM acquisitions a "
+                "LEFT JOIN transactions t ON t.user_id = a.user_id "
+                "GROUP BY a.channel",
+            ):
+                item = bucket(r["channel"])
+                if item is None:
+                    continue
+                item["users"] = int(r["users"])
+                item["paid_users"] = int(r["paid_users"])
+                item["revenue_stars"] = int(r["revenue_stars"] or 0)
+                item["revenue_rub"] = float(r["revenue_rub"] or 0.0)
+
+            for r in _rows(
+                conn,
+                "SELECT source AS channel, COUNT(*) AS created "
+                "FROM events WHERE event_name='channel_seed_created' "
+                "AND source IS NOT NULL AND source!='' GROUP BY source",
+            ):
+                item = bucket(r["channel"])
+                if item is not None:
+                    item["seed_links_created"] = int(r["created"] or 0)
+
+            for r in _rows(
+                conn,
+                "SELECT source AS channel, COUNT(*) AS clicks, "
+                "COUNT(DISTINCT user_id) AS unique_users "
+                "FROM events WHERE event_name='channel_seed_clicked' "
+                "AND source IS NOT NULL AND source!='' GROUP BY source",
+            ):
+                item = bucket(r["channel"])
+                if item is None:
+                    continue
+                item["seed_clicks"] = int(r["clicks"] or 0)
+                item["unique_click_users"] = int(r["unique_users"] or 0)
+
+            for r in _rows(
+                conn,
+                "SELECT source AS channel, COUNT(*) AS clicks "
+                "FROM events WHERE event_name='channel_seed_returning' "
+                "AND source IS NOT NULL AND source!='' GROUP BY source",
+            ):
+                item = bucket(r["channel"])
+                if item is not None:
+                    item["returning_clicks"] = int(r["clicks"] or 0)
+
+            passive = ",".join(f"'{name}'" for name in sorted(_SEED_PASSIVE_EVENTS))
+            for r in _rows(
+                conn,
+                "SELECT a.channel, a.user_id, a.created_at AS acquired_at, "
+                "u.username, u.first_name, u.first_seen, u.last_active, "
+                f"EXISTS(SELECT 1 FROM events e WHERE e.user_id=a.user_id "
+                f"       AND e.event_name NOT IN ({passive})) AS interacted, "
+                "EXISTS(SELECT 1 FROM flow_jobs fj WHERE fj.user_id=a.user_id) AS requested, "
+                "EXISTS(SELECT 1 FROM flow_jobs fj WHERE fj.user_id=a.user_id "
+                "       AND fj.status='success') AS generated, "
+                "EXISTS(SELECT 1 FROM transactions t WHERE t.user_id=a.user_id "
+                "       AND t.status='paid') AS paid, "
+                "(SELECT e.event_name FROM events e WHERE e.user_id=a.user_id "
+                " ORDER BY e.id DESC LIMIT 1) AS last_event, "
+                "(SELECT e.source FROM events e WHERE e.user_id=a.user_id "
+                " ORDER BY e.id DESC LIMIT 1) AS last_source, "
+                "(SELECT e.created_at FROM events e WHERE e.user_id=a.user_id "
+                " ORDER BY e.id DESC LIMIT 1) AS last_event_at "
+                "FROM acquisitions a LEFT JOIN users u ON u.user_id=a.user_id "
+                "ORDER BY a.created_at DESC, a.id DESC",
+            ):
+                item = bucket(r["channel"])
+                if item is None:
+                    continue
+                requested = bool(r["requested"])
+                generated = bool(r["generated"])
+                paid = bool(r["paid"])
+                interacted = bool(r["interacted"])
+                stage = _seed_user_stage(
+                    paid=paid, generated=generated, requested=requested, interacted=interacted
                 )
-            ]
-            return {"total_acquired": int(total_acquired), "channels": channels}
+                if stage == "started_only":
+                    item["started_only"] += 1
+                if interacted:
+                    item["interacted_users"] += 1
+                if requested:
+                    item["requested_users"] += 1
+                if generated:
+                    item["generated_users"] += 1
+                if len(item["recent_users"]) < 8:
+                    item["recent_users"].append({
+                        "user_id": int(r["user_id"]),
+                        "username": r["username"],
+                        "first_name": r["first_name"],
+                        "stage": stage,
+                        "first_seen": r["first_seen"] or r["acquired_at"],
+                        "last_active": r["last_active"] or r["last_event_at"] or r["acquired_at"],
+                        "last_event": r["last_event"],
+                        "last_source": r["last_source"],
+                        "last_event_at": r["last_event_at"],
+                    })
+
+            channels = []
+            for item in by_channel.values():
+                # Older rows predate channel_seed_clicked events. Keep their
+                # tables visible by treating a cold acquisition as at least one click.
+                item["seed_clicks"] = max(int(item["seed_clicks"]), int(item["users"]))
+                item["unique_click_users"] = max(
+                    int(item["unique_click_users"]), int(item["users"])
+                )
+                channels.append(item)
+            channels.sort(
+                key=lambda c: (
+                    int(c["users"]),
+                    int(c["seed_clicks"]),
+                    int(c["revenue_stars"]),
+                    float(c["revenue_rub"]),
+                ),
+                reverse=True,
+            )
+            total_seed_clicks = sum(int(c["seed_clicks"]) for c in channels)
+            return {
+                "total_acquired": int(total_acquired),
+                "total_seed_clicks": int(total_seed_clicks),
+                "channels": channels,
+            }
     except Exception:  # noqa: BLE001
         log.warning("report_channels failed", exc_info=True)
-        return {"total_acquired": 0, "channels": []}
+        return {"total_acquired": 0, "total_seed_clicks": 0, "channels": []}
 
 
 def report_errors(days: int = 7) -> dict:
@@ -2561,7 +2722,7 @@ def report_recent_events(limit: int = 50) -> list:
     """Recent events for the admin Overview log panel.
 
     Sourced from flow_jobs (has account_id) joined with latest username from
-    events.  Returns ``{time, text, chip, color, account}`` dicts.
+    events.  Returns ``{time, created_at, text, chip, color, account, kind}`` dicts.
     Newest first.  Falls back to ``[]`` on any error.
     """
     _OP_CHIP = {
@@ -2604,7 +2765,8 @@ def report_recent_events(limit: int = 50) -> list:
                 SELECT event_name, user_id, username, source, payload_json, created_at
                 FROM events
                 WHERE event_name IN (
-                    'gen_failover', 'user_started', 'account_cooldown', 'payment_success',
+                    'gen_failover', 'user_started', 'new_user',
+                    'account_cooldown', 'payment_success',
                     'video_ab'
                 )
                 ORDER BY id DESC LIMIT ?
@@ -2615,7 +2777,7 @@ def report_recent_events(limit: int = 50) -> list:
         result = []
         for r in rows:
             op   = r["operation_type"] or ""
-            icon, _ = _OP_CHIP.get(op, ("⚙", "op"))
+            icon, kind = _OP_CHIP.get(op, ("⚙", "op"))
             status = r["status"] or ""
             if status == "success":
                 chip_label = f"{icon} ok"
@@ -2646,14 +2808,17 @@ def report_recent_events(limit: int = 50) -> list:
             time_str = ts[11:16] if len(ts) >= 16 else ts
             result.append({
                 "time":     time_str,
+                "created_at": ts,
                 "text":     text,
                 "chip":     chip_label,
                 "color":    color,
                 "account":  acc,
+                "kind":     kind,
                 "_sort_ts": ts,
             })
 
         import json as _json
+        new_user_seen: set[int] = set()
         for fr in system_event_rows:
             try:
                 payload = _json.loads(fr["payload_json"] or "{}")
@@ -2673,19 +2838,27 @@ def report_recent_events(limit: int = 50) -> list:
                 if reason:
                     text += f"  ({reason})"
                 result.append({
-                    "time": time_str, "text": text,
+                    "time": time_str, "created_at": ts, "text": text,
                     "chip": "⚠ failover", "color": "warn",
-                    "account": from_acc, "_sort_ts": ts,
+                    "account": from_acc, "kind": "system", "_sort_ts": ts,
                 })
 
-            elif ev == "user_started":
-                is_new = payload.get("is_new", False)
+            elif ev in ("user_started", "new_user"):
+                is_new = (ev == "new_user") or payload.get("is_new", False)
                 if is_new:
-                    text = f"🆕 новый юзер  {user_label}"
+                    user_key = fr["user_id"]
+                    if ev == "user_started" and user_key in new_user_seen:
+                        continue
+                    if user_key is not None:
+                        new_user_seen.add(user_key)
+                    channel = fr["source"] or payload.get("seed_channel") or payload.get("channel") or ""
+                    text = f"new user  {user_label}"
+                    if channel and channel not in ("command", "organic"):
+                        text += f"  seed:{channel}"
                     result.append({
-                        "time": time_str, "text": text,
-                        "chip": "👤 new", "color": "cyan",
-                        "account": "—", "_sort_ts": ts,
+                        "time": time_str, "created_at": ts, "text": text,
+                        "chip": "user new", "color": "cyan",
+                        "account": "—", "kind": "new", "_sort_ts": ts,
                     })
 
             elif ev == "account_cooldown":
@@ -2696,9 +2869,9 @@ def report_recent_events(limit: int = 50) -> list:
                 if reason:
                     text += f"  · {reason}"
                 result.append({
-                    "time": time_str, "text": text,
+                    "time": time_str, "created_at": ts, "text": text,
                     "chip": "❄ cooldown", "color": "coral",
-                    "account": acc, "_sort_ts": ts,
+                    "account": acc, "kind": "system", "_sort_ts": ts,
                 })
 
             elif ev == "payment_success":
@@ -2711,9 +2884,9 @@ def report_recent_events(limit: int = 50) -> list:
                 if amount_str:
                     text += f"  ({amount_str})"
                 result.append({
-                    "time": time_str, "text": text,
+                    "time": time_str, "created_at": ts, "text": text,
                     "chip": "💳 topup", "color": "lime",
-                    "account": "—", "_sort_ts": ts,
+                    "account": "—", "kind": "topup", "_sort_ts": ts,
                 })
 
             elif ev == "video_ab":
@@ -2725,9 +2898,9 @@ def report_recent_events(limit: int = 50) -> list:
                 if status_bits:
                     text += f"  {status_bits}"
                 result.append({
-                    "time": time_str, "text": text,
+                    "time": time_str, "created_at": ts, "text": text,
                     "chip": "🎬 video_ab", "color": "cyan",
-                    "account": acc, "_sort_ts": ts,
+                    "account": acc, "kind": "video", "_sort_ts": ts,
                 })
 
         # Сортируем по времени (новейшие первыми), обрезаем до limit

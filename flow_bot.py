@@ -6318,24 +6318,30 @@ async def _send_one_image(
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
+    parts = (message.text or "").split(maxsplit=1)
+    payload = parts[1].strip() if len(parts) > 1 else ""
+    channel = parse_channel_seed(payload)
+    is_new = not metrics.user_exists(user_id)
     metrics.upsert_user(user_id, username=_username(message),
-                        first_name=getattr(message.from_user, "first_name", None))
+                        first_name=getattr(message.from_user, "first_name", None),
+                        channel=channel if is_new else None)
     _reset_image_flow(user_id)
     _vid_clear(user_id)
-    is_new = not metrics.user_exists(user_id)  # DB надёжнее in-memory _granted после рестарта
     credit_store.balance(user_id)  # начисляем стартовые кредиты при первом старте
     metrics.log_event("user_started", user_id=user_id,
                       username=_username(message), source="command",
-                      payload={"is_new": is_new})
+                      payload={"is_new": is_new, "seed_channel": channel})
     if is_new:
+        metrics.log_event("new_user", user_id=user_id,
+                          username=_username(message),
+                          source=channel or "organic",
+                          payload={"seed_channel": channel})
         uname = _username(message)
         uname_str = f"@{uname}" if uname else f"id {user_id}"
         asyncio.create_task(_send_owner_alert(
             f"👤 <b>Новый пользователь</b>\n{uname_str}"
         ))
     # Deep-link приглашение: /start ref_<id> — фиксируем рефералку (один раз).
-    parts = (message.text or "").split(maxsplit=1)
-    payload = parts[1].strip() if len(parts) > 1 else ""
     _referral_welcome_bonus: int = 0
     if payload.startswith(REFERRAL_PARAM_PREFIX) and not getattr(message.from_user, "is_bot", False):
         raw = payload[len(REFERRAL_PARAM_PREFIX):]
@@ -6356,11 +6362,21 @@ async def cmd_start(message: types.Message):
                                   payload={"referrer": referrer_id})
                 _referral_welcome_bonus = credit_store.balance(user_id)
     # Рекламный deep-link: /start seed_<канал> — first-touch атрибуция канала.
-    channel = parse_channel_seed(payload)
     if channel and not getattr(message.from_user, "is_bot", False):
-        if metrics.record_acquisition(user_id=user_id, channel=channel):
+        metrics.log_event("channel_seed_clicked", user_id=user_id,
+                          username=_username(message), source=channel,
+                          payload={"channel": channel, "is_new": is_new})
+        if is_new and metrics.record_acquisition(user_id=user_id, channel=channel):
             metrics.log_event("acquired_from_channel", user_id=user_id,
-                              username=_username(message), payload={"channel": channel})
+                              username=_username(message), source=channel,
+                              payload={"channel": channel})
+            metrics.log_event("channel_seed_new", user_id=user_id,
+                              username=_username(message), source=channel,
+                              payload={"channel": channel})
+        elif not is_new:
+            metrics.log_event("channel_seed_returning", user_id=user_id,
+                              username=_username(message), source=channel,
+                              payload={"channel": channel})
     # Постоянная нижняя клавиатура всегда показывается при /start
     await message.answer("👇", reply_markup=reply_menu_kb(user_id))
 
@@ -6909,6 +6925,8 @@ async def cmd_admin_channels(message: types.Message):
             return
         username = BOT_USERNAME or "&lt;bot&gt;"
         link = f"https://t.me/{username}?start={CHANNEL_PARAM_PREFIX}{slug}"
+        metrics.log_event("channel_seed_created", user_id=message.from_user.id,
+                          username=_username(message), source=slug)
         await message.answer(
             f"🔗 Ссылка для канала <b>{html.escape(slug)}</b>:\n<code>{html.escape(link)}</code>",
             parse_mode="HTML",
@@ -9026,6 +9044,9 @@ async def on_marketplace_action(callback: types.CallbackQuery):
     metrics.upsert_user(user_id, username=getattr(callback.from_user, "username", None),
                         first_name=getattr(callback.from_user, "first_name", None))
     data = callback.data or ""
+    metrics.log_event("menu_clicked", user_id=user_id,
+                      username=getattr(callback.from_user, "username", None),
+                      source=data)
     msg = callback.message
     if _mp_is_stale_callback(user_id, callback):
         await _mp_reject_stale_callback(callback)

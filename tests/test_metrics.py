@@ -334,6 +334,12 @@ class AcquisitionTests(MetricsTestBase):
         row = self._one("SELECT channel FROM acquisitions WHERE user_id=7")
         self.assertEqual(row[0], "kanal_a")  # first-touch сохранён
 
+    def test_acquisition_syncs_user_channel_snapshot(self) -> None:
+        metrics.upsert_user(7, username="seeded")
+        self.assertTrue(metrics.record_acquisition(user_id=7, channel="goroskop_new"))
+        row = self._one("SELECT acq_channel FROM users WHERE user_id=7")
+        self.assertEqual(row[0], "goroskop_new")
+
     def test_acquisition_blank_channel_rejected(self) -> None:
         self.assertFalse(metrics.record_acquisition(user_id=1, channel="  "))
         self.assertEqual(self._count("acquisitions"), 0)
@@ -369,9 +375,44 @@ class AcquisitionTests(MetricsTestBase):
         self.assertEqual(by_ch["B"]["paid_users"], 0)
         self.assertEqual(by_ch["B"]["revenue_stars"], 0)
 
+    def test_report_channels_includes_seed_click_funnel_and_recent_users(self) -> None:
+        metrics.upsert_user(1, username="paid")
+        metrics.upsert_user(2, username="idle")
+        metrics.log_event("channel_seed_created", user_id=777, source="goroskop_new")
+        metrics.record_acquisition(user_id=1, channel="goroskop_new")
+        metrics.record_acquisition(user_id=2, channel="goroskop_new")
+        metrics.log_event("channel_seed_clicked", user_id=1, source="goroskop_new")
+        metrics.log_event("channel_seed_new", user_id=1, source="goroskop_new")
+        metrics.log_event("menu_clicked", user_id=1, source="m:gen")
+        metrics.log_event("channel_seed_clicked", user_id=2, source="goroskop_new")
+        metrics.log_event("channel_seed_new", user_id=2, source="goroskop_new")
+        metrics.log_event("channel_seed_clicked", user_id=99, source="goroskop_new")
+        metrics.log_event("channel_seed_returning", user_id=99, source="goroskop_new")
+        metrics.log_flow_job(user_id=1, operation_type="image_generate", status="success")
+        metrics.record_transaction(
+            provider="telegram", provider_payment_id="chg_seed", user_id=1,
+            package_id="small", amount_rub=99.0, stars_amount=75,
+            credits_issued=100, status="paid")
+
+        rep = metrics.report_channels()
+        item = {c["channel"]: c for c in rep["channels"]}["goroskop_new"]
+        self.assertEqual(item["seed_links_created"], 1)
+        self.assertEqual(item["seed_clicks"], 3)
+        self.assertEqual(item["unique_click_users"], 3)
+        self.assertEqual(item["returning_clicks"], 1)
+        self.assertEqual(item["users"], 2)
+        self.assertEqual(item["started_only"], 1)
+        self.assertEqual(item["interacted_users"], 1)
+        self.assertEqual(item["requested_users"], 1)
+        self.assertEqual(item["generated_users"], 1)
+        self.assertEqual(item["paid_users"], 1)
+        stages = {u["stage"] for u in item["recent_users"]}
+        self.assertIn("started_only", stages)
+        self.assertIn("paid", stages)
+
     def test_report_channels_empty_db(self) -> None:
         rep = metrics.report_channels()
-        self.assertEqual(rep, {"total_acquired": 0, "channels": []})
+        self.assertEqual(rep, {"total_acquired": 0, "total_seed_clicks": 0, "channels": []})
 
 
 class ReportTodayTests(MetricsTestBase):
@@ -390,6 +431,7 @@ class ReportTodayTests(MetricsTestBase):
         self.assertEqual(rep["top_actions"], [])
 
     def test_report_today_reflects_inserted_activity(self) -> None:
+        metrics.upsert_user(7, username="alice")
         metrics.log_event("user_started", user_id=7)
         metrics.log_event("image_success", user_id=7)
         metrics.log_flow_job(
@@ -464,6 +506,21 @@ class ReportResilienceTests(MetricsTestBase):
         events = metrics.report_recent_events(10)
         self.assertEqual(events[0]["chip"], "💳 topup")
         self.assertIn("+100кр", events[0]["text"])
+
+    def test_recent_events_includes_new_user_events(self) -> None:
+        metrics.log_event(
+            "new_user",
+            user_id=77,
+            username="seeded",
+            source="goroskop_new",
+            payload={"seed_channel": "goroskop_new"},
+        )
+
+        events = metrics.report_recent_events(10)
+        self.assertEqual(events[0]["chip"], "user new")
+        self.assertEqual(events[0]["kind"], "new")
+        self.assertIn("seed:goroskop_new", events[0]["text"])
+        self.assertIn("created_at", events[0])
 
     def test_recent_events_includes_video_ab_events(self) -> None:
         metrics.log_event(
