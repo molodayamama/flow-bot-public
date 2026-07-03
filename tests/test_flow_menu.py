@@ -1710,18 +1710,17 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('"account_risk": "video_auth"', block)
         self.assertIn('"account_risk": "video_recaptcha_403"', block)
 
-        helper = self.source[
-            self.source.index("def _mark_video_account_failure"):
-            self.source.index("async def _download_ref_image_bytes")
-        ]
+        # Failure/cooldown policy moved to accounts.health (Phase 11).
+        health_source = (PROJECT_ROOT / "accounts" / "health.py").read_text(encoding="utf-8")
+        helper = health_source[health_source.index("def mark_video_failure"):]
         # video_auth — кулдаун сразу; video_recaptcha_403 (стохастичный) —
         # через счётчик fail (кулдаун только после серии).
         self.assertIn('risk == "video_auth"', helper)
-        self.assertIn("account_pool.mark_cooldown(account_id)", helper)
-        self.assertIn("account_pool.mark_failure(account_id)", helper)
+        self.assertIn("self._pool.mark_cooldown(account_id)", helper)
+        self.assertIn("self._pool.mark_failure(account_id)", helper)
         self.assertIn('risk == "video_recaptcha_403"', helper)
         # Провайдерский 429 → аккаунт сразу в кулдаун (а не через счётчик fail).
-        self.assertIn("_is_rate_limit_error(result)", helper)
+        self.assertIn("is_rate_limit_error(result)", helper)
         self.assertIn('"reason": "rate_limited", "op": "video"', helper)
 
         video = self.source[

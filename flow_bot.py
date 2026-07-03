@@ -576,6 +576,7 @@ client = clients[DEFAULT_ACCOUNT_ID]
 # visible; the flow_bot-level names below stay as thin backward-compatible
 # delegates.
 from accounts.routing import VideoAccountRouter
+from accounts.health import AccountFailurePolicy, is_rate_limit_error as _is_rate_limit_error
 
 _video_router = VideoAccountRouter(
     account_pool=account_pool,
@@ -2815,16 +2816,6 @@ async def _send_result_pairs(
         await asyncio.sleep(0.3)
 
 
-def _is_rate_limit_error(result: dict) -> bool:
-    error = str((result or {}).get("error", "")).lower()
-    return (
-        error == flow_copy.msg("rate_limited").lower()
-        or "429" in error
-        or "too many requests" in error
-        or "слишком много" in error
-    )
-
-
 async def _send_owner_alert(text: str) -> None:
     """Send a plain-text Telegram message to every OWNER_ID.  Never raises."""
     for oid in OWNER_IDS:
@@ -2843,82 +2834,22 @@ def _fire_owner_alert(text: str) -> None:
         pass  # no running loop — silently drop
 
 
+# Account failure/cooldown policy lives in accounts.health (channel-neutral);
+# here we bind it to the runtime pool/metrics/log and the owner-alert callback.
+_account_failure_policy = AccountFailurePolicy(
+    account_pool=account_pool,
+    log=log,
+    metrics=metrics,
+    fire_owner_alert=_fire_owner_alert,
+)
+
+
 def _mark_image_account_failure(account_id: str | None, result: dict | None = None) -> None:
-    if not account_id:
-        return
-    if (result or {}).get("account_risk") == "unusual_activity":
-        if account_pool.mark_cooldown(account_id):
-            log.warning("Image account %s cooled down after provider unusual-activity", account_id)
-            metrics.log_event(
-                "account_cooldown",
-                payload={"account": account_id, "reason": "unusual_activity", "op": "image"},
-            )
-            _fire_owner_alert(
-                f"⚠️ <b>Аккаунт кулдаун</b>\n"
-                f"Аккаунт: <code>{account_id}</code>\n"
-                f"Причина: unusual_activity (image)"
-            )
-        return
-    if _is_rate_limit_error(result):
-        # Провайдер вернул 429 — сразу остужаем аккаунт. Кулдаун в пуле общий,
-        # поэтому он блокирует и картинки, и видео на этом аккаунте; роутер
-        # уводит трафик на здоровые аккаунты (owner-alert не шлём — при флоте
-        # 429 может быть частым, не спамим).
-        if account_pool.mark_cooldown(account_id):
-            log.warning("Image account %s cooled down after provider 429 (rate limit)", account_id)
-            metrics.log_event(
-                "account_cooldown",
-                payload={"account": account_id, "reason": "rate_limited", "op": "image"},
-            )
-        return
-    if account_pool.mark_failure(account_id):
-        _fire_owner_alert(
-            f"⚠️ <b>Аккаунт кулдаун</b>\n"
-            f"Аккаунт: <code>{account_id}</code>\n"
-            f"Причина: N ошибок подряд (image)"
-        )
+    _account_failure_policy.mark_image_failure(account_id, result)
 
 
 def _mark_video_account_failure(account_id: str | None, result: dict | None = None) -> None:
-    if not account_id:
-        return
-    risk = (result or {}).get("account_risk")
-    if risk == "video_auth":
-        # Auth/bearer — кулдаун сразу (запросы всё равно не пройдут до фикса).
-        if account_pool.mark_cooldown(account_id):
-            log.warning("Video account %s cooled down after provider account-risk signal", account_id)
-            metrics.log_event(
-                "account_cooldown",
-                payload={"account": account_id, "reason": risk, "op": "video"},
-            )
-            _fire_owner_alert(
-                f"⚠️ <b>Аккаунт кулдаун</b>\n"
-                f"Аккаунт: <code>{account_id}</code>\n"
-                f"Причина: {risk} (video)"
-            )
-        return
-    if _is_rate_limit_error(result):
-        # Провайдер вернул 429 — сразу остужаем аккаунт (общий cooldown пула
-        # блокирует и видео, и картинки на нём). Без owner-alert, чтобы не
-        # спамить при частых лимитах на флоте.
-        if account_pool.mark_cooldown(account_id):
-            log.warning("Video account %s cooled down after provider 429 (rate limit)", account_id)
-            metrics.log_event(
-                "account_cooldown",
-                payload={"account": account_id, "reason": "rate_limited", "op": "video"},
-            )
-        return
-    # video_recaptcha_403 (стохастичный score) и прочие ошибки — НЕ остужаем
-    # аккаунт после одной серии 403: считаем как fail, кулдаун лишь после
-    # нескольких подряд (mark_failure порог). Так не выжигаем годный аккаунт.
-    if risk == "video_recaptcha_403":
-        metrics.log_event("video_recaptcha_403", payload={"account": account_id})
-    if account_pool.mark_failure(account_id):
-        _fire_owner_alert(
-            f"⚠️ <b>Аккаунт кулдаун</b>\n"
-            f"Аккаунт: <code>{account_id}</code>\n"
-            f"Причина: N ошибок подряд (video)"
-        )
+    _account_failure_policy.mark_video_failure(account_id, result)
 
 
 async def _download_ref_image_bytes(ref: ImageRef) -> bytes | None:

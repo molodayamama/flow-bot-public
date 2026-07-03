@@ -520,6 +520,10 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.plain_text_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "plain_text.py"
         ).read_text(encoding="utf-8")
+        # Account failure/cooldown policy moved to accounts.health (Phase 11).
+        self.health_source = (
+            PROJECT_ROOT / "accounts" / "health.py"
+        ).read_text(encoding="utf-8")
 
     def test_edit_button_and_callback_handler_present(self) -> None:
         # Labels now come from flow_copy; the edit button uses the "edit" action.
@@ -622,7 +626,8 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("pending_edits.pop(user_id, None)", block)
 
     def test_edit_rate_limit_keeps_context_copy(self) -> None:
-        self.assertIn("def _is_rate_limit_error", self.source)
+        self.assertIn("def is_rate_limit_error", self.health_source)
+        self.assertIn("is_rate_limit_error as _is_rate_limit_error", self.source)
         self.assertIn("image_edit_rate_limited", self.source)
         # image_edit_failover msg key exists in flow_copy but is shown only in logs, not to users
         self.assertIn("_reupload_ref_for_edit_failover", self.source)
@@ -654,17 +659,17 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertLess(rate_limited_return, gen_failed_return)
 
     def test_unusual_activity_cools_down_image_account(self) -> None:
-        self.assertIn("def _mark_image_account_failure", self.source)
-        helper = self.source[
-            self.source.index("def _mark_image_account_failure"):
-            self.source.index("async def _download_ref_image_bytes")
+        self.assertIn("def mark_image_failure", self.health_source)
+        helper = self.health_source[
+            self.health_source.index("def mark_image_failure"):
+            self.health_source.index("def mark_video_failure")
         ]
         self.assertIn('(result or {}).get("account_risk") == "unusual_activity"', helper)
-        self.assertIn("account_pool.mark_cooldown(account_id)", helper)
-        self.assertIn("account_pool.mark_failure(account_id)", helper)
+        self.assertIn("self._pool.mark_cooldown(account_id)", helper)
+        self.assertIn("self._pool.mark_failure(account_id)", helper)
         # Провайдерский 429 → аккаунт сразу в кулдаун (общий cooldown пула
         # блокирует и картинки, и видео на нём).
-        self.assertIn("_is_rate_limit_error(result)", helper)
+        self.assertIn("is_rate_limit_error(result)", helper)
         self.assertIn('"reason": "rate_limited", "op": "image"', helper)
 
         edit = self.source[

@@ -25,6 +25,7 @@ CORE_MODULES = [
     "flow_core",
     "accounts.routing",
     "accounts.projects",
+    "accounts.health",
     "product.marketplace",
     "product.marketplace_prompts",
     "storage.session_state",
