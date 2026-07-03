@@ -29,6 +29,7 @@ CORE_MODULES = [
     "product.marketplace",
     "product.marketplace_prompts",
     "product.video_reference",
+    "config.video",
     "storage.session_state",
     "billing.credit_gate",
     "billing.pricing",

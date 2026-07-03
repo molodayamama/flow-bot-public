@@ -6,7 +6,7 @@ re-exports these.
 
 from __future__ import annotations
 
-from flow_core import VIDEO_MODELS
+from flow_core import VIDEO_MODELS, video_price
 
 
 SELECT_STYLE = "success"  # green — Bot API 9.4 colour for the chosen wizard option
@@ -31,3 +31,24 @@ _VID_OMNI_DUR_MODEL = {4: "omni-flash-4s", 6: "omni-flash-6s",
 _VID_VEO_QUALITY_CYCLE = ["lite", "fast", "quality"]
 _VID_VEO_QUAL_MODEL = {"lite": "veo-lite", "fast": "veo-fast", "quality": "veo-quality"}
 _VID_VEO_QUAL_NAMES = {"lite": "Lite", "fast": "Fast", "quality": "Quality"}
+
+
+# ── new-video-wizard resolvers ───────────────────────────────────────────────
+# Engine/model/price derived from the wizard session dict. The engine is a user
+# choice (⚡ omni / 💎 veo), independent of whether a photo is attached; the
+# model then follows from the engine + duration/quality knob.
+def nwiz_engine(st: dict) -> str:
+    eng = (st.get("vengine") or "").lower()
+    return eng if eng in ("omni", "veo") else "omni"
+
+
+def nwiz_model(st: dict) -> str:
+    if nwiz_engine(st) == "veo":
+        return _VID_VEO_QUAL_MODEL.get(st.get("vquality", "lite"), "veo-lite")
+    return _VID_OMNI_DUR_MODEL.get(st.get("vdur", 4), "omni-flash-4s")
+
+
+def nwiz_price(st: dict) -> int:
+    mid = nwiz_model(st)
+    vmode = "ingredients" if st.get("vphoto") else "text"
+    return video_price(mid, 1, vmode)

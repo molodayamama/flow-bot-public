@@ -201,6 +201,9 @@ from config.video import (
     VID_REF_DEFAULT_MODEL,
     VIDEO_EXTEND_MODEL,
     SELECT_STYLE,
+    nwiz_engine as _nwiz_engine,
+    nwiz_model as _nwiz_model,
+    nwiz_price as _nwiz_price,
 )
 
 
@@ -1442,29 +1445,6 @@ _GUIDED_TO_VID_STYLE: dict[str, str] = {
     "realism":   "photo",
     "cinematic": "cine",
 }
-
-
-def _nwiz_engine(st: dict) -> str:
-    """Движок видео: ``omni`` (⚡ Быстро) или ``veo`` (💎 Качество).
-
-    Раньше движок жёстко зависел от наличия фото (фото → Veo, текст → Omni).
-    Теперь оба движка работают и с фото, и без — выбор делает сам пользователь
-    одной кнопкой, а дефолт — «Быстро» (Omni: дешевле и проще)."""
-    eng = (st.get("vengine") or "").lower()
-    return eng if eng in ("omni", "veo") else "omni"
-
-
-def _nwiz_model(st: dict) -> str:
-    """Модель для нового wizard на основе выбранного движка (не от наличия фото)."""
-    if _nwiz_engine(st) == "veo":
-        return _VID_VEO_QUAL_MODEL.get(st.get("vquality", "lite"), "veo-lite")
-    return _VID_OMNI_DUR_MODEL.get(st.get("vdur", 4), "omni-flash-4s")
-
-
-def _nwiz_price(st: dict) -> int:
-    mid = _nwiz_model(st)
-    vmode = "ingredients" if st.get("vphoto") else "text"
-    return video_price(mid, 1, vmode)
 
 
 def _new_video_wizard_screens_deps() -> tg_screens.NewVideoWizardScreensDeps:
