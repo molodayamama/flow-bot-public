@@ -178,6 +178,7 @@ from flow_core import (
 import flow_copy
 from generation import backend_service
 import metrics
+from textutil import _days_word, _short_prompt
 from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScenario
 import prompts_lib
 import config.settings as _cfg
@@ -1189,18 +1190,6 @@ async def _save_pending_sku_item(message: types.Message, user_id: int, sku: str)
 DEFAULT_COUNT = 1
 DEFAULT_FMT = "land"
 _FMT_NAMES = {"land": "16:9", "port": "9:16", "sq": "1:1", "f43": "4:3", "f34": "3:4"}
-
-
-def _short_prompt(text: str, limit: int = 80) -> str:
-    """Trim a prompt for captions/status lines, adding an ellipsis if cut.
-
-    Avoids the abrupt «…рыгает мотая головой влево вп» cut — instead the user
-    sees «…влево вп…» so it's clear the description continues.
-    """
-    text = (text or "").strip()
-    if len(text) <= limit:
-        return text
-    return text[:limit].rstrip() + "…"
 
 
 _QUICK_IDEAS: list[str] = [
@@ -2698,18 +2687,6 @@ def _streak_note(user_id: int) -> str | None:
         return flow_copy.msg("streak_ongoing", n=current, days=days_word)
     except Exception:
         return None
-
-
-def _days_word(n: int) -> str:
-    """Russian plural form for 'день/дня/дней'."""
-    if 11 <= n % 100 <= 19:
-        return "дней"
-    rem = n % 10
-    if rem == 1:
-        return "день"
-    if 2 <= rem <= 4:
-        return "дня"
-    return "дней"
 
 
 async def _after_result(message: types.Message, user_id: int, *, streak_note: str | None = None):
