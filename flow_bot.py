@@ -186,6 +186,7 @@ from product import video_reference
 from product import agent_prompts
 from product.video_delivery import video_delivery_bytes
 from product.streak import streak_note
+from channels.telegram.image_delivery import ImageDelivery, ImageDeliveryDeps
 from product.job_log import (
     ImageJobLogger,
     ms_since as _ms_since,
@@ -1697,6 +1698,22 @@ async def show_balance(message: types.Message, *, user_id: int, edit: bool = Tru
     )
 
 
+# Image result delivery lives in channels.telegram.image_delivery; bind it to
+# the runtime registries/stores/keyboards + the late-bound bot username here.
+_image_delivery = ImageDelivery(ImageDeliveryDeps(
+    keeper_for_acc=_keeper_for_acc,
+    image_registry=image_registry,
+    workspace=_ws,
+    is_seller=lambda: _cfg.IS_SELLER,
+    seller_image_keyboard=_seller_image_keyboard,
+    image_keyboard=_image_keyboard,
+    metrics=metrics,
+    log=log,
+    referral_link=_referral_link,
+    bot_username=lambda: BOT_USERNAME,
+))
+
+
 async def _send_one_image(
     message: types.Message,
     *,
@@ -1711,54 +1728,11 @@ async def _send_one_image(
     aspect_ratio: str,
     account_id: str | None = None,
 ) -> None:
-    """Отправить одну картинку с кнопкой «Редактировать», привязанной к ней."""
-    # Запоминаем сырой объект картинки, чтобы бот мог изучить формат правки.
-    _keeper_for_acc(account_id).note_image(img)
-    token = image_registry.add(
-        ImageRef(
-            user_id=user_id,
-            project_id=project_id,
-            source=img,
-            prompt=prompt,
-            aspect_ratio=aspect_ratio,
-            account_id=account_id,
-            platform=_ws(user_id).get("mp_platform", "") if _cfg.IS_SELLER else "",
-        )
+    await _image_delivery.send_one_image(
+        message, url=url, img=img, index=index, total=total, caption=caption,
+        user_id=user_id, project_id=project_id, prompt=prompt,
+        aspect_ratio=aspect_ratio, account_id=account_id,
     )
-    keyboard = _seller_image_keyboard(token) if _cfg.IS_SELLER else _image_keyboard(token)
-    try:
-        sent = await message.reply_photo(
-            photo=url, caption=caption, reply_markup=keyboard, parse_mode="HTML"
-        )
-        if sent and sent.photo:
-            metrics.save_to_gallery(
-                user_id, sent.photo[-1].file_id, token=token, prompt=prompt[:400] if prompt else None
-            )
-        return
-    except Exception as e:
-        log.error(f"Ошибка отправки фото {index}/{total}: {e}")
-
-    # Если прямая ссылка не работает — скачиваем и отправляем байтами.
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
-                if r.status == 200:
-                    data = await r.read()
-                    from aiogram.types import BufferedInputFile
-
-                    sent2 = await message.reply_photo(
-                        photo=BufferedInputFile(data, f"img_{index}.png"),
-                        caption=caption,
-                        reply_markup=keyboard,
-                        parse_mode="HTML",
-                    )
-                    if sent2 and sent2.photo:
-                        metrics.save_to_gallery(
-                            user_id, sent2.photo[-1].file_id, token=token,
-                            prompt=prompt[:400] if prompt else None,
-                        )
-    except Exception as e2:
-        log.error(f"Повторная ошибка отправки фото {index}/{total}: {e2}")
 
 
 # ── хэндлеры ──────────────────────────────
@@ -2722,31 +2696,10 @@ async def _send_result_pairs(
     emoji: str,
     account_id: str | None = None,
 ):
-    """Отправить набор картинок с кнопками действий (общий для всех режимов)."""
-    total = len(pairs)
-    # Реферальная ссылка автора — под каждой картинкой
-    ref_link = _referral_link(user_id)
-    if BOT_USERNAME:
-        ref_text = f'\n\n<a href="{html.escape(ref_link)}">Создай своё в @{html.escape(BOT_USERNAME)}</a>'
-    else:
-        ref_text = ""
-    for i, (url, img) in enumerate(pairs, 1):
-        counter = f" {i}/{total}" if total > 1 else ""
-        caption = f"{emoji}{counter} · {html.escape(_short_prompt(prompt, 80))}{ref_text}"
-        await _send_one_image(
-            message,
-            url=url,
-            img=img,
-            index=i,
-            total=total,
-            caption=caption,
-            user_id=user_id,
-            project_id=project_id,
-            prompt=prompt,
-            aspect_ratio=aspect_ratio,
-            account_id=account_id,
-        )
-        await asyncio.sleep(0.3)
+    await _image_delivery.send_result_pairs(
+        message, pairs, user_id=user_id, project_id=project_id, prompt=prompt,
+        aspect_ratio=aspect_ratio, emoji=emoji, account_id=account_id,
+    )
 
 
 async def _send_owner_alert(text: str) -> None:

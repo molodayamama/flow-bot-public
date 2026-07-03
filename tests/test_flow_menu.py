@@ -1366,11 +1366,13 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("return", block)
 
     def test_seller_result_keyboard_is_gated_to_seller_mode(self) -> None:
-        start = self.source.index("async def _send_one_image")
-        block = self.source[start:start + 900]
-        self.assertIn("IS_SELLER", block)
-        self.assertIn("_seller_image_keyboard(token)", block)
-        self.assertIn("_image_keyboard(token)", block)
+        # send_one_image moved to channels.telegram.image_delivery (Phase 11).
+        source = (PROJECT_ROOT / "channels" / "telegram" / "image_delivery.py").read_text(encoding="utf-8")
+        start = source.index("async def send_one_image")
+        block = source[start:start + 1200]
+        self.assertIn("is_seller()", block)
+        self.assertIn("d.seller_image_keyboard(token)", block)
+        self.assertIn("d.image_keyboard(token)", block)
 
     def test_support_brief_text_runs_before_image_fallback(self) -> None:
         source = self.plain_text_router_source

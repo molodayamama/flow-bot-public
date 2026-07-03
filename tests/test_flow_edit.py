@@ -717,7 +717,9 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         # Edit must replay a captured real request, never a hardcoded guess.
         self.assertIn("def _maybe_capture_edit", self.source)
         self.assertIn("def note_image", self.source)
-        self.assertIn("_keeper_for_acc(account_id).note_image(img)", self.source)
+        # send_one_image (with the note_image call) moved to image_delivery (Phase 11).
+        delivery_source = (PROJECT_ROOT / "channels" / "telegram" / "image_delivery.py").read_text(encoding="utf-8")
+        self.assertIn("d.keeper_for_acc(account_id).note_image(img)", delivery_source)
         self.assertIn("capture = load_edit_capture(EDIT_CAPTURE_FILE)", self.source)
         self.assertIn("build_image_inputs(ref.source, capture)", self.source)
 
