@@ -48,7 +48,6 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-from aiogram.filters import Command
 from dotenv import load_dotenv
 from playwright.async_api import BrowserContext, async_playwright
 
@@ -340,6 +339,7 @@ from channels.telegram.routers import admin_reports as tg_admin_reports_router
 from channels.telegram.routers import admin_credits as tg_admin_credits_router
 from channels.telegram.routers import video_upload_input as tg_video_upload_input_router
 from channels.telegram.routers import plain_text as tg_plain_text_router
+from channels.telegram.routers import start as tg_start_router
 from channels.telegram.routers import fallback as tg_fallback_router
 
 from referrals.service import ReferralService
@@ -2309,97 +2309,37 @@ async def _send_one_image(
 # ── хэндлеры ──────────────────────────────
 
 
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    user_id = message.from_user.id
-    metrics.upsert_user(user_id, username=_username(message),
-                        first_name=getattr(message.from_user, "first_name", None))
-    _reset_image_flow(user_id)
-    _vid_clear(user_id)
-    is_new = not metrics.user_exists(user_id)  # DB надёжнее in-memory _granted после рестарта
-    credit_store.balance(user_id)  # начисляем стартовые кредиты при первом старте
-    metrics.log_event("user_started", user_id=user_id,
-                      username=_username(message), source="command",
-                      payload={"is_new": is_new})
-    if is_new:
-        uname = _username(message)
-        uname_str = f"@{uname}" if uname else f"id {user_id}"
-        asyncio.create_task(_send_owner_alert(
-            f"👤 <b>Новый пользователь</b>\n{uname_str}"
-        ))
-    # Deep-link приглашение: /start ref_<id> — фиксируем рефералку (один раз).
-    parts = (message.text or "").split(maxsplit=1)
-    payload = parts[1].strip() if len(parts) > 1 else ""
-    _referral_welcome_bonus: int = 0
-    if payload.startswith(REFERRAL_PARAM_PREFIX) and not getattr(message.from_user, "is_bot", False):
-        raw = payload[len(REFERRAL_PARAM_PREFIX):]
-        if raw.isdigit():
-            referrer_id = int(raw)
-            if referrer_id != user_id and is_new and metrics.record_referral_join(
-                referrer_user_id=referrer_id, referred_user_id=user_id
-            ):
-                # Подарок приглашённому другу — разово, ровно при создании строки
-                # реферала (record_referral_join вернул True). Идёт мимо
-                # payments-pipeline, поэтому НЕ триггерит награду пригласившему.
-                if REFERRAL_REFERRED_BONUS > 0:
-                    credit_store.add(user_id, REFERRAL_REFERRED_BONUS)
-                    metrics.log_event("referral_referred_bonus", user_id=user_id,
-                                      payload={"referrer": referrer_id,
-                                               "bonus": REFERRAL_REFERRED_BONUS})
-                metrics.log_event("referral_joined", user_id=user_id,
-                                  payload={"referrer": referrer_id})
-                _referral_welcome_bonus = credit_store.balance(user_id)
-    # Рекламный deep-link: /start seed_<канал> — first-touch атрибуция канала.
-    channel = parse_channel_seed(payload)
-    if channel and not getattr(message.from_user, "is_bot", False):
-        if metrics.record_acquisition(user_id=user_id, channel=channel):
-            metrics.log_event("acquired_from_channel", user_id=user_id,
-                              username=_username(message), payload={"channel": channel})
-    # Постоянная нижняя клавиатура всегда показывается при /start
-    await message.answer("👇", reply_markup=reply_menu_kb(user_id))
+_start_router_deps = tg_start_router.StartDeps(
+    metrics=metrics,
+    username=_username,
+    reset_image_flow=_reset_image_flow,
+    vid_clear=_vid_clear,
+    credit_store=credit_store,
+    send_owner_alert=lambda text: _send_owner_alert(text),
+    referral_param_prefix=REFERRAL_PARAM_PREFIX,
+    referral_referred_bonus=REFERRAL_REFERRED_BONUS,
+    parse_channel_seed=parse_channel_seed,
+    reply_menu_kb=reply_menu_kb,
+    config=_cfg,
+    workspace=_ws,
+    mp_jobs_kb=mp_jobs_kb,
+    mp_stamp_message=_mp_stamp_message,
+    price_gen=price_gen,
+    onboarding_step1_kb=_onboarding_step1_kb,
+    show_main_menu=show_main_menu,
+)
+cmd_start = tg_start_router.create_handler(_start_router_deps)
 
-    if _cfg.IS_SELLER:
-        # Селлер-бот: сразу показываем выбор задачи, без промежуточного hub-экрана.
-        st = _ws(user_id)
-        st.setdefault("mp_platform", "wb")
-        sent = await message.answer(
-            flow_copy.msg("welcome_seller"),
-            reply_markup=mp_jobs_kb(st.get("mp_platform", "wb")),
-            parse_mode="HTML",
-        )
-        _mp_stamp_message(user_id, sent)
-        return
 
-    if _referral_welcome_bonus > 0:
-        # Пришёл по реф-ссылке → эмоциональный бонус + онбординг
-        gens = _referral_welcome_bonus // price_gen(1)
-        await message.answer(
-            flow_copy.msg("referral_welcome", bonus=_referral_welcome_bonus, gens=gens),
-            parse_mode="HTML",
-        )
-        # После реф-приветствия → онбординг
-        if is_new:
-            await message.answer(
-                flow_copy.msg("onboarding_step1"),
-                reply_markup=_onboarding_step1_kb(),
-            )
-            return
-    elif is_new:
-        # Новый пользователь без реф-ссылки → онбординг
-        await message.answer(
-            flow_copy.msg("onboarding_step1"),
-            reply_markup=_onboarding_step1_kb(),
-        )
-        return
-
-    # Старый пользователь → обычный welcome + меню
-    await message.answer(flow_copy.msg("welcome"), parse_mode="HTML")
-    await show_main_menu(message, user_id=user_id)
+# /start lives in channels/telegram/routers/start.py (Phase 6). Include it
+# first to preserve the former dp-level precedence for deep-link commands in
+# text or captions.
+dp.include_router(tg_start_router.create_router(_start_router_deps, handler=cmd_start))
 
 
 # Photo input lives in channels/telegram/routers/photo_input.py (Phase 6).
 # It is included before command routers to preserve the former dp-level
-# precedence for captioned photos such as "/menu"; dp-level /start still wins.
+# precedence for captioned photos such as "/menu"; /start router still wins.
 dp.include_router(
     tg_photo_input_router.create_router(
         tg_photo_input_router.PhotoInputDeps(

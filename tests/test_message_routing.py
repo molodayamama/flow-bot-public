@@ -15,8 +15,8 @@ pins the full routing table:
   photos and payments keep their disjoint filters.
 - Captionless and plain-captioned videos/documents land on the extracted
   handler, as before.
-- A video captioned with a DP-LEVEL command (``/start``) still hits that
-  command: dp-level precedes routers, unchanged.
+- A video captioned with ``/start`` still hits that command: the start router is
+  included before generic video/document input.
 - A video captioned with a ROUTER-owned command (``/menu``) now hits the
   command handler because command routers are included before the
   video-input router. This is the one intentional delta vs. the pre-move
@@ -38,11 +38,9 @@ from aiogram.types import Chat, Document, Message, PhotoSize, SuccessfulPayment,
 
 import flow_bot
 
-# Protected dp-level message handlers that must NOT be extracted yet:
-# /start deep-links.
-EXPECTED_DP_LEVEL = [
-    "cmd_start",
-]
+# No message handlers should remain registered directly on dp; Phase 6 routes
+# them through explicit routers so precedence is visible in inclusion order.
+EXPECTED_DP_LEVEL = []
 
 
 def _message(**kwargs) -> Message:
@@ -69,7 +67,7 @@ _PAYMENT = SuccessfulPayment(
 
 # The pinned routing table: description -> (Message kwargs, expected handler).
 ROUTING_TABLE = {
-    "text /start": (dict(text="/start"), "dp:cmd_start"),
+    "text /start": (dict(text="/start"), "tg-start:cmd_start"),
     "text /status": (dict(text="/status"), "tg-admin-status:cmd_status"),
     "text /menu": (dict(text="/menu"), "tg-public-commands:cmd_menu"),
     "text /img": (dict(text="/img cat"), "tg-generation-commands:cmd_img"),
@@ -90,8 +88,8 @@ ROUTING_TABLE = {
         dict(document=_DOCUMENT, caption="edit this"),
         "tg-video-upload-input:handle_video_upload",
     ),
-    # dp-level commands read captions and dp-level precedes routers: unchanged.
-    "video with dp-command caption": (dict(video=_VIDEO, caption="/start"), "dp:cmd_start"),
+    # /start reads captions and is included before the video-input router.
+    "video with /start caption": (dict(video=_VIDEO, caption="/start"), "tg-start:cmd_start"),
     # Router-owned commands win over the video-input router (included later).
     # Intentional delta vs the dp-level video handler layout; restores the
     # original monolith order where commands preceded handle_video_upload.
@@ -132,16 +130,18 @@ class MessageRoutingRegressionTests(unittest.TestCase):
 
     def test_video_input_router_is_included_after_command_routers(self) -> None:
         names = [router.name for router in flow_bot.dp.sub_routers]
-        self.assertEqual(names[0], "tg-photo-input")
+        self.assertEqual(names[0], "tg-start")
+        self.assertEqual(names[1], "tg-photo-input")
         self.assertIn("tg-video-upload-input", names)
         self.assertIn("tg-payments", names)
         self.assertIn("tg-plain-text", names)
         video_idx = names.index("tg-video-upload-input")
+        self.assertLess(names.index("tg-start"), video_idx)
         self.assertLess(names.index("tg-payments"), video_idx)
         for command_router in (
             "tg-public-commands", "tg-generation-commands",
             "tg-admin-accounts", "tg-admin-status",
-                "tg-admin-reports", "tg-admin-credits",
+            "tg-admin-reports", "tg-admin-credits",
         ):
             self.assertLess(names.index(command_router), video_idx, command_router)
         self.assertLess(video_idx, names.index("tg-plain-text"))

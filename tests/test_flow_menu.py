@@ -438,6 +438,10 @@ class BotMenuWiringTests(unittest.TestCase):
         self.commands_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "commands.py"
         ).read_text(encoding="utf-8")
+        # /start deep-link handling moved to its own first-included router.
+        self.start_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "start.py"
+        ).read_text(encoding="utf-8")
         # Telegram Stars pre-checkout and successful-payment handlers moved to
         # their own router (Phase 6, wave G).
         self.payments_router_source = (
@@ -672,8 +676,10 @@ class BotMenuWiringTests(unittest.TestCase):
             self.assertIn(command, self.commands_router_source)
 
     def test_start_resets_stale_generation_state(self) -> None:
-        start = self.source.index("async def cmd_start")
-        block = self.source[start:start + 700]
+        self.assertIn("tg_start_router.create_router(", self.source)
+        self.assertIn("cmd_start = tg_start_router.create_handler", self.source)
+        start = self.start_router_source.index("async def cmd_start")
+        block = self.start_router_source[start:start + 1200]
         self.assertIn("_reset_image_flow(user_id)", block)
         self.assertIn("_vid_clear(user_id)", block)
 
@@ -875,7 +881,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("pending_edits.pop(user_id, None)", self.source[reset_start:reset_start + 600])
         # The dangerous unconditional "old path" edit fallback is gone.
         self.assertNotIn("Старый путь (на случай pending_edits", self.source)
-        self.assertIn("_reset_image_flow(user_id)", self.source)
+        self.assertIn("_reset_image_flow(user_id)", self.source + "\n" + self.start_router_source)
 
     def test_frames_and_ingredients_have_format_and_count(self) -> None:
         # Frames/Ingredients screens reuse the shared format+count picker rows.
@@ -1336,7 +1342,15 @@ class BotMenuWiringTests(unittest.TestCase):
         # Metrics import + init + key events + idempotent transaction recording.
         self.assertIn("import metrics", self.source)
         self.assertIn("metrics.init_db(", self.source)
-        metrics_sources = self.source + "\n" + self.menu_router_source + "\n" + self.payments_router_source
+        metrics_sources = (
+            self.source
+            + "\n"
+            + self.menu_router_source
+            + "\n"
+            + self.payments_router_source
+            + "\n"
+            + self.start_router_source
+        )
         for ev in (
             '"user_started"', '"image_requested"', '"image_success"', '"image_failed"',
             '"variations_requested"', '"upscale_requested"', '"image_edit_requested"',
@@ -1376,12 +1390,13 @@ class BotMenuWiringTests(unittest.TestCase):
     def test_channel_attribution_wired(self) -> None:
         # /start seed_<канал> → first-touch атрибуция в metrics.acquisitions.
         self.assertIn("CHANNEL_PARAM_PREFIX", self.source)
-        self.assertIn("parse_channel_seed(payload)", self.source)
-        self.assertIn("metrics.record_acquisition(", self.source)
-        self.assertIn('"acquired_from_channel"', self.source)
+        self.assertIn("parse_channel_seed=parse_channel_seed", self.source)
+        self.assertIn("parse_channel_seed(payload)", self.start_router_source)
+        self.assertIn("metrics.record_acquisition(", self.start_router_source)
+        self.assertIn('"acquired_from_channel"', self.start_router_source)
         # Атрибуция стоит внутри cmd_start (рядом с рефералкой), не где попало.
-        start = self.source.index("async def cmd_start")
-        block = self.source[start:start + 3000]
+        start = self.start_router_source.index("async def cmd_start")
+        block = self.start_router_source[start:start + 4500]
         self.assertIn("channel = parse_channel_seed(payload)", block)
         self.assertIn("metrics.record_acquisition(user_id=user_id, channel=channel)", block)
         # Админ-отчёт по каналам читает report_channels и умеет выдавать ссылку
@@ -1407,13 +1422,13 @@ class BotMenuWiringTests(unittest.TestCase):
     def test_referral_wired(self) -> None:
         # Deep-link join, payment reward, menu entry, invite buttons, clawback.
         self.assertIn("REFERRAL_PARAM_PREFIX", self.source)
-        self.assertIn("metrics.record_referral_join(", self.source)
-        self.assertIn('"referral_joined"', self.source)
+        self.assertIn("metrics.record_referral_join(", self.start_router_source)
+        self.assertIn('"referral_joined"', self.start_router_source)
         self.assertIn("_maybe_apply_referral_rewards(", self.source)
         self.assertIn("deps.maybe_apply_referral_rewards(", self.payments_router_source)
         # Подарок приглашённому другу (+15) при join, мимо payments-pipeline.
         self.assertIn("REFERRAL_REFERRED_BONUS", self.source)
-        self.assertIn('"referral_referred_bonus"', self.source)
+        self.assertIn('"referral_referred_bonus"', self.start_router_source)
         # «+50 за генерацию» удалено целиком — награда рефереру только на оплате
         # (anti-farm, REFERRAL.md §3). Второго пути быть не должно.
         self.assertNotIn("_maybe_apply_first_referral_generation_reward", self.source)
@@ -2089,6 +2104,7 @@ class BotImportSmokeTests(unittest.TestCase):
             )
             self.assertGreaterEqual(callback_handler_count, 12)
             router_names = [router.name for router in fb.dp.sub_routers]
+            self.assertIn("tg-start", router_names)
             self.assertIn("tg-image-action", router_names)
             self.assertIn("tg-payments", router_names)
             pre_checkout_count = len(fb.dp.pre_checkout_query.handlers) + sum(
