@@ -510,6 +510,10 @@ class BotMenuWiringTests(unittest.TestCase):
         self.video_upload_input_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "video_upload_input.py"
         ).read_text(encoding="utf-8")
+        # Plain text catch-all moved to its own router (Phase 6, wave I).
+        self.plain_text_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "plain_text.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         self.assertIn('F.data.startswith("m:")', self.menu_router_source)  # menu router
@@ -623,8 +627,8 @@ class BotMenuWiringTests(unittest.TestCase):
         end = self.source.index("async def _show_help_screen", start)
         block = self.source[start:end]
         # Reply-button taps are handled as plain text before prompt routing.
-        self.assertIn('text == L("kb_gen")', self.source)
-        self.assertIn("_is_balance_reply_text(text)", self.source)
+        self.assertIn('text == L("kb_gen")', self.plain_text_router_source)
+        self.assertIn("_is_balance_reply_text(text)", self.plain_text_router_source)
         self.assertIn("def _balance_reply_label", self.source)
         self.assertIn('B(text=L("kb_gen"))', block)
         self.assertIn('B(text=L("kb_vid"))', block)
@@ -633,7 +637,7 @@ class BotMenuWiringTests(unittest.TestCase):
         for key in ("ideas", "myphoto", "invite", "help"):
             self.assertNotIn(f'B(text=L("{key}"))', block)
         for key in ("ideas", "myphoto", "invite", "help"):
-            self.assertIn(f'text == L("{key}")', self.source)
+            self.assertIn(f'text == L("{key}")', self.plain_text_router_source)
 
     def test_public_help_ideas_referral_commands_wired(self) -> None:
         # /help and /referral handlers live in the extracted commands router;
@@ -644,7 +648,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('Command("ideas")', self.generation_commands_router_source)
         self.assertIn("async def _show_help_screen", self.source)
         self.assertIn("async def _show_referral_screen", self.source)
-        self.assertIn("_show_ideas_root(message, user_id=user_id, edit=False)", self.source)
+        self.assertIn("_show_ideas_root(message, user_id=user_id, edit=False)", self.plain_text_router_source)
         for command in ('command="ideas"', 'command="help"', 'command="referral"'):
             self.assertIn(command, self.source)
 
@@ -922,58 +926,64 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_video_settings_plain_text_runs_video_before_image_fallback(self) -> None:
         self.assertIn("def _video_plain_text_ready", self.source)
-        start = self.source.index("async def handle_plain_text")
-        video_branch = self.source.index("if _video_plain_text_ready(st):", start)
-        image_fallback = self.source.index('st["pending_prompt"] = text', start)
-        awaiting_image_prompt = self.source.index('awaiting = st.get("await")', start)
+        source = self.plain_text_router_source
+        start = source.index("async def handle_plain_text")
+        video_branch = source.index("if _video_plain_text_ready(st):", start)
+        image_fallback = source.index('st["pending_prompt"] = text', start)
+        awaiting_image_prompt = source.index('awaiting = st.get("await")', start)
         self.assertLess(video_branch, awaiting_image_prompt)
         self.assertLess(video_branch, image_fallback)
-        block = self.source[video_branch:video_branch + 250]
+        block = source[video_branch:video_branch + 250]
         self.assertIn("_video_generate_and_send(message, text, user_id=user_id)", block)
         self.assertIn("return", block)
 
     def test_myphoto_waiting_text_stays_in_photo_upload_state(self) -> None:
-        start = self.source.index("async def handle_plain_text")
-        photo_guard = self.source.index('if awaiting == "photo":', start)
-        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        source = self.plain_text_router_source
+        start = source.index("async def handle_plain_text")
+        photo_guard = source.index('if awaiting == "photo":', start)
+        image_fallback = source.index('st["pending_prompt"] = text', start)
         self.assertLess(photo_guard, image_fallback)
-        block = self.source[photo_guard:photo_guard + 180]
+        block = source[photo_guard:photo_guard + 180]
         self.assertIn('flow_copy.msg("ask_photo")', block)
         self.assertIn("return", block)
 
     def test_marketplace_photo_waiting_text_stays_in_photo_upload_state(self) -> None:
-        start = self.source.index("async def handle_plain_text")
-        mp_photo_guard = self.source.index('if awaiting == "mp_photo":', start)
-        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        source = self.plain_text_router_source
+        start = source.index("async def handle_plain_text")
+        mp_photo_guard = source.index('if awaiting == "mp_photo":', start)
+        image_fallback = source.index('st["pending_prompt"] = text', start)
         self.assertLess(mp_photo_guard, image_fallback)
-        block = self.source[mp_photo_guard:mp_photo_guard + 350]
+        block = source[mp_photo_guard:mp_photo_guard + 350]
         self.assertIn("_mp_photo_request_text", block)
         self.assertIn("return", block)
 
     def test_marketplace_series_waiting_text_stays_in_photo_upload_state(self) -> None:
-        start = self.source.index("async def handle_plain_text")
-        mp_series_guard = self.source.index('if awaiting == "mp_series_photo":', start)
-        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        source = self.plain_text_router_source
+        start = source.index("async def handle_plain_text")
+        mp_series_guard = source.index('if awaiting == "mp_series_photo":', start)
+        image_fallback = source.index('st["pending_prompt"] = text', start)
         self.assertLess(mp_series_guard, image_fallback)
-        block = self.source[mp_series_guard:mp_series_guard + 520]
+        block = source[mp_series_guard:mp_series_guard + 520]
         self.assertIn("_mp_series_request_text", block)
         self.assertIn("return", block)
 
     def test_marketplace_sku_name_text_saves_before_image_fallback(self) -> None:
-        start = self.source.index("async def handle_plain_text")
-        sku_guard = self.source.index('if awaiting == "mp_sku_name":', start)
-        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        source = self.plain_text_router_source
+        start = source.index("async def handle_plain_text")
+        sku_guard = source.index('if awaiting == "mp_sku_name":', start)
+        image_fallback = source.index('st["pending_prompt"] = text', start)
         self.assertLess(sku_guard, image_fallback)
-        block = self.source[sku_guard:sku_guard + 450]
+        block = source[sku_guard:sku_guard + 450]
         self.assertIn("_save_pending_sku_item", block)
         self.assertIn("return", block)
 
     def test_marketplace_brandkit_text_saves_before_image_fallback(self) -> None:
-        start = self.source.index("async def handle_plain_text")
-        brand_guard = self.source.index('if awaiting == "mp_brandkit":', start)
-        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        source = self.plain_text_router_source
+        start = source.index("async def handle_plain_text")
+        brand_guard = source.index('if awaiting == "mp_brandkit":', start)
+        image_fallback = source.index('st["pending_prompt"] = text', start)
         self.assertLess(brand_guard, image_fallback)
-        block = self.source[brand_guard:brand_guard + 650]
+        block = source[brand_guard:brand_guard + 650]
         self.assertIn("metrics.save_seller_profile", block)
         self.assertIn('"mp_brandkit_saved"', block)
         self.assertIn("return", block)
@@ -986,11 +996,12 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("_image_keyboard(token)", block)
 
     def test_support_brief_text_runs_before_image_fallback(self) -> None:
-        start = self.source.index("async def handle_plain_text")
-        support_guard = self.source.index('if st.get("support_await"):', start)
-        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        source = self.plain_text_router_source
+        start = source.index("async def handle_plain_text")
+        support_guard = source.index('if st.get("support_await"):', start)
+        image_fallback = source.index('st["pending_prompt"] = text', start)
         self.assertLess(support_guard, image_fallback)
-        block = self.source[support_guard:support_guard + 2200]
+        block = source[support_guard:support_guard + 2200]
         self.assertIn("metrics.create_ticket", block)
         self.assertIn("ticket_text", block)
         self.assertIn("return", block)
@@ -1134,6 +1145,8 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('if data.startswith("v:extend:")', self.video_router_source)
         self.assertIn('st["vawait"] = "vedit_prompt"', self.source)
         self.assertIn('st["vawait"] = "vextend_prompt"', self.source)
+        self.assertIn('if st.get("vawait") == "vedit_prompt":', self.plain_text_router_source)
+        self.assertIn('if st.get("vawait") == "vextend_prompt":', self.plain_text_router_source)
         self.assertIn('unit_price_override=action_price("video_prompt_edit")', self.source)
         self.assertIn('video_operation="edit"', self.source)
         self.assertIn('video_operation="extend"', self.source)
@@ -1177,7 +1190,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # v:retrynew dispatch/state-set moved to the video router (Phase 6).
         self.assertIn('if data == "v:retrynew":', self.video_router_source)
         self.assertIn('st["vawait"] = "vretry_prompt"', self.video_router_source)
-        self.assertIn('if st.get("vawait") == "vretry_prompt":', self.source)
+        self.assertIn('if st.get("vawait") == "vretry_prompt":', self.plain_text_router_source)
         self.assertIn("vid_retry_edit", (PROJECT_ROOT / "flow_copy.py").read_text(encoding="utf-8"))
 
     def test_moderation_fail_excluded_from_account_stats(self) -> None:
@@ -1448,7 +1461,7 @@ class BotMenuWiringTests(unittest.TestCase):
             self.menu_router_source.index('elif data == "m:animate"'):
         ][:500]
         self.assertIn("deps.show_animate_photo_input", animate_menu)
-        self.assertIn('"vanimate_photo"', self.source)
+        self.assertIn('"vanimate_photo"', self.plain_text_router_source)
         # Seeds the generated image into the new scenario layer as a vphoto
         # reference, carrying the image's account/project so r2v doesn't 404 on
         # another acc.
@@ -1466,29 +1479,30 @@ class BotMenuWiringTests(unittest.TestCase):
         # The vnchange text handler re-renders the wizard (keeps vphoto/vmode).
         self.assertIn(
             'if st.get("vstep") == "vnewwiz" and st.get("vawait") == "vnchange":',
-            self.source,
+            self.plain_text_router_source,
         )
         self.assertIn('startswith("an:")', self.animate_router_source)
 
     def test_ingredients_chat_prompt_starts_video(self) -> None:
         # «Оживить фото»: фото уже выбрано → текст из чата запускает ВИДЕО, а не
         # картинки. Ветки (ingredients/frames) стоят ДО image-фолбэка.
-        start = self.source.index("async def handle_plain_text")
-        ing_branch = self.source.index(
+        source = self.plain_text_router_source
+        start = source.index("async def handle_plain_text")
+        ing_branch = source.index(
             'if st.get("vmode") == "ingredients" and (st.get("ving_photos") or []):', start
         )
-        frm_branch = self.source.index(
+        frm_branch = source.index(
             'if st.get("vmode") == "frames" and st.get("vfrm_start") and st.get("vfrm_end"):',
             start,
         )
-        image_fallback = self.source.index('st["pending_prompt"] = text', start)
-        awaiting_image_prompt = self.source.index('awaiting = st.get("await")', start)
-        wizard_image = self.source.index('if st.get("step") == "wizard":', start)
+        image_fallback = source.index('st["pending_prompt"] = text', start)
+        awaiting_image_prompt = source.index('awaiting = st.get("await")', start)
+        wizard_image = source.index('if st.get("step") == "wizard":', start)
         for branch in (ing_branch, frm_branch):
             self.assertLess(branch, awaiting_image_prompt)
             self.assertLess(branch, wizard_image)
             self.assertLess(branch, image_fallback)
-        block = self.source[ing_branch:frm_branch + 260]
+        block = source[ing_branch:frm_branch + 260]
         self.assertIn("_video_generate_and_send(message, text, user_id=user_id)", block)
         # Вход в «Оживить фото» чистит залипший image-визард (await/step), иначе он
         # перехватил бы промпт. Помощник зовётся из m:animate и an:img.
@@ -1496,21 +1510,22 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertGreaterEqual(self.source.count("_clear_image_flow_keys(st)"), 2)
 
     def test_video_photo_wait_text_does_not_open_image_wizard(self) -> None:
-        start = self.source.index("async def handle_plain_text")
-        wait_guard = self.source.index('if st.get("vawait") == "ving_photo":', start)
-        start_guard = self.source.index('if st.get("vawait") == "vfrm_start":', start)
-        end_guard = self.source.index('if st.get("vawait") == "vfrm_end":', start)
-        ing_ready = self.source.index(
+        source = self.plain_text_router_source
+        start = source.index("async def handle_plain_text")
+        wait_guard = source.index('if st.get("vawait") == "ving_photo":', start)
+        start_guard = source.index('if st.get("vawait") == "vfrm_start":', start)
+        end_guard = source.index('if st.get("vawait") == "vfrm_end":', start)
+        ing_ready = source.index(
             'if st.get("vmode") == "ingredients" and (st.get("ving_photos") or []):',
             start,
         )
-        image_fallback = self.source.index('st["pending_prompt"] = text', start)
+        image_fallback = source.index('st["pending_prompt"] = text', start)
         # ingredients check must come BEFORE the vawait guards (ingredients-ready text
         # should trigger video generation, not be blocked by the photo-wait guard).
         for guard in (wait_guard, start_guard, end_guard):
             self.assertLess(ing_ready, guard)
             self.assertLess(guard, image_fallback)
-        block = self.source[wait_guard:end_guard + 180]
+        block = source[wait_guard:end_guard + 180]
         self.assertIn('flow_copy.msg("vid_ing_send_photo")', block)
         self.assertIn('flow_copy.msg("vid_frm_send_photo_start")', block)
         self.assertIn('flow_copy.msg("vid_frm_send_photo_end")', block)
@@ -1530,10 +1545,10 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('"template_opened"', self.ideas_flow_router_source)
         self.assertIn('"template_used"', self.source)
         # Free-text Q&A answers are captured in the text handler.
-        self.assertIn('st.get("tp_await") == "text"', self.source)
-        self.assertIn('flow_copy.msg("ideas_text_attached_template")', self.source)
-        self.assertIn('flow_copy.msg("ideas_text_attached_guided")', self.source)
-        self.assertIn('flow_copy.msg("ideas_text_attached_root")', self.source)
+        self.assertIn('st.get("tp_await") == "text"', self.plain_text_router_source)
+        self.assertIn('flow_copy.msg("ideas_text_attached_template")', self.plain_text_router_source)
+        self.assertIn('flow_copy.msg("ideas_text_attached_guided")', self.plain_text_router_source)
+        self.assertIn('flow_copy.msg("ideas_text_attached_root")', self.plain_text_router_source)
         self.assertIn('flow_copy.msg("ideas_choice_hint")', self.source)
         self.assertIn('flow_copy.msg("ideas_guided_hint")', self.source)
         self.assertIn("_ideas_prompt_with_extra(prompt, st)", self.source)

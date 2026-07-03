@@ -27,6 +27,7 @@ from channels.telegram.routers import menu as menu_router
 from channels.telegram.routers import payments as payments_router
 from channels.telegram.routers import photo_input as photo_input_router
 from channels.telegram.routers import photo_route as photo_route_router
+from channels.telegram.routers import plain_text as plain_text_router
 from channels.telegram.routers import video as video_router
 from channels.telegram.routers import video_upload as video_upload_router
 from channels.telegram.routers import video_upload_input as video_upload_input_router
@@ -569,6 +570,175 @@ class PhotoInputRouterTests(unittest.TestCase):
 
     def test_router_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(photo_input_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class FakeTextMessage:
+    def __init__(self, text: str, user_id: int = 42) -> None:
+        self.text = text
+        self.from_user = SimpleNamespace(id=user_id, first_name="Test")
+        self.chat = SimpleNamespace(id=user_id)
+        self.photo = None
+        self.answers: list[tuple[tuple, dict]] = []
+        self.bot = SimpleNamespace(edit_message_text=self._edit_message_text)
+        self.edits: list[tuple[tuple, dict]] = []
+
+    async def answer(self, *args, **kwargs):
+        self.answers.append((args, kwargs))
+        return SimpleNamespace(message_id=99)
+
+    async def _edit_message_text(self, *args, **kwargs):
+        self.edits.append((args, kwargs))
+
+
+class RecordingPlainTextDeps:
+    def __init__(self, *, seller: bool = False) -> None:
+        self.states: dict[int, dict] = defaultdict(dict)
+        self.calls: list[tuple[str, tuple, dict]] = []
+        self.pending_edits: dict[int, object] = {}
+        self.pending_photo_routes: dict[int, object] = {}
+        self.config = SimpleNamespace(IS_SELLER=seller)
+        self.metrics = SimpleNamespace(
+            upsert_user=self._sync("upsert_user"),
+            log_event=self._sync("log_event"),
+            create_ticket=self._sync("create_ticket", 123),
+            set_ticket_admin_msg=self._sync("set_ticket_admin_msg"),
+            reply_ticket=self._sync("reply_ticket", None),
+            redeem_promo=self._sync("redeem_promo", None),
+            create_seller_sku_project=self._sync("create_seller_sku_project", True),
+            rename_seller_sku_project=self._sync("rename_seller_sku_project", True),
+            save_seller_profile=self._sync("save_seller_profile", True),
+        )
+        self.credit_store = SimpleNamespace(add=self._sync("credit_store.add", 50))
+        self.log = SimpleNamespace(warning=self._sync("log.warning"))
+        self.image_registry = SimpleNamespace(get=self._sync("image_registry.get", None))
+        self.video_registry = {}
+
+    def build(self) -> plain_text_router.PlainTextDeps:
+        return plain_text_router.PlainTextDeps(
+            workspace=lambda user_id: self.states[user_id],
+            metrics=self.metrics,
+            username=lambda message: f"user{message.from_user.id}",
+            reset_image_flow=self._sync("reset_image_flow"),
+            show_prompt_picker=self._async("show_prompt_picker"),
+            pending_edits=self.pending_edits,
+            pending_photo_routes=self.pending_photo_routes,
+            show_main_menu=self._async("show_main_menu"),
+            is_balance_reply_text=lambda text: text == "balance",
+            show_balance=self._async("show_balance"),
+            vid_clear=self._sync("vid_clear"),
+            show_ideas_root=self._async("show_ideas_root"),
+            show_referral_screen=self._async("show_referral_screen"),
+            show_help_screen=self._async("show_help_screen"),
+            show_video_prompt_input=self._async("show_video_prompt_input"),
+            tp_store_answer=self._sync("tp_store_answer"),
+            render_template_step=self._async("render_template_step"),
+            render_guided_step=self._async("render_guided_step"),
+            video_edit_uploaded=self._async("video_edit_uploaded"),
+            video_registry=self.video_registry,
+            video_prompt_edit_and_send=self._async("video_prompt_edit_and_send"),
+            video_extend_and_send=self._async("video_extend_and_send"),
+            video_generate_and_send=self._async("video_generate_and_send"),
+            animate_photo_scenario=lambda: SimpleNamespace(
+                remember_prompt_until_photo=self._async("remember_prompt_until_photo"),
+                generate_from_ready_references=self._async("generate_from_ready_references"),
+            ),
+            telegram_animate_photo_context=lambda message, user_id: ("ctx", message, user_id),
+            show_new_video_wizard=self._async("show_new_video_wizard"),
+            video_plain_text_ready=lambda st: bool(st.get("video_ready")),
+            admin_ids=[],
+            credit_store=self.credit_store,
+            send_owner_alert=self._async("send_owner_alert"),
+            pending_sku_payload=self._sync("pending_sku_payload", None),
+            save_pending_sku_item=self._async("save_pending_sku_item", True),
+            log=self.log,
+            wizard_text=self._sync("wizard_text", "wizard"),
+            default_count=1,
+            default_fmt="land",
+            default_image_model="nb2",
+            fmt_to_aspect=lambda fmt: f"aspect:{fmt}",
+            aspect_to_fmt=lambda aspect: f"fmt:{aspect}",
+            image_registry=self.image_registry,
+            run_i2i=self._async("run_i2i", True),
+            show_edit_confirm=self._async("show_edit_confirm"),
+            generate_and_send=self._async("generate_and_send"),
+            config=self.config,
+            show_wizard=self._async("show_wizard"),
+        )
+
+    def _sync(self, name: str, result=None):
+        def fn(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return result
+
+        return fn
+
+    def _async(self, name: str, result=None):
+        async def fn(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return result
+
+        return fn
+
+
+class PlainTextRouterTests(unittest.TestCase):
+    def _router(self, rec: RecordingPlainTextDeps | None = None):
+        self.rec = rec or RecordingPlainTextDeps()
+        return plain_text_router.create_router(self.rec.build())
+
+    def _handler(self, router):
+        return router.message.handlers[0].callback
+
+    def test_creates_router_with_plain_text_handler(self) -> None:
+        router = self._router()
+        self.assertIsInstance(router, Router)
+        self.assertEqual(router.name, "tg-plain-text")
+        self.assertEqual(len(router.message.handlers), 1)
+        self.assertEqual(self._handler(router).__name__, "handle_plain_text")
+
+    def test_reply_keyboard_generate_opens_prompt_picker(self) -> None:
+        router = self._router()
+        message = FakeTextMessage(plain_text_router.L("kb_gen"))
+
+        run(self._handler(router)(message))
+
+        self.assertEqual([call[0] for call in self.rec.calls[:3]], [
+            "upsert_user",
+            "reset_image_flow",
+            "show_prompt_picker",
+        ])
+
+    def test_awaiting_prompt_delegates_to_image_generation(self) -> None:
+        router = self._router()
+        self.rec.states[42].update({"await": "prompt", "count": 2, "fmt": "sq", "imodel": "nb2"})
+        message = FakeTextMessage("make a poster")
+
+        run(self._handler(router)(message))
+
+        call = self.rec.calls[-1]
+        self.assertEqual(call[0], "generate_and_send")
+        self.assertEqual(call[1][:2], (message, "make a poster"))
+        self.assertEqual(call[2]["num_images"], 2)
+        self.assertEqual(call[2]["aspect_ratio"], "aspect:sq")
+        self.assertEqual(self.rec.states[42]["await"], None)
+
+    def test_seller_fallback_does_not_open_image_wizard(self) -> None:
+        router = self._router(RecordingPlainTextDeps(seller=True))
+        message = FakeTextMessage("random text")
+
+        run(self._handler(router)(message))
+
+        self.assertEqual(len(message.answers), 1)
+        self.assertNotIn("show_wizard", [call[0] for call in self.rec.calls])
+        self.assertNotIn("generate_and_send", [call[0] for call in self.rec.calls])
+
+    def test_deps_dataclass_is_frozen(self) -> None:
+        deps = RecordingPlainTextDeps().build()
+        with self.assertRaises(Exception):
+            deps.default_fmt = "sq"  # type: ignore[misc]
+
+    def test_router_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(plain_text_router)
         self.assertNotIn("flow_bot", src)
 
 

@@ -517,6 +517,9 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.photo_input_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "photo_input.py"
         ).read_text(encoding="utf-8")
+        self.plain_text_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "plain_text.py"
+        ).read_text(encoding="utf-8")
 
     def test_edit_button_and_callback_handler_present(self) -> None:
         # Labels now come from flow_copy; the edit button uses the "edit" action.
@@ -607,10 +610,11 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn('source.setdefault("_tg_file_id", file_id)', self.source)
 
     def test_pending_edit_routing_in_plain_text_handler(self) -> None:
-        start = self.source.index("async def handle_plain_text")
-        edit_start = self.source.index('if awaiting in ("edit", "revary"):', start)
-        block = self.source[edit_start:edit_start + 2400]
-        self.assertIn("pending_edits", self.source)
+        source = self.plain_text_router_source
+        start = source.index("async def handle_plain_text")
+        edit_start = source.index('if awaiting in ("edit", "revary"):', start)
+        block = source[edit_start:edit_start + 2400]
+        self.assertIn("pending_edits", source)
         self.assertIn("token = pending_edits.get(user_id)", block)
         self.assertIn('st["edit_instruction"] = text', block)
         self.assertIn('st["await"] = "edit_confirm"', block)

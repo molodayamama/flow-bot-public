@@ -10,6 +10,7 @@ import flow_bot
 import config.settings as _cfg
 from channels.telegram.routers import marketplace as marketplace_router
 from channels.telegram.routers import photo_input as photo_input_router
+from channels.telegram.routers import plain_text as plain_text_router
 from generation import backend_service
 
 
@@ -461,7 +462,7 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn('"mp_done4you_open"', source)
 
     def test_done4you_brief_is_tagged_ticket(self) -> None:
-        source = inspect.getsource(flow_bot.handle_plain_text)
+        source = inspect.getsource(plain_text_router)
         self.assertIn('support_kind = st.pop("support_kind", "support")', source)
         self.assertIn('if support_kind == "mp_done4you":', source)
         self.assertIn("Заявка под ключ", source)
@@ -475,7 +476,7 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn('if data == "mp:sku:addlast":', source)
         self.assertIn('if data == "mp:sku:rename":', source)
         self.assertIn('if data == "mp:sku:delete"', source)
-        self.assertIn("metrics.rename_seller_sku_project", inspect.getsource(flow_bot.handle_plain_text))
+        self.assertIn("metrics.rename_seller_sku_project", inspect.getsource(plain_text_router))
         self.assertIn("deps.metrics.delete_seller_sku_project", source)
         from channels.telegram.routers import image_action as image_action_router
         action_source = inspect.getsource(image_action_router)

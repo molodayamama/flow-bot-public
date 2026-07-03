@@ -39,10 +39,9 @@ from aiogram.types import Chat, Document, Message, PhotoSize, SuccessfulPayment,
 import flow_bot
 
 # Protected dp-level message handlers that must NOT be extracted yet:
-# media catch-alls and /start deep-links.
+# /start deep-links.
 EXPECTED_DP_LEVEL = [
     "cmd_start",
-    "handle_plain_text",
 ]
 
 
@@ -77,7 +76,7 @@ ROUTING_TABLE = {
     "text /grant": (dict(text="/grant 1 10"), "tg-admin-credits:cmd_grant"),
     "text /admin_today": (dict(text="/admin_today"), "tg-admin-reports:cmd_admin_today"),
     "text /acc_off": (dict(text="/acc_off a1"), "tg-admin-accounts:cmd_acc_off"),
-    "plain text": (dict(text="hello"), "dp:handle_plain_text"),
+    "plain text": (dict(text="hello"), "tg-plain-text:handle_plain_text"),
     "successful payment": (dict(successful_payment=_PAYMENT), "tg-payments:on_successful_payment"),
     "photo": (dict(photo=_PHOTO), "tg-photo-input:handle_photo"),
     "photo with command caption": (dict(photo=_PHOTO, caption="/menu"), "tg-photo-input:handle_photo"),
@@ -136,15 +135,18 @@ class MessageRoutingRegressionTests(unittest.TestCase):
         self.assertEqual(names[0], "tg-photo-input")
         self.assertIn("tg-video-upload-input", names)
         self.assertIn("tg-payments", names)
+        self.assertIn("tg-plain-text", names)
         video_idx = names.index("tg-video-upload-input")
         self.assertLess(names.index("tg-payments"), video_idx)
         for command_router in (
             "tg-public-commands", "tg-generation-commands",
             "tg-admin-accounts", "tg-admin-status",
-            "tg-admin-reports", "tg-admin-credits",
+                "tg-admin-reports", "tg-admin-credits",
         ):
             self.assertLess(names.index(command_router), video_idx, command_router)
+        self.assertLess(video_idx, names.index("tg-plain-text"))
         # And still above the tail callback fallback.
+        self.assertLess(names.index("tg-plain-text"), names.index("tg-callback-fallback"))
         self.assertEqual(names[-1], "tg-callback-fallback")
 
     def test_message_routing_table_is_stable(self) -> None:
