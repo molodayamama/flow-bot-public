@@ -323,6 +323,7 @@ from channels.telegram.routers import ideas_hub as tg_ideas_hub_router
 from channels.telegram.routers import ideas_flow as tg_ideas_flow_router
 from channels.telegram.routers import agent as tg_agent_router
 from channels.telegram.routers import video_upload as tg_video_upload_router
+from channels.telegram.routers import edit_settings as tg_edit_settings_router
 from channels.telegram.routers import fallback as tg_fallback_router
 
 from referrals.service import ReferralService
@@ -5873,89 +5874,6 @@ async def _video_edit_uploaded(message: types.Message, prompt: str, *, user_id: 
     )
 
 
-@dp.callback_query(F.data.startswith("es:"))
-async def on_edit_settings(callback: types.CallbackQuery):
-    """Пикер формата/модели на экране редактирования фото."""
-    user_id = callback.from_user.id
-    data = callback.data or ""
-    st = _ws(user_id)
-
-    if data == "es:cancel":
-        st["await"] = None
-        pending_edits.pop(user_id, None)
-        st.pop("edit_instruction", None)
-        st.pop("ag_variants", None)
-        await callback.answer("Отменено")
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
-        return
-
-    if data == "es:change":
-        # Вернуться к вводу запроса правки.
-        st["await"] = "edit"
-        st.pop("ag_variants", None)
-        await callback.answer()
-        await callback.message.answer(
-            flow_copy.msg("ask_edit_prompt"),
-            reply_markup=edit_settings_kb(
-                st.get("edit_fmt", DEFAULT_FMT), st.get("edit_imodel", DEFAULT_IMAGE_MODEL)
-            ),
-        )
-        return
-
-    if data == "es:apply":
-        instr = (st.get("edit_instruction") or "").strip()
-        token = pending_edits.get(user_id)
-        ref = image_registry.get(token) if token else None
-        if not instr or ref is None or ref.user_id != user_id:
-            await callback.answer(flow_copy.msg("expired"), show_alert=True)
-            return
-        await callback.answer()
-        ok = await _edit_and_send(
-            callback.message, ref, instr,
-            actor_id=user_id,
-            aspect_ratio=_fmt_to_aspect(st.get("edit_fmt", _aspect_to_fmt(ref.aspect_ratio))),
-            image_model=st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
-            price_action="gen" if st.get("edit_as_gen") else "edit",
-        )
-        if ok:
-            st["await"] = None
-            st.pop("edit_instruction", None)
-            st.pop("ag_variants", None)
-            pending_edits.pop(user_id, None)
-        return
-
-    changed = False
-    if data.startswith("es:fmt:"):
-        st["edit_fmt"] = data.split(":")[2]
-        changed = True
-    elif data.startswith("es:imodel:"):
-        choice = data.split(":")[2]
-        if image_model_meta(choice):
-            st["edit_imodel"] = choice
-            changed = True
-    await callback.answer()
-    if changed:
-        kb = (
-            edit_confirm_kb(
-                st.get("edit_fmt", DEFAULT_FMT),
-                st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
-                as_generation=bool(st.get("edit_as_gen")),
-            )
-            if st.get("await") == "edit_confirm"
-            else edit_settings_kb(
-                st.get("edit_fmt", DEFAULT_FMT),
-                st.get("edit_imodel", DEFAULT_IMAGE_MODEL),
-            )
-        )
-        try:
-            await callback.message.edit_reply_markup(reply_markup=kb)
-        except Exception:
-            pass
-
-
 @dp.callback_query(F.data.startswith("w:"))
 async def on_wizard_action(callback: types.CallbackQuery):
     """Один экран визарда: меняем количество/формат и жмём «Сгенерировать»."""
@@ -9141,6 +9059,23 @@ dp.include_router(
             upload_video_edit_enabled=lambda: _cfg.UPLOAD_VIDEO_EDIT_ENABLED,
             vid_clear=_vid_clear,
             edit_or_answer=_edit_or_answer,
+        )
+    )
+)
+dp.include_router(
+    tg_edit_settings_router.create_router(
+        tg_edit_settings_router.EditSettingsDeps(
+            workspace=_ws,
+            pending_edits=pending_edits,
+            image_registry=image_registry,
+            edit_and_send=_edit_and_send,
+            fmt_to_aspect=_fmt_to_aspect,
+            aspect_to_fmt=_aspect_to_fmt,
+            image_model_meta=image_model_meta,
+            edit_confirm_kb=edit_confirm_kb,
+            edit_settings_kb=edit_settings_kb,
+            default_fmt=DEFAULT_FMT,
+            default_image_model=DEFAULT_IMAGE_MODEL,
         )
     )
 )

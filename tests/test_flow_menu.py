@@ -451,6 +451,9 @@ class BotMenuWiringTests(unittest.TestCase):
         self.video_upload_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "video_upload.py"
         ).read_text(encoding="utf-8")
+        self.edit_settings_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "edit_settings.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         for needle in (
@@ -550,14 +553,14 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertLess(fc.price_gen(1), fc.action_price("edit"))
         # pr:img и инлайн «Создать картинку» помечают фото как генерацию.
         self.assertIn("as_generation=True", self.source)
-        self.assertIn('price_action="gen" if st.get("edit_as_gen") else "edit"', self.source)
+        self.assertIn('price_action="gen" if st.get("edit_as_gen") else "edit"', self.edit_settings_router_source)
 
     def test_edit_settings_prefix_does_not_collide_with_edit_button(self) -> None:
         # The image "Изменить" button uses the "edit:" callback prefix; the edit
         # settings picker must use "es:" so its handler never hijacks it.
-        self.assertIn('F.data.startswith("es:")', self.source)
+        self.assertIn('F.data.startswith("es:")', self.edit_settings_router_source)
         self.assertFalse("edit:".startswith("es:"))  # the actual guarantee
-        self.assertNotIn('startswith("e:")', self.source)  # no over-broad filter
+        self.assertNotIn('startswith("e:")', self.edit_settings_router_source)  # no over-broad filter
 
     def test_persistent_reply_keyboard_present(self) -> None:
         self.assertIn("def reply_menu_kb", self.source)
@@ -1520,7 +1523,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # Uploaded-video edit is marked prompt_edited=True → extend stays blocked.
         block = self.source[
             self.source.index("async def _video_edit_uploaded"):
-            self.source.index("async def on_edit_settings")
+            self.source.index("async def on_wizard_action")
         ]
         self.assertIn("prompt_edited=True", block)
         self.assertIn('video_operation="edit"', block)

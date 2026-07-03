@@ -9,6 +9,7 @@ from aiogram import Router
 
 from channels.telegram.routers import agent as agent_router
 from channels.telegram.routers import commands as commands_router
+from channels.telegram.routers import edit_settings as edit_settings_router
 from channels.telegram.routers import ideas_flow as ideas_flow_router
 from channels.telegram.routers import image_retry as image_retry_router
 from channels.telegram.routers import ideas_hub as ideas_hub_router
@@ -150,6 +151,10 @@ class FakeCallback:
         self.answers: list[tuple[tuple, dict]] = []
         self.edits: list[dict] = []
         self.text_edits: list[tuple[tuple, dict]] = []
+        self.message_answers: list[tuple[tuple, dict]] = []
+        self.deletes: int = 0
+        self.message.answer = self._message_answer
+        self.message.delete = self._message_delete
 
     async def answer(self, *args, **kwargs):
         self.answers.append((args, kwargs))
@@ -159,6 +164,12 @@ class FakeCallback:
 
     async def _edit_text(self, *args, **kwargs):
         self.text_edits.append((args, kwargs))
+
+    async def _message_answer(self, *args, **kwargs):
+        self.message_answers.append((args, kwargs))
+
+    async def _message_delete(self):
+        self.deletes += 1
 
 
 class RecordingOnboardingDeps:
@@ -673,6 +684,165 @@ class VideoUploadRouterTests(unittest.TestCase):
 
     def test_video_upload_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(video_upload_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class RecordingEditSettingsDeps:
+    def __init__(self) -> None:
+        self.workspaces: dict[int, dict] = {}
+        self.pending_edits: dict[int, str] = {}
+        self.registry: dict[str, object] = {}
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def workspace(self, user_id: int) -> dict:
+        self.calls.append(("workspace", (user_id,), {}))
+        return self.workspaces.setdefault(user_id, {})
+
+    async def edit_and_send(self, *args, **kwargs) -> bool:
+        self.calls.append(("edit_and_send", args, kwargs))
+        return True
+
+    def fmt_to_aspect(self, fmt: str) -> str:
+        self.calls.append(("fmt_to_aspect", (fmt,), {}))
+        return {"port": "portrait", "land": "landscape"}.get(fmt, fmt)
+
+    def aspect_to_fmt(self, aspect: str) -> str:
+        self.calls.append(("aspect_to_fmt", (aspect,), {}))
+        return {"portrait": "port", "landscape": "land"}.get(aspect, "land")
+
+    def image_model_meta(self, model: str):
+        self.calls.append(("image_model_meta", (model,), {}))
+        return {"id": model} if model in {"default-model", "pro-model"} else None
+
+    def edit_confirm_kb(self, *args, **kwargs):
+        self.calls.append(("edit_confirm_kb", args, kwargs))
+        return f"confirm:{args}:{kwargs}"
+
+    def edit_settings_kb(self, *args, **kwargs):
+        self.calls.append(("edit_settings_kb", args, kwargs))
+        return f"settings:{args}:{kwargs}"
+
+
+def _edit_settings_deps() -> tuple[edit_settings_router.EditSettingsDeps, RecordingEditSettingsDeps]:
+    rec = RecordingEditSettingsDeps()
+    deps = edit_settings_router.EditSettingsDeps(
+        workspace=rec.workspace,
+        pending_edits=rec.pending_edits,
+        image_registry=rec.registry,
+        edit_and_send=rec.edit_and_send,
+        fmt_to_aspect=rec.fmt_to_aspect,
+        aspect_to_fmt=rec.aspect_to_fmt,
+        image_model_meta=rec.image_model_meta,
+        edit_confirm_kb=rec.edit_confirm_kb,
+        edit_settings_kb=rec.edit_settings_kb,
+        default_fmt="land",
+        default_image_model="default-model",
+    )
+    return deps, rec
+
+
+class EditSettingsRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _edit_settings_deps()
+        self.router = edit_settings_router.create_router(self.deps)
+        self.handler = self.router.callback_query.handlers[0].callback
+
+    def test_creates_es_callback_router(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        self.assertEqual(self.router.name, "tg-edit-settings")
+        self.assertEqual(len(self.router.callback_query.handlers), 1)
+        self.assertEqual(self.router.callback_query.handlers[0].callback.__name__, "on_edit_settings")
+
+    def test_cancel_clears_pending_edit_and_deletes_message(self) -> None:
+        self.rec.workspaces[42] = {
+            "await": "edit_confirm",
+            "edit_instruction": "change",
+            "ag_variants": [{"prompt": "x"}],
+        }
+        self.rec.pending_edits[42] = "tok"
+        callback = FakeCallback("es:cancel")
+        run(self.handler(callback))
+        st = self.rec.workspaces[42]
+        self.assertIsNone(st["await"])
+        self.assertNotIn("edit_instruction", st)
+        self.assertNotIn("ag_variants", st)
+        self.assertNotIn(42, self.rec.pending_edits)
+        self.assertEqual(callback.deletes, 1)
+
+    def test_change_returns_to_edit_prompt(self) -> None:
+        self.rec.workspaces[42] = {"edit_fmt": "port", "edit_imodel": "pro-model", "ag_variants": [1]}
+        callback = FakeCallback("es:change")
+        run(self.handler(callback))
+        st = self.rec.workspaces[42]
+        self.assertEqual(st["await"], "edit")
+        self.assertNotIn("ag_variants", st)
+        self.assertTrue(callback.message_answers)
+        self.assertEqual(self.rec.calls[-1][0], "edit_settings_kb")
+
+    def test_apply_expired_alerts_when_ref_missing(self) -> None:
+        self.rec.workspaces[42] = {"edit_instruction": "change"}
+        self.rec.pending_edits[42] = "missing"
+        callback = FakeCallback("es:apply")
+        run(self.handler(callback))
+        self.assertEqual(callback.answers[-1][1], {"show_alert": True})
+        self.assertFalse(any(c[0] == "edit_and_send" for c in self.rec.calls))
+
+    def test_apply_success_calls_edit_and_cleans_state(self) -> None:
+        ref = SimpleNamespace(user_id=42, aspect_ratio="landscape")
+        self.rec.registry["tok"] = ref
+        self.rec.pending_edits[42] = "tok"
+        self.rec.workspaces[42] = {
+            "await": "edit_confirm",
+            "edit_instruction": "change it",
+            "edit_fmt": "port",
+            "edit_imodel": "pro-model",
+            "edit_as_gen": True,
+            "ag_variants": [1],
+        }
+        callback = FakeCallback("es:apply")
+        run(self.handler(callback))
+        edit_call = next(c for c in self.rec.calls if c[0] == "edit_and_send")
+        self.assertEqual(edit_call[1], (callback.message, ref, "change it"))
+        self.assertEqual(edit_call[2]["actor_id"], 42)
+        self.assertEqual(edit_call[2]["aspect_ratio"], "portrait")
+        self.assertEqual(edit_call[2]["image_model"], "pro-model")
+        self.assertEqual(edit_call[2]["price_action"], "gen")
+        st = self.rec.workspaces[42]
+        self.assertIsNone(st["await"])
+        self.assertNotIn("edit_instruction", st)
+        self.assertNotIn("ag_variants", st)
+        self.assertNotIn(42, self.rec.pending_edits)
+
+    def test_format_change_updates_confirm_keyboard(self) -> None:
+        self.rec.workspaces[42] = {"await": "edit_confirm", "edit_imodel": "default-model"}
+        callback = FakeCallback("es:fmt:port")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42]["edit_fmt"], "port")
+        self.assertEqual(self.rec.calls[-1][0], "edit_confirm_kb")
+        self.assertTrue(callback.edits)
+
+    def test_valid_model_change_updates_settings_keyboard(self) -> None:
+        self.rec.workspaces[42] = {"await": "edit", "edit_fmt": "land"}
+        callback = FakeCallback("es:imodel:pro-model")
+        run(self.handler(callback))
+        self.assertEqual(self.rec.workspaces[42]["edit_imodel"], "pro-model")
+        self.assertEqual(self.rec.calls[-1][0], "edit_settings_kb")
+        self.assertTrue(callback.edits)
+
+    def test_invalid_model_choice_only_acknowledges(self) -> None:
+        self.rec.workspaces[42] = {"await": "edit", "edit_fmt": "land"}
+        callback = FakeCallback("es:imodel:nope")
+        run(self.handler(callback))
+        self.assertNotIn("edit_imodel", self.rec.workspaces[42])
+        self.assertTrue(callback.answers)
+        self.assertFalse(callback.edits)
+
+    def test_edit_settings_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.workspace = None  # type: ignore[misc]
+
+    def test_edit_settings_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(edit_settings_router)
         self.assertNotIn("flow_bot", src)
 
 
