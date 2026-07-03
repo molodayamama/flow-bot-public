@@ -179,7 +179,7 @@ import flow_copy
 from generation import backend_service
 import metrics
 from mediautil import image_ext_from_bytes
-from textutil import _days_word, _short_prompt
+from textutil import _days_word, _short_prompt, parse_ids as _parse_ids
 from storage.session_state import reset_image_flow as _reset_image_flow
 from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScenario
 from product import video_reference
@@ -453,15 +453,8 @@ ROBOKASSA_CONSUMER_BOT_USERNAME = _env_any("ROBOKASSA_CONSUMER_BOT_USERNAME", de
 ROBOKASSA_SELLER_BOT_USERNAME = _env_any("ROBOKASSA_SELLER_BOT_USERNAME", default="photozhab_wb_bot").lstrip("@")
 TG_PROXY_URL = os.getenv("TG_PROXY_URL", "")    # SOCKS5 прокси для Telegram API
 # auto: browser → capmonster → 2captcha; или явно: browser | capmonster | 2captcha
-def _parse_ids(raw: str) -> set[int]:
-    """Разобрать список Telegram ID из строки (разделители — запятая/точка с запятой)."""
-    return {
-        int(x) for x in (raw or "").replace(";", ",").split(",")
-        if x.strip().isdigit()
-    }
-
-
 # OWNER_ID и ADMIN_IDS оба поддерживают НЕСКОЛЬКО ID через запятую/точку с запятой.
+# _parse_ids вынесен в textutil.parse_ids (импортирован выше как _parse_ids).
 OWNER_IDS = _parse_ids(os.getenv("OWNER_ID", ""))
 # Админы бота — могут начислять кредиты командой /grant и видят тест-пакет.
 # Объединяем с владельцами: каждый owner — администратор.

@@ -18,6 +18,14 @@ def _days_word(n: int) -> str:
     return "дней"
 
 
+def parse_ids(raw: str) -> set[int]:
+    """Parse a set of Telegram IDs from a string (comma/semicolon separated)."""
+    return {
+        int(x) for x in (raw or "").replace(";", ",").split(",")
+        if x.strip().isdigit()
+    }
+
+
 def _short_prompt(text: str, limit: int = 80) -> str:
     """Trim a prompt for captions/status lines, adding an ellipsis if cut.
 
