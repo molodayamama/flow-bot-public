@@ -153,20 +153,18 @@ Server migration/cutover:
 - Do not run media generation, paid/captcha diagnostics, Google re-login, or
   `login.py` unless explicitly approved.
 
-Failover controller:
+NL-only deployment:
 
-- Syntax check:
-  `python -m py_compile tools/failover_controller.py tests/test_failover_controller.py`
-- Targeted tests:
-  `python -m unittest discover -s tests -p "test_failover_controller.py"`
-- On NL, with secrets installed but without mutation:
-  `python /opt/geminifree/tools/failover_controller.py status --dry-run`
-- On NL, verify REG.RU read access without printing credentials:
-  `python /opt/geminifree/tools/failover_controller.py dns-status --dry-run`
-- Before enabling the timer, confirm `/etc/geminifree/failover.env` is mode
-  `600`, `SERVICES=geminifree-bot`, and `geminifree-seller-bot` is inactive.
-- Live DNS mutation commands (`tick`, `failover-to-nl`, `failback-to-fi`,
-  `sync`) are external/stateful operations and require operator approval.
+- The project no longer ships FI/NL DNS failover tooling. `photozhab.ru` and
+  `pay.photozhab.ru` are expected to run on NL (`192.0.2.10`) only.
+- Verify the intended NL services:
+  `systemctl is-active geminifree-bot geminifree-seller-bot`.
+- Verify no old failover timer is installed or active:
+  `systemctl is-enabled geminifree-failover.timer` should be absent/disabled,
+  and `systemctl is-active geminifree-failover.timer` should be inactive/failed.
+- Verify DNS points at NL before relying on public traffic:
+  `Resolve-DnsName photozhab.ru -Type A` and
+  `Resolve-DnsName pay.photozhab.ru -Type A`.
 
 Dependency manifests:
 
