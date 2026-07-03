@@ -316,6 +316,7 @@ from channels.telegram.texts import (
     _seller_history_text as _telegram_seller_history_text,
 )
 from channels.telegram.routers import commands as tg_commands_router
+from channels.telegram.routers import payments as tg_payments_router
 from channels.telegram.routers import menu as tg_menu_router
 from channels.telegram.routers import marketplace as tg_marketplace_router
 from channels.telegram.routers import onboarding as tg_onboarding_router
@@ -787,7 +788,7 @@ def _maybe_apply_referral_rewards(
 def _first_referral_cta_text(user_id: int) -> str | None:
     """Invite CTA shown after every successful generation until user has referrals.
 
-    Реферальные награды пригласившему начисляются ТОЛЬКО в on_successful_payment
+    Реферальные награды пригласившему начисляются ТОЛЬКО в tg-payments handler
     (anti-farm, REFERRAL.md §3) — здесь лишь зовём пригласить друга.
     """
     try:
@@ -5629,73 +5630,21 @@ async def _start_robokassa_topup(callback: types.CallbackQuery, user_id: int, pa
     )
 
 
-@dp.pre_checkout_query()
-async def on_pre_checkout(query: types.PreCheckoutQuery):
-    """Последний рубеж перед списанием звёзд: подтверждаем только наш payload."""
-    payload = query.invoice_payload or ""
-    parts = payload.split(":")
-    ok = len(parts) >= 2 and parts[0] == "credits" and credit_pack(parts[1]) is not None
-    if not ok:
-        log.warning("pre_checkout отклонён: payload=%r", payload[:64])
-    await query.answer(
-        ok=ok,
-        error_message=None if ok else "Пакет не найден — обновите меню и попробуйте снова.",
+dp.include_router(
+    tg_payments_router.create_router(
+        tg_payments_router.PaymentDeps(
+            credit_pack=credit_pack,
+            stars_to_rub=STARS_TO_RUB,
+            credit_store=credit_store,
+            payment_store=payment_store,
+            metrics=metrics,
+            log=log,
+            username=_username,
+            maybe_apply_referral_rewards=_maybe_apply_referral_rewards,
+            show_main_menu=show_main_menu,
+        )
     )
-
-
-@dp.message(F.successful_payment)
-async def on_successful_payment(message: types.Message):
-    """Зачислить кредиты после успешной оплаты Stars."""
-    sp = message.successful_payment
-    payload = sp.invoice_payload if sp else ""
-    user_id = message.from_user.id
-    pack_id = payload.split(":")[1] if payload.startswith("credits:") else ""
-    p = credit_pack(pack_id)
-    if not p:
-        log.warning(f"Unknown payment payload: {payload}")
-        await message.answer("Платёж получен, но пакет не распознан. Напишите в поддержку.")
-        return
-    charge_id = getattr(sp, "telegram_payment_charge_id", "") or ""
-    stars_paid = getattr(sp, "total_amount", p["stars"])
-    # Идемпотентность ДО зачисления: Telegram может редоставить successful_payment
-    # (бот упал до подтверждения offset и т.п.) — кредиты нельзя зачислять дважды.
-    # Fallback-ключ включает message_id: редоставка того же апдейта дедупится,
-    # а честная вторая покупка того же пака приходит новым сообщением.
-    provider_payment_id = charge_id or f"nocharge:{user_id}:{pack_id}:{message.message_id}"
-    tx_status = metrics.record_transaction_status(
-        provider="telegram_stars",
-        provider_payment_id=provider_payment_id,
-        user_id=user_id, package_id=pack_id,
-        amount_rub=round(stars_paid * STARS_TO_RUB, 2), stars_amount=stars_paid,
-        credits_issued=p["credits"], status="paid",
-    )
-    if tx_status == "duplicate":
-        log.warning("💳 Дубль доставки платежа проигнорирован: %s", provider_payment_id)
-        return
-    if tx_status == "error":
-        # Метрики недоступны — звёзды уже уплачены, кредиты всё равно отдаём,
-        # но громко логируем: дедуп-защита на этот платёж не сработала.
-        log.error("💳 metrics недоступны, зачисляю без дедуп-гарантии: %s", provider_payment_id)
-    new_balance = credit_store.add(user_id, p["credits"])
-    # Запоминаем платёж (charge_id) — нужен для возврата звёзд через /refund.
-    if charge_id:
-        try:
-            payment_store.add(user_id, charge_id, stars_paid, p["credits"], pack_id)
-        except Exception:
-            log.exception("payment_store.add failed")
-    metrics.log_event("payment_success", user_id=user_id, username=_username(message),
-                      source="stars",
-                      payload={"pack": pack_id, "stars": stars_paid, "credits": p["credits"]})
-    # Реферальная награда пригласившему (идемпотентно; не ломает оплату).
-    _maybe_apply_referral_rewards(
-        user_id, stars_paid=stars_paid, credits_issued=p["credits"],
-        pack_id=pack_id, provider_payment_id=provider_payment_id,
-    )
-    log.info(f"💳 Оплата: +{p['credits']} кр пользователю {user_id} (баланс {new_balance})")
-    await message.answer(
-        flow_copy.msg("topup_done", credits=p["credits"], balance=new_balance)
-    )
-    await show_main_menu(message, user_id=user_id)
+)
 
 
 async def _robokassa_request_data(request: web.Request) -> dict[str, str]:

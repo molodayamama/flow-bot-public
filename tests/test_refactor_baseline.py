@@ -22,6 +22,9 @@ class RefactorBaselineTests(unittest.TestCase):
         cls.flow_core = (PROJECT_ROOT / "flow_core.py").read_text(encoding="utf-8")
         cls.seller_backend = (PROJECT_ROOT / "seller_backend.py").read_text(encoding="utf-8")
         cls.kb_src = (PROJECT_ROOT / "channels" / "telegram" / "keyboards.py").read_text(encoding="utf-8")
+        cls.payments_router = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "payments.py"
+        ).read_text(encoding="utf-8")
 
     def test_consumer_main_menu_routes_are_baselined(self) -> None:
         # main_menu_kb moved to channels/telegram/keyboards.py (Phase 5).
@@ -65,12 +68,11 @@ class RefactorBaselineTests(unittest.TestCase):
         self.assertIn("credit_store.refund(user_id, refund_amt)", video_block)
 
     def test_payment_and_referral_order_is_baselined(self) -> None:
-        start = self.flow_bot.index("async def on_successful_payment")
-        end = self.flow_bot.index("def _robokassa_provider_payment_id", start)
-        block = self.flow_bot[start:end]
-        tx_at = block.index("metrics.record_transaction_status(")
-        add_at = block.index("credit_store.add(user_id")
-        referral_at = block.index("_maybe_apply_referral_rewards(")
+        start = self.payments_router.index("async def on_successful_payment")
+        block = self.payments_router[start:start + 2600]
+        tx_at = block.index("deps.metrics.record_transaction_status(")
+        add_at = block.index("deps.credit_store.add(user_id")
+        referral_at = block.index("deps.maybe_apply_referral_rewards(")
         self.assertLess(tx_at, add_at)
         self.assertLess(add_at, referral_at)
         self.assertIn('provider="telegram_stars"', block)

@@ -11,9 +11,8 @@ registered handlers' filter chains in aiogram's precedence order (dp-level
 observers in registration order, then sub_routers in inclusion order) and
 pins the full routing table:
 
-- All non-video routing is unchanged: text commands, plain text, photos and
-  payments land exactly where they did (their filters are disjoint from
-  ``F.video | F.document``).
+- All non-video routing is unchanged behaviorally: text commands, plain text,
+  photos and payments keep their disjoint filters.
 - Captionless and plain-captioned videos/documents land on the extracted
   handler, as before.
 - A video captioned with a DP-LEVEL command (``/start``) still hits that
@@ -35,15 +34,14 @@ import datetime
 import unittest
 from types import SimpleNamespace
 
-from aiogram.types import Chat, Document, Message, PhotoSize, User, Video
+from aiogram.types import Chat, Document, Message, PhotoSize, SuccessfulPayment, User, Video
 
 import flow_bot
 
 # Protected dp-level message handlers that must NOT be extracted yet:
-# payments, media catch-alls, and /start deep-links.
+# media catch-alls and /start deep-links.
 EXPECTED_DP_LEVEL = [
     "cmd_start",
-    "on_successful_payment",
     "handle_photo",
     "handle_plain_text",
 ]
@@ -63,6 +61,13 @@ def _message(**kwargs) -> Message:
 _VIDEO = Video(file_id="f", file_unique_id="u", width=10, height=10, duration=3)
 _DOCUMENT = Document(file_id="f2", file_unique_id="u2")
 _PHOTO = [PhotoSize(file_id="p", file_unique_id="pu", width=10, height=10)]
+_PAYMENT = SuccessfulPayment(
+    currency="XTR",
+    total_amount=35,
+    invoice_payload="credits:trial",
+    telegram_payment_charge_id="chg1",
+    provider_payment_charge_id="prov1",
+)
 
 # The pinned routing table: description -> (Message kwargs, expected handler).
 ROUTING_TABLE = {
@@ -74,6 +79,7 @@ ROUTING_TABLE = {
     "text /admin_today": (dict(text="/admin_today"), "tg-admin-reports:cmd_admin_today"),
     "text /acc_off": (dict(text="/acc_off a1"), "tg-admin-accounts:cmd_acc_off"),
     "plain text": (dict(text="hello"), "dp:handle_plain_text"),
+    "successful payment": (dict(successful_payment=_PAYMENT), "tg-payments:on_successful_payment"),
     "photo": (dict(photo=_PHOTO), "dp:handle_photo"),
     "photo with command caption": (dict(photo=_PHOTO, caption="/menu"), "dp:handle_photo"),
     "video no caption": (dict(video=_VIDEO), "tg-video-upload-input:handle_video_upload"),
@@ -129,7 +135,9 @@ class MessageRoutingRegressionTests(unittest.TestCase):
     def test_video_input_router_is_included_after_command_routers(self) -> None:
         names = [router.name for router in flow_bot.dp.sub_routers]
         self.assertIn("tg-video-upload-input", names)
+        self.assertIn("tg-payments", names)
         video_idx = names.index("tg-video-upload-input")
+        self.assertLess(names.index("tg-payments"), video_idx)
         for command_router in (
             "tg-public-commands", "tg-generation-commands",
             "tg-admin-accounts", "tg-admin-status",

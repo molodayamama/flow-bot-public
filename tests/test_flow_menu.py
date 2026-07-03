@@ -438,6 +438,11 @@ class BotMenuWiringTests(unittest.TestCase):
         self.commands_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "commands.py"
         ).read_text(encoding="utf-8")
+        # Telegram Stars pre-checkout and successful-payment handlers moved to
+        # their own router (Phase 6, wave G).
+        self.payments_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "payments.py"
+        ).read_text(encoding="utf-8")
         # Photo-route callback handler (pr:) moved to its own router (Phase 6).
         self.photo_route_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "photo_route.py"
@@ -766,9 +771,12 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_stars_payment_wired(self) -> None:
         self.assertIn("currency=\"XTR\"", self.source)
-        self.assertIn("@dp.pre_checkout_query()", self.source)
-        self.assertIn("F.successful_payment", self.source)
-        self.assertIn("credit_store.add", self.source)
+        self.assertIn("@router.pre_checkout_query()", self.payments_router_source)
+        self.assertIn("F.successful_payment", self.payments_router_source)
+        self.assertIn("deps.credit_store.add", self.payments_router_source)
+        self.assertIn("tg_payments_router.create_router(", self.source)
+        self.assertIn("credit_store=credit_store", self.source)
+        self.assertIn("payment_store=payment_store", self.source)
 
     def test_paid_upscale_and_free_download_distinct(self) -> None:
         # up2x = prompt enhance; realup = true service upscale; download = free file.
@@ -1300,7 +1308,7 @@ class BotMenuWiringTests(unittest.TestCase):
         # Metrics import + init + key events + idempotent transaction recording.
         self.assertIn("import metrics", self.source)
         self.assertIn("metrics.init_db(", self.source)
-        metrics_sources = self.source + "\n" + self.menu_router_source
+        metrics_sources = self.source + "\n" + self.menu_router_source + "\n" + self.payments_router_source
         for ev in (
             '"user_started"', '"image_requested"', '"image_success"', '"image_failed"',
             '"variations_requested"', '"upscale_requested"', '"image_edit_requested"',
@@ -1311,12 +1319,12 @@ class BotMenuWiringTests(unittest.TestCase):
             self.assertIn(ev, metrics_sources, ev)
         # Идемпотентность ДО зачисления: дубль доставки successful_payment не
         # зачисляет кредиты второй раз; сбой метрик-БД оплату не блокирует.
-        self.assertIn("metrics.record_transaction_status(", self.source)
-        start = self.source.index("async def on_successful_payment")
-        handler = self.source[start:start + 2600]
+        self.assertIn("deps.metrics.record_transaction_status(", self.payments_router_source)
+        start = self.payments_router_source.index("async def on_successful_payment")
+        handler = self.payments_router_source[start:start + 2600]
         self.assertLess(
-            handler.index("metrics.record_transaction_status("),
-            handler.index("credit_store.add(user_id"),
+            handler.index("deps.metrics.record_transaction_status("),
+            handler.index("deps.credit_store.add(user_id"),
         )
         self.assertIn('if tx_status == "duplicate":', handler)
         self.assertIn('if tx_status == "error":', handler)
@@ -1374,6 +1382,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("metrics.record_referral_join(", self.source)
         self.assertIn('"referral_joined"', self.source)
         self.assertIn("_maybe_apply_referral_rewards(", self.source)
+        self.assertIn("deps.maybe_apply_referral_rewards(", self.payments_router_source)
         # Подарок приглашённому другу (+15) при join, мимо payments-pipeline.
         self.assertIn("REFERRAL_REFERRED_BONUS", self.source)
         self.assertIn('"referral_referred_bonus"', self.source)
@@ -1416,11 +1425,11 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_pre_checkout_validates_payload(self) -> None:
         # Последний рубеж перед списанием звёзд: чужой/битый payload не одобряем.
-        start = self.source.index("async def on_pre_checkout")
-        block = self.source[start:start + 700]
+        start = self.payments_router_source.index("async def on_pre_checkout")
+        block = self.payments_router_source[start:start + 700]
         self.assertIn("invoice_payload", block)
         self.assertIn('parts[0] == "credits"', block)
-        self.assertIn("credit_pack(parts[1]) is not None", block)
+        self.assertIn("deps.credit_pack(parts[1]) is not None", block)
         self.assertIn("ok=ok", block)
         self.assertNotIn("answer(ok=True)", block)
 
@@ -2049,8 +2058,13 @@ class BotImportSmokeTests(unittest.TestCase):
                 len(router.callback_query.handlers) for router in fb.dp.sub_routers
             )
             self.assertGreaterEqual(callback_handler_count, 12)
-            self.assertIn("tg-image-action", [router.name for router in fb.dp.sub_routers])
-            self.assertEqual(len(fb.dp.pre_checkout_query.handlers), 1)
+            router_names = [router.name for router in fb.dp.sub_routers]
+            self.assertIn("tg-image-action", router_names)
+            self.assertIn("tg-payments", router_names)
+            pre_checkout_count = len(fb.dp.pre_checkout_query.handlers) + sum(
+                len(router.pre_checkout_query.handlers) for router in fb.dp.sub_routers
+            )
+            self.assertEqual(pre_checkout_count, 1)
             # Keyboards build without error.
             fb.main_menu_kb()
             fb.wizard_kb(2, "sq")          # single-screen count+format

@@ -24,6 +24,7 @@ from channels.telegram.routers import ideas_hub as ideas_hub_router
 from channels.telegram.routers import marketplace as marketplace_router
 from channels.telegram.routers import onboarding as onboarding_router
 from channels.telegram.routers import menu as menu_router
+from channels.telegram.routers import payments as payments_router
 from channels.telegram.routers import photo_route as photo_route_router
 from channels.telegram.routers import video as video_router
 from channels.telegram.routers import video_upload as video_upload_router
@@ -137,6 +138,235 @@ class CommandsRouterTests(unittest.TestCase):
 
     def test_router_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(commands_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class FakePreCheckoutQuery:
+    def __init__(self, payload: str) -> None:
+        self.invoice_payload = payload
+        self.answers: list[tuple[tuple, dict]] = []
+
+    async def answer(self, *args, **kwargs):
+        self.answers.append((args, kwargs))
+
+
+class FakePaymentMessage:
+    def __init__(self, payment, user_id: int = 42, message_id: int = 77) -> None:
+        self.successful_payment = payment
+        self.from_user = SimpleNamespace(id=user_id)
+        self.message_id = message_id
+        self.answers: list[tuple[tuple, dict]] = []
+
+    async def answer(self, *args, **kwargs):
+        self.answers.append((args, kwargs))
+
+
+class RecordingPaymentDeps:
+    def __init__(self, tx_status: str = "paid") -> None:
+        self.tx_status = tx_status
+        self.packs = {"trial": {"credits": 45, "stars": 35}}
+        self.order: list[str] = []
+        self.tx_calls: list[dict] = []
+        self.events: list[tuple[str, dict]] = []
+        self.credits_added: list[tuple[int, int]] = []
+        self.payments_added: list[tuple] = []
+        self.referrals: list[tuple[tuple, dict]] = []
+        self.menus: list[tuple[tuple, dict]] = []
+        self.warnings: list[tuple[tuple, dict]] = []
+        self.errors: list[tuple[tuple, dict]] = []
+        self.infos: list[tuple[tuple, dict]] = []
+        self.exceptions: list[tuple[tuple, dict]] = []
+        self.credit_store = SimpleNamespace(add=self._credit_add)
+        self.payment_store = SimpleNamespace(add=self._payment_add)
+        self.metrics = SimpleNamespace(
+            record_transaction_status=self._record_transaction_status,
+            log_event=self._log_event,
+        )
+        self.log = SimpleNamespace(
+            warning=self._warning,
+            error=self._error,
+            info=self._info,
+            exception=self._exception,
+        )
+
+    def credit_pack(self, pack_id: str):
+        return self.packs.get(pack_id)
+
+    def username(self, message) -> str:
+        return f"user{message.from_user.id}"
+
+    def maybe_apply_referral_rewards(self, *args, **kwargs):
+        self.order.append("referral")
+        self.referrals.append((args, kwargs))
+
+    async def show_main_menu(self, *args, **kwargs):
+        self.order.append("menu")
+        self.menus.append((args, kwargs))
+
+    def build(self) -> payments_router.PaymentDeps:
+        return payments_router.PaymentDeps(
+            credit_pack=self.credit_pack,
+            stars_to_rub=1.5,
+            credit_store=self.credit_store,
+            payment_store=self.payment_store,
+            metrics=self.metrics,
+            log=self.log,
+            username=self.username,
+            maybe_apply_referral_rewards=self.maybe_apply_referral_rewards,
+            show_main_menu=self.show_main_menu,
+        )
+
+    def _record_transaction_status(self, **kwargs):
+        self.order.append("tx")
+        self.tx_calls.append(kwargs)
+        return self.tx_status
+
+    def _log_event(self, event: str, **kwargs):
+        self.order.append("event")
+        self.events.append((event, kwargs))
+
+    def _credit_add(self, user_id: int, credits: int) -> int:
+        self.order.append("credit")
+        self.credits_added.append((user_id, credits))
+        return 145
+
+    def _payment_add(self, *args):
+        self.order.append("payment_store")
+        self.payments_added.append(args)
+
+    def _warning(self, *args, **kwargs):
+        self.warnings.append((args, kwargs))
+
+    def _error(self, *args, **kwargs):
+        self.errors.append((args, kwargs))
+
+    def _info(self, *args, **kwargs):
+        self.infos.append((args, kwargs))
+
+    def _exception(self, *args, **kwargs):
+        self.exceptions.append((args, kwargs))
+
+
+class PaymentsRouterTests(unittest.TestCase):
+    def _router(self, rec: RecordingPaymentDeps | None = None):
+        self.rec = rec or RecordingPaymentDeps()
+        return payments_router.create_router(self.rec.build())
+
+    def _pre_checkout(self, router):
+        return router.pre_checkout_query.handlers[0].callback
+
+    def _successful_payment(self, router):
+        return router.message.handlers[0].callback
+
+    def _message(self, payload: str = "credits:trial", charge_id: str = "chg_1"):
+        payment = SimpleNamespace(
+            invoice_payload=payload,
+            telegram_payment_charge_id=charge_id,
+            total_amount=35,
+        )
+        return FakePaymentMessage(payment)
+
+    def test_creates_router_with_payment_handlers(self) -> None:
+        router = self._router()
+        self.assertIsInstance(router, Router)
+        self.assertEqual(router.name, "tg-payments")
+        self.assertEqual(len(router.pre_checkout_query.handlers), 1)
+        self.assertEqual(len(router.message.handlers), 1)
+        self.assertEqual(self._pre_checkout(router).__name__, "on_pre_checkout")
+        self.assertEqual(self._successful_payment(router).__name__, "on_successful_payment")
+
+    def test_pre_checkout_accepts_known_pack(self) -> None:
+        router = self._router()
+        query = FakePreCheckoutQuery("credits:trial")
+
+        run(self._pre_checkout(router)(query))
+
+        self.assertEqual(query.answers, [((), {"ok": True, "error_message": None})])
+        self.assertEqual(self.rec.warnings, [])
+
+    def test_pre_checkout_rejects_unknown_pack(self) -> None:
+        router = self._router()
+        query = FakePreCheckoutQuery("credits:missing")
+
+        run(self._pre_checkout(router)(query))
+
+        self.assertEqual(query.answers[0][1]["ok"], False)
+        self.assertIn("Пакет не найден", query.answers[0][1]["error_message"])
+        self.assertEqual(len(self.rec.warnings), 1)
+
+    def test_unknown_successful_payment_payload_answers_support_without_crediting(self) -> None:
+        router = self._router()
+        message = self._message("credits:missing")
+
+        run(self._successful_payment(router)(message))
+
+        self.assertEqual(self.rec.tx_calls, [])
+        self.assertEqual(self.rec.credits_added, [])
+        self.assertEqual(self.rec.payments_added, [])
+        self.assertEqual(len(message.answers), 1)
+        self.assertIn("Платёж получен", message.answers[0][0][0])
+
+    def test_duplicate_successful_payment_returns_before_crediting(self) -> None:
+        router = self._router(RecordingPaymentDeps(tx_status="duplicate"))
+        message = self._message()
+
+        run(self._successful_payment(router)(message))
+
+        self.assertEqual(self.rec.order, ["tx"])
+        self.assertEqual(self.rec.credits_added, [])
+        self.assertEqual(self.rec.payments_added, [])
+        self.assertEqual(self.rec.referrals, [])
+        self.assertEqual(self.rec.menus, [])
+        self.assertEqual(message.answers, [])
+
+    def test_metrics_error_still_credits_and_continues(self) -> None:
+        router = self._router(RecordingPaymentDeps(tx_status="error"))
+        message = self._message()
+
+        run(self._successful_payment(router)(message))
+
+        self.assertEqual(self.rec.credits_added, [(42, 45)])
+        self.assertEqual(self.rec.payments_added, [(42, "chg_1", 35, 45, "trial")])
+        self.assertEqual(len(self.rec.errors), 1)
+        self.assertEqual(len(self.rec.referrals), 1)
+        self.assertEqual(len(self.rec.menus), 1)
+        self.assertEqual(len(message.answers), 1)
+
+    def test_successful_payment_records_before_credit_and_rewards_after(self) -> None:
+        router = self._router()
+        message = self._message()
+
+        run(self._successful_payment(router)(message))
+
+        self.assertLess(self.rec.order.index("tx"), self.rec.order.index("credit"))
+        self.assertLess(self.rec.order.index("credit"), self.rec.order.index("referral"))
+        self.assertEqual(self.rec.tx_calls[0]["provider"], "telegram_stars")
+        self.assertEqual(self.rec.tx_calls[0]["provider_payment_id"], "chg_1")
+        self.assertEqual(self.rec.tx_calls[0]["amount_rub"], 52.5)
+        self.assertEqual(self.rec.events[0][0], "payment_success")
+        self.assertEqual(self.rec.events[0][1]["payload"]["pack"], "trial")
+        self.assertEqual(self.rec.referrals[0][1]["provider_payment_id"], "chg_1")
+        self.assertEqual(message.answers[0][1], {})
+        self.assertEqual(self.rec.menus[0][1], {"user_id": 42})
+
+    def test_successful_payment_fallback_id_uses_message_id(self) -> None:
+        router = self._router()
+        message = self._message(charge_id="")
+
+        run(self._successful_payment(router)(message))
+
+        self.assertEqual(
+            self.rec.tx_calls[0]["provider_payment_id"],
+            "nocharge:42:trial:77",
+        )
+
+    def test_deps_dataclass_is_frozen(self) -> None:
+        deps = RecordingPaymentDeps().build()
+        with self.assertRaises(Exception):
+            deps.credit_store = None  # type: ignore[misc]
+
+    def test_router_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(payments_router)
         self.assertNotIn("flow_bot", src)
 
 
