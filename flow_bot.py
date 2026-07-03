@@ -178,6 +178,7 @@ from flow_core import (
 import flow_copy
 from generation import backend_service
 import metrics
+from mediautil import image_ext_from_bytes
 from textutil import _days_word, _short_prompt
 from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScenario
 import prompts_lib
@@ -3325,13 +3326,7 @@ async def _regen_and_send(message: types.Message, ref: ImageRef):
 
 
 def _image_ext_from_bytes(data: bytes, fallback: str = "png") -> str:
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "png"
-    if data.startswith(b"\xff\xd8\xff"):
-        return "jpg"
-    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
-        return "webp"
-    return fallback
+    return image_ext_from_bytes(data, fallback)
 
 
 def _marketplace_export_filename(ref: ImageRef, data: bytes) -> str:
