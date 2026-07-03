@@ -11,6 +11,7 @@ from aiogram import Router
 from channels.telegram.routers import animate as animate_router
 from channels.telegram.routers import agent as agent_router
 from channels.telegram.routers import admin_accounts as admin_accounts_router
+from channels.telegram.routers import admin_reports as admin_reports_router
 from channels.telegram.routers import commands as commands_router
 from channels.telegram.routers import edit_settings as edit_settings_router
 from channels.telegram.routers import generation_commands as generation_commands_router
@@ -2176,6 +2177,231 @@ class AdminAccountsRouterTests(unittest.TestCase):
 
     def test_admin_accounts_module_does_not_import_flow_bot(self) -> None:
         src = inspect.getsource(admin_accounts_router)
+        self.assertNotIn("flow_bot", src)
+
+
+class RecordingReportsMetrics:
+    """Fake metrics facade: records report calls, returns canned shapes."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def report_today(self):
+        self.calls.append(("report_today", (), {}))
+        return {
+            "new_users": 3, "active_users": 9, "paying_users": 2,
+            "image_generations": 14, "video_generations": 4,
+            "success_rate": 0.93, "revenue_rub": 1234.0, "revenue_stars": 700,
+            "credits_charged": 210, "credits_refunded": 10,
+            "top_actions": [{"event_name": "image_requested", "count": 14}],
+        }
+
+    def report_revenue(self, days):
+        self.calls.append(("report_revenue", (days,), {}))
+        return {
+            "revenue_rub": 5000.0, "revenue_stars": 2800,
+            "transactions_count": 12, "paying_users": 8,
+            "by_package": [{"package_id": "pack100", "count": 5, "rub": 900.0, "stars": 500}],
+            "by_day": [{"day": "2026-07-01", "rub": 450.0, "count": 3}],
+        }
+
+    def report_flow(self):
+        self.calls.append(("report_flow", (), {}))
+        return {
+            "success_rate": 0.88,
+            "by_operation": [{"operation_type": "image", "count": 10, "success": 9, "fail": 1, "avg_duration_ms": 900}],
+            "by_model_credits": [{"model": "nb2", "jobs": 10, "flow_credits_delta_sum": 0}],
+            "errors_by_type": [{"error_type": "http_500", "count": 1}],
+        }
+
+    def report_accounts(self):
+        self.calls.append(("report_accounts", (), {}))
+        return {
+            "accounts": [{
+                "account_id": "acc1", "jobs": 5, "success": 4, "fail": 1,
+                "credits_remaining": 900, "last_error": None,
+            }],
+        }
+
+    def report_refs(self):
+        self.calls.append(("report_refs", (), {}))
+        return {
+            "total_referrals": 6, "joined": 5, "rewarded": 4,
+            "total_reward_credits": 120,
+            "top_referrers": [{"referrer_user_id": 42, "count": 3}],
+        }
+
+    def report_channels(self):
+        self.calls.append(("report_channels", (), {}))
+        return {
+            "total_acquired": 11,
+            "channels": [{
+                "channel": "tg_ads", "users": 11, "paid_users": 2,
+                "revenue_stars": 550, "revenue_rub": 990.0,
+            }],
+        }
+
+    def report_errors(self, days):
+        self.calls.append(("report_errors", (days,), {}))
+        return {
+            "errors_by_type": [{"error_type": "http_403", "count": 2}],
+            "recent": [{
+                "created_at": "2026-07-02", "operation_type": "video",
+                "model": "veo-lite", "error_type": "http_403",
+            }],
+        }
+
+    def report_cohort_retention(self):
+        self.calls.append(("report_cohort_retention", (), {}))
+        return [{
+            "period": 1, "cohort_date": "2026-06-25",
+            "cohort_size": 10, "retained": 4, "rate": 0.4,
+        }]
+
+
+class FakeReportsKeeper:
+    def __init__(self, rec) -> None:
+        self.rec = rec
+
+    async def get_g_credits(self):
+        self.rec.keeper_calls.append("get_g_credits")
+        return {"credits": 950, "is_paid": False}
+
+
+class FakeReportsPool:
+    def __init__(self, rec) -> None:
+        self.rec = rec
+
+    def account_ids(self):
+        self.rec.pool_calls.append("account_ids")
+        return ["acc1"]
+
+    def status(self):
+        self.rec.pool_calls.append("status")
+        return [{
+            "id": "acc1", "disabled": False, "cooldown_left": 0,
+            "video_allowed": True, "users": 2, "fails": 0,
+            "active_image_jobs": 0, "image_capacity": 2,
+            "active_video_jobs": 0, "video_capacity": 1,
+        }]
+
+
+class RecordingAdminReportsDeps:
+    def __init__(self, *, admin: bool = True) -> None:
+        self.admin = admin
+        self.metrics = RecordingReportsMetrics()
+        self.pool_calls: list[str] = []
+        self.keeper_calls: list[str] = []
+        self.account_pool = FakeReportsPool(self)
+        self.gate_calls: list[int] = []
+
+    def admin_only(self, message) -> bool:
+        self.gate_calls.append(message.from_user.id)
+        return self.admin
+
+    def keeper_for_acc(self, acc_id):
+        return FakeReportsKeeper(self)
+
+    def bot_username(self) -> str:
+        return "test_bot"
+
+
+def _admin_reports_deps(*, admin: bool = True) -> tuple[
+    admin_reports_router.AdminReportsDeps, RecordingAdminReportsDeps
+]:
+    rec = RecordingAdminReportsDeps(admin=admin)
+    deps = admin_reports_router.AdminReportsDeps(
+        admin_only=rec.admin_only,
+        metrics=rec.metrics,
+        account_pool=rec.account_pool,
+        keeper_for_acc=rec.keeper_for_acc,
+        bot_username=rec.bot_username,
+    )
+    return deps, rec
+
+
+_ADMIN_REPORT_COMMANDS = (
+    "admin_today", "admin_revenue", "admin_flow", "admin_accounts",
+    "admin_refs", "admin_channels", "admin_errors", "admin_cohort",
+)
+
+
+class AdminReportsRouterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.deps, self.rec = _admin_reports_deps()
+        self.router = admin_reports_router.create_router(self.deps)
+
+    def _call(self, router, command: str, text: str):
+        for handler in router.message.handlers:
+            if _handler_commands(handler) == {command}:
+                message = FakeMessage(text)
+                run(handler.callback(message))
+                return message
+        raise AssertionError(f"no handler for {command}")
+
+    def test_creates_router_with_eight_report_handlers(self) -> None:
+        self.assertIsInstance(self.router, Router)
+        handlers = self.router.message.handlers
+        self.assertEqual(len(handlers), 8)
+        self.assertEqual(self.router.callback_query.handlers, [])
+        matched = [_handler_commands(h) for h in handlers]
+        for expected in _ADMIN_REPORT_COMMANDS:
+            self.assertIn({expected}, matched)
+
+    def test_every_command_denies_non_admin_without_side_effects(self) -> None:
+        # Security-sensitive gate: a non-admin must get the denial text and
+        # NO metrics/pool/keeper call may happen for any of the 8 commands.
+        for command in _ADMIN_REPORT_COMMANDS:
+            with self.subTest(command=command):
+                deps, rec = _admin_reports_deps(admin=False)
+                router = admin_reports_router.create_router(deps)
+                message = self._call(router, command, f"/{command}")
+                self.assertEqual(len(message.answers), 1)
+                self.assertEqual(rec.gate_calls, [7])  # gate consulted once
+                self.assertEqual(rec.metrics.calls, [])
+                self.assertEqual(rec.pool_calls, [])
+                self.assertEqual(rec.keeper_calls, [])
+
+    def test_every_command_calls_its_report_for_admin(self) -> None:
+        expected_report = {
+            "admin_today": "report_today",
+            "admin_revenue": "report_revenue",
+            "admin_flow": "report_flow",
+            "admin_accounts": "report_accounts",
+            "admin_refs": "report_refs",
+            "admin_channels": "report_channels",
+            "admin_errors": "report_errors",
+            "admin_cohort": "report_cohort_retention",
+        }
+        for command, report in expected_report.items():
+            with self.subTest(command=command):
+                deps, rec = _admin_reports_deps()
+                router = admin_reports_router.create_router(deps)
+                message = self._call(router, command, f"/{command}")
+                self.assertIn(report, [c[0] for c in rec.metrics.calls])
+                self.assertTrue(message.answers)
+
+    def test_admin_channels_with_slug_builds_deep_link(self) -> None:
+        message = self._call(self.router, "admin_channels", "/admin_channels my_channel")
+        text = message.answers[-1][0][0]
+        self.assertIn("https://t.me/test_bot?start=", text)
+        self.assertIn("my_channel", text)
+        # Link mode must not read the channels report.
+        self.assertEqual(self.rec.metrics.calls, [])
+
+    def test_admin_accounts_gathers_g_credits_per_pool_account(self) -> None:
+        message = self._call(self.router, "admin_accounts", "/admin_accounts")
+        self.assertIn("account_ids", self.rec.pool_calls)
+        self.assertIn("status", self.rec.pool_calls)
+        self.assertEqual(self.rec.keeper_calls, ["get_g_credits"])
+        self.assertIn("acc1", message.answers[-1][0][0])
+
+    def test_admin_reports_deps_dataclass_is_frozen(self) -> None:
+        with self.assertRaises(Exception):
+            self.deps.metrics = None  # type: ignore[misc]
+
+    def test_admin_reports_module_does_not_import_flow_bot(self) -> None:
+        src = inspect.getsource(admin_reports_router)
         self.assertNotIn("flow_bot", src)
 
 

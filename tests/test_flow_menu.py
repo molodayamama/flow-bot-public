@@ -480,6 +480,11 @@ class BotMenuWiringTests(unittest.TestCase):
         self.admin_accounts_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "admin_accounts.py"
         ).read_text(encoding="utf-8")
+        # /admin_today .. /admin_cohort read-only reports moved to their own
+        # router (Phase 6); cmd_status stays in flow_bot.py (keeper internals).
+        self.admin_reports_router_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "routers" / "admin_reports.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         self.assertIn('F.data.startswith("m:")', self.menu_router_source)  # menu router
@@ -1296,15 +1301,17 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("metrics.log_flow_job(", self.source)
 
     def test_admin_metrics_commands_registered(self) -> None:
+        # The report commands live in the admin_reports router (Phase 6).
         for cmd in (
             "admin_today", "admin_revenue", "admin_flow",
             "admin_accounts", "admin_refs", "admin_channels", "admin_errors",
         ):
-            self.assertIn(f'Command("{cmd}")', self.source, cmd)
-        # All admin-gated (read-only for users).
+            self.assertIn(f'Command("{cmd}")', self.admin_reports_router_source, cmd)
+        # All admin-gated (read-only for users); the gate stays in flow_bot
+        # and is injected into the router.
         self.assertIn("def _admin_only", self.source)
-        self.assertIn("metrics.report_today()", self.source)
-        self.assertIn("metrics.report_accounts()", self.source)
+        self.assertIn("deps.metrics.report_today()", self.admin_reports_router_source)
+        self.assertIn("deps.metrics.report_accounts()", self.admin_reports_router_source)
 
     def test_channel_attribution_wired(self) -> None:
         # /start seed_<канал> → first-touch атрибуция в metrics.acquisitions.
@@ -1317,9 +1324,10 @@ class BotMenuWiringTests(unittest.TestCase):
         block = self.source[start:start + 3000]
         self.assertIn("channel = parse_channel_seed(payload)", block)
         self.assertIn("metrics.record_acquisition(user_id=user_id, channel=channel)", block)
-        # Админ-отчёт по каналам читает report_channels и умеет выдавать ссылку.
-        self.assertIn("metrics.report_channels()", self.source)
-        self.assertIn("?start={CHANNEL_PARAM_PREFIX}{slug}", self.source)
+        # Админ-отчёт по каналам читает report_channels и умеет выдавать ссылку
+        # (живёт в admin_reports роутере, Phase 6).
+        self.assertIn("deps.metrics.report_channels()", self.admin_reports_router_source)
+        self.assertIn("?start={CHANNEL_PARAM_PREFIX}{slug}", self.admin_reports_router_source)
 
     def test_admin_help_is_owner_gated(self) -> None:
         # /admin_help — справочник команд, доступен ТОЛЬКО владельцам (OWNER_ID).
