@@ -28,6 +28,7 @@ CORE_MODULES = [
     "accounts.health",
     "product.marketplace",
     "product.marketplace_prompts",
+    "product.video_reference",
     "storage.session_state",
     "billing.credit_gate",
     "billing.pricing",

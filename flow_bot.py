@@ -182,6 +182,7 @@ from mediautil import image_ext_from_bytes
 from textutil import _days_word, _short_prompt
 from storage.session_state import reset_image_flow as _reset_image_flow
 from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScenario
+from product import video_reference
 import prompts_lib
 import config.settings as _cfg
 
@@ -4070,51 +4071,19 @@ async def _repeat_last(callback: types.CallbackQuery, user_id: int):
     )
 
 
-def _source_account_id(source: dict | None) -> str | None:
-    if isinstance(source, dict):
-        value = source.get("_account_id")
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _source_project_id(source: dict | None) -> str | None:
-    if isinstance(source, dict):
-        value = source.get("_project_id")
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _video_reference_sources(st: dict, vmode: str) -> list[dict]:
-    if vmode == "ingredients":
-        return [s for s in (st.get("ving_photos") or []) if isinstance(s, dict)]
-    if vmode == "frames":
-        return [s for s in (st.get("vfrm_start"), st.get("vfrm_end")) if isinstance(s, dict)]
-    return []
+# Video reference-source resolution lives in product.video_reference
+# (channel-neutral, pure); the account resolver is bound to the runtime pool's
+# health check here. Thin wrappers keep existing call sites unchanged.
+_source_account_id = video_reference.source_account_id
+_source_project_id = video_reference.source_project_id
+_video_reference_sources = video_reference.video_reference_sources
+_video_reference_project_id = video_reference.video_reference_project_id
 
 
 def _video_reference_account_id(st: dict, vmode: str) -> str | None:
-    accounts = {
-        aid for aid in (_source_account_id(s) for s in _video_reference_sources(st, vmode))
-        if aid
-    }
-    if len(accounts) == 1:
-        aid = next(iter(accounts))
-        # Reference-медиа привязано к этому аккаунту → генерим там же даже если
-        # он в кулдауне (иначе другой аккаунт = гарантированный 404). Только
-        # hard-disabled / image-only отбраковываем.
-        if account_pool.is_reference_usable(aid):
-            return aid
-    return None
-
-
-def _video_reference_project_id(st: dict, vmode: str) -> str | None:
-    projects = {
-        pid for pid in (_source_project_id(s) for s in _video_reference_sources(st, vmode))
-        if pid
-    }
-    return next(iter(projects)) if len(projects) == 1 else None
+    return video_reference.video_reference_account_id(
+        st, vmode, is_reference_usable=account_pool.is_reference_usable
+    )
 
 
 async def _reupload_reference_source(
