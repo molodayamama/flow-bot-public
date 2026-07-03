@@ -183,6 +183,7 @@ from textutil import _days_word, _short_prompt
 from storage.session_state import reset_image_flow as _reset_image_flow
 from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScenario
 from product import video_reference
+from product import agent_prompts
 from product.streak import streak_note
 import prompts_lib
 import config.settings as _cfg
@@ -3777,26 +3778,9 @@ async def _render_guided_step(message: types.Message, *, user_id: int):
     await _edit_or_answer(message, text, _guided_step_kb(step))
 
 
-def _agent_improve_instruction(prompt: str) -> str:
-    """Wrap the user's draft into an instruction that asks the agent for three
-    distinct, ready-to-use prompt variants (text only, no image generation)."""
-    return (
-        "Ты — помощник по промптам для генерации видео/изображений. "
-        "Улучши промпт ниже и предложи 3 РАЗНЫХ варианта на выбор (разные стиль/"
-        "настроение/детали), каждый — законченный готовый промпт. Только текст "
-        "вариантов, не запускай генерацию.\n\nИсходный промпт: " + prompt
-    )
-
-
-def _agent_edit_instruction(prompt: str) -> str:
-    """Wrap a photo-edit instruction so the agent returns 3 clearer edit
-    instructions (not generative scene prompts)."""
-    return (
-        "Ты — помощник по правкам фото. Улучши и уточни инструкцию правки ниже и "
-        "предложи 3 варианта (разной детализации/акцента), каждый — законченная "
-        "инструкция, ЧТО изменить на фото. Только текст вариантов, без генерации."
-        "\n\nИсходная правка: " + prompt
-    )
+# Agent instruction builders live in product.agent_prompts (versioned copy).
+_agent_improve_instruction = agent_prompts.improve_instruction
+_agent_edit_instruction = agent_prompts.edit_instruction
 
 
 async def _agent_improve_call(user_id: int, prompt: str, *, instruction_fn=None) -> dict:
