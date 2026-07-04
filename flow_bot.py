@@ -40,7 +40,6 @@ from contextlib import asynccontextmanager
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import quote, unquote, urlencode, urlparse
 
 import aiohttp
 from aiohttp import web
@@ -199,6 +198,7 @@ from channels.telegram.agent_flow import (
     agent_edit_instruction as _agent_edit_instruction,
 )
 from channels.telegram.photo_route_offer import PhotoRouteOffer, PhotoRouteOfferDeps
+from channels.telegram.referral_flow import ReferralFlow, ReferralFlowDeps
 from product.job_log import (
     ImageJobLogger,
     ms_since as _ms_since,
@@ -768,22 +768,25 @@ def _username(message_or_user) -> str | None:
 
 # ── реферальная программа (экономика в docs/REFERRAL.md) ───────────────
 
+def _referral_flow() -> ReferralFlow:
+    return ReferralFlow(ReferralFlowDeps(
+        bot_username=lambda: BOT_USERNAME,
+        referral_param_prefix=REFERRAL_PARAM_PREFIX,
+        referred_bonus=REFERRAL_REFERRED_BONUS,
+        referral_service=_referral_service,
+        metrics=metrics,
+        bot=bot,
+    ))
+
+
 def _referral_link(user_id: int) -> str:
     """Личная реферальная ссылка пользователя (deep-link /start ref_<id>)."""
-    if BOT_USERNAME:
-        return f"https://t.me/{BOT_USERNAME}?start={REFERRAL_PARAM_PREFIX}{user_id}"
-    return f"{REFERRAL_PARAM_PREFIX}{user_id}"
+    return _referral_flow().link(user_id)
 
 
 def _invite_button(user_id: int) -> types.InlineKeyboardButton:
     """Кнопка «поделиться» под результатом — открывает диалог пересылки."""
-    from urllib.parse import quote
-    link = _referral_link(user_id)
-    share = (
-        "https://t.me/share/url?url=" + quote(link, safe="")
-        + "&text=" + quote(flow_copy.msg("invite_share_text"), safe="")
-    )
-    return types.InlineKeyboardButton(text=flow_copy.label("invite_friend"), url=share)
+    return _referral_flow().invite_button(user_id)
 
 
 def _public_screens_deps() -> tg_screens.PublicScreensDeps:
@@ -814,7 +817,7 @@ def _maybe_apply_referral_rewards(
     pack_id: str, provider_payment_id: str,
 ) -> None:
     """Reward the referrer for a referred user's payment (Phase 9 service)."""
-    _referral_service.apply_payment_rewards(
+    _referral_flow().maybe_apply_rewards(
         referred_user_id, stars_paid=stars_paid, credits_issued=credits_issued,
         pack_id=pack_id, provider_payment_id=provider_payment_id,
     )
@@ -826,12 +829,7 @@ def _first_referral_cta_text(user_id: int) -> str | None:
     Реферальные награды пригласившему начисляются ТОЛЬКО в tg-payments handler
     (anti-farm, REFERRAL.md §3) — здесь лишь зовём пригласить друга.
     """
-    try:
-        if int(metrics.referral_stats(user_id).get("invited") or 0) > 0:
-            return None
-    except Exception:
-        return None
-    return flow_copy.msg("first_referral_cta", referred=REFERRAL_REFERRED_BONUS)
+    return _referral_flow().first_cta_text(user_id)
 
 
 async def _post_generation_referral_hooks(
@@ -840,40 +838,17 @@ async def _post_generation_referral_hooks(
     *,
     send_cta: bool = True,
 ) -> None:
-    if not send_cta:
-        return
-    text = _first_referral_cta_text(user_id)
-    if not text:
-        return
-    try:
-        await message.answer(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [_invite_button(user_id)],
-        ]))
-    except Exception:
-        pass
+    await _referral_flow().post_generation_hooks(message, user_id, send_cta=send_cta)
 
 
 def _clawback_referral_rewards(referred_user_id: int, charge_id: str) -> None:
     """Reverse referral rewards for a refunded payment (Phase 9 service)."""
-    _referral_service.clawback(referred_user_id, charge_id)
+    _referral_flow().clawback_rewards(referred_user_id, charge_id)
 
 
 def _notify_referrer(referrer_id: int, bonus: int, *, message_key: str = "referral_reward_got") -> None:
     """Best-effort уведомление реферера о начислении (не блокирует оплату)."""
-    async def _send():
-        try:
-            await bot.send_message(
-                referrer_id, flow_copy.msg(message_key, bonus=bonus),
-                parse_mode="HTML",
-            )
-        except TelegramForbiddenError:
-            metrics.mark_user_blocked(referrer_id)
-        except Exception:
-            pass
-    try:
-        asyncio.create_task(_send())
-    except Exception:
-        pass
+    _referral_flow().notify_referrer(referrer_id, bonus, message_key=message_key)
 
 
 # Referral reward orchestration moved to referrals/ (Phase 9); wired with this

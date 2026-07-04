@@ -536,6 +536,9 @@ class BotMenuWiringTests(unittest.TestCase):
         self.screens_source = (
             PROJECT_ROOT / "channels" / "telegram" / "screens.py"
         ).read_text(encoding="utf-8")
+        self.referral_flow_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "referral_flow.py"
+        ).read_text(encoding="utf-8")
 
     def test_menu_and_wizard_handlers_present(self) -> None:
         self.assertIn('F.data.startswith("m:")', self.menu_router_source)  # menu router
@@ -1911,7 +1914,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertNotIn("_maybe_apply_first_referral_generation_reward", self.source)
         self.assertNotIn("grant_first_generation_referral_reward", self.source)
         self.assertNotIn("REFERRAL_FIRST_GENERATION_BONUS", self.source)
-        self.assertIn("first_referral_cta", self.source)
+        self.assertIn("first_referral_cta", self.referral_flow_source)
         # Reward orchestration moved to referrals/service.py (Phase 9).
         svc = (PROJECT_ROOT / "referrals" / "service.py").read_text(encoding="utf-8")
         self.assertIn('"referral_reward_paid"', svc)
