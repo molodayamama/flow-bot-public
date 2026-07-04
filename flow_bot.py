@@ -2407,50 +2407,10 @@ async def _run_i2i(
     fail_text: str,
     action: str = "edit",
 ) -> bool:
-    """Общий image-to-image: правка/вариации/улучшение картинки ``ref``.
-
-    Браузерный фолбэк отключён, чтобы вместо результата по этой картинке не
-    прислать несвязанную генерацию.
-    """
-    user_id = ref.user_id
-    capture = load_edit_capture(EDIT_CAPTURE_FILE)
-    image_inputs = build_image_inputs(ref.source, capture)
-    if not image_inputs:
-        await message.answer(
-            "⚠️ Не удалось определить идентификатор исходной картинки. "
-            "Сгенерируйте изображение заново и попробуйте снова."
-        )
-        return False
-
-    metrics.log_event(_IMG_REQUEST_EVENT.get(action, "image_requested"),
-                      user_id=user_id, source=action, payload={"count": num_images})
-    started = time.monotonic()
-    ok = False
-    try:
-        async with user_slot(user_id, message):
-            async with credit_gate(user_id, action, message, num_images) as charge:
-                ok = await _do_run_i2i(
-                    message, ref, prompt, image_inputs,
-                    num_images=num_images, emoji=emoji, fail_text=fail_text,
-                )
-                charge.ok = ok
-    except RateLimited:
-        _log_image_job(user_id, action, None, started, ok=False, error="user_busy")
-        return False
-    except NotEnoughCredits:
-        metrics.log_event("image_failed", user_id=user_id, source=action,
-                          payload={"reason": "insufficient_credits"})
-        return False
-    charged = action_price(action, num_images) if ok else 0
-    metrics.log_event("image_success" if ok else "image_failed",
-                      user_id=user_id, source=action)
-    if ok:
-        metrics.log_event("credits_charged", user_id=user_id, source=action,
-                          payload={"amount": charged, "action": action})
-    _log_image_job(user_id, action, None, started, ok=ok, charged=charged)
-    if ok:
-        await _post_generation_referral_hooks(message, user_id)
-    return ok
+    return await _generation_flow.run_i2i(
+        message, ref, prompt, num_images=num_images, emoji=emoji,
+        fail_text=fail_text, action=action,
+    )
 
 
 async def _do_run_i2i(
@@ -2463,50 +2423,10 @@ async def _do_run_i2i(
     emoji: str,
     fail_text: str,
 ) -> bool:
-    user_id = ref.user_id
-    status_msg = await message.answer(f"{emoji} Обрабатываю...")
-
-    async def update_status(text: str):
-        try:
-            await status_msg.edit_text(text)
-        except Exception:
-            pass
-
-    try:
-        result = await _client_for_acc(ref.account_id).generate_images(
-            prompt,
-            aspect_ratio=ref.aspect_ratio,
-            num_images=num_images,
-            progress_cb=update_status,
-            project_id=ref.project_id,
-            image_inputs=image_inputs,
-            allow_browser_fallback=False,
-        )
-    except Exception:
-        log.exception("i2i failed")
-        await status_msg.edit_text("❌ Ошибка. Попробуйте ещё раз.")
-        return False
-
-    if "error" in result:
-        if _is_rate_limit_error(result):
-            _mark_image_account_failure(ref.account_id, result)
-            await status_msg.edit_text(flow_copy.msg("image_edit_rate_limited"))
-        else:
-            await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
-        return False
-
-    pairs = result_pairs(result)
-    if not pairs:
-        await status_msg.edit_text(fail_text)
-        return False
-
-    await _send_result_pairs(
-        message, pairs, user_id=user_id, project_id=ref.project_id,
-        prompt=prompt, aspect_ratio=ref.aspect_ratio, emoji=emoji,
-        account_id=ref.account_id,
+    return await _generation_flow.do_run_i2i(
+        message, ref, prompt, image_inputs,
+        num_images=num_images, emoji=emoji, fail_text=fail_text,
     )
-    await status_msg.delete()
-    return True
 
 
 async def _vary_and_send(message: types.Message, ref: ImageRef):

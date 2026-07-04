@@ -393,7 +393,11 @@ class BotPoolWiringTests(unittest.TestCase):
 
     def test_refs_carry_account_id(self) -> None:
         self.assertIn("account_id=acc_id", self.source)
-        self.assertIn("account_id=ref.account_id", self.source)
+        # i2i/edit delivery (account_id=ref.account_id) moved to generation_flow.
+        gen_flow = (
+            PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("account_id=ref.account_id", gen_flow)
         self.assertIn("account_id: str | None = None", (PROJECT_ROOT / "flow_core.py").read_text(encoding="utf-8"))
 
     def test_animate_from_image_pins_reference_account(self) -> None:

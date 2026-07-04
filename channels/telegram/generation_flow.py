@@ -312,6 +312,120 @@ class GenerationFlow:
         await status_msg.delete()
         return True
 
+    async def run_i2i(
+        self,
+        message: types.Message,
+        ref: ImageRef,
+        prompt: str,
+        *,
+        num_images: int,
+        emoji: str,
+        fail_text: str,
+        action: str = "edit",
+    ) -> bool:
+        """Общий image-to-image: правка/вариации/улучшение картинки ``ref``.
+
+        Браузерный фолбэк отключён, чтобы вместо результата по этой картинке не
+        прислать несвязанную генерацию.
+        """
+        d = self._d
+        user_id = ref.user_id
+        capture = load_edit_capture(d.edit_capture_file)
+        image_inputs = build_image_inputs(ref.source, capture)
+        if not image_inputs:
+            await message.answer(
+                "⚠️ Не удалось определить идентификатор исходной картинки. "
+                "Сгенерируйте изображение заново и попробуйте снова."
+            )
+            return False
+
+        d.metrics.log_event(d.image_request_event.get(action, "image_requested"),
+                            user_id=user_id, source=action, payload={"count": num_images})
+        started = time.monotonic()
+        ok = False
+        try:
+            async with d.user_slot(user_id, message):
+                async with d.credit_gate(user_id, action, message, num_images) as charge:
+                    ok = await self.do_run_i2i(
+                        message, ref, prompt, image_inputs,
+                        num_images=num_images, emoji=emoji, fail_text=fail_text,
+                    )
+                    charge.ok = ok
+        except d.rate_limited_error:
+            d.log_image_job(user_id, action, None, started, ok=False, error="user_busy")
+            return False
+        except d.not_enough_credits_error:
+            d.metrics.log_event("image_failed", user_id=user_id, source=action,
+                                payload={"reason": "insufficient_credits"})
+            return False
+        charged = action_price(action, num_images) if ok else 0
+        d.metrics.log_event("image_success" if ok else "image_failed",
+                            user_id=user_id, source=action)
+        if ok:
+            d.metrics.log_event("credits_charged", user_id=user_id, source=action,
+                                payload={"amount": charged, "action": action})
+        d.log_image_job(user_id, action, None, started, ok=ok, charged=charged)
+        if ok:
+            await d.post_generation_referral_hooks(message, user_id)
+        return ok
+
+    async def do_run_i2i(
+        self,
+        message: types.Message,
+        ref: ImageRef,
+        prompt: str,
+        image_inputs: list,
+        *,
+        num_images: int,
+        emoji: str,
+        fail_text: str,
+    ) -> bool:
+        d = self._d
+        user_id = ref.user_id
+        status_msg = await message.answer(f"{emoji} Обрабатываю...")
+
+        async def update_status(text: str):
+            try:
+                await status_msg.edit_text(text)
+            except Exception:
+                pass
+
+        try:
+            result = await d.client_for_acc(ref.account_id).generate_images(
+                prompt,
+                aspect_ratio=ref.aspect_ratio,
+                num_images=num_images,
+                progress_cb=update_status,
+                project_id=ref.project_id,
+                image_inputs=image_inputs,
+                allow_browser_fallback=False,
+            )
+        except Exception:
+            d.log.exception("i2i failed")
+            await status_msg.edit_text("❌ Ошибка. Попробуйте ещё раз.")
+            return False
+
+        if "error" in result:
+            if d.is_rate_limit_error(result):
+                d.mark_image_account_failure(ref.account_id, result)
+                await status_msg.edit_text(flow_copy.msg("image_edit_rate_limited"))
+            else:
+                await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
+            return False
+
+        pairs = result_pairs(result)
+        if not pairs:
+            await status_msg.edit_text(fail_text)
+            return False
+
+        await d.send_result_pairs(
+            message, pairs, user_id=user_id, project_id=ref.project_id,
+            prompt=prompt, aspect_ratio=ref.aspect_ratio, emoji=emoji,
+            account_id=ref.account_id,
+        )
+        await status_msg.delete()
+        return True
+
     async def do_generate_and_send(
         self, message, prompt: str, num_images: int, aspect_ratio: str, user_id: int,
         image_model: str = DEFAULT_IMAGE_MODEL,

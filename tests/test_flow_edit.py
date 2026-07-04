@@ -637,12 +637,13 @@ class FlowBotWiringStaticTests(unittest.TestCase):
     def test_edit_rate_limit_keeps_context_copy(self) -> None:
         self.assertIn("def is_rate_limit_error", self.health_source)
         self.assertIn("is_rate_limit_error as _is_rate_limit_error", self.source)
-        self.assertIn("image_edit_rate_limited", self.source)
+        # image_edit_rate_limited copy now lives in generation_flow (edit + i2i).
+        self.assertIn("image_edit_rate_limited", self.generation_flow_source)
         # image_edit_failover msg key exists in flow_copy but is shown only in logs, not to users
         self.assertIn("_reupload_ref_for_edit_failover", self.source)
         self.assertIn("async def _reupload_ref_for_edit_failover", self.source)
         self.assertIn("exclude={current_account_id}", self.source)
-        self.assertIn("_mark_image_account_failure(ref.account_id, result)", self.source)
+        self.assertIn("d.mark_image_account_failure(ref.account_id, result)", self.generation_flow_source)
         # edit failover retry lives in generation_flow.do_edit_and_send now.
         self.assertIn(
             "_generate_for(failover_ref, failover_inputs)", self.generation_flow_source
@@ -736,7 +737,8 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         delivery_source = (PROJECT_ROOT / "channels" / "telegram" / "image_delivery.py").read_text(encoding="utf-8")
         self.assertIn("d.keeper_for_acc(account_id).note_image(img)", delivery_source)
         self.assertIn("capture = load_edit_capture(EDIT_CAPTURE_FILE)", self.source)
-        self.assertIn("build_image_inputs(ref.source, capture)", self.source)
+        # i2i (edit/vary/enhance) inputs built in generation_flow.run_i2i now.
+        self.assertIn("build_image_inputs(ref.source, capture)", self.generation_flow_source)
 
     def test_edit_capture_is_guarded_against_breaking_requests(self) -> None:
         self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source

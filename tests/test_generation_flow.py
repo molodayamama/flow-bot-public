@@ -332,6 +332,33 @@ class GenerationFlowTests(unittest.TestCase):
         self.assertEqual(pool.successes, ["b", "b"])
         self.assertEqual(len(sent), 1)
 
+    def test_run_i2i_success_delivers_and_fires_referral(self):
+        referral_calls = []
+        deps, pool, sent = _deps(
+            clients={"a": _Client(PAIRS_RESULT)}, accounts=[], referral_calls=referral_calls,
+        )
+        flow = GenerationFlow(deps)
+        msg = _Message()
+        ok = run(flow.run_i2i(msg, _ref(), "vary it", num_images=2, emoji="🎲",
+                              fail_text="fail", action="revary"))
+        self.assertTrue(ok)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(referral_calls, [42])
+
+    def test_run_i2i_rate_limit_marks_account(self):
+        marked = []
+        deps, pool, sent = _deps(
+            clients={"a": _Client({"error": "cooldown", "rate_limited": True})}, accounts=[],
+        )
+        # capture failure marking
+        object.__setattr__(deps, "mark_image_account_failure", lambda acc, res: marked.append(acc))
+        flow = GenerationFlow(deps)
+        msg = _Message()
+        ok = run(flow.do_run_i2i(msg, _ref(account_id="a"), "vary", [{"name": "x"}],
+                                 num_images=1, emoji="🎲", fail_text="fail"))
+        self.assertFalse(ok)
+        self.assertEqual(marked, ["a"])
+
 
 if __name__ == "__main__":
     unittest.main()
