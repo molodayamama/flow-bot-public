@@ -432,6 +432,10 @@ class BotMenuWiringTests(unittest.TestCase):
         self.video_flow_source = (
             PROJECT_ROOT / "channels" / "telegram" / "video_flow.py"
         ).read_text(encoding="utf-8")
+        # Ideas Hub screen renderers moved to channels.telegram.ideas_screens.
+        self.ideas_screens_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "ideas_screens.py"
+        ).read_text(encoding="utf-8")
         # Video/edit keyboard builders moved to channels/telegram/keyboards.py
         # (Phase 5). Scrapes of those defs read kb_source instead of flow_bot.
         self.kb_source = (
@@ -1234,7 +1238,11 @@ class BotMenuWiringTests(unittest.TestCase):
         helper_start = self.source.index("async def _edit_or_answer")
         helper = self.source[helper_start:helper_start + 1100]
         self.assertIn('"not modified" in str(exc).lower()', helper)
-        self.assertIn("await _edit_or_answer(message, text, kb", self.source)
+        # edit_or_answer callers (ideas renderers) moved to ideas_screens (Phase 11).
+        ideas_screens = (
+            PROJECT_ROOT / "channels" / "telegram" / "ideas_screens.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("await d.edit_or_answer(message, text, kb", ideas_screens)
 
     def test_credit_price_tags_on_action_buttons(self) -> None:
         # Video result / model rows show the credit cost in credits.
@@ -1501,8 +1509,8 @@ class BotMenuWiringTests(unittest.TestCase):
         # «Изменить моё фото» — оно становится основой, к которой применяется
         # собранный промпт шаблона как правка (запрос оператора).
         self.assertIn("async def _template_photo_received", self.source)
-        # Photo-key set moved to product.ideas_hub (Phase 11); flow_bot imports it.
-        self.assertIn("_IDEAS_PHOTO_KEYS", self.source)
+        # Photo-key set lives in product.ideas_hub and is consumed by ideas_screens.
+        self.assertIn("_IDEAS_PHOTO_KEYS", self.ideas_screens_source)
         ideas_hub_source = (PROJECT_ROOT / "product" / "ideas_hub.py").read_text(encoding="utf-8")
         self.assertIn(
             '_IDEAS_PHOTO_KEYS = ("ideas_photo_file_id", "ideas_photo_caption", "ideas_extra_prompt")',
@@ -1513,19 +1521,23 @@ class BotMenuWiringTests(unittest.TestCase):
         for mode in ('"root"', '"templates"', '"guided"'):
             self.assertIn(mode, self.photo_input_router_source)
         self.assertIn("await deps.template_photo_received(message, user_id=user_id)", self.photo_input_router_source)
-        receive = self.source[
-            self.source.index("async def _template_photo_received"):
-            self.source.index("async def _render_guided_step")
+        # template_photo_received moved to channels.telegram.ideas_screens (Phase 11).
+        receive = self.ideas_screens_source[
+            self.ideas_screens_source.index("async def template_photo_received"):
+            self.ideas_screens_source.index("async def render_guided_step")
         ]
         self.assertIn('st["ideas_photo_file_id"] = message.photo[-1].file_id', receive)
         self.assertNotIn("upload_image(", receive)
         # При завершении шаблона с фото — идём в штатные экраны настроек image/video.
-        start = self.source.index("async def _render_template_step")
-        block = self.source[start:start + 3000]
+        # render_template_step moved to ideas_screens (Phase 11).
+        start = self.ideas_screens_source.index("async def render_template_step")
+        block = self.ideas_screens_source[
+            start:self.ideas_screens_source.index("async def template_photo_received")
+        ]
         self.assertIn('ideas_photo_file_id = st.get("ideas_photo_file_id")', block)
-        self.assertIn("await _prepare_photo_video_from_file_id(", block)
+        self.assertIn("await d.prepare_photo_video_from_file_id(", block)
         self.assertIn("elif ideas_photo_file_id:", block)
-        self.assertIn("await _prepare_photo_edit_from_file_id(", block)
+        self.assertIn("await d.prepare_photo_edit_from_file_id(", block)
 
     def test_guided_video_carries_format_and_style(self) -> None:
         # «Подбор по шагам» → видео: выбранный формат (9:16) и стиль должны
@@ -1538,11 +1550,11 @@ class BotMenuWiringTests(unittest.TestCase):
         clear_at = block.index("deps.vid_clear(user_id)")
         apply_at = block.index('st["vfmt"] = vfmt')
         self.assertLess(clear_at, apply_at)  # применяем после очистки
-        # Guided-ветка передаёт формат и стиль.
-        self.assertIn("gv_fmt = _guided_video_fmt(answers)", self.source)
-        self.assertIn("image_fmt = _guided_image_fmt(answers)", self.source)
-        self.assertIn("vfmt=gv_fmt", self.source)
-        self.assertIn("vstyle=gv_style", self.source)
+        # Guided-ветка передаёт формат и стиль (moved to ideas_screens, Phase 11).
+        self.assertIn("gv_fmt = _guided_video_fmt(answers)", self.ideas_screens_source)
+        self.assertIn("image_fmt = _guided_image_fmt(answers)", self.ideas_screens_source)
+        self.assertIn("vfmt=gv_fmt", self.ideas_screens_source)
+        self.assertIn("vstyle=gv_style", self.ideas_screens_source)
 
     def test_video_result_edit_and_extend_wiring(self) -> None:
         self.assertIn("def _video_can_edit", self.kb_source)
@@ -2003,9 +2015,13 @@ class BotMenuWiringTests(unittest.TestCase):
         photo_intake = (
             PROJECT_ROOT / "channels" / "telegram" / "photo_intake.py"
         ).read_text(encoding="utf-8")
+        ideas_screens = (
+            PROJECT_ROOT / "channels" / "telegram" / "ideas_screens.py"
+        ).read_text(encoding="utf-8")
         self.assertGreaterEqual(
             self.source.count("_clear_image_flow_keys(st)")
-            + photo_intake.count("clear_image_flow_keys(st)"),
+            + photo_intake.count("clear_image_flow_keys(st)")
+            + ideas_screens.count("clear_image_flow_keys(st)"),
             2,
         )
 
@@ -2032,28 +2048,30 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_ideas_hub_wired(self) -> None:
         # Menu entry + hub root + both branches (templates Q&A, guided picker).
-        self.assertIn("import prompts_lib", self.source)
+        self.assertIn("import prompts_lib", self.ideas_screens_source)
         self.assertIn('data == "m:ideas"', self.menu_router_source)
         self.assertIn("deps.show_ideas_root", self.menu_router_source)
         self.assertIn('@router.callback_query(F.data.startswith("ih:"))', self.ideas_hub_router_source)
         self.assertIn('@router.callback_query(F.data.startswith("tp:"))', self.ideas_flow_router_source)
         self.assertIn('@router.callback_query(F.data.startswith("gp:"))', self.ideas_flow_router_source)
-        self.assertIn("prompts_lib.compose_template_prompt(", self.source)
-        self.assertIn("prompts_lib.compose_guided_prompt(", self.source)
+        # Ideas Hub renderers moved to channels.telegram.ideas_screens (Phase 11).
+        ideas = self.ideas_screens_source
+        self.assertIn("prompts_lib.compose_template_prompt(", ideas)
+        self.assertIn("prompts_lib.compose_guided_prompt(", ideas)
         # Composed prompt feeds the existing wizard via pending_prompt.
-        self.assertIn('st["pending_prompt"] = prompt', self.source)
+        self.assertIn('st["pending_prompt"] = prompt', ideas)
         self.assertIn('"template_opened"', self.ideas_flow_router_source)
-        self.assertIn('"template_used"', self.source)
+        self.assertIn('"template_used"', ideas)
         # Free-text Q&A answers are captured in the text handler.
         self.assertIn('st.get("tp_await") == "text"', self.plain_text_router_source)
         self.assertIn('flow_copy.msg("ideas_text_attached_template")', self.plain_text_router_source)
         self.assertIn('flow_copy.msg("ideas_text_attached_guided")', self.plain_text_router_source)
         self.assertIn('flow_copy.msg("ideas_text_attached_root")', self.plain_text_router_source)
-        self.assertIn('flow_copy.msg("ideas_choice_hint")', self.source)
-        self.assertIn('flow_copy.msg("ideas_guided_hint")', self.source)
-        self.assertIn("_ideas_prompt_with_extra(prompt, st)", self.source)
-        self.assertIn("await _prepare_photo_edit_from_file_id(", self.source)
-        self.assertIn("await _prepare_photo_video_from_file_id(", self.source)
+        self.assertIn('flow_copy.msg("ideas_choice_hint")', ideas)
+        self.assertIn('flow_copy.msg("ideas_guided_hint")', ideas)
+        self.assertIn("_ideas_prompt_with_extra(prompt, st)", ideas)
+        self.assertIn("await d.prepare_photo_edit_from_file_id(", ideas)
+        self.assertIn("await d.prepare_photo_video_from_file_id(", ideas)
         for key in (
             "ideas_choice_hint",
             "ideas_guided_hint",
