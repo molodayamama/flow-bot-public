@@ -737,3 +737,45 @@ class VideoFlow:
         st["vfmt"] = d.aspect_to_vfmt(vlast.get("aspect", "landscape"))
         st["vcount"] = vlast.get("count", d.vid_default_count)
         await self.generate_and_send(callback.message, vlast["prompt"], user_id=user_id)
+
+    async def edit_uploaded(self, message: types.Message, prompt: str, *, user_id: int) -> None:
+        """Правка загруженного пользователем видео промптом (Extend недоступен)."""
+        d = self._d
+        st = d.workspace(user_id)
+        src = st.get("vu_source") or {}
+        if not src.get("mediaId"):
+            await message.answer(flow_copy.msg("vid_expired_wizard"))
+            return
+        # Ориентация — из реальных размеров загруженного видео (PUT-ответ),
+        # иначе вертикальный ролик ушёл бы в правку как landscape.
+        w, h = src.get("width"), src.get("height")
+        fmt = "port" if isinstance(w, int) and isinstance(h, int) and h > w else "land"
+        ref = VideoRef(
+            user_id=user_id,
+            project_id=src.get("_project_id"),
+            media_id=src.get("mediaId"),
+            prompt="",
+            model_id="omni-flash-4s",
+            aspect_ratio=_VID_FMT_TO_ASPECT[fmt],
+            mode="edit",
+            prompt_edited=True,  # навсегда блокирует Продлить у результата
+            workflow_id=src.get("workflowId") or src.get("workflow_id"),
+            duration_s=src.get("duration_s"),
+            account_id=src.get("_account_id") or d.account_for_video(user_id),
+        )
+        st["vmode"] = "edit"
+        st["vmodel"] = "omni-flash-4s"
+        st["vfmt"] = fmt
+        st["vcount"] = 1
+        st["vawait"] = None
+        st.pop("vu_source", None)
+        await self.generate_and_send(
+            message,
+            prompt.strip(),
+            user_id=user_id,
+            unit_price_override=action_price("video_prompt_edit"),
+            prompt_edited=True,
+            status_text=flow_copy.msg("vid_edit_working"),
+            source_video=ref,
+            video_operation="edit",
+        )

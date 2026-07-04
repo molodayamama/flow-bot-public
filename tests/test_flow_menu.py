@@ -2102,9 +2102,9 @@ class BotMenuWiringTests(unittest.TestCase):
         # on_video_action (v: callback handler) moved to
         # channels/telegram/routers/video.py (Phase 6); the next function in
         # flow_bot.py after _video_edit_uploaded is now _aspect_to_fmt.
-        block = self.source[
-            self.source.index("async def _video_edit_uploaded"):
-            self.source.index("def _aspect_to_fmt")
+        # _video_edit_uploaded moved to channels.telegram.video_flow (Phase 11).
+        block = self.video_flow_source[
+            self.video_flow_source.index("async def edit_uploaded"):
         ]
         self.assertIn("prompt_edited=True", block)
         self.assertIn('video_operation="edit"', block)
