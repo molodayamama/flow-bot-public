@@ -1150,7 +1150,11 @@ class BotMenuWiringTests(unittest.TestCase):
         # flow_bot wires the gate and callers flag success; the charge/refund
         # rule itself lives in billing/credit_gate.py (PR-7a).
         self.assertIn("credit_gate", self.source)
-        self.assertIn("charge.ok =", self.source)
+        # callers flag success via charge.ok inside generation_flow (Phase 11).
+        gen_flow = (
+            PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("charge.ok =", gen_flow)
         billing_src = (PROJECT_ROOT / "billing" / "credit_gate.py").read_text(encoding="utf-8")
         self.assertIn("class NotEnoughCredits", billing_src)
         self.assertIn("store.refund", billing_src)
@@ -1177,7 +1181,11 @@ class BotMenuWiringTests(unittest.TestCase):
         # The real upscale uses the verified flow/upsampleImage contract (sync POST
         # returning base64 encodedImage), NOT a prompt-based image-to-image enhance.
         self.assertIn("async def upsample_image", self.source)
-        self.assertIn("result = await _client_for_acc(ref.account_id).upsample_image", self.source)
+        # real upscale orchestration moved to generation_flow.do_real_upscale.
+        gen_flow = (
+            PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("result = await d.client_for_acc(ref.account_id).upsample_image", gen_flow)
         self.assertIn("build_upsample_payload", self.source)
         self.assertIn("parse_upsample_response", self.source)
         # realup button lives under each generated image (restored by operator
@@ -1815,7 +1823,8 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('if tx_status == "error":', handler)
         # Fallback-ключ дедупа различает редоставку и новую покупку (message_id).
         self.assertIn("message.message_id", handler)
-        self.assertIn("metrics.log_flow_job(", self.source)
+        # flow-job logging now lives in the generate/video/seller adapters.
+        self.assertIn("metrics.log_flow_job(", metrics_sources)
 
     def test_admin_metrics_commands_registered(self) -> None:
         # The report commands live in the admin_reports router (Phase 6).

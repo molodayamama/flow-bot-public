@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from aiogram import types
+from aiogram.types import BufferedInputFile
 
 import flow_copy
 from flow_core import (
@@ -24,6 +25,7 @@ from flow_core import (
     ImageRef,
     action_price,
     build_image_inputs,
+    id_from_media_url,
     image_model_extra,
     load_edit_capture,
     result_pairs,
@@ -62,6 +64,7 @@ class GenerationFlowDeps:
     reupload_ref_for_edit_failover: Callable[..., Awaitable[ImageRef | None]]
     is_rate_limit_error: Callable[[dict], bool]
     post_generation_referral_hooks: Callable[..., Awaitable[None]]
+    flow_account_id: str
 
 
 class GenerationFlow:
@@ -424,6 +427,95 @@ class GenerationFlow:
             account_id=ref.account_id,
         )
         await status_msg.delete()
+        return True
+
+    async def real_upscale_and_send(self, message: types.Message, ref: ImageRef) -> None:
+        """🔍 Настоящий апскейл сервиса (flow/upsampleImage → картинка в 2K).
+
+        В отличие от «Чёткости ×2» (доработка промптом) — это родной серверный
+        апскейл по сверенному контракту. Возвращает готовую увеличенную картинку.
+        """
+        d = self._d
+        user_id = ref.user_id
+        media_id = ref.source.get("mediaId") if isinstance(ref.source, dict) else None
+        if not media_id:
+            media_id = id_from_media_url(ref.source.get("fifeUrl") if isinstance(ref.source, dict) else None)
+        if not media_id:
+            await message.answer(flow_copy.msg("upscale_unavailable"))
+            return
+
+        d.metrics.log_event("upscale_requested", user_id=user_id, source="realup")
+        started = time.monotonic()
+        ok = False
+        try:
+            async with d.user_slot(user_id, message):
+                async with d.credit_gate(user_id, "realup", message, 1) as charge:
+                    ok = await self.do_real_upscale(message, ref, media_id)
+                    charge.ok = ok
+        except d.rate_limited_error:
+            d.log_image_job(user_id, "realup", None, started, ok=False, error="user_busy")
+            return
+        except d.not_enough_credits_error:
+            d.metrics.log_event("image_failed", user_id=user_id, source="realup",
+                                payload={"reason": "insufficient_credits"})
+            return
+        charged = action_price("realup", 1) if ok else 0
+        d.metrics.log_event("image_success" if ok else "image_failed", user_id=user_id, source="realup")
+        if ok:
+            d.metrics.log_event("credits_charged", user_id=user_id, source="realup",
+                                payload={"amount": charged, "action": "realup"})
+        d.metrics.log_flow_job(
+            user_id=user_id,
+            account_id=(ref.account_id or d.account_pool.assigned_to(user_id) or d.flow_account_id),
+            operation_type="upscale",
+            model=None, bot_credits_charged=charged, duration_ms=_ms_since(started),
+            status="success" if ok else "fail", error_type=None if ok else "upscale_failed",
+        )
+        if ok:
+            await d.post_generation_referral_hooks(message, user_id)
+
+    async def do_real_upscale(self, message: types.Message, ref: ImageRef, media_id: str) -> bool:
+        d = self._d
+        status_msg = await message.answer(flow_copy.msg("upscaling"))
+
+        async def update_status(text: str):
+            try:
+                await status_msg.edit_text(text)
+            except Exception:
+                pass
+
+        try:
+            result = await d.client_for_acc(ref.account_id).upsample_image(
+                media_id, ref.project_id, progress_cb=update_status
+            )
+        except Exception:
+            d.log.exception("real upscale failed")
+            await status_msg.edit_text(flow_copy.msg("gen_failed"))
+            return False
+
+        if "error" in result:
+            # Тексты ошибок здесь — наша копия из flow_copy, но эскейпим на случай
+            # сырого текста от бэкенда (защита разметки от инъекции).
+            await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
+            return False
+
+        image_bytes = result.get("image_bytes")
+        if not image_bytes:
+            await status_msg.edit_text(flow_copy.msg("nothing_returned"))
+            return False
+
+        # Отдаём документом (без сжатия Telegram), чтобы сохранить высокое разрешение.
+        ext = "png" if image_bytes[:8].startswith(b"\x89PNG") else "jpg"
+        try:
+            await message.answer_document(
+                BufferedInputFile(image_bytes, f"upscaled_{media_id[-8:]}.{ext}"),
+                caption="🔍 Картинка в высоком разрешении (2K).",
+            )
+            await status_msg.delete()
+        except Exception:
+            d.log.exception("upscaled image send failed")
+            await status_msg.edit_text("❌ Не удалось отправить файл.")
+            return False
         return True
 
     async def do_generate_and_send(

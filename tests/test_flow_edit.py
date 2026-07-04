@@ -562,7 +562,8 @@ class FlowBotWiringStaticTests(unittest.TestCase):
     def test_callback_actions_use_ref_user_not_bot(self) -> None:
         # In callbacks message.from_user is the bot; new images must be owned by
         # the real user, so helpers derive the actor from ref.user_id.
-        self.assertIn("user_id = ref.user_id", self.source)
+        # i2i/upscale callbacks derive the actor from ref.user_id in generation_flow.
+        self.assertIn("user_id = ref.user_id", self.generation_flow_source)
         self.assertIn("actor_id=ref.user_id", self.source)
         self.assertIn("actor_id: int | None = None", self.source)
         # actor derivation moved into generation_flow (edit_and_send).

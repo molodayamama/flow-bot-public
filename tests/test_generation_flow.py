@@ -50,6 +50,10 @@ class _Message:
         self.answers.append(text)
         return self.status
 
+    async def answer_document(self, *a, **k):
+        self.documents = getattr(self, "documents", [])
+        self.documents.append((a, k))
+
 
 class _Client:
     def __init__(self, result):
@@ -78,6 +82,9 @@ class _Pool:
 
     def mark_success(self, acc):
         self.successes.append(acc)
+
+    def assigned_to(self, user_id):
+        return None
 
 
 class _NullLog:
@@ -197,6 +204,7 @@ def _deps(
         reupload_ref_for_edit_failover=_reupload,
         is_rate_limit_error=lambda res: bool(res.get("rate_limited")),
         post_generation_referral_hooks=_post_hooks,
+        flow_account_id="acc-default",
     ), pool, sent
 
 
@@ -358,6 +366,26 @@ class GenerationFlowTests(unittest.TestCase):
                                  num_images=1, emoji="🎲", fail_text="fail"))
         self.assertFalse(ok)
         self.assertEqual(marked, ["a"])
+
+    def test_real_upscale_delivers_document_and_logs(self):
+        class _UpClient:
+            async def upsample_image(self, media_id, project_id, progress_cb=None):
+                return {"image_bytes": b"\x89PNGxxxx"}
+
+        deps, pool, sent = _deps(clients={"a": _UpClient()}, accounts=[])
+        flow = GenerationFlow(deps)
+        msg = _Message()
+        ok = run(flow.do_real_upscale(msg, _ref(account_id="a"), "mediaid12345678"))
+        self.assertTrue(ok)
+        self.assertTrue(msg.status.deleted)
+
+    def test_real_upscale_no_media_id_short_circuits(self):
+        deps, pool, sent = _deps(clients={}, accounts=[])
+        flow = GenerationFlow(deps)
+        msg = _Message()
+        ref = ImageRef(user_id=42, project_id="proj", source={}, account_id="a")
+        run(flow.real_upscale_and_send(msg, ref))
+        self.assertTrue(msg.answers)  # upscale_unavailable
 
 
 if __name__ == "__main__":

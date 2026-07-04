@@ -434,7 +434,11 @@ class BotPoolWiringTests(unittest.TestCase):
     def test_flow_jobs_log_real_account(self) -> None:
         # Метрики flow_jobs пишут фактический аккаунт джобы, не статичный ярлык.
         self.assertIn("account_id=acc_id", self.source)
-        self.assertIn("account_pool.assigned_to(user_id) or FLOW_ACCOUNT_ID", self.source)
+        # upscale flow-job (real account fallback) moved to generation_flow.
+        gen_flow = (
+            PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("d.account_pool.assigned_to(user_id) or d.flow_account_id", gen_flow)
 
     def test_image_upload_prefers_image_only_and_video_upload_uses_video_account(self) -> None:
         self.assertIn("def _account_for_image", self.source)
