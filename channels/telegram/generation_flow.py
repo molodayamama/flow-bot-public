@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+import aiohttp
 from aiogram import types
 from aiogram.types import BufferedInputFile
 
@@ -25,11 +26,14 @@ from flow_core import (
     ImageRef,
     action_price,
     build_image_inputs,
+    download_url,
     id_from_media_url,
     image_model_extra,
     load_edit_capture,
     result_pairs,
 )
+from mediautil import image_ext_from_bytes
+from product.marketplace import marketplace_export_caption, marketplace_export_filename
 from textutil import _short_prompt
 
 _GEN_ATTEMPT_TIMEOUT = 70  # seconds per attempt
@@ -517,6 +521,64 @@ class GenerationFlow:
             await status_msg.edit_text("❌ Не удалось отправить файл.")
             return False
         return True
+
+    async def send_original_file(
+        self, message: types.Message, ref: ImageRef, *, marketplace_export: bool = False
+    ) -> None:
+        """⬇️ Оригинал: отдать картинку файлом в полном качестве.
+
+        На сайте кнопка «upscale» — это клиентское скачивание файла, а не серверный
+        запрос. Эквивалент в боте: скачать исходные байты и отправить ДОКУМЕНТОМ
+        (Telegram не пережимает документы, в отличие от фото), сохранив полное
+        разрешение сгенерированной картинки.
+        """
+        url = download_url(ref.source)
+        if not url:
+            await message.answer("⚠️ Нет ссылки на файл этой картинки.")
+            return
+
+        # Скачивание — бесплатная offline-операция: НЕ держим busy-слот, иначе
+        # зависшая/идущая генерация мешает забрать уже готовый файл (audit Major 11).
+        await self.do_send_original_file(message, ref, url, marketplace_export=marketplace_export)
+
+    async def do_send_original_file(
+        self,
+        message: types.Message,
+        ref: ImageRef,
+        url: str,
+        *,
+        marketplace_export: bool = False,
+    ) -> None:
+        d = self._d
+        status_msg = await message.answer("⬇️ Готовлю файл в полном качестве...")
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(url, timeout=aiohttp.ClientTimeout(total=60)) as r:
+                    if r.status != 200:
+                        await status_msg.edit_text(f"⚠️ Не удалось скачать файл (HTTP {r.status}).")
+                        return
+                    data = await r.read()
+        except Exception:
+            d.log.exception("download original failed")
+            await status_msg.edit_text("❌ Ошибка скачивания. Попробуйте ещё раз.")
+            return
+
+        media_id = ref.source.get("mediaId") if isinstance(ref.source, dict) else None
+        if marketplace_export:
+            filename = marketplace_export_filename(ref, image_ext_from_bytes(data))
+            caption = marketplace_export_caption(ref)
+        else:
+            filename = f"flow_{media_id or 'image'}.{image_ext_from_bytes(data)}"
+            caption = "⬇️ Оригинал в полном качестве (Telegram не сжимает документы)."
+        try:
+            await message.answer_document(
+                BufferedInputFile(data, filename),
+                caption=caption,
+            )
+            await status_msg.delete()
+        except Exception:
+            d.log.exception("send document failed")
+            await status_msg.edit_text("❌ Не удалось отправить файл.")
 
     async def do_generate_and_send(
         self, message, prompt: str, num_images: int, aspect_ratio: str, user_id: int,

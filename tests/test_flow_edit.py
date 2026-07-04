@@ -546,7 +546,6 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         for needle in (
             "build_ingredients_inputs",          # #1 ingredients
             "async def _send_original_file",     # #3 full-quality download
-            "answer_document",                   # #3 document (no Telegram compression)
             "download_url",                      # #3 best fetchable URL
             "clamp_num_images",                  # #4 flexible count
             "async def _vary_and_send",          # #5 variations
@@ -554,6 +553,8 @@ class FlowBotWiringStaticTests(unittest.TestCase):
             "mix_baskets",                       # mix basket state
         ):
             self.assertIn(needle, self.source, needle)
+        # document delivery (no Telegram compression) moved to generation_flow.
+        self.assertIn("answer_document", self.generation_flow_source)
         # /square and /imgn commands moved to the generation-commands router
         # (Phase 6).
         self.assertIn('aspect_ratio="square"', self.generation_commands_router_source)  # #2 square
