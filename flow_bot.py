@@ -2298,6 +2298,8 @@ _generation_flow = GenerationFlow(GenerationFlowDeps(
     is_rate_limit_error=_is_rate_limit_error,
     post_generation_referral_hooks=_post_generation_referral_hooks,
     flow_account_id=FLOW_ACCOUNT_ID,
+    mix_baskets=mix_baskets,
+    account_for=_account_for,
 ))
 
 
@@ -2491,78 +2493,13 @@ async def _do_send_original_file(
 
 
 async def _mix_and_send(message: types.Message, prompt: str):
-    """Собрать одну картинку из выбранных «ингредиентов» + текстовый промпт."""
-    user_id = message.from_user.id
-    basket = mix_baskets.get(user_id) or []
-    if len(basket) < 2:
-        await message.answer(
-            "➕ Сначала добавьте 2–4 картинки в микс кнопкой «➕ В микс» под ними, "
-            "потом пришлите `/mix ваш промпт`.",
-            parse_mode="Markdown",
-        )
-        return
-    if not prompt or len(prompt) < 3:
-        await message.answer("❌ Укажите промпт к миксу (минимум 3 символа)")
-        return
-
-    capture = load_edit_capture(EDIT_CAPTURE_FILE)
-    image_inputs = build_ingredients_inputs(basket, capture)
-    if len(image_inputs) < 2:
-        await message.answer(
-            "⚠️ Не удалось собрать ингредиенты. Сгенерируйте картинки заново."
-        )
-        return
-
-    try:
-        async with user_slot(user_id, message):
-            await _do_mix_and_send(message, prompt, image_inputs, user_id)
-    except RateLimited:
-        return
+    await _generation_flow.mix_and_send(message, prompt)
 
 
 async def _do_mix_and_send(
     message: types.Message, prompt: str, image_inputs: list, user_id: int
 ):
-    status_msg = await message.answer(f"🧩 Собираю микс из {len(image_inputs)} картинок...")
-
-    async def update_status(text: str):
-        try:
-            await status_msg.edit_text(text)
-        except Exception:
-            pass
-
-    project_id = await ensure_user_project(user_id)
-    acc_id = _account_for(user_id)
-    try:
-        result = await _client_for_acc(acc_id).generate_images(
-            prompt,
-            aspect_ratio="landscape",
-            num_images=2,
-            progress_cb=update_status,
-            project_id=project_id,
-            image_inputs=image_inputs,
-            allow_browser_fallback=False,
-        )
-    except Exception:
-        log.exception("mix failed")
-        await status_msg.edit_text("❌ Ошибка микса. Попробуйте ещё раз.")
-        return
-
-    if "error" in result:
-        await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
-        return
-
-    pairs = result_pairs(result)
-    if not pairs:
-        await status_msg.edit_text("⚠️ Микс не дал результата.")
-        return
-
-    mix_baskets[user_id] = []  # корзина израсходована
-    await _send_result_pairs(
-        message, pairs, user_id=user_id, project_id=project_id,
-        prompt=prompt, aspect_ratio="landscape", emoji="🧩", account_id=acc_id,
-    )
-    await status_msg.delete()
+    await _generation_flow.do_mix_and_send(message, prompt, image_inputs, user_id)
 
 
 def _profile_screens_deps() -> tg_screens.ProfileScreensDeps:

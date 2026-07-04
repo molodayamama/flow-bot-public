@@ -705,7 +705,8 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("project_id=project_id", self.source)
 
     def test_edit_disables_browser_fallback(self) -> None:
-        self.assertIn("allow_browser_fallback=False", self.source)
+        # edit/i2i/mix generation moved to generation_flow (Phase 11).
+        self.assertIn("allow_browser_fallback=False", self.generation_flow_source)
 
     def test_callback_enforces_owner_match(self) -> None:
         # video result-button callbacks moved to channels.telegram.video_flow.

@@ -26,6 +26,7 @@ from flow_core import (
     ImageRef,
     action_price,
     build_image_inputs,
+    build_ingredients_inputs,
     download_url,
     id_from_media_url,
     image_model_extra,
@@ -69,6 +70,8 @@ class GenerationFlowDeps:
     is_rate_limit_error: Callable[[dict], bool]
     post_generation_referral_hooks: Callable[..., Awaitable[None]]
     flow_account_id: str
+    mix_baskets: dict
+    account_for: Callable[[int], str | None]
 
 
 class GenerationFlow:
@@ -579,6 +582,81 @@ class GenerationFlow:
         except Exception:
             d.log.exception("send document failed")
             await status_msg.edit_text("❌ Не удалось отправить файл.")
+
+    async def mix_and_send(self, message: types.Message, prompt: str) -> None:
+        """Собрать одну картинку из выбранных «ингредиентов» + текстовый промпт."""
+        d = self._d
+        user_id = message.from_user.id
+        basket = d.mix_baskets.get(user_id) or []
+        if len(basket) < 2:
+            await message.answer(
+                "➕ Сначала добавьте 2–4 картинки в микс кнопкой «➕ В микс» под ними, "
+                "потом пришлите `/mix ваш промпт`.",
+                parse_mode="Markdown",
+            )
+            return
+        if not prompt or len(prompt) < 3:
+            await message.answer("❌ Укажите промпт к миксу (минимум 3 символа)")
+            return
+
+        capture = load_edit_capture(d.edit_capture_file)
+        image_inputs = build_ingredients_inputs(basket, capture)
+        if len(image_inputs) < 2:
+            await message.answer(
+                "⚠️ Не удалось собрать ингредиенты. Сгенерируйте картинки заново."
+            )
+            return
+
+        try:
+            async with d.user_slot(user_id, message):
+                await self.do_mix_and_send(message, prompt, image_inputs, user_id)
+        except d.rate_limited_error:
+            return
+
+    async def do_mix_and_send(
+        self, message: types.Message, prompt: str, image_inputs: list, user_id: int
+    ) -> None:
+        d = self._d
+        status_msg = await message.answer(f"🧩 Собираю микс из {len(image_inputs)} картинок...")
+
+        async def update_status(text: str):
+            try:
+                await status_msg.edit_text(text)
+            except Exception:
+                pass
+
+        project_id = await d.ensure_user_project(user_id)
+        acc_id = d.account_for(user_id)
+        try:
+            result = await d.client_for_acc(acc_id).generate_images(
+                prompt,
+                aspect_ratio="landscape",
+                num_images=2,
+                progress_cb=update_status,
+                project_id=project_id,
+                image_inputs=image_inputs,
+                allow_browser_fallback=False,
+            )
+        except Exception:
+            d.log.exception("mix failed")
+            await status_msg.edit_text("❌ Ошибка микса. Попробуйте ещё раз.")
+            return
+
+        if "error" in result:
+            await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
+            return
+
+        pairs = result_pairs(result)
+        if not pairs:
+            await status_msg.edit_text("⚠️ Микс не дал результата.")
+            return
+
+        d.mix_baskets[user_id] = []  # корзина израсходована
+        await d.send_result_pairs(
+            message, pairs, user_id=user_id, project_id=project_id,
+            prompt=prompt, aspect_ratio="landscape", emoji="🧩", account_id=acc_id,
+        )
+        await status_msg.delete()
 
     async def do_generate_and_send(
         self, message, prompt: str, num_images: int, aspect_ratio: str, user_id: int,

@@ -205,6 +205,8 @@ def _deps(
         is_rate_limit_error=lambda res: bool(res.get("rate_limited")),
         post_generation_referral_hooks=_post_hooks,
         flow_account_id="acc-default",
+        mix_baskets={},
+        account_for=lambda uid: "a",
     ), pool, sent
 
 
