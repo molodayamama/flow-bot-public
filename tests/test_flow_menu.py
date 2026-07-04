@@ -1296,8 +1296,12 @@ class BotMenuWiringTests(unittest.TestCase):
         # Grouped photos (album) → first=start, second=end; caption → prompt.
         self.assertIn("async def _handle_album_photos", self.source)
         self.assertIn("message.media_group_id", self.photo_input_router_source)
-        self.assertIn('st["vfrm_start"] = sources[0]', self.source)
-        self.assertIn("vcaption_prompt", self.source)
+        # album handling moved to channels.telegram.photo_intake (Phase 11).
+        photo_intake = (
+            PROJECT_ROOT / "channels" / "telegram" / "photo_intake.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('st["vfrm_start"] = sources[0]', photo_intake)
+        self.assertIn("vcaption_prompt", photo_intake)
 
     def test_frames_next_generates_from_saved_caption(self) -> None:
         # v:frm:go / v:frm:clear dispatch lives in the video router (Phase 6).
@@ -1426,8 +1430,12 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('st.get("step") in ("prompt_picker", "wizard")', block)
         self.assertIn('or st.get("await") == "prompt"', block)
         self.assertIn('or st.get("pending_prompt")', block)
-        self.assertIn('st["await"] = "edit_confirm" if caption else "edit"', self.source)
-        self.assertIn("await show_edit_confirm(message, user_id=user_id, edit=False)", self.source)
+        # prepare-photo-edit moved to channels.telegram.photo_intake (Phase 11).
+        photo_intake = (
+            PROJECT_ROOT / "channels" / "telegram" / "photo_intake.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('st["await"] = "edit_confirm" if caption else "edit"', photo_intake)
+        self.assertIn("await d.show_edit_confirm(message, user_id=user_id, edit=False)", photo_intake)
 
     def test_edit_and_send_can_use_callback_actor_id(self) -> None:
         start = self.source.index("async def _edit_and_send")
@@ -1990,7 +1998,16 @@ class BotMenuWiringTests(unittest.TestCase):
         # _clear_image_flow_keys moved to storage/session_state.py (Phase 11).
         ss = (PROJECT_ROOT / "storage" / "session_state.py").read_text(encoding="utf-8")
         self.assertIn("def _clear_image_flow_keys", ss)
-        self.assertGreaterEqual(self.source.count("_clear_image_flow_keys(st)"), 2)
+        # One caller stayed in flow_bot (animate helper); the photo→video prep
+        # caller moved to channels.telegram.photo_intake (Phase 11).
+        photo_intake = (
+            PROJECT_ROOT / "channels" / "telegram" / "photo_intake.py"
+        ).read_text(encoding="utf-8")
+        self.assertGreaterEqual(
+            self.source.count("_clear_image_flow_keys(st)")
+            + photo_intake.count("clear_image_flow_keys(st)"),
+            2,
+        )
 
     def test_video_photo_wait_text_does_not_open_image_wizard(self) -> None:
         source = self.plain_text_router_source

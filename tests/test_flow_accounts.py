@@ -440,18 +440,17 @@ class BotPoolWiringTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("d.account_pool.assigned_to(user_id) or d.flow_account_id", gen_flow)
 
-    def test_image_upload_prefers_image_only_and_video_upload_uses_video_account(self) -> None:
         self.assertIn("def _account_for_image", self.source)
-        photo_start = self.source.index("async def _upload_image_ref_from_photo_message")
-        photo_block = self.source[photo_start:photo_start + 2200]
-        self.assertIn("_account_for_image(user_id, prefer_image_only=True)", photo_block)
-        self.assertIn("ensure_user_project(user_id, account_id=acc_id)", photo_block)
-        self.assertIn("_keeper_for_acc(acc_id).upload_image", photo_block)
-
-        helper_start = self.source.index("async def _upload_photo_source_from_message")
-        helper_block = self.source[helper_start:helper_start + 1800]
-        self.assertIn("acc_id = _account_for_video(user_id)", helper_block)
-        self.assertIn('source.setdefault("_account_id", acc_id)', helper_block)
+        # Photo upload/ingestion moved to channels.telegram.photo_intake (Phase 11);
+        # deps injected, hence the ``d.`` prefix.
+        photo_intake = (
+            PROJECT_ROOT / "channels" / "telegram" / "photo_intake.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("d.account_for_image(user_id, prefer_image_only=True)", photo_intake)
+        self.assertIn("d.ensure_user_project(user_id, account_id=acc_id)", photo_intake)
+        self.assertIn("d.keeper_for_acc(acc_id).upload_image", photo_intake)
+        self.assertIn("acc_id = d.account_for_video(user_id)", photo_intake)
+        self.assertIn('source.setdefault("_account_id", acc_id)', photo_intake)
 
         video_block = self.video_flow_source
         # Photo-video re-places the reference on a healthy account seamlessly

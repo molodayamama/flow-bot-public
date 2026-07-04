@@ -603,8 +603,12 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("@router.message(F.photo)", self.photo_input_router_source)
         self.assertIn("async def handle_photo", self.photo_input_router_source)
         # Загрузка идёт через keeper аккаунта юзера (multi-account роутинг).
-        self.assertIn("_keeper_for_acc(acc_id).upload_image", self.source)
-        self.assertIn("_account_for_image(user_id, prefer_image_only=True)", self.source)
+        # Photo ingestion moved to channels.telegram.photo_intake (Phase 11).
+        photo_intake = (
+            PROJECT_ROOT / "channels" / "telegram" / "photo_intake.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("d.keeper_for_acc(acc_id).upload_image", photo_intake)
+        self.assertIn("d.account_for_image(user_id, prefer_image_only=True)", photo_intake)
         self.assertIn("async def upload_image", self.source)
         self.assertIn("set_input_files", self.source)
         self.assertIn("media_source_from_response", self.source)
@@ -625,10 +629,15 @@ class FlowBotWiringStaticTests(unittest.TestCase):
 
     def test_uploaded_photo_edits_in_upload_project(self) -> None:
         # Edit must target the project the upload actually landed in.
-        self.assertIn('source.pop("_project_id", None)', self.source)
-        self.assertIn("upload_project", self.source)
+        # Photo ingestion moved to channels.telegram.photo_intake (Phase 11).
+        photo_intake = (
+            PROJECT_ROOT / "channels" / "telegram" / "photo_intake.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('source.pop("_project_id", None)', photo_intake)
+        self.assertIn("upload_project", photo_intake)
+        self.assertIn('source.setdefault("_tg_file_id", file_id)', photo_intake)
+        # flow_bot keeps the thin wrapper the routers bind.
         self.assertIn("async def _upload_image_ref_from_file_id", self.source)
-        self.assertIn('source.setdefault("_tg_file_id", file_id)', self.source)
 
     def test_pending_edit_routing_in_plain_text_handler(self) -> None:
         source = self.plain_text_router_source
