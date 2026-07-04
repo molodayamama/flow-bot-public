@@ -1788,11 +1788,15 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("credit_store.balance", block)
 
     def test_price_screens_use_html_and_escape_user_text(self) -> None:
-        self.assertIn("import html", self.source)
+        photo_route_offer = (
+            PROJECT_ROOT / "channels" / "telegram" / "photo_route_offer.py"
+        ).read_text(encoding="utf-8")
+        html_sources = self.source + "\n" + self.screens_source + "\n" + photo_route_offer
+        self.assertIn("import html", photo_route_offer)
         self.assertIn('parse_mode="HTML"', self.source)
         # every echoed user prompt on an HTML screen is escaped
-        self.assertIn("html.escape(pending", self.source + "\n" + self.screens_source)
-        self.assertIn("html.escape(caption", self.source + "\n" + self.screens_source)
+        self.assertIn("html.escape(pending", html_sources)
+        self.assertIn("html.escape(_short_prompt(caption", html_sources)
 
     def test_ingredients_diagnostic_logging_present(self) -> None:
         self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source

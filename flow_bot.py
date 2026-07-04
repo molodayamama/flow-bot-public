@@ -28,7 +28,6 @@ HTTP-клиент делает запросы с этими свежими да�
 
 import asyncio
 import base64
-import html
 import itertools
 import json
 import logging
@@ -199,6 +198,7 @@ from channels.telegram.agent_flow import (
     AgentFlowDeps,
     agent_edit_instruction as _agent_edit_instruction,
 )
+from channels.telegram.photo_route_offer import PhotoRouteOffer, PhotoRouteOfferDeps
 from product.job_log import (
     ImageJobLogger,
     ms_since as _ms_since,
@@ -2415,22 +2415,18 @@ async def _show_my_tickets(message: types.Message, *, user_id: int, edit: bool) 
     )
 
 
+_photo_route_offer = PhotoRouteOffer(PhotoRouteOfferDeps(
+    pending_photo_routes=pending_photo_routes,
+    photo_route_kb=_photo_route_kb,
+))
+
+
 def _store_pending_photo_route(user_id: int, *, file_id: str, caption: str) -> None:
-    pending_photo_routes[user_id] = {
-        "file_id": file_id,
-        "caption": caption.strip()[:2000],
-    }
+    _photo_route_offer.store(user_id, file_id=file_id, caption=caption)
 
 
 async def _offer_photo_route_choice(message: types.Message, *, user_id: int, caption: str) -> None:
-    _store_pending_photo_route(
-        user_id, file_id=message.photo[-1].file_id, caption=caption
-    )
-    await message.answer(
-        flow_copy.msg("photo_route_choice", prompt=html.escape(_short_prompt(caption, 300))),
-        reply_markup=_photo_route_kb(),
-        parse_mode="HTML",
-    )
+    await _photo_route_offer.offer(message, user_id=user_id, caption=caption)
 
 
 _photo_intake = PhotoIntake(PhotoIntakeDeps(
