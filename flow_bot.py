@@ -189,6 +189,7 @@ from product.streak import streak_note
 from channels.telegram.image_delivery import ImageDelivery, ImageDeliveryDeps
 from channels.telegram.generation_flow import GenerationFlow, GenerationFlowDeps
 from channels.telegram.video_flow import VideoFlow, VideoFlowDeps
+from channels.telegram.seller_flow import SellerFlow, SellerFlowDeps
 from product.job_log import (
     ImageJobLogger,
     ms_since as _ms_since,
@@ -2066,60 +2067,37 @@ async def _backend_generate(req: dict) -> dict:
     return await _backend_generate_images(req)
 
 
+_seller_flow = SellerFlow(SellerFlowDeps(
+    backend_client=_backend_client,
+    send_one_image=_send_one_image,
+    download=bot.download,
+    log=log,
+    metrics=metrics,
+    username=_username,
+    image_request_event=_IMG_REQUEST_EVENT,
+    user_slot=user_slot,
+    credit_gate=credit_gate,
+    rate_limited_error=RateLimited,
+    not_enough_credits_error=NotEnoughCredits,
+    log_image_job=lambda *a, **k: _log_image_job(*a, **k),
+    post_generation_referral_hooks=_post_generation_referral_hooks,
+    credit_store=credit_store,
+    zero_balance_kb=_zero_balance_kb,
+    menu_button=_menu_button,
+    mp_back_kb=_mp_back_kb,
+    is_seller=lambda: _cfg.IS_SELLER,
+    mp_brand_kit=_mp_brand_kit,
+))
+
+
 async def _seller_backend_call_and_send(
     message: types.Message, prompt: str, *, num_images: int, aspect_ratio: str,
     user_id: int, image_model: str, kind: str = "image", image_b64: str | None = None,
 ) -> tuple[bool, str | None]:
-    """Seller-side: ask the consumer backend to generate, then send the URLs.
-
-    Returns ``(sent_any, backend_account_id)`` — the account_id is the REAL
-    consumer-backend account that did the work (for ``<acc>-sell`` event tagging)."""
-    client = _backend_client()
-    if client is None:
-        await message.answer(flow_copy.msg("accounts_unavailable"))
-        return False, None
-    status_msg = await message.answer(flow_copy.msg("generating"))
-    data = await client.generate(
-        prompt=prompt, num_images=num_images, aspect_ratio=aspect_ratio,
-        image_model=image_model, user_id=user_id, kind=kind, image_b64=image_b64,
+    return await _seller_flow.backend_call_and_send(
+        message, prompt, num_images=num_images, aspect_ratio=aspect_ratio,
+        user_id=user_id, image_model=image_model, kind=kind, image_b64=image_b64,
     )
-    images = data.get("images") or []
-    if data.get("error") or not images:
-        # Понятный финальный статус вместо технической ошибки. Кредиты вернёт
-        # credit_gate (charge.ok остаётся False) — поэтому прямо говорим об этом.
-        raw = str(data.get("error") or "").lower()
-        if any(k in raw for k in ("rate", "limit", "429", "quota", "перегруж",
-                                   "busy", "unavailable", "account", "капч", "captcha", "403")):
-            friendly = "⏳ Сервис сейчас перегружен. Кредиты возвращены — попробуй ещё раз через пару минут 🙏"
-        elif raw:
-            friendly = "❌ Не получилось создать карточку. Кредиты возвращены — попробуй ещё раз или измени фото/описание."
-        else:
-            friendly = "❌ Карточка не получилась. Кредиты возвращены — попробуй ещё раз 🙏"
-        try:
-            await status_msg.edit_text(friendly)
-        except Exception:
-            pass
-        return False, data.get("account_id")
-    try:
-        await status_msg.delete()
-    except Exception:
-        pass
-    sent_any = False
-    for index, im in enumerate(images, 1):
-        url = im.get("url")
-        if not url:
-            continue
-        try:
-            await _send_one_image(
-                message, url=url, img=im.get("img") or {"url": url},
-                index=index, total=len(images), caption="", user_id=user_id,
-                project_id=data.get("project_id"), prompt=prompt,
-                aspect_ratio=aspect_ratio, account_id=data.get("account_id"),
-            )
-            sent_any = True
-        except Exception:
-            log.exception("seller backend send image failed")
-    return sent_any, data.get("account_id")
 
 
 async def _seller_generate_and_send(
@@ -2127,93 +2105,19 @@ async def _seller_generate_and_send(
     user_id: int, action: str = "gen", image_model: str = DEFAULT_IMAGE_MODEL,
     kind: str = "image", image_b64: str | None = None,
 ) -> bool:
-    """Seller generation: charge the seller wallet, generate via backend, send.
-
-    ``kind="i2i"`` runs image-to-image on ``image_b64`` (the user's photo).
-    """
-    if _backend_client() is None:
-        await message.answer(flow_copy.msg("accounts_unavailable"))
-        return False
-    metrics.log_event(
-        _IMG_REQUEST_EVENT.get(action, "image_requested"), user_id=user_id,
-        username=_username(message), source=action,
-        payload={"count": num_images, "model": image_model, "surface": "seller", "kind": kind},
+    return await _seller_flow.generate_and_send(
+        message, prompt, num_images=num_images, aspect_ratio=aspect_ratio,
+        user_id=user_id, action=action, image_model=image_model, kind=kind, image_b64=image_b64,
     )
-    surcharge = image_model_extra(image_model) * max(1, num_images)
-    started = time.monotonic()
-    ok = False
-    backend_acc = None
-    try:
-        async with user_slot(user_id, message):
-            async with credit_gate(user_id, action, message, num_images, surcharge=surcharge) as charge:
-                ok, backend_acc = await _seller_backend_call_and_send(
-                    message, prompt, num_images=num_images, aspect_ratio=aspect_ratio,
-                    user_id=user_id, image_model=image_model, kind=kind, image_b64=image_b64,
-                )
-                charge.ok = ok
-    except RateLimited:
-        _log_image_job(user_id, action, image_model, started, ok=False, error="user_busy",
-                       account_id=_seller_acc_tag(backend_acc))
-        return False
-    except NotEnoughCredits:
-        metrics.log_event("image_failed", user_id=user_id, source=action,
-                          payload={"reason": "insufficient_credits"})
-        return False
-    charged = (action_price(action, num_images) + surcharge) if ok else 0
-    metrics.log_event("image_success" if ok else "image_failed", user_id=user_id, source=action)
-    if ok:
-        metrics.log_event("credits_charged", user_id=user_id, source=action,
-                          payload={"amount": charged, "action": action})
-    _log_image_job(user_id, action, image_model, started, ok=ok, charged=charged,
-                   account_id=_seller_acc_tag(backend_acc))
-    if ok:
-        await _post_generation_referral_hooks(message, user_id)
-        await _maybe_brandkit_nudge(message, user_id)
-    return ok
-
-
-async def _maybe_brandkit_nudge(message: types.Message, user_id: int) -> None:
-    """После первой удачной seller-генерации (один раз) предлагаем заполнить
-    бренд-кит — чтобы карточки были в едином стиле магазина."""
-    if not _cfg.IS_SELLER:
-        return
-    try:
-        if _mp_brand_kit(user_id):
-            return  # бренд-кит уже задан
-        if metrics.has_user_event(user_id, "brandkit_nudge_shown"):
-            return  # нудж уже показывали
-        metrics.log_event("brandkit_nudge_shown", user_id=user_id, source="seller")
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="🎨 Заполнить бренд-кит", callback_data="mp:brandkit")],
-            [_menu_button("menu", "m:menu")],
-        ])
-        await message.answer(
-            "🎉 <b>Поздравляем с первой карточкой!</b>\n\n"
-            "Чтобы усилить качество и держать единый стиль магазина (цвета, тон, "
-            "что показывать), заполни <b>бренд-кит</b> — я буду учитывать его в "
-            "каждой карточке и серии.",
-            reply_markup=kb, parse_mode="HTML",
-        )
-    except Exception:
-        log.warning("brandkit nudge failed", exc_info=True)
 
 
 async def _seller_i2i_from_file_id(
     message: types.Message, file_id: str, instruction: str, *, num_images: int,
     aspect_ratio: str, user_id: int, action: str,
 ) -> bool:
-    """Seller marketplace photo job from a stored Telegram file_id: download, i2i."""
-    try:
-        buf = await bot.download(file_id)
-        data = buf.read() if hasattr(buf, "read") else bytes(buf)
-    except Exception:
-        log.exception("seller photo download failed")
-        await message.answer(flow_copy.msg("upload_failed"))
-        return False
-    image_b64 = base64.b64encode(data).decode("ascii")
-    return await _seller_generate_and_send(
-        message, instruction, num_images=num_images, aspect_ratio=aspect_ratio,
-        user_id=user_id, action=action, kind="i2i", image_b64=image_b64,
+    return await _seller_flow.i2i_from_file_id(
+        message, file_id, instruction, num_images=num_images,
+        aspect_ratio=aspect_ratio, user_id=user_id, action=action,
     )
 
 
@@ -2221,10 +2125,9 @@ async def _seller_i2i_from_photo(
     message: types.Message, instruction: str, *, num_images: int, aspect_ratio: str,
     user_id: int, action: str,
 ) -> bool:
-    """Seller marketplace photo job: download the product photo, run i2i via backend."""
-    return await _seller_i2i_from_file_id(
-        message, message.photo[-1].file_id, instruction,
-        num_images=num_images, aspect_ratio=aspect_ratio, user_id=user_id, action=action,
+    return await _seller_flow.i2i_from_photo(
+        message, instruction, num_images=num_images, aspect_ratio=aspect_ratio,
+        user_id=user_id, action=action,
     )
 
 
@@ -2232,178 +2135,28 @@ async def _seller_video_backend_call_and_send(
     message: types.Message, prompt: str, *, image_b64: str, aspect_ratio: str,
     user_id: int, video_model: str = VID_REF_DEFAULT_MODEL,
 ) -> bool:
-    """Seller-side marketplace video: ask consumer backend, send returned mp4."""
-    client = _backend_client()
-    if client is None:
-        await message.answer(flow_copy.msg("accounts_unavailable"))
-        return False
-    status_msg = await message.answer(flow_copy.msg("vid_working"))
-    data = await client.generate(
-        prompt=prompt,
-        num_images=1,
-        aspect_ratio=aspect_ratio,
-        image_model=DEFAULT_IMAGE_MODEL,
-        video_model=video_model,
-        user_id=user_id,
-        kind="video_ingredients",
-        image_b64=image_b64,
+    return await _seller_flow.video_backend_call_and_send(
+        message, prompt, image_b64=image_b64, aspect_ratio=aspect_ratio,
+        user_id=user_id, video_model=video_model,
     )
-    videos = data.get("videos") or []
-    if data.get("error") or not videos:
-        err = str(data.get("error") or flow_copy.msg("vid_gen_failed"))[:300]
-        try:
-            await status_msg.edit_text(f"{flow_copy.msg('vid_gen_failed')}\n{html.escape(err)}")
-        except Exception:
-            pass
-        return False
-
-    from aiogram.types import BufferedInputFile
-
-    sent_any = False
-    for index, item in enumerate(videos, 1):
-        raw = item.get("video_b64")
-        if not raw:
-            continue
-        try:
-            video_bytes = base64.b64decode(raw)
-        except Exception:
-            log.exception("seller backend video base64 decode failed")
-            continue
-        filename = f"marketplace_video_{index}.mp4"
-        caption = flow_copy.msg(
-            "vid_result_caption", i=index, n=len(videos),
-            prompt=html.escape(_short_prompt(prompt, 60)),
-        )
-        try:
-            await message.answer_video(
-                BufferedInputFile(video_bytes, filename),
-                caption=caption,
-                reply_markup=_mp_back_kb(),
-                parse_mode="HTML",
-            )
-            sent_any = True
-        except Exception:
-            log.exception("seller answer_video failed, falling back to document")
-            try:
-                await message.answer_document(
-                    BufferedInputFile(video_bytes, filename),
-                    caption=caption,
-                    reply_markup=_mp_back_kb(),
-                    parse_mode="HTML",
-                )
-                sent_any = True
-            except Exception:
-                log.exception("seller answer_document video fallback failed")
-
-    try:
-        if sent_any:
-            await status_msg.delete()
-        else:
-            await status_msg.edit_text(flow_copy.msg("vid_gen_failed"))
-    except Exception:
-        pass
-    return sent_any
 
 
 async def _seller_video_generate_and_send(
     message: types.Message, prompt: str, *, image_b64: str, aspect_ratio: str,
     user_id: int, video_model: str = VID_REF_DEFAULT_MODEL,
 ) -> bool:
-    """Charge seller credits, generate marketplace video via consumer backend."""
-    if _backend_client() is None:
-        await message.answer(flow_copy.msg("accounts_unavailable"))
-        return False
-    if not prompt or len(prompt.strip()) < 3:
-        await message.answer(flow_copy.msg("vid_prompt_too_short"))
-        return False
-    price = video_price(video_model, 1, "ingredients")
-    started = time.monotonic()
-    charged = False
-    ok = False
-    try:
-        async with user_slot(user_id, message):
-            have = credit_store.balance(user_id)
-            if have < price:
-                if have == 0:
-                    await message.answer(
-                        flow_copy.msg("zero_balance"),
-                        reply_markup=_zero_balance_kb(),
-                        parse_mode="HTML",
-                    )
-                else:
-                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                        [_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]
-                    ])
-                    await message.answer(
-                        flow_copy.msg("low_balance", needed=price, have=have),
-                        reply_markup=kb,
-                        parse_mode="HTML",
-                    )
-                return False
-            credit_store.charge(user_id, price)
-            charged = True
-            metrics.log_event(
-                "video_requested", user_id=user_id, username=_username(message),
-                source="mp_animate",
-                payload={"model": video_model, "count": 1, "mode": "ingredients", "surface": "seller"},
-            )
-            ok = await _seller_video_backend_call_and_send(
-                message, prompt, image_b64=image_b64, aspect_ratio=aspect_ratio,
-                user_id=user_id, video_model=video_model,
-            )
-    except RateLimited:
-        return False
-    except Exception:
-        log.exception("seller video backend generation failed")
-        ok = False
-    finally:
-        if charged and not ok:
-            credit_store.refund(user_id, price)
-
-    metrics.log_event("video_success" if ok else "video_failed", user_id=user_id, source="mp_animate")
-    if ok:
-        metrics.log_event(
-            "credits_charged", user_id=user_id, source="mp_animate",
-            payload={"amount": price, "action": "video_mp_animate"},
-        )
-    elif charged:
-        metrics.log_event(
-            "credits_refunded", user_id=user_id, source="mp_animate",
-            payload={"amount": price},
-        )
-    metrics.log_flow_job(
-        user_id=user_id,
-        account_id="consumer-backend",
-        operation_type="video_mp_animate",
-        model=video_model,
-        bot_credits_charged=price if ok else 0,
-        refund_amount=0 if ok else price if charged else 0,
-        duration_ms=_ms_since(started),
-        status="success" if ok else "fail",
-        error_type=None if ok else "backend_failed",
+    return await _seller_flow.video_generate_and_send(
+        message, prompt, image_b64=image_b64, aspect_ratio=aspect_ratio,
+        user_id=user_id, video_model=video_model,
     )
-    if ok:
-        await _post_generation_referral_hooks(message, user_id)
-    return ok
 
 
 async def _seller_video_from_photo(
     message: types.Message, prompt: str, *, aspect_ratio: str, user_id: int,
     video_model: str = VID_REF_DEFAULT_MODEL,
 ) -> bool:
-    """Seller marketplace animate job: download product photo, run video backend."""
-    try:
-        photo = message.photo[-1]
-        buf = await bot.download(photo.file_id)
-        data = buf.read() if hasattr(buf, "read") else bytes(buf)
-    except Exception:
-        log.exception("seller video photo download failed")
-        await message.answer(flow_copy.msg("upload_failed"))
-        return False
-    image_b64 = base64.b64encode(data).decode("ascii")
-    return await _seller_video_generate_and_send(
-        message, prompt, image_b64=image_b64, aspect_ratio=aspect_ratio,
-        user_id=user_id, video_model=video_model,
+    return await _seller_flow.video_from_photo(
+        message, prompt, aspect_ratio=aspect_ratio, user_id=user_id, video_model=video_model,
     )
 
 
