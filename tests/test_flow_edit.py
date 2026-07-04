@@ -707,7 +707,11 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("allow_browser_fallback=False", self.source)
 
     def test_callback_enforces_owner_match(self) -> None:
-        self.assertIn("ref.user_id != user_id", self.source)
+        # video result-button callbacks moved to channels.telegram.video_flow.
+        video_flow = (
+            PROJECT_ROOT / "channels" / "telegram" / "video_flow.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("ref.user_id != user_id", video_flow)
 
     def test_project_creation_uses_separate_tab_not_main_page(self) -> None:
         self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source

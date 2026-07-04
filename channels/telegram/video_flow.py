@@ -24,12 +24,15 @@ from aiogram.types import BufferedInputFile
 import flow_copy
 from flow_core import (
     VideoRef,
+    action_price,
     build_video_frame_images,
     build_video_reference_images,
+    video_extend_price,
     video_model_meta,
     video_price,
 )
-from config.video import _VID_FMT_TO_ASPECT, VID_DEFAULT_FMT
+from config.video import _VID_FMT_TO_ASPECT, VID_DEFAULT_FMT, VIDEO_EXTEND_MODEL
+from channels.telegram.keyboards import _video_can_edit, _video_can_extend
 from product.job_log import ms_since as _ms_since
 from textutil import _short_prompt
 
@@ -61,6 +64,8 @@ class VideoFlowDeps:
     zero_balance_kb: Callable[[], Any]
     menu_button: Callable[..., Any]
     log: Any
+    aspect_to_vfmt: Callable[[str], str]
+    vid_clear_reference_inputs: Callable[[int], None]
 
 
 class VideoFlow:
@@ -540,3 +545,195 @@ class VideoFlow:
             _stop_vid_anim()
             st.pop("vstep", None)
             d.vid_clear(user_id)
+
+    # ── result-button callbacks (download / edit / extend / repeat) ──────
+
+    async def download(self, callback: types.CallbackQuery, user_id: int, token: str) -> None:
+        """Скачать видео по кнопке — бесплатно, без повторной генерации."""
+        d = self._d
+        ref = d.video_registry.get(token)
+        if ref is None or ref.user_id != user_id:
+            await callback.answer(flow_copy.msg("expired"), show_alert=True)
+            return
+
+        await callback.answer()
+        status_msg = await callback.message.answer(flow_copy.msg("preparing_file"))
+        video_bytes, merged_video = await d.video_delivery_bytes(ref)
+
+        if not video_bytes:
+            await status_msg.edit_text("❌ Не удалось скачать видео. Попробуйте позже.")
+            return
+
+        filename = f"video_{ref.media_id[-8:]}{'_full' if merged_video else ''}.mp4"
+        try:
+            await callback.message.answer_document(
+                BufferedInputFile(video_bytes, filename),
+                caption="⬇️ Видео в полном качестве.",
+            )
+            await status_msg.delete()
+        except Exception:
+            d.log.exception("video download send failed")
+            await status_msg.edit_text("❌ Не удалось отправить файл.")
+
+    async def segment_download(self, callback: types.CallbackQuery, user_id: int, token: str) -> None:
+        """Скачать только новый фрагмент Extend (сам результат, без склейки таймлайна)."""
+        d = self._d
+        ref = d.video_registry.get(token)
+        if ref is None or ref.user_id != user_id:
+            await callback.answer(flow_copy.msg("expired"), show_alert=True)
+            return
+        if not ref.media_id:
+            await callback.answer(flow_copy.msg("expired"), show_alert=True)
+            return
+
+        await callback.answer()
+        status_msg = await callback.message.answer(flow_copy.msg("preparing_file"))
+        video_bytes = await d.client_for_acc(ref.account_id).fetch_video_bytes(ref.media_id)
+
+        if not video_bytes:
+            await status_msg.edit_text("❌ Не удалось скачать фрагмент. Попробуйте позже.")
+            return
+
+        filename = f"video_fragment_{ref.media_id[-8:]}.mp4"
+        try:
+            await callback.message.answer_document(
+                BufferedInputFile(video_bytes, filename),
+                caption="⬇️ Только новый фрагмент.",
+            )
+            await status_msg.delete()
+        except Exception:
+            d.log.exception("video fragment download send failed")
+            await status_msg.edit_text("❌ Не удалось отправить файл.")
+
+    async def edit_start(self, callback: types.CallbackQuery, user_id: int, token: str) -> None:
+        """Ask for a prompt edit instruction for a delivered video."""
+        d = self._d
+        ref = d.video_registry.get(token)
+        if ref is None or ref.user_id != user_id:
+            await callback.answer(flow_copy.msg("expired"), show_alert=True)
+            return
+        if not _video_can_edit(ref):
+            await callback.answer(flow_copy.msg("vid_extend_unavailable"), show_alert=True)
+            return
+
+        st = d.workspace(user_id)
+        d.vid_clear(user_id)
+        st["vawait"] = "vedit_prompt"
+        st["vedit_token"] = token
+        await callback.answer()
+        await callback.message.answer(
+            flow_copy.msg("vid_edit_ask_prompt", price=action_price("video_prompt_edit"))
+        )
+
+    async def extend_start(self, callback: types.CallbackQuery, user_id: int, token: str) -> None:
+        """Ask for a continuation prompt for a delivered video."""
+        d = self._d
+        ref = d.video_registry.get(token)
+        if ref is None or ref.user_id != user_id:
+            await callback.answer(flow_copy.msg("expired"), show_alert=True)
+            return
+        if not _video_can_extend(ref):
+            await callback.answer(flow_copy.msg("vid_extend_unavailable"), show_alert=True)
+            return
+
+        st = d.workspace(user_id)
+        d.vid_clear(user_id)
+        st["vawait"] = "vextend_prompt"
+        st["vextend_token"] = token
+        await callback.answer()
+        next_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
+        await callback.message.answer(
+            flow_copy.msg("vid_extend_ask_prompt", price=next_price)
+        )
+
+    async def prompt_edit_and_send(
+        self, message: types.Message, ref: VideoRef, instruction: str, *, user_id: int
+    ) -> None:
+        d = self._d
+        if not instruction or len(instruction.strip()) < 3:
+            await message.answer(flow_copy.msg("vid_prompt_too_short"))
+            return
+        if not _video_can_edit(ref):
+            await message.answer(flow_copy.msg("vid_extend_unavailable"))
+            return
+
+        st = d.workspace(user_id)
+        d.vid_clear_reference_inputs(user_id)
+        st["vmode"] = "edit"
+        st["vmodel"] = ref.model_id or "omni-flash-4s"
+        st["vfmt"] = d.aspect_to_vfmt(ref.aspect_ratio)
+        st["vcount"] = 1
+        st["vawait"] = None
+        st.pop("vedit_token", None)
+        await self.generate_and_send(
+            message,
+            instruction.strip(),
+            user_id=user_id,
+            unit_price_override=action_price("video_prompt_edit"),
+            prompt_edited=True,
+            status_text=flow_copy.msg("vid_edit_working"),
+            source_video=ref,
+            video_operation="edit",
+        )
+
+    async def extend_and_send(
+        self, message: types.Message, ref: VideoRef, prompt: str, *, user_id: int
+    ) -> None:
+        d = self._d
+        if not prompt or len(prompt.strip()) < 3:
+            await message.answer(flow_copy.msg("vid_prompt_too_short"))
+            return
+        if not _video_can_extend(ref):
+            await message.answer(flow_copy.msg("vid_extend_unavailable"))
+            return
+
+        status_msg = await message.answer(flow_copy.msg("vid_working"))
+        scene_id = ref.scene_id or await d.client_for_acc(ref.account_id).prepare_video_extend_scene(
+            project_id=ref.project_id,
+            workflow_id=ref.workflow_id,
+        )
+        if not scene_id:
+            try:
+                await status_msg.edit_text(flow_copy.msg("vid_extend_unavailable"))
+            except Exception:
+                await message.answer(flow_copy.msg("vid_extend_unavailable"))
+            return
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+
+        st = d.workspace(user_id)
+        d.vid_clear_reference_inputs(user_id)
+        st["vmode"] = "extend"
+        st["vmodel"] = VIDEO_EXTEND_MODEL  # продление всегда через veo-lite, независимо от исходника
+        st["vfmt"] = d.aspect_to_vfmt(ref.aspect_ratio)
+        st["vcount"] = 1
+        st["vawait"] = None
+        st.pop("vextend_token", None)
+        # Fixed operator-set extend price.
+        extend_price = video_extend_price(VIDEO_EXTEND_MODEL, ref.extend_index + 1)
+        await self.generate_and_send(
+            message,
+            prompt.strip(),
+            user_id=user_id,
+            unit_price_override=extend_price,
+            status_text=flow_copy.msg("vid_working"),
+            source_video=ref,
+            video_operation="extend",
+            source_scene_id=scene_id,
+        )
+
+    async def repeat_last(self, callback: types.CallbackQuery, user_id: int) -> None:
+        """Повторить последнюю видеогенерацию с теми же настройками и промптом."""
+        d = self._d
+        st = d.workspace(user_id)
+        vlast = st.get("vlast")
+        if not vlast or not vlast.get("prompt"):
+            await callback.message.answer("Нет предыдущей видеогенерации.")
+            return
+
+        st["vmodel"] = vlast["model"]
+        st["vfmt"] = d.aspect_to_vfmt(vlast.get("aspect", "landscape"))
+        st["vcount"] = vlast.get("count", d.vid_default_count)
+        await self.generate_and_send(callback.message, vlast["prompt"], user_id=user_id)

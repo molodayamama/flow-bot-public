@@ -1548,14 +1548,15 @@ class BotMenuWiringTests(unittest.TestCase):
         # v:edit:/v:extend: dispatch lives in the video callback router (Phase 6).
         self.assertIn('if data.startswith("v:edit:")', self.video_router_source)
         self.assertIn('if data.startswith("v:extend:")', self.video_router_source)
-        self.assertIn('st["vawait"] = "vedit_prompt"', self.source)
-        self.assertIn('st["vawait"] = "vextend_prompt"', self.source)
+        # video edit/extend callbacks moved to channels.telegram.video_flow.
+        self.assertIn('st["vawait"] = "vedit_prompt"', self.video_flow_source)
+        self.assertIn('st["vawait"] = "vextend_prompt"', self.video_flow_source)
         self.assertIn('if st.get("vawait") == "vedit_prompt":', self.plain_text_router_source)
         self.assertIn('if st.get("vawait") == "vextend_prompt":', self.plain_text_router_source)
-        self.assertIn('unit_price_override=action_price("video_prompt_edit")', self.source)
-        self.assertIn('video_operation="edit"', self.source)
-        self.assertIn('video_operation="extend"', self.source)
-        self.assertIn("prepare_video_extend_scene", self.source)
+        self.assertIn('unit_price_override=action_price("video_prompt_edit")', self.video_flow_source)
+        self.assertIn('video_operation="edit"', self.video_flow_source)
+        self.assertIn('video_operation="extend"', self.video_flow_source)
+        self.assertIn("prepare_video_extend_scene", self.video_flow_source)
 
     # ── Phase 1 upgrades ───────────────────────────────────────────────
     def test_ingredients_and_frames_have_back_to_family(self) -> None:
@@ -2127,19 +2128,23 @@ class BotMenuWiringTests(unittest.TestCase):
             "def _vid_clear_reference_inputs",
             (PROJECT_ROOT / "storage" / "session_state.py").read_text(encoding="utf-8"),
         )
-        start = self.source.index("async def _video_prompt_edit_and_send")
-        end = self.source.index("async def _video_repeat_last")
-        block = self.source[start:end]
-        self.assertIn("_vid_clear_reference_inputs(user_id)", block)
+        # video prompt-edit moved to channels.telegram.video_flow (Phase 11).
+        gen = self.video_flow_source
+        start = gen.index("async def prompt_edit_and_send")
+        end = gen.index("async def extend_and_send")
+        block = gen[start:end]
+        self.assertIn("d.vid_clear_reference_inputs(user_id)", block)
         self.assertIn('st["vmode"] = "edit"', block)
         self.assertIn('source_video=ref', block)
         self.assertNotIn("_video_prompt_edit_prompt(ref, instruction)", block)
 
     def test_video_extend_prepares_scene_before_generation(self) -> None:
-        start = self.source.index("async def _video_extend_and_send")
-        end = self.source.index("async def _video_repeat_last")
-        block = self.source[start:end]
-        self.assertIn("_client_for_acc(ref.account_id).prepare_video_extend_scene", block)
+        # video extend moved to channels.telegram.video_flow (Phase 11).
+        gen = self.video_flow_source
+        start = gen.index("async def extend_and_send")
+        end = gen.index("async def repeat_last")
+        block = gen[start:end]
+        self.assertIn("d.client_for_acc(ref.account_id).prepare_video_extend_scene", block)
         self.assertIn("if not scene_id:", block)
         self.assertNotIn("ref.scene_id =", block)
         self.assertIn('st["vmode"] = "extend"', block)
@@ -2174,10 +2179,12 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("BufferedInputFile(delivery_bytes, filename)", gen)
 
     def test_video_download_uses_delivery_helper(self) -> None:
-        start = self.source.index("async def _video_download")
-        end = self.source.index("async def _video_edit_start", start)
-        block = self.source[start:end]
-        self.assertIn("video_bytes, merged_video = await _video_delivery_bytes(ref)", block)
+        # video download moved to channels.telegram.video_flow (Phase 11).
+        gen = self.video_flow_source
+        start = gen.index("async def download(")
+        end = gen.index("async def segment_download(", start)
+        block = gen[start:end]
+        self.assertIn("video_bytes, merged_video = await d.video_delivery_bytes(ref)", block)
         self.assertIn("'_full' if merged_video else ''", block)
 
     def test_no_backend_or_captcha_words_in_user_messages(self) -> None:
