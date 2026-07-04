@@ -1420,7 +1420,13 @@ class BotMenuWiringTests(unittest.TestCase):
         start = self.source.index("async def _edit_and_send")
         block = self.source[start:start + 1200]
         self.assertIn("actor_id: int | None = None", block)
-        self.assertIn("user_id = actor_id if actor_id is not None else message.from_user.id", block)
+        # actor derivation moved into generation_flow.edit_and_send (Phase 11).
+        gen = (
+            PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "user_id = actor_id if actor_id is not None else message.from_user.id", gen
+        )
         self.assertIn("actor_id=user_id", self.source)
 
     def test_video_plain_text_ready_is_narrow(self) -> None:

@@ -524,6 +524,11 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.health_source = (
             PROJECT_ROOT / "accounts" / "health.py"
         ).read_text(encoding="utf-8")
+        # Image generate/edit orchestration moved to
+        # channels.telegram.generation_flow (Phase 11).
+        self.generation_flow_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py"
+        ).read_text(encoding="utf-8")
 
     def test_edit_button_and_callback_handler_present(self) -> None:
         # Labels now come from flow_copy; the edit button uses the "edit" action.
@@ -560,7 +565,11 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("user_id = ref.user_id", self.source)
         self.assertIn("actor_id=ref.user_id", self.source)
         self.assertIn("actor_id: int | None = None", self.source)
-        self.assertIn("user_id = actor_id if actor_id is not None else message.from_user.id", self.source)
+        # actor derivation moved into generation_flow (edit_and_send).
+        self.assertIn(
+            "user_id = actor_id if actor_id is not None else message.from_user.id",
+            self.generation_flow_source,
+        )
 
     def test_result_regen_button_generates_one_image(self) -> None:
         # The result button is labeled with the default one-image regen price,
@@ -634,7 +643,10 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("async def _reupload_ref_for_edit_failover", self.source)
         self.assertIn("exclude={current_account_id}", self.source)
         self.assertIn("_mark_image_account_failure(ref.account_id, result)", self.source)
-        self.assertIn("_generate_for(failover_ref, failover_inputs)", self.source)
+        # edit failover retry lives in generation_flow.do_edit_and_send now.
+        self.assertIn(
+            "_generate_for(failover_ref, failover_inputs)", self.generation_flow_source
+        )
         self.assertIn("1–3 минуты", flow_copy.msg("image_edit_rate_limited"))
 
     def test_no_fallback_image_403_classified_as_rate_limited(self) -> None:
@@ -672,12 +684,15 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.assertIn("is_rate_limit_error(result)", helper)
         self.assertIn('"reason": "rate_limited", "op": "image"', helper)
 
-        edit = self.source[
-            self.source.index("async def _do_edit_and_send"):
-            self.source.index("async def _run_i2i")
+        # do_edit_and_send moved to channels.telegram.generation_flow (Phase 11);
+        # deps are injected, hence the ``d.`` prefix.
+        gen = self.generation_flow_source
+        edit = gen[
+            gen.index("async def do_edit_and_send"):
+            gen.index("async def do_generate_and_send")
         ]
-        self.assertIn("_mark_image_account_failure(ref.account_id, result)", edit)
-        self.assertIn("_mark_image_account_failure(failover_ref.account_id, result)", edit)
+        self.assertIn("d.mark_image_account_failure(ref.account_id, result)", edit)
+        self.assertIn("d.mark_image_account_failure(failover_ref.account_id, result)", edit)
 
     def test_per_user_project_creation_wired(self) -> None:
         self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source

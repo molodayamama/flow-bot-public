@@ -19,7 +19,15 @@ from typing import Any, Awaitable, Callable
 from aiogram import types
 
 import flow_copy
-from flow_core import DEFAULT_IMAGE_MODEL, action_price, image_model_extra, result_pairs
+from flow_core import (
+    DEFAULT_IMAGE_MODEL,
+    ImageRef,
+    action_price,
+    build_image_inputs,
+    image_model_extra,
+    load_edit_capture,
+    result_pairs,
+)
 from textutil import _short_prompt
 
 _GEN_ATTEMPT_TIMEOUT = 70  # seconds per attempt
@@ -50,6 +58,10 @@ class GenerationFlowDeps:
     after_result: Callable[..., Awaitable[None]]
     streak_note: Callable[[int], str | None]
     log_image_job: Callable[..., None]
+    edit_capture_file: Any
+    reupload_ref_for_edit_failover: Callable[..., Awaitable[ImageRef | None]]
+    is_rate_limit_error: Callable[[dict], bool]
+    post_generation_referral_hooks: Callable[..., Awaitable[None]]
 
 
 class GenerationFlow:
@@ -132,6 +144,173 @@ class GenerationFlow:
                 d.metrics.log_event("wizard_completed", user_id=user_id, source=action)
                 d.metrics.save_prompt_history(user_id, prompt)
         d.log_image_job(user_id, action, image_model, started, ok=ok, charged=charged)
+
+    async def edit_and_send(
+        self,
+        message: types.Message,
+        ref: ImageRef,
+        instruction: str,
+        *,
+        actor_id: int | None = None,
+        aspect_ratio: str | None = None,
+        image_model: str = DEFAULT_IMAGE_MODEL,
+        price_action: str = "edit",
+    ) -> bool:
+        """Apply ``instruction`` to a specific generated image ref."""
+        d = self._d
+        user_id = actor_id if actor_id is not None else message.from_user.id
+
+        if not instruction or len(instruction) < 3:
+            await message.answer("❌ Опишите правку (минимум 3 символа)")
+            return False
+
+        capture = load_edit_capture(d.edit_capture_file)
+        image_inputs = build_image_inputs(ref.source, capture)
+        if not image_inputs:
+            await message.answer(
+                "⚠️ Не удалось определить идентификатор исходной картинки. "
+                "Сгенерируйте изображение заново и нажмите «Редактировать» под ним."
+            )
+            return False
+
+        aspect = aspect_ratio or ref.aspect_ratio
+        surcharge = image_model_extra(image_model)
+        d.metrics.log_event(
+            "image_edit_requested", user_id=user_id, source="edit",
+            payload={"model": image_model},
+        )
+        started = time.monotonic()
+        ok = False
+        try:
+            async with d.user_slot(user_id, message):
+                async with d.credit_gate(
+                    user_id, price_action, message, 1, surcharge=surcharge
+                ) as charge:
+                    ok = await self.do_edit_and_send(
+                        message, ref, instruction, image_inputs, user_id,
+                        aspect_ratio=aspect, image_model=image_model,
+                    )
+                    charge.ok = ok
+        except d.rate_limited_error:
+            d.log_image_job(user_id, "edit", image_model, started, ok=False, error="user_busy")
+            return False
+        except d.not_enough_credits_error:
+            d.metrics.log_event(
+                "image_failed", user_id=user_id, source="edit",
+                payload={"reason": "insufficient_credits"},
+            )
+            return False
+
+        charged = (action_price(price_action, 1) + surcharge) if ok else 0
+        d.metrics.log_event("image_success" if ok else "image_failed", user_id=user_id, source="edit")
+        if ok:
+            d.metrics.log_event(
+                "credits_charged", user_id=user_id, source="edit",
+                payload={"amount": charged, "action": price_action},
+            )
+        d.log_image_job(user_id, "edit", image_model, started, ok=ok, charged=charged)
+        if ok:
+            d.workspace(user_id)["last"] = {
+                "kind": "edit",
+                "ref": ref,
+                "instruction": instruction,
+                "aspect": aspect,
+                "imodel": image_model,
+                "price_action": price_action,
+            }
+            await d.post_generation_referral_hooks(message, user_id)
+        return ok
+
+    async def do_edit_and_send(
+        self,
+        message: types.Message,
+        ref: ImageRef,
+        instruction: str,
+        image_inputs: list,
+        user_id: int,
+        *,
+        aspect_ratio: str | None = None,
+        image_model: str = DEFAULT_IMAGE_MODEL,
+    ) -> bool:
+        d = self._d
+        status_msg = await message.answer(
+            f"✏️ Редактирую изображение...\n📝 {instruction[:80]}"
+        )
+        aspect = aspect_ratio or ref.aspect_ratio
+
+        async def update_status(text: str):
+            try:
+                await status_msg.edit_text(f"{text}\n📝 {instruction[:80]}")
+            except Exception:
+                pass
+
+        async def _generate_for(edit_ref: ImageRef, inputs: list) -> dict:
+            return await d.client_for_acc(edit_ref.account_id).generate_images(
+                instruction,
+                aspect_ratio=aspect,
+                num_images=1,
+                progress_cb=update_status,
+                project_id=edit_ref.project_id,
+                image_inputs=inputs,
+                allow_browser_fallback=False,
+                image_model=image_model,
+            )
+
+        active_ref = ref
+        try:
+            result = await _generate_for(active_ref, image_inputs)
+        except Exception:
+            d.log.exception("Edit failed")
+            await status_msg.edit_text("❌ Ошибка редактирования. Попробуйте ещё раз.")
+            return False
+
+        if "error" in result:
+            if d.is_rate_limit_error(result):
+                d.mark_image_account_failure(ref.account_id, result)
+                d.log.info(
+                    "image_edit failover: аккаунт %s ушёл в кулдаун, пробую другой",
+                    ref.account_id,
+                )
+                failover_ref = await d.reupload_ref_for_edit_failover(
+                    ref, user_id, current_account_id=ref.account_id,
+                )
+                failover_inputs = (
+                    build_image_inputs(failover_ref.source, load_edit_capture(d.edit_capture_file))
+                    if failover_ref else []
+                )
+                if failover_ref and failover_inputs:
+                    try:
+                        result = await _generate_for(failover_ref, failover_inputs)
+                        if "error" not in result:
+                            active_ref = failover_ref
+                            d.account_pool.mark_success(failover_ref.account_id)
+                    except Exception:
+                        d.log.exception("Edit failover retry failed")
+                        result = {"error": flow_copy.msg("image_edit_rate_limited")}
+                if "error" in result:
+                    if failover_ref and d.is_rate_limit_error(result):
+                        d.mark_image_account_failure(failover_ref.account_id, result)
+                    await status_msg.edit_text(flow_copy.msg("image_edit_rate_limited"))
+                    return False
+            else:
+                await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
+                return False
+
+        pairs = result_pairs(result)
+        if not pairs:
+            d.log.warning("Пустой ответ редактирования: %s", str(result)[:500])
+            await status_msg.edit_text(flow_copy.msg("nothing_returned"))
+            return False
+
+        await update_status(flow_copy.msg("sending"))
+        d.account_pool.mark_success(active_ref.account_id)
+        await d.send_result_pairs(
+            message, pairs, user_id=user_id, project_id=active_ref.project_id,
+            prompt=instruction, aspect_ratio=aspect, emoji="✏️",
+            account_id=active_ref.account_id,
+        )
+        await status_msg.delete()
+        return True
 
     async def do_generate_and_send(
         self, message, prompt: str, num_images: int, aspect_ratio: str, user_id: int,

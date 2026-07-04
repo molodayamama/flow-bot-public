@@ -2537,6 +2537,12 @@ _generation_flow = GenerationFlow(GenerationFlowDeps(
     after_result=_after_result,
     streak_note=_streak_note,
     log_image_job=_log_image_job,
+    edit_capture_file=EDIT_CAPTURE_FILE,
+    reupload_ref_for_edit_failover=(
+        lambda *args, **kwargs: _reupload_ref_for_edit_failover(*args, **kwargs)
+    ),
+    is_rate_limit_error=_is_rate_limit_error,
+    post_generation_referral_hooks=_post_generation_referral_hooks,
 ))
 
 
@@ -2616,71 +2622,10 @@ async def _edit_and_send(
     image_model: str = DEFAULT_IMAGE_MODEL,
     price_action: str = "edit",
 ) -> bool:
-    """Применить правку ``instruction`` к конкретной картинке ``ref``.
-
-    Правка уходит именно этому изображению (через ``imageInputs``) в проекте
-    того же пользователя. Браузерный фолбэк отключён, чтобы вместо правки не
-    прислать несвязанную картинку. ``aspect_ratio`` / ``image_model`` позволяют
-    сменить формат и модель прямо при редактировании (по умолчанию — как у
-    исходной картинки и базовая модель). ``price_action`` задаёт тариф: ``edit``
-    (правка, 15/20) или ``gen`` (фото-референс в «Создать картинку», 10/15).
-    """
-    user_id = actor_id if actor_id is not None else message.from_user.id
-
-    if not instruction or len(instruction) < 3:
-        await message.answer("❌ Опишите правку (минимум 3 символа)")
-        return False
-
-    capture = load_edit_capture(EDIT_CAPTURE_FILE)
-    image_inputs = build_image_inputs(ref.source, capture)
-    if not image_inputs:
-        await message.answer(
-            "⚠️ Не удалось определить идентификатор исходной картинки. "
-            "Сгенерируйте изображение заново и нажмите «Редактировать» под ним."
-        )
-        return False
-
-    aspect = aspect_ratio or ref.aspect_ratio
-    surcharge = image_model_extra(image_model)
-    metrics.log_event("image_edit_requested", user_id=user_id, source="edit",
-                      payload={"model": image_model})
-    started = time.monotonic()
-    ok = False
-    try:
-        async with user_slot(user_id, message):
-            async with credit_gate(user_id, price_action, message, 1, surcharge=surcharge) as charge:
-                ok = await _do_edit_and_send(
-                    message, ref, instruction, image_inputs, user_id,
-                    aspect_ratio=aspect, image_model=image_model,
-                )
-                charge.ok = ok
-    except RateLimited:
-        _log_image_job(user_id, "edit", image_model, started, ok=False, error="user_busy")
-        return False
-    except NotEnoughCredits:
-        metrics.log_event("image_failed", user_id=user_id, source="edit",
-                          payload={"reason": "insufficient_credits"})
-        return False
-    charged = (action_price(price_action, 1) + surcharge) if ok else 0
-    metrics.log_event("image_success" if ok else "image_failed", user_id=user_id, source="edit")
-    if ok:
-        metrics.log_event("credits_charged", user_id=user_id, source="edit",
-                          payload={"amount": charged, "action": price_action})
-    _log_image_job(user_id, "edit", image_model, started, ok=ok, charged=charged)
-    if ok:
-        # Запоминаем правку для «🔁 Повторить» под результатом. Без этого «Изменить
-        # моё фото» сбрасывает last (keep_last=False), и повтор выдавал «Нет
-        # предыдущей генерации». kind="edit" → повтор переприменяет ту же правку.
-        _ws(user_id)["last"] = {
-            "kind": "edit",
-            "ref": ref,
-            "instruction": instruction,
-            "aspect": aspect,
-            "imodel": image_model,
-            "price_action": price_action,
-        }
-        await _post_generation_referral_hooks(message, user_id)
-    return ok
+    return await _generation_flow.edit_and_send(
+        message, ref, instruction, actor_id=actor_id, aspect_ratio=aspect_ratio,
+        image_model=image_model, price_action=price_action,
+    )
 
 
 async def _do_edit_and_send(
@@ -2693,83 +2638,10 @@ async def _do_edit_and_send(
     aspect_ratio: str | None = None,
     image_model: str = DEFAULT_IMAGE_MODEL,
 ) -> bool:
-    status_msg = await message.answer(
-        f"✏️ Редактирую изображение...\n📝 {instruction[:80]}"
+    return await _generation_flow.do_edit_and_send(
+        message, ref, instruction, image_inputs, user_id,
+        aspect_ratio=aspect_ratio, image_model=image_model,
     )
-    aspect = aspect_ratio or ref.aspect_ratio
-
-    async def update_status(text: str):
-        try:
-            await status_msg.edit_text(f"{text}\n📝 {instruction[:80]}")
-        except Exception:
-            pass
-
-    async def _generate_for(edit_ref: ImageRef, inputs: list) -> dict:
-        return await _client_for_acc(edit_ref.account_id).generate_images(
-            instruction,
-            aspect_ratio=aspect,
-            num_images=1,
-            progress_cb=update_status,
-            project_id=edit_ref.project_id,
-            image_inputs=inputs,
-            allow_browser_fallback=False,
-            image_model=image_model,
-        )
-
-    active_ref = ref
-    result: dict
-    try:
-        result = await _generate_for(active_ref, image_inputs)
-    except Exception:
-        log.exception("Edit failed")
-        await status_msg.edit_text("❌ Ошибка редактирования. Попробуйте ещё раз.")
-        return False
-
-    if "error" in result:
-        if _is_rate_limit_error(result):
-            _mark_image_account_failure(ref.account_id, result)
-            log.info("image_edit failover: аккаунт %s ушёл в кулдаун, пробую другой", ref.account_id)
-            failover_ref = await _reupload_ref_for_edit_failover(
-                ref, user_id, current_account_id=ref.account_id,
-            )
-            failover_inputs = (
-                build_image_inputs(failover_ref.source, load_edit_capture(EDIT_CAPTURE_FILE))
-                if failover_ref else []
-            )
-            if failover_ref and failover_inputs:
-                try:
-                    result = await _generate_for(failover_ref, failover_inputs)
-                    if "error" not in result:
-                        active_ref = failover_ref
-                        account_pool.mark_success(failover_ref.account_id)
-                except Exception:
-                    log.exception("Edit failover retry failed")
-                    result = {"error": flow_copy.msg("image_edit_rate_limited")}
-            if "error" in result:
-                if failover_ref and _is_rate_limit_error(result):
-                    _mark_image_account_failure(failover_ref.account_id, result)
-                await status_msg.edit_text(flow_copy.msg("image_edit_rate_limited"))
-                return False
-        else:
-            await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
-            return False
-
-    pairs = result_pairs(result)
-    if not pairs:
-        log.warning(f"Пустой ответ редактирования: {str(result)[:500]}")
-        await status_msg.edit_text(flow_copy.msg("nothing_returned"))
-        return False
-
-    await update_status(flow_copy.msg("sending"))
-    account_pool.mark_success(active_ref.account_id)
-    await _send_result_pairs(
-        message, pairs, user_id=user_id, project_id=active_ref.project_id,
-        prompt=instruction, aspect_ratio=aspect, emoji="✏️",
-        account_id=active_ref.account_id,
-    )
-    await status_msg.delete()
-    return True
-
 
 async def _run_i2i(
     message: types.Message,

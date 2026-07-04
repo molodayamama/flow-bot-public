@@ -9,7 +9,15 @@ from unittest.mock import ANY
 
 from aiogram import types
 
+from flow_core import ImageRef
 from channels.telegram.generation_flow import GenerationFlow, GenerationFlowDeps
+
+
+def _ref(account_id="a", media_id="11111111-1111-1111-1111-111111111111"):
+    return ImageRef(
+        user_id=42, project_id="proj", source={"mediaId": media_id},
+        prompt="orig", aspect_ratio="square", account_id=account_id,
+    )
 
 
 def run(coro):
@@ -117,6 +125,8 @@ def _deps(
     log_jobs=None,
     raise_rate_limited=False,
     raise_not_enough=False,
+    reupload_ref=None,
+    referral_calls=None,
 ):
     pool = pool or _Pool()
     sent = sent if sent is not None else []
@@ -124,6 +134,7 @@ def _deps(
     metrics = metrics or _Metrics()
     seller_calls = seller_calls if seller_calls is not None else []
     log_jobs = log_jobs if log_jobs is not None else []
+    referral_calls = referral_calls if referral_calls is not None else []
     acc_iter = iter(accounts)
 
     async def _ensure(uid, *, account_id=None):
@@ -149,6 +160,12 @@ def _deps(
         if raise_not_enough:
             raise _NotEnoughCredits()
         yield _Charge()
+
+    async def _reupload(ref, uid, *, current_account_id=None):
+        return reupload_ref
+
+    async def _post_hooks(message, uid):
+        referral_calls.append(uid)
 
     return GenerationFlowDeps(
         workspace=lambda uid: workspace.setdefault(uid, {}),
@@ -176,6 +193,10 @@ def _deps(
         after_result=_after_result,
         streak_note=lambda uid: None,
         log_image_job=lambda *a, **k: log_jobs.append((a, k)),
+        edit_capture_file="no_such_edit_capture.json",
+        reupload_ref_for_edit_failover=_reupload,
+        is_rate_limit_error=lambda res: bool(res.get("rate_limited")),
+        post_generation_referral_hooks=_post_hooks,
     ), pool, sent
 
 
@@ -266,6 +287,50 @@ class GenerationFlowTests(unittest.TestCase):
         self.assertFalse(ok)          # rejected → stop, no failover
         self.assertEqual(pool.successes, [])
         self.assertEqual(sent, [])
+
+    def test_edit_short_instruction_skips(self):
+        deps, pool, sent = _deps(clients={}, accounts=[])
+        flow = GenerationFlow(deps)
+        msg = _Message()
+        ok = run(flow.edit_and_send(msg, _ref(), "x"))
+        self.assertFalse(ok)
+        self.assertEqual(sent, [])
+        self.assertTrue(msg.answers)
+
+    def test_edit_success_stores_last_and_fires_referral(self):
+        workspace = {}
+        referral_calls = []
+        deps, pool, sent = _deps(
+            clients={"a": _Client(PAIRS_RESULT)}, accounts=[],
+            workspace=workspace, referral_calls=referral_calls,
+        )
+        flow = GenerationFlow(deps)
+        msg = _Message(user_id=42)
+        ok = run(flow.edit_and_send(msg, _ref(), "add a hat"))
+        self.assertTrue(ok)
+        self.assertEqual(pool.successes, ["a"])
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(workspace[42]["last"]["kind"], "edit")
+        self.assertEqual(referral_calls, [42])
+
+    def test_edit_rate_limit_fails_over(self):
+        clients = {
+            "a": _Client({"error": "cooldown", "rate_limited": True}),
+            "b": _Client(PAIRS_RESULT),
+        }
+        deps, pool, sent = _deps(
+            clients=clients, accounts=[], reupload_ref=_ref(account_id="b"),
+        )
+        flow = GenerationFlow(deps)
+        msg = _Message()
+        ok = run(flow.do_edit_and_send(
+            msg, _ref(account_id="a"), "add a hat",
+            [{"name": "x"}], 42,
+        ))
+        self.assertTrue(ok)
+        # marked once in failover branch, once on final delivery
+        self.assertEqual(pool.successes, ["b", "b"])
+        self.assertEqual(len(sent), 1)
 
 
 if __name__ == "__main__":
