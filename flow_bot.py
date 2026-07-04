@@ -406,17 +406,16 @@ try:
     KEEP_WARM_ROTATE_SEC = max(30.0, float(os.getenv("KEEP_WARM_ROTATE_SEC", "60")))
 except (TypeError, ValueError):
     KEEP_WARM_ROTATE_SEC = 60.0
-_KEEP_WARM_MIN_HOLD = max(
-    KEEP_WARM_ROTATE_SEC + PARK_CHECK_SEC + 10.0,
-    IDLE_PARK_SEC + PARK_CHECK_SEC + 10.0,
-)
 try:
-    KEEP_WARM_HOLD_SEC = max(
-        _KEEP_WARM_MIN_HOLD,
-        float(os.getenv("KEEP_WARM_HOLD_SEC", str(_KEEP_WARM_MIN_HOLD))),
+    KEEP_WARM_AFTER_REQUEST_SEC = max(
+        60.0,
+        float(os.getenv(
+            "KEEP_WARM_AFTER_REQUEST_SEC",
+            os.getenv("KEEP_WARM_HOLD_SEC", "1800"),
+        )),
     )
 except (TypeError, ValueError):
-    KEEP_WARM_HOLD_SEC = _KEEP_WARM_MIN_HOLD
+    KEEP_WARM_AFTER_REQUEST_SEC = 1800.0
 TOKEN_TTL_SEC = 50 * 60  # обновлять Bearer каждые 50 минут
 GCREDITS_CACHE_SEC = max(60, int(os.getenv("GCREDITS_CACHE_SEC", "1800")))
 GCREDITS_SESSION_SNAPSHOT_TIMEOUT_SEC = 1.5
@@ -7185,6 +7184,7 @@ async def _backend_generate_images(req: dict) -> dict:
         if acc_id is None:
             return {"error": "accounts_unavailable"}
         tried.add(acc_id)
+        _note_keep_warm_account("image", acc_id)
         project_id = await ensure_user_project(user_id, account_id=acc_id)
         try:
             async with account_pool.image_slot(acc_id):
@@ -7247,6 +7247,7 @@ async def _backend_generate_i2i(req: dict) -> dict:
         if acc_id is None:
             return {"error": "accounts_unavailable" if not tried else last_error}
         tried.add(acc_id)
+        _note_keep_warm_account("image", acc_id)
         project_id = await ensure_user_project(user_id, account_id=acc_id)
         try:
             source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png", project_id=project_id)
@@ -7324,6 +7325,7 @@ async def _backend_generate_video_ingredients(req: dict) -> dict:
     acc_id = _account_for_video(user_id)
     if acc_id is None:
         return {"error": "accounts_unavailable"}
+    _note_keep_warm_account("video", acc_id)
     project_id = await ensure_user_project(user_id, account_id=acc_id)
     try:
         source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_video_{user_id}.png", project_id=project_id)
@@ -7333,7 +7335,6 @@ async def _backend_generate_video_ingredients(req: dict) -> dict:
     if not source or not source.get("mediaId"):
         return {"error": "upload failed"}
     video_project_id = source.pop("_project_id", None) or project_id
-
     try:
         async with account_pool.video_slot(acc_id):
             result = await _client_for_acc(acc_id).generate_video(
@@ -7892,6 +7893,7 @@ async def _do_generate_and_send(
                 await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
                 return False
             tried.add(acc_id)
+            _note_keep_warm_account("image", acc_id)
             project_id = await ensure_user_project(user_id, account_id=acc_id)
 
             def _log_failover(from_acc: str, reason: str) -> None:
@@ -8514,6 +8516,7 @@ async def _do_edit_and_send(
             pass
 
     async def _generate_for(edit_ref: ImageRef, inputs: list) -> dict:
+        _note_keep_warm_account("image", edit_ref.account_id)
         return await _client_for_acc(edit_ref.account_id).generate_images(
             instruction,
             aspect_ratio=aspect,
@@ -8657,6 +8660,7 @@ async def _do_run_i2i(
             pass
 
     try:
+        _note_keep_warm_account("image", ref.account_id)
         result = await _client_for_acc(ref.account_id).generate_images(
             prompt,
             aspect_ratio=ref.aspect_ratio,
@@ -8958,6 +8962,7 @@ async def _do_mix_and_send(
 
     project_id = await ensure_user_project(user_id)
     acc_id = _account_for(user_id)
+    _note_keep_warm_account("image", acc_id)
     try:
         result = await _client_for_acc(acc_id).generate_images(
             prompt,
@@ -9961,6 +9966,7 @@ async def _upload_video_sources_from_file_ids(
     if acc_id is None:
         await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
         return []
+    _note_keep_warm_account("video", acc_id)
     project_id = await ensure_user_project(user_id, account_id=acc_id)
     sources: list[dict] = []
     for file_id in file_ids[:MAX_INGREDIENTS]:
@@ -10737,6 +10743,7 @@ async def handle_video_upload(message: types.Message):
     if acc_id is None:
         await status.edit_text(flow_copy.msg("accounts_unavailable"))
         return
+    _note_keep_warm_account("video", acc_id)
     project_id = await ensure_user_project(user_id, account_id=acc_id)
     source = await _keeper_for_acc(acc_id).upload_video(
         data,
@@ -11731,6 +11738,7 @@ async def _do_video_generate_and_send(
         # Нет доступных video-capable аккаунтов — отказ ДО списания кредитов.
         await message.answer(flow_copy.msg("accounts_unavailable"))
         return
+    _note_keep_warm_account("video", acc_id)
     video_project_id = (
         source_video.project_id if source_video
         else _video_reference_project_id(st, vmode)
@@ -11954,6 +11962,7 @@ async def _do_video_generate_and_send(
                     if failover_acc and failover_acc != failed_acc:
                         log.info("🔄 video failover: %s → %s", failed_acc, failover_acc)
                         acc_id = failover_acc
+                        _note_keep_warm_account("video", acc_id)
                         video_project_id = (
                             _video_reference_project_id(st, vmode)
                             if reference_failover else None
@@ -12954,6 +12963,7 @@ async def _upload_photo_source_from_file_id(
     if acc_id is None:
         await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
         return None
+    _note_keep_warm_account("video", acc_id)
     project_id = project_id or await ensure_user_project(user_id, account_id=acc_id)
     try:
         source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png", project_id=project_id)
@@ -13149,6 +13159,7 @@ async def _upload_image_ref_from_file_id(
     if acc_id is None:
         await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
         return None
+    _note_keep_warm_account("image", acc_id)
     project_id = project_id or await ensure_user_project(user_id, account_id=acc_id)
     try:
         source = await _keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png", project_id=project_id)
@@ -13940,29 +13951,7 @@ async def handle_plain_text(message: types.Message):
 # ТОЧКА ВХОДА
 # ───────────────────────────────────────────
 
-_keep_warm_cursor: dict[str, int] = {"image": 0, "video": 0}
-
-
-def _pick_keep_warm_accounts(
-    candidates: list[str],
-    role: str,
-    count: int,
-    *,
-    avoid: set[str] | None = None,
-) -> list[str]:
-    if count <= 0 or not candidates:
-        return []
-    avoid_set = set(avoid or set())
-    pool = [aid for aid in candidates if aid not in avoid_set]
-    if not pool:
-        pool = list(candidates)
-    if not pool:
-        return []
-    start = _keep_warm_cursor.get(role, 0) % len(pool)
-    ordered = pool[start:] + pool[:start]
-    picked = ordered[: min(count, len(ordered))]
-    _keep_warm_cursor[role] = _keep_warm_cursor.get(role, 0) + len(picked)
-    return picked
+_keep_warm_targets: dict[str, dict[str, float]] = {"image": {}, "video": {}}
 
 
 def _keep_warm_image_candidates() -> list[str]:
@@ -13984,39 +13973,63 @@ def _keep_warm_video_candidates() -> list[str]:
     ]
 
 
+def _keep_warm_limit(role: str) -> int:
+    return KEEP_WARM_VIDEO_ACCOUNTS if role == "video" else KEEP_WARM_IMAGE_ACCOUNTS
+
+
+def _keep_warm_candidates(role: str) -> list[str]:
+    return _keep_warm_video_candidates() if role == "video" else _keep_warm_image_candidates()
+
+
+def _prune_keep_warm_targets(now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    for role, targets in _keep_warm_targets.items():
+        allowed = set(_keep_warm_candidates(role))
+        for acc_id, expires_at in list(targets.items()):
+            if expires_at <= now or acc_id not in allowed:
+                targets.pop(acc_id, None)
+        limit = _keep_warm_limit(role)
+        if limit <= 0:
+            targets.clear()
+            continue
+        while len(targets) > limit:
+            oldest = min(targets, key=targets.get)
+            targets.pop(oldest, None)
+
+
+def _note_keep_warm_account(role: str, acc_id: str | None) -> None:
+    if role not in _keep_warm_targets or not acc_id or _keep_warm_limit(role) <= 0:
+        return
+    if acc_id not in set(_keep_warm_candidates(role)):
+        return
+    _keep_warm_targets[role][acc_id] = time.time() + KEEP_WARM_AFTER_REQUEST_SEC
+    _prune_keep_warm_targets()
+    kp = keepers.get(acc_id)
+    if kp is not None:
+        kp.keep_warm_for(KEEP_WARM_AFTER_REQUEST_SEC, role)
+    log.info(
+        "keep-warm pinned after request: %s:%s for %.0f sec",
+        role,
+        acc_id,
+        KEEP_WARM_AFTER_REQUEST_SEC,
+    )
+
+
 async def _account_keep_warm_loop() -> None:
     if KEEP_WARM_IMAGE_ACCOUNTS <= 0 and KEEP_WARM_VIDEO_ACCOUNTS <= 0:
         return
-    await asyncio.sleep(5)
     while True:
         try:
-            selected: list[tuple[str, str]] = []
-            video_accounts = _pick_keep_warm_accounts(
-                _keep_warm_video_candidates(),
-                "video",
-                KEEP_WARM_VIDEO_ACCOUNTS,
-            )
-            selected.extend(("video", aid) for aid in video_accounts)
-            image_accounts = _pick_keep_warm_accounts(
-                _keep_warm_image_candidates(),
-                "image",
-                KEEP_WARM_IMAGE_ACCOUNTS,
-                avoid={aid for _, aid in selected},
-            )
-            selected.extend(("image", aid) for aid in image_accounts)
-
-            tasks = []
-            activated: list[str] = []
-            for role, acc_id in selected:
-                kp = keepers.get(acc_id)
-                if kp is None:
-                    continue
-                kp.keep_warm_for(KEEP_WARM_HOLD_SEC, role)
-                tasks.append(kp.get_session())
-                activated.append(f"{role}:{acc_id}")
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-                log.info("🔥 keep-warm active: %s", ", ".join(activated))
+            before = {role: set(targets) for role, targets in _keep_warm_targets.items()}
+            _prune_keep_warm_targets()
+            after = {role: set(targets) for role, targets in _keep_warm_targets.items()}
+            if before != after:
+                active = [
+                    f"{role}:{acc_id}"
+                    for role, targets in _keep_warm_targets.items()
+                    for acc_id in targets
+                ]
+                log.info("keep-warm active after prune: %s", ", ".join(active) or "none")
         except asyncio.CancelledError:
             raise
         except Exception:

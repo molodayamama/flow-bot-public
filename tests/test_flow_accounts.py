@@ -396,11 +396,18 @@ class BotPoolWiringTests(unittest.TestCase):
         self.assertIn("async def _account_keep_warm_loop", self.source)
         self.assertIn("KEEP_WARM_IMAGE_ACCOUNTS", self.source)
         self.assertIn("KEEP_WARM_VIDEO_ACCOUNTS", self.source)
-        self.assertIn("kp.keep_warm_for(KEEP_WARM_HOLD_SEC, role)", self.source)
+        self.assertIn("KEEP_WARM_AFTER_REQUEST_SEC", self.source)
+        self.assertIn("def _note_keep_warm_account", self.source)
+        self.assertIn("kp.keep_warm_for(KEEP_WARM_AFTER_REQUEST_SEC, role)", self.source)
+        self.assertNotIn("_pick_keep_warm_accounts", self.source)
         start = self.source.index("async def _main_impl")
         block = self.source[start:start + 8500]
         self.assertIn("keep_warm_task = asyncio.create_task(_account_keep_warm_loop())", block)
         self.assertIn("keep_warm_task.cancel()", block)
+
+        loop_start = self.source.index("async def _account_keep_warm_loop")
+        loop_block = self.source[loop_start:self.source.index("def _install_shutdown_exception_filter")]
+        self.assertNotIn("get_session()", loop_block)
 
     def test_admin_pool_commands(self) -> None:
         self.assertIn('Command("acc_off")', self.source)
@@ -421,7 +428,7 @@ class BotPoolWiringTests(unittest.TestCase):
         self.assertIn("_keeper_for_acc(acc_id).upload_image", photo_block)
 
         helper_start = self.source.index("async def _upload_photo_source_from_message")
-        helper_block = self.source[helper_start:helper_start + 1800]
+        helper_block = self.source[helper_start:helper_start + 2300]
         self.assertIn("acc_id = _account_for_video(user_id)", helper_block)
         self.assertIn('source.setdefault("_account_id", acc_id)', helper_block)
 

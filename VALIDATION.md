@@ -732,3 +732,18 @@ For the documentation bootstrap task:
 - No business logic files should be modified.
 - No network/stateful tests are required.
 - Secrets must be described by category/name only, not copied as values.
+
+## Keep-Warm Request Pinning
+
+- Account keep-warm must not rotate accounts on a background timer. It should
+  pin only accounts that were actually used by image/video upload or generation
+  paths, for `KEEP_WARM_AFTER_REQUEST_SEC` seconds (default 1800).
+- Safe offline validation:
+  - `python -m py_compile flow_bot.py`
+  - `$env:TELEGRAM_TOKEN='123456789:REDACTED'; python -m unittest discover -s tests -p test_keeper_parking.py`
+  - `$env:TELEGRAM_TOKEN='123456789:REDACTED'; python -m unittest discover -s tests -p test_flow_accounts.py`
+  - `git diff --check`
+- Live validation after deploy: journal should show `keep-warm pinned after
+  request: <role>:<account> for 1800 sec` only after real bot/backend requests,
+  and should not show periodic `keep-warm active: video:..., image:...` wake
+  cycles when there are no requests.
