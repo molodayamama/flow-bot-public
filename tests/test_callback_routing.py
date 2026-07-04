@@ -59,6 +59,7 @@ _SOURCE_FILES = (
     str(Path("channels") / "telegram" / "routers" / "marketplace.py"),
     str(Path("channels") / "telegram" / "routers" / "video.py"),
     str(Path("channels") / "telegram" / "texts.py"),
+    str(Path("channels") / "telegram" / "monitors.py"),
     "prompts_lib.py",
 )
 

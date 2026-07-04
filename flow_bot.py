@@ -190,6 +190,7 @@ from channels.telegram.image_delivery import ImageDelivery, ImageDeliveryDeps
 from channels.telegram.generation_flow import GenerationFlow, GenerationFlowDeps
 from channels.telegram.video_flow import VideoFlow, VideoFlowDeps
 from channels.telegram.seller_flow import SellerFlow, SellerFlowDeps
+from channels.telegram.monitors import Monitors, MonitorsDeps
 from product.job_log import (
     ImageJobLogger,
     ms_since as _ms_since,
@@ -3774,82 +3775,33 @@ _DIGEST_DELAY_S = 0.5     # Пауза между отправками (не с�
 
 
 async def _daily_digest_loop() -> None:
-    """Фоновый луп: раз в 6 часов шлём дайджест пользователям, неактивным 3-7 дней."""
-    import random as _random
-    while True:
-        try:
-            now_h = __import__("datetime").datetime.utcnow().hour
-            # Отправляем только в окно 11:00–13:00 UTC (гибко).
-            if abs(now_h - _DIGEST_HOUR) <= 1:
-                users = metrics.get_users_for_digest(min_days=3, max_days=7, limit=_DIGEST_BATCH)
-                log.info("📨 Дайджест: найдено %d кандидатов", len(users))
-                ideas = list(_QUICK_IDEAS)
-                for entry in users:
-                    uid = entry["user_id"]
-                    try:
-                        bal = credit_store.balance(uid)
-                        if bal <= 0:
-                            text = flow_copy.msg("digest_nudge_empty")
-                        else:
-                            idea = _random.choice(ideas)
-                            text = flow_copy.msg("digest_nudge", idea=idea)
-                        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                            [types.InlineKeyboardButton(text="🎨 Создать", callback_data="m:gen")],
-                            [types.InlineKeyboardButton(text="🏠 Меню", callback_data="m:menu")],
-                        ])
-                        await bot.send_message(uid, text, reply_markup=kb, parse_mode="HTML")
-                        metrics.log_event("digest_sent", user_id=uid)
-                        await asyncio.sleep(_DIGEST_DELAY_S)
-                    except Exception as exc:
-                        log.debug("Дайджест не доставлен uid=%s: %s", uid, exc)
-        except Exception:
-            log.warning("_daily_digest_loop iteration failed", exc_info=True)
-        # Спим 6 часов до следующей проверки
-        await asyncio.sleep(_DIGEST_INTERVAL_H * 3600)
+    await _monitors.daily_digest_loop()
 
 
 _VIDEO_POOL_CHECK_INTERVAL_S = 300   # как часто проверяем здоровье видео-пула
 _VIDEO_POOL_MIN_SCORE = 10           # ниже — аккаунт считаем «нездоровым»
-_pool_degraded_alerted = False       # шлём алерт один раз на переход состояния
+
+
+_monitors = Monitors(MonitorsDeps(
+    metrics=metrics,
+    credit_store=credit_store,
+    log=log,
+    send_message=bot.send_message,
+    send_owner_alert=lambda text: _send_owner_alert(text),
+    account_pool=account_pool,
+    video_scores_for_model=_video_scores_for_model,
+    quick_ideas=tuple(_QUICK_IDEAS),
+    digest_hour=_DIGEST_HOUR,
+    digest_batch=_DIGEST_BATCH,
+    digest_delay_s=_DIGEST_DELAY_S,
+    digest_interval_h=_DIGEST_INTERVAL_H,
+    video_pool_min_score=_VIDEO_POOL_MIN_SCORE,
+    video_pool_check_interval_s=_VIDEO_POOL_CHECK_INTERVAL_S,
+))
 
 
 async def _video_pool_health_loop() -> None:
-    """Фоновый монитор: алерт владельцу, когда не осталось ни одного здорового
-    video-аккаунта — РАНЬШЕ, чем юзеры начнут ловить отказы. Алерт шлём один раз
-    на переход (degraded ↔ recovered), чтобы не спамить."""
-    global _pool_degraded_alerted
-    await asyncio.sleep(120)  # дать прогреву устаканиться
-    while True:
-        try:
-            scores = _video_scores_for_model("omni-flash-4s")
-            usable = [a for a in account_pool.account_ids() if account_pool.is_video_capable(a)]
-            # «Нездоров» = есть скор и он ниже порога; без данных = нейтрально (ок).
-            healthy = [
-                a for a in usable
-                if not (a in scores and (scores[a].get("score") or 0) < _VIDEO_POOL_MIN_SCORE)
-            ]
-            if not healthy:
-                if not _pool_degraded_alerted:
-                    _pool_degraded_alerted = True
-                    detail = ", ".join(
-                        f"{a}:{round((scores.get(a, {}).get('score') or 0), 1)}" for a in usable
-                    ) or "нет video-capable аккаунтов"
-                    await _send_owner_alert(
-                        "⚠️ <b>Видео-пул деградировал</b>\n"
-                        f"Здоровых video-аккаунтов: 0 из {len(usable)} доступных.\n"
-                        f"Score: {detail}\n"
-                        "Видео-запросы юзеров начнут падать — проверь аккаунты/прокси."
-                    )
-                    metrics.log_event("video_pool_degraded", source="monitor",
-                                      payload={"usable": len(usable)})
-            elif _pool_degraded_alerted:
-                _pool_degraded_alerted = False
-                await _send_owner_alert(
-                    f"✅ Видео-пул восстановлен: здоровых аккаунтов {len(healthy)}."
-                )
-        except Exception:
-            log.warning("_video_pool_health_loop iteration failed", exc_info=True)
-        await asyncio.sleep(_VIDEO_POOL_CHECK_INTERVAL_S)
+    await _monitors.video_pool_health_loop()
 
 
 # Tail fallback for unmatched callback queries (Phase 6). Must stay the LAST
