@@ -194,6 +194,7 @@ from channels.telegram.seller_flow import SellerFlow, SellerFlowDeps
 from channels.telegram.monitors import Monitors, MonitorsDeps
 from channels.telegram.photo_intake import PhotoIntake, PhotoIntakeDeps
 from channels.telegram.ideas_screens import IdeasScreens, IdeasScreensDeps
+from channels.telegram.marketplace_sku import MarketplaceSku, MarketplaceSkuDeps
 from product.job_log import (
     ImageJobLogger,
     ms_since as _ms_since,
@@ -1043,81 +1044,31 @@ async def _show_sku_projects(message: types.Message, *, user_id: int, edit: bool
     )
 
 
+_marketplace_sku = MarketplaceSku(MarketplaceSkuDeps(
+    workspace=_ws,
+    metrics=metrics,
+    menu_button=_menu_button,
+))
+
+
 def _mp_sku_choice_kb(user_id: int) -> types.InlineKeyboardMarkup:
-    B = types.InlineKeyboardButton
-    choices = metrics.recent_seller_skus(user_id, limit=5)
-    _ws(user_id)["mp_sku_choices"] = choices
-    rows = [
-        [B(text=f"📦 {sku[:48]}", callback_data=f"mp:sku:{idx}")]
-        for idx, sku in enumerate(choices)
-    ]
-    rows.append([B(text="➕ Новый SKU / артикул", callback_data="mp:sku:new")])
-    rows.append([_menu_button("menu", "m:menu")])
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+    return _marketplace_sku.choice_kb(user_id)
 
 
 def _pending_sku_payload(user_id: int) -> dict | None:
-    st = _ws(user_id)
-    payload = st.get("mp_sku_pending")
-    return payload if isinstance(payload, dict) else None
+    return _marketplace_sku.pending_payload(user_id)
 
 
 def _latest_sku_payload(user_id: int, *, platform: str | None = None) -> dict | None:
-    rows = metrics.get_gallery(user_id, limit=1)
-    if not rows:
-        return None
-    row = rows[0]
-    file_id = str(row.get("file_id") or "")
-    if not file_id:
-        return None
-    return {
-        "file_id": file_id,
-        "token": str(row.get("token") or ""),
-        "prompt": str(row.get("prompt") or ""),
-        "platform": platform or str(_ws(user_id).get("mp_platform") or ""),
-    }
+    return _marketplace_sku.latest_payload(user_id, platform=platform)
 
 
 async def _save_sku_payload(message: types.Message, user_id: int, sku: str, payload: dict) -> bool:
-    if not payload:
-        await message.answer("Кнопка устарела. Нажми «➕ В серию SKU» под нужной картинкой ещё раз.")
-        return False
-    row_id = metrics.save_seller_sku_item(
-        user_id,
-        sku,
-        file_id=str(payload.get("file_id") or ""),
-        token=str(payload.get("token") or ""),
-        prompt=str(payload.get("prompt") or ""),
-        platform=str(payload.get("platform") or ""),
-    )
-    if row_id <= 0:
-        await message.answer("Не удалось сохранить SKU. Проверь название и попробуй ещё раз.")
-        return False
-    return True
+    return await _marketplace_sku.save_payload(message, user_id, sku, payload)
 
 
 async def _save_pending_sku_item(message: types.Message, user_id: int, sku: str) -> bool:
-    payload = _pending_sku_payload(user_id)
-    if not payload:
-        _ws(user_id).pop("mp_sku_pending", None)
-        await message.answer("Кнопка устарела. Нажми «➕ В серию SKU» под нужной картинкой ещё раз.")
-        return False
-    if not await _save_sku_payload(message, user_id, sku, payload):
-        return False
-    st = _ws(user_id)
-    st.pop("mp_sku_pending", None)
-    st.pop("mp_sku_choices", None)
-    st["await"] = None
-    metrics.log_event("mp_sku_saved", user_id=user_id, source=str(payload.get("platform") or "seller"))
-    await message.answer(
-        f"📦 Добавлено в SKU <b>{html.escape(sku.strip())}</b>.",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="📦 Мои товары", callback_data="mp:projects")],
-            [_menu_button("menu", "m:menu")],
-        ]),
-        parse_mode="HTML",
-    )
-    return True
+    return await _marketplace_sku.save_pending_item(message, user_id, sku)
 
 
 # DEFAULT_COUNT / DEFAULT_FMT moved to config/settings.py (Phase 11); imported above.
