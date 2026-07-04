@@ -901,92 +901,22 @@ _project_mgr = ProjectManager(
 # parse_result / result_pairs импортированы из flow_core (общая логика разбора).
 
 
-class RateLimited(Exception):
-    """Запрос отклонён: у пользователя уже выполняется другой запрос."""
-
-
-@asynccontextmanager
-async def user_slot(user_id: int, message: types.Message):
-    """Удержать «слот» пользователя на время запроса.
-
-    Поведение:
-    - Если уже идёт запрос этого пользователя — отклоняем (анти-абуз).
-    - Если кулдаун не вышел, но осталось ≤ ``MAX_AUTO_WAIT_SEC`` — ждём остаток
-      и выполняем (не отклоняем за раннее нажатие).
-    - Слот гарантированно освобождается в ``finally``.
-    """
-    busy_since = user_busy.get(user_id)
-    if busy_since is not None and (time.time() - busy_since) < BUSY_MAX_SEC:
-        await message.answer("⏳ Ваш предыдущий запрос ещё выполняется — дождитесь его.")
-        raise RateLimited
-    if busy_since is not None:
-        # Слот протух (операция зависла) — отпускаем и пускаем новый запрос.
-        log.warning("user_busy слот для %s протух (%.0fс), отпускаю", user_id, time.time() - busy_since)
-        user_busy.pop(user_id, None)
-
-    elapsed = time.time() - user_last_request[user_id]
-    remaining = COOLDOWN_SEC - elapsed
-    if remaining > 0 and remaining > MAX_AUTO_WAIT_SEC:
-        await message.answer(f"⏱️ Слишком часто. Подождите ещё {int(remaining)} сек.")
-        raise RateLimited
-
-    # Занимаем слот ДО любого await чтобы избежать race condition:
-    # два одновременных запроса иначе оба пройдут проверку user_busy
-    # и уйдут в sleep параллельно.
-    user_busy[user_id] = time.time()
-    try:
-        if remaining > 0:
-            await message.answer(f"⏱️ Подождите {int(remaining) + 1} сек, выполняю...")
-            await asyncio.sleep(remaining)
-        yield
-    finally:
-        user_busy.pop(user_id, None)
-        user_last_request[user_id] = time.time()
-
-
-# Credit-gate primitives now live in billing/credit_gate.py (PR-7a). Re-exported
-# here so the rest of flow_bot and its callers keep working unchanged.
-from billing.credit_gate import (  # noqa: E402
-    Charge as _Charge,
-    NotEnoughCredits,
-    open_credit_gate,
+from channels.telegram.request_gate import (  # noqa: E402
+    RateLimited,
+    RequestGate,
+    RequestGateDeps,
 )
+from billing.credit_gate import NotEnoughCredits  # noqa: E402
 
 
-@asynccontextmanager
-async def credit_gate(
+def user_slot(user_id: int, message: types.Message):
+    return _request_gate.user_slot(user_id, message)
+
+
+def credit_gate(
     user_id: int, action: str, message: types.Message, num_images: int = 1, *, surcharge: int = 0
 ):
-    """Списать кредиты за действие; вернуть при неуспехе (charge-on-success).
-
-    Резервируем стоимость на входе; если тело не выставило ``charge.ok``, делаем
-    рефанд. Бесплатные действия (цена 0) проходят без списания. При нехватке
-    средств показываем экран пополнения и поднимаем ``NotEnoughCredits``.
-    ``surcharge`` — доплата сверх базовой цены (например, премиум-модель картинки).
-    """
-    price = action_price(action, num_images) + max(0, int(surcharge))
-
-    async def _on_insufficient(have: int, needed: int) -> None:
-        # Telegram-specific balance UI; the charge/refund rule lives in billing/.
-        if have == 0:
-            await message.answer(
-                flow_copy.msg("zero_balance"),
-                reply_markup=_zero_balance_kb(),
-                parse_mode="HTML",
-            )
-        else:
-            kb = types.InlineKeyboardMarkup(
-                inline_keyboard=[[_menu_button("topup", "m:topup")], [_menu_button("menu", "m:menu")]]
-            )
-            await message.answer(
-                flow_copy.msg("low_balance", needed=needed, have=have), reply_markup=kb,
-                parse_mode="HTML",
-            )
-
-    async with open_credit_gate(
-        credit_store, user_id, price, on_insufficient=_on_insufficient
-    ) as charge:
-        yield charge
+    return _request_gate.credit_gate(user_id, action, message, num_images, surcharge=surcharge)
 
 
 def _project_key(account_id: str, user_id: int) -> str:
@@ -1681,6 +1611,19 @@ def _zero_balance_kb() -> types.InlineKeyboardMarkup:
     rows.append([_menu_button("topup", "m:topup")])  # Все пакеты
     rows.append([_menu_button("menu", "m:menu")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+_request_gate = RequestGate(RequestGateDeps(
+    user_busy=user_busy,
+    user_last_request=user_last_request,
+    busy_max_sec=BUSY_MAX_SEC,
+    cooldown_sec=COOLDOWN_SEC,
+    max_auto_wait_sec=MAX_AUTO_WAIT_SEC,
+    log=log,
+    credit_store=credit_store,
+    zero_balance_kb=_zero_balance_kb,
+    menu_button=_menu_button,
+))
 
 
 async def show_main_menu(

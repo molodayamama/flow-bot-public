@@ -584,12 +584,18 @@ class FlowBotWiringStaticTests(unittest.TestCase):
 
     def test_rate_limit_waits_instead_of_rejecting(self) -> None:
         # Early cooldown should sleep the remainder and proceed, not reject.
-        self.assertIn("MAX_AUTO_WAIT_SEC", self.source)
-        self.assertIn("await asyncio.sleep(remaining)", self.source)
-        self.assertIn("async def user_slot", self.source)
+        # user_slot / RateLimited moved to channels.telegram.request_gate (Phase 11).
+        gate = (
+            PROJECT_ROOT / "channels" / "telegram" / "request_gate.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("max_auto_wait_sec", gate)
+        self.assertIn("await asyncio.sleep(remaining)", gate)
+        self.assertIn("async def user_slot", gate)
         # Anti-abuse: parallel request while one is in-flight is rejected.
-        self.assertIn("user_busy", self.source)
-        self.assertIn("class RateLimited", self.source)
+        self.assertIn("user_busy", gate)
+        self.assertIn("class RateLimited", gate)
+        # flow_bot still owns the cooldown constant it injects.
+        self.assertIn("MAX_AUTO_WAIT_SEC", self.source)
         self.assertEqual(self.source.count("COOLDOWN_SEC = 10"), 1)
 
     def test_photo_upload_and_edit_wired(self) -> None:
