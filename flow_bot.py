@@ -177,6 +177,7 @@ from flow_core import (
 )
 import flow_copy
 from generation import backend_service
+from generation.prompt_boost import boost_prompt_with_gemini as _gemini_boost_prompt
 import metrics
 from mediautil import image_ext_from_bytes
 from textutil import _days_word, _short_prompt, parse_ids as _parse_ids
@@ -1239,36 +1240,7 @@ async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
 
 
 async def _boost_prompt_with_gemini(prompt: str) -> str | None:
-    """Расширить короткий промпт через Gemini Flash. Возвращает улучшенный текст или None."""
-    if not GEMINI_API_KEY:
-        return None
-    system = (
-        "You improve image generation prompts. The user gave a short prompt; you expand it "
-        "with lighting, composition, style, mood, and artistic detail. "
-        "Reply ONLY with the improved prompt. No quotes, no explanation, no intro. "
-        "Keep the same language as the input. Length: 1-3 sentences max."
-    )
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "systemInstruction": {"parts": [{"text": system}]},
-        "generationConfig": {"maxOutputTokens": 200, "temperature": 0.7},
-    }
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-    )
-    try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as sess:
-            async with sess.post(url, json=payload) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-                return (
-                    data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                ) or None
-    except Exception as exc:
-        log.warning("Gemini prompt boost failed: %s", exc)
-        return None
+    return await _gemini_boost_prompt(prompt, api_key=GEMINI_API_KEY, log=log)
 
 
 def _prompt_picker_text(ideas: list[str]) -> str:
