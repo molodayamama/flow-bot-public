@@ -427,6 +427,11 @@ class CopyTests(unittest.TestCase):
 class BotMenuWiringTests(unittest.TestCase):
     def setUp(self) -> None:
         self.source = (PROJECT_ROOT / "flow_bot.py").read_text(encoding="utf-8")
+        # Video generate-and-send moved to channels.telegram.video_flow (Phase 11);
+        # deps injected, so runtime singletons carry a ``d.`` prefix there.
+        self.video_flow_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "video_flow.py"
+        ).read_text(encoding="utf-8")
         # Video/edit keyboard builders moved to channels/telegram/keyboards.py
         # (Phase 5). Scrapes of those defs read kb_source instead of flow_bot.
         self.kb_source = (
@@ -1447,8 +1452,8 @@ class BotMenuWiringTests(unittest.TestCase):
         # не должны попадать в caption — иначе при пересылке видео подпись
         # выглядит мусорно. Доступность Продлить решает клавиатура
         # (_video_can_extend в video_result_kb).
-        start = self.source.index('caption = flow_copy.msg("vid_result_caption"')
-        block = self.source[start:start + 350]
+        start = self.video_flow_source.index('caption = flow_copy.msg("vid_result_caption"')
+        block = self.video_flow_source[start:start + 350]
         self.assertNotIn("vid_result_actions_hint", block)
         self.assertNotIn("vid_omni_no_extend_hint", block)
 
@@ -1456,9 +1461,9 @@ class BotMenuWiringTests(unittest.TestCase):
         # Видео-результат должен звать друзей так же, как картинки
         # (_send_result_pairs) — и parse_mode="HTML" обязателен, иначе
         # тег <a href> уйдёт пользователю как голый текст.
-        start = self.source.index('caption = flow_copy.msg("vid_result_caption"')
-        block = self.source[start:start + 4000]
-        self.assertIn("_referral_link(user_id)", block)
+        start = self.video_flow_source.index('caption = flow_copy.msg("vid_result_caption"')
+        block = self.video_flow_source[start:start + 4000]
+        self.assertIn("d.referral_link(user_id)", block)
         self.assertIn('Создай своё в @', block)
         answer_video_start = block.index("await message.answer_video(")
         answer_video_block = block[answer_video_start:answer_video_start + 300]
@@ -1471,8 +1476,8 @@ class BotMenuWiringTests(unittest.TestCase):
         # prompt идёт в HTML-caption — без escape сломает parse_mode="HTML"
         # на промптах с <, >, & (раньше caption слали без parse_mode, поэтому
         # экранирование не требовалось; теперь требуется).
-        start = self.source.index('caption = flow_copy.msg("vid_result_caption"')
-        line = self.source[start:start + 200]
+        start = self.video_flow_source.index('caption = flow_copy.msg("vid_result_caption"')
+        line = self.video_flow_source[start:start + 200]
         self.assertIn("html.escape(_short_prompt(prompt, 60))", line)
 
     def test_ideas_template_photo_becomes_edit_base(self) -> None:
@@ -1622,7 +1627,7 @@ class BotMenuWiringTests(unittest.TestCase):
 
     def test_video_retry_rehydrates_from_snapshot(self) -> None:
         # The retry button must re-run the SAME request, not report "expired".
-        self.assertIn('st["vretry"]', self.source)
+        self.assertIn('st["vretry"]', self.video_flow_source)
         # v:retry / v:retrynew snapshot restore lives in the video router (Phase 6).
         self.assertIn('snap = st.get("vretry")', self.video_router_source)
         # _vid_clear moved to storage/session_state.py (Phase 11 core split).
@@ -1634,8 +1639,8 @@ class BotMenuWiringTests(unittest.TestCase):
         # На модерации повтор того же промпта бессмыслен → отдельная кнопка
         # «Изменить промпт и снова» (v:retrynew), которая ждёт новый промпт и
         # генерит с сохранёнными фото/настройками. Прочие сбои — обычный v:retry.
-        self.assertIn('if error_type == "danger_filter"', self.source)
-        self.assertIn('_menu_button("vid_retry_edit", "v:retrynew")', self.source)
+        self.assertIn('if error_type == "danger_filter"', self.video_flow_source)
+        self.assertIn('d.menu_button("vid_retry_edit", "v:retrynew")', self.video_flow_source)
         # v:retrynew dispatch/state-set moved to the video router (Phase 6).
         self.assertIn('if data == "v:retrynew":', self.video_router_source)
         self.assertIn('st["vawait"] = "vretry_prompt"', self.video_router_source)
@@ -1646,19 +1651,19 @@ class BotMenuWiringTests(unittest.TestCase):
         # Модерация (кривой промпт) — не вина аккаунта: video_outcome (routing
         # score) и flow_jobs (admin per-account fail) НЕ пишутся при danger_filter.
         # Продуктовый video_failed и возврат кредитов остаются.
-        start = self.source.index("async def _fail_retry")
-        block = self.source[start:start + 2200]
+        start = self.video_flow_source.index("async def _fail_retry")
+        block = self.video_flow_source[start:start + 2200]
         self.assertIn('content_moderation = error_type == "danger_filter"', block)
         # both account-attributing writes are guarded by `if not content_moderation:`
         self.assertEqual(block.count("if not content_moderation:"), 2)
         # the two guarded writes are the routing score and the per-account ledger
         om = block.index('"video_outcome"')
-        fj = block.index("metrics.log_flow_job(")
+        fj = block.index("d.metrics.log_flow_job(")
         for pos in (om, fj):
             guard = block.rfind("if not content_moderation:", 0, pos)
             self.assertNotEqual(guard, -1)
         # product-level failure event stays unconditional
-        self.assertIn('metrics.log_event("video_failed"', block)
+        self.assertIn('d.metrics.log_event("video_failed"', block)
 
     def test_video_403_refreshes_session_before_next_action(self) -> None:
         self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
@@ -1740,11 +1745,8 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("is_rate_limit_error(result)", helper)
         self.assertIn('"reason": "rate_limited", "op": "video"', helper)
 
-        video = self.source[
-            self.source.index("async def _do_video_generate_and_send"):
-            self.source.index("async def _video_download")
-        ]
-        self.assertIn("_mark_video_account_failure(acc_id, result)", video)
+        # do_generate_and_send moved to channels.telegram.video_flow (Phase 11).
+        self.assertIn("d.mark_video_account_failure(acc_id, result)", self.video_flow_source)
 
     def test_after_result_offers_video_balance_and_menu(self) -> None:
         # after_result moved to channels.telegram.image_delivery (Phase 11).
@@ -1896,12 +1898,14 @@ class BotMenuWiringTests(unittest.TestCase):
     def test_video_generation_holds_user_slot(self) -> None:
         # Видео — через тот же per-user замок, что и картинки: иначе гонка
         # «проверь баланс — потом спиши» между параллельными видео и картинкой.
-        start = self.source.index("async def _video_generate_and_send")
-        end = self.source.index("async def _do_video_generate_and_send", start)
-        wrapper = self.source[start:end]
-        self.assertIn("async with user_slot(user_id, message):", wrapper)
-        self.assertIn("await _do_video_generate_and_send(", wrapper)
-        self.assertIn("except RateLimited:", wrapper)
+        # Slot wrapper moved to channels.telegram.video_flow (Phase 11).
+        gen = self.video_flow_source
+        start = gen.index("async def generate_and_send")
+        end = gen.index("async def do_generate_and_send", start)
+        wrapper = gen[start:end]
+        self.assertIn("async with d.user_slot(user_id, message):", wrapper)
+        self.assertIn("await self.do_generate_and_send(", wrapper)
+        self.assertIn("except d.rate_limited_error:", wrapper)
 
     def test_pre_checkout_validates_payload(self) -> None:
         # Последний рубеж перед списанием звёзд: чужой/битый payload не одобряем.
@@ -2148,11 +2152,13 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("v:dl_seg:", self.video_router_source)
 
     def test_video_extend_result_keeps_source_media_id(self) -> None:
-        start = self.source.index("vref = VideoRef(")
-        block = self.source[start:start + 550]
+        # video result assembly moved to channels.telegram.video_flow (Phase 11).
+        gen = self.video_flow_source
+        start = gen.index("vref = VideoRef(")
+        block = gen[start:start + 550]
         self.assertIn('source_media_id=source_video.media_id if video_operation == "extend"', block)
-        self.assertIn("delivery_bytes, merged_video = await _video_delivery_bytes", self.source)
-        self.assertIn("BufferedInputFile(delivery_bytes, filename)", self.source)
+        self.assertIn("delivery_bytes, merged_video = await d.video_delivery_bytes", gen)
+        self.assertIn("BufferedInputFile(delivery_bytes, filename)", gen)
 
     def test_video_download_uses_delivery_helper(self) -> None:
         start = self.source.index("async def _video_download")

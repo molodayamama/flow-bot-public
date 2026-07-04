@@ -333,6 +333,11 @@ class BotPoolWiringTests(unittest.TestCase):
         cls.admin_status_router_source = (
             PROJECT_ROOT / "channels" / "telegram" / "routers" / "admin_status.py"
         ).read_text(encoding="utf-8")
+        # Video generate-and-send moved to channels.telegram.video_flow (Phase 11);
+        # deps injected, so account/pool refs carry a ``d.`` prefix there.
+        cls.video_flow_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "video_flow.py"
+        ).read_text(encoding="utf-8")
 
     def test_pool_globals_built_from_env(self) -> None:
         self.assertIn('FLOW_ACCOUNTS_RAW = os.getenv("FLOW_ACCOUNTS", "")', self.source)
@@ -381,11 +386,10 @@ class BotPoolWiringTests(unittest.TestCase):
         self.assertIn("d.account_pool.mark_failure(acc_id)", block)
         self.assertIn("d.account_pool.mark_success(acc_id)", block)
         # Video: правки/extend остаются на аккаунте исходного ролика.
-        vstart = self.source.index("async def _do_video_generate_and_send")
-        vblock = self.source[vstart:vstart + 13000]
+        vblock = self.video_flow_source
         self.assertIn("if source_video and source_video.account_id:", vblock)
         self.assertIn('flow_copy.msg("accounts_unavailable")', vblock)
-        self.assertIn("_client_for_acc(acc_id).generate_video(", vblock)
+        self.assertIn("d.client_for_acc(acc_id).generate_video(", vblock)
 
     def test_refs_carry_account_id(self) -> None:
         self.assertIn("account_id=acc_id", self.source)
@@ -441,11 +445,10 @@ class BotPoolWiringTests(unittest.TestCase):
         self.assertIn("acc_id = _account_for_video(user_id)", helper_block)
         self.assertIn('source.setdefault("_account_id", acc_id)', helper_block)
 
-        video_start = self.source.index("async def _do_video_generate_and_send")
-        video_block = self.source[video_start:video_start + 5200]
+        video_block = self.video_flow_source
         # Photo-video re-places the reference on a healthy account seamlessly
         # (no user-facing "account unavailable" error).
-        self.assertIn("_ensure_reference_on_healthy_account(", video_block)
+        self.assertIn("d.ensure_reference_on_healthy_account(", video_block)
         self.assertIn("video_project_id = (", video_block)
 
 
@@ -583,8 +586,9 @@ class CapacityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(pool.has_image_capacity(acc))
 
     async def test_media_bound_video_uses_source_account(self):
-        """flow_bot.py: extend/edit keeps source_video.account_id; check text assert."""
-        source = PROJECT_ROOT / "flow_bot.py"
+        """video_flow.py: extend/edit keeps source_video.account_id; check text assert."""
+        # Moved to channels.telegram.video_flow (Phase 11).
+        source = PROJECT_ROOT / "channels" / "telegram" / "video_flow.py"
         text = source.read_text(encoding="utf-8")
         self.assertIn(
             "if source_video and source_video.account_id:",
@@ -636,10 +640,12 @@ class CapacityBotWiringTests(unittest.TestCase):
         self.assertIn("async with d.account_pool.image_slot(acc_id):", block)
 
     def test_video_generation_wrapped_in_video_slot(self):
-        start = self.source.index("async def _do_video_generate_and_send")
-        block = self.source[start:start + 10000]
-        self.assertIn("account_pool.video_slot(acc_id)", block)
-        self.assertIn("async with account_pool.video_slot(acc_id):", block)
+        # do_generate_and_send moved to channels.telegram.video_flow (Phase 11).
+        block = (
+            PROJECT_ROOT / "channels" / "telegram" / "video_flow.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("d.account_pool.video_slot(acc_id)", block)
+        self.assertIn("async with d.account_pool.video_slot(acc_id):", block)
 
     def test_high_load_message_shown_when_capacity_full(self):
         gen_flow = (PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py").read_text(encoding="utf-8")

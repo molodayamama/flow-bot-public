@@ -62,10 +62,15 @@ class RefactorBaselineTests(unittest.TestCase):
         self.assertIn("if not charge.ok:", gate)
         self.assertIn("store.refund(user_id, price)", gate)
 
-        video_start = self.flow_bot.index("async def _do_video_generate_and_send")
-        video_block = self.flow_bot[video_start:video_start + 7000]
-        self.assertIn("credit_store.charge(user_id, total_price)", video_block)
-        self.assertIn("credit_store.refund(user_id, refund_amt)", video_block)
+        # Video generate-and-send moved to channels.telegram.video_flow (Phase 11);
+        # deps are injected, hence the ``d.credit_store`` prefix.
+        video_flow = (
+            PROJECT_ROOT / "channels" / "telegram" / "video_flow.py"
+        ).read_text(encoding="utf-8")
+        video_start = video_flow.index("async def do_generate_and_send")
+        video_block = video_flow[video_start:video_start + 20000]
+        self.assertIn("d.credit_store.charge(user_id, total_price)", video_block)
+        self.assertIn("d.credit_store.refund(user_id, refund_amt)", video_block)
 
     def test_payment_and_referral_order_is_baselined(self) -> None:
         start = self.payments_router.index("async def on_successful_payment")
