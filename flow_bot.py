@@ -191,6 +191,7 @@ from channels.telegram.seller_flow import SellerFlow, SellerFlowDeps
 from channels.telegram.monitors import Monitors, MonitorsDeps
 from channels.telegram.photo_intake import PhotoIntake, PhotoIntakeDeps
 from channels.telegram.ideas_screens import IdeasScreens, IdeasScreensDeps
+from channels.telegram.marketplace_stale import MarketplaceStale, MarketplaceStaleDeps
 from channels.telegram.marketplace_sku import MarketplaceSku, MarketplaceSkuDeps
 from channels.telegram.agent_flow import (
     AgentFlow,
@@ -931,38 +932,23 @@ def _mp_platform_aspect(platform: str) -> str:
     return _fmt_to_aspect(_mp_platform_fmt(platform))
 
 
-_MP_STALE_SCREEN_TEXT = "Это старый экран — открой актуальное меню"
+_marketplace_stale = MarketplaceStale(MarketplaceStaleDeps(workspace=_ws))
 
 
 def _mp_message_id(message) -> int:
-    try:
-        return int(getattr(message, "message_id", 0) or 0)
-    except (TypeError, ValueError):
-        return 0
+    return _marketplace_stale.message_id(message)
 
 
 def _mp_stamp_message(user_id: int, message) -> None:
-    msg_id = _mp_message_id(message)
-    if msg_id:
-        _ws(user_id)["mp_active_msg_id"] = msg_id
+    _marketplace_stale.stamp_message(user_id, message)
 
 
 def _mp_is_stale_callback(user_id: int, callback: types.CallbackQuery) -> bool:
-    current = _ws(user_id).get("mp_active_msg_id")
-    try:
-        current_id = int(current or 0)
-    except (TypeError, ValueError):
-        current_id = 0
-    clicked_id = _mp_message_id(getattr(callback, "message", None))
-    return bool(current_id and clicked_id and clicked_id != current_id)
+    return _marketplace_stale.is_stale_callback(user_id, callback)
 
 
 async def _mp_reject_stale_callback(callback: types.CallbackQuery) -> None:
-    await callback.answer(_MP_STALE_SCREEN_TEXT, show_alert=True)
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+    await _marketplace_stale.reject_stale_callback(callback)
 
 
 # Подсказка-сид к промпту под каждую задачу (формат подставляется отдельно).
