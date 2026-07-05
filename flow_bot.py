@@ -195,6 +195,7 @@ from channels.telegram.owner_alerts import OwnerAlerts, OwnerAlertsDeps
 from channels.telegram.reference_routing import ReferenceRouting, ReferenceRoutingDeps
 from channels.telegram.animate_photo import AnimatePhotoDeps, make_animate_photo_context_factory
 from channels.telegram.robokassa_topup import RobokassaTopup, RobokassaTopupDeps
+from channels.telegram.max_bootstrap import MaxBootstrap, MaxBootstrapDeps
 from channels.telegram.marketplace_stale import MarketplaceStale, MarketplaceStaleDeps
 from channels.telegram.marketplace_sku import MarketplaceSku, MarketplaceSkuDeps
 from channels.telegram.agent_flow import (
@@ -1760,82 +1761,22 @@ async def _backend_generate_video_ingredients(req: dict) -> dict:
     return await backend_service.generate_video_ingredients(_backend_generation_deps(), req)
 
 
+_max_bootstrap = MaxBootstrap(MaxBootstrapDeps(
+    backend_generation_deps=_backend_generation_deps,
+    log=log,
+))
+
+
 def _build_max_runtime():
-    """Build (config, client, service) for MAX, or None when disabled/failed.
-
-    Shared by the polling and webhook intake paths; the generation service uses
-    the same backend + account pool as Telegram, and photo edit/animate download
-    the incoming MAX photo and feed it to i2i/video.
-    """
-    from channels.base import PlatformFile
-    from channels.max.client import MaxBotClient, max_config_from_env
-    from channels.max.generation_adapter import BackendGenerationService
-
-    config = max_config_from_env()
-    if not config.enabled:
-        return None
-    client = MaxBotClient(
-        token=config.bot_token,
-        base_url=config.api_base_url,
-        ca_bundle=config.ca_bundle,
-    )
-
-    async def _download(url: str) -> bytes:
-        return await client.get_file_bytes(PlatformFile(file_id="", url=url))
-
-    service = BackendGenerationService(
-        generate_images=backend_service.generate_images,
-        generate_i2i=backend_service.generate_i2i,
-        generate_video_ingredients=backend_service.generate_video_ingredients,
-        download_bytes=_download,
-        deps=_backend_generation_deps(),
-    )
-    return config, client, service
+    return _max_bootstrap.build_runtime()
 
 
 def _maybe_start_max_bot() -> None:
-    """Start MAX long-polling as a background task (poll mode, MAX_ENABLED=1).
-
-    No-op (never crashes Telegram startup) when MAX is disabled, in webhook mode,
-    or on any startup error. Webhook mode is mounted on the web server instead.
-    """
-    try:
-        built = _build_max_runtime()
-        if built is None:
-            return
-        config, client, service = built
-        if config.mode == "webhook":
-            return  # webhook mode is registered on the web app, not polled
-        from channels.max.runtime import run_max
-
-        asyncio.create_task(run_max(service, client=client))
-    except Exception:
-        log.exception("MAX bot startup failed")
+    _max_bootstrap.maybe_start_polling()
 
 
 def _maybe_register_max_webhook(app) -> None:
-    """Mount the MAX webhook route on the web app when MAX_MODE=webhook.
-
-    No-op when MAX is disabled, not in webhook mode, or missing a webhook secret.
-    """
-    try:
-        built = _build_max_runtime()
-        if built is None:
-            return
-        config, client, service = built
-        if config.mode != "webhook":
-            return
-        if not config.webhook_secret:
-            log.warning("MAX webhook mode requires MAX_WEBHOOK_SECRET; skipping")
-            return
-        from channels.max.handler import MaxMvpBot
-        from channels.max.webhook_route import register_max_webhook
-
-        bot = MaxMvpBot(platform=client, service=service)
-        register_max_webhook(app, dispatch=bot.handle, secret=config.webhook_secret)
-        log.info("MAX webhook route registered")
-    except Exception:
-        log.exception("MAX webhook registration failed")
+    _max_bootstrap.maybe_register_webhook(app)
 
 
 async def _backend_generate(req: dict) -> dict:

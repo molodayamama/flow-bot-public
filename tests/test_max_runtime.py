@@ -94,31 +94,37 @@ class FlowBotWiringTests(unittest.TestCase):
         from pathlib import Path
         root = Path(__file__).resolve().parents[1]
         self.src = (root / "flow_bot.py").read_text(encoding="utf-8")
+        # MAX bootstrap helpers moved to channels.telegram.max_bootstrap (Phase 11).
+        self.max_src = (
+            root / "channels" / "telegram" / "max_bootstrap.py"
+        ).read_text(encoding="utf-8")
 
     def test_defines_and_calls_maybe_start_max_bot(self):
         self.assertIn("def _maybe_start_max_bot", self.src)
         self.assertIn("_maybe_start_max_bot()", self.src)
 
     def test_builds_backend_generation_service_and_runs_max(self):
-        self.assertIn("from channels.max.runtime import run_max", self.src)
-        self.assertIn("BackendGenerationService(", self.src)
-        self.assertIn("generate_images=backend_service.generate_images", self.src)
-        self.assertIn("run_max(service, client=client)", self.src)
+        # build_runtime + run_max moved to channels.telegram.max_bootstrap.
+        self.assertIn("from channels.max.runtime import run_max", self.max_src)
+        self.assertIn("BackendGenerationService(", self.max_src)
+        self.assertIn("generate_images=backend_service.generate_images", self.max_src)
+        self.assertIn("run_max(service, client=client)", self.max_src)
 
     def test_wires_photo_bridge_backend_fns(self):
         # edit/animate need i2i + video + a downloader threaded from the client.
-        self.assertIn("generate_i2i=backend_service.generate_i2i", self.src)
-        self.assertIn("generate_video_ingredients=backend_service.generate_video_ingredients", self.src)
-        self.assertIn("download_bytes=_download", self.src)
-        self.assertIn("client.get_file_bytes(PlatformFile(", self.src)
+        self.assertIn("generate_i2i=backend_service.generate_i2i", self.max_src)
+        self.assertIn("generate_video_ingredients=backend_service.generate_video_ingredients", self.max_src)
+        self.assertIn("download_bytes=_download", self.max_src)
+        self.assertIn("client.get_file_bytes(PlatformFile(", self.max_src)
 
     def test_registers_webhook_route_in_webhook_mode(self):
         self.assertIn("def _maybe_register_max_webhook", self.src)
         self.assertIn("_maybe_register_max_webhook(app)", self.src)
-        self.assertIn("from channels.max.webhook_route import register_max_webhook", self.src)
-        self.assertIn('config.mode == "webhook"', self.src)
-        # polling is skipped in webhook mode
-        self.assertIn('config.mode == "webhook":\n            return', self.src)
+        self.assertIn("from channels.max.webhook_route import register_max_webhook", self.max_src)
+        self.assertIn('config.mode == "webhook"', self.max_src)
+        # polling is skipped in webhook mode (return right after the check)
+        idx = self.max_src.index('config.mode == "webhook":')
+        self.assertIn("return", self.max_src[idx:idx + 120])
 
 
 if __name__ == "__main__":

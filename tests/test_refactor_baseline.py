@@ -109,7 +109,11 @@ class RefactorBaselineTests(unittest.TestCase):
         """
         self.assertIn("def _maybe_start_max_bot", self.flow_bot)
         self.assertIn("_maybe_start_max_bot()", self.flow_bot)
-        self.assertIn("from channels.max.runtime import run_max", self.flow_bot)
+        # run_max import + build_runtime moved to channels.telegram.max_bootstrap.
+        max_src = (
+            PROJECT_ROOT / "channels" / "telegram" / "max_bootstrap.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("from channels.max.runtime import run_max", max_src)
         # run_max is a no-op unless MAX_ENABLED=1 (checked in channels/max/client.py),
         # so flow_bot must not force-enable it.
         self.assertNotIn('MAX_ENABLED"] = "1"', self.flow_bot)
