@@ -199,6 +199,7 @@ from channels.telegram.max_bootstrap import MaxBootstrap, MaxBootstrapDeps
 from channels.telegram.bot_factory import make_bot, BotFactoryDeps
 from channels.telegram.web_server import WebServer, WebServerDeps
 from channels.telegram.stars_topup import StarsTopup, StarsTopupDeps
+from channels.telegram.admin_help import AdminHelp, AdminHelpDeps, HELP_SECTIONS
 from channels.telegram.marketplace_stale import MarketplaceStale, MarketplaceStaleDeps
 from channels.telegram.marketplace_sku import MarketplaceSku, MarketplaceSkuDeps
 from channels.telegram.agent_flow import (
@@ -1558,56 +1559,18 @@ def _admin_only(message: types.Message) -> bool:
     return True
 
 
+_admin_help = AdminHelp(AdminHelpDeps(owner_ids=OWNER_IDS))
+
+# Re-exported so the existing source guards and call sites keep working.
+_HELP_SECTIONS = HELP_SECTIONS
+
+
 def _owner_only(message: types.Message) -> bool:
-    """Гейт для команд уровня владельца (OWNER_ID в .env), строго ⊆ ADMIN_IDS."""
-    return message.from_user.id in OWNER_IDS
-
-
-# Справочник команд для /admin_help. Угловые скобки экранированы (HTML parse_mode).
-# Держим единым местом, чтобы при добавлении команды правка была одна.
-_HELP_SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
-    ("👤 Пользовательские", (
-        ("/start", "запуск и главное меню"),
-        ("/menu", "главное меню"),
-        ("/balance", "баланс и пополнение через Stars"),
-        ("/promo &lt;код&gt;", "активировать промокод"),
-        ("/img &lt;промпт&gt;", "4 картинки по тексту"),
-        ("/one &lt;промпт&gt;", "1 картинка"),
-        ("/portrait &lt;промпт&gt;", "2 вертикальные картинки"),
-        ("/square &lt;промпт&gt;", "2 квадратные картинки"),
-        ("/imgn N &lt;промпт&gt;", "N картинок (1–8)"),
-        ("/mix &lt;промпт&gt;", "собрать картинку из выбранных «ингредиентов»"),
-    )),
-    ("🛡 Админские (ADMIN_IDS)", (
-        ("/grant &lt;user_id&gt; &lt;кредиты&gt;", "начислить пользователю кредиты"),
-        ("/status", "состояние сессии (токен / проект / капча)"),
-        ("/refund &lt;user_id&gt; [charge_id]", "вернуть Stars за платёж (по умолчанию последний)"),
-        ("/admin_today", "сводка за сегодня (юзеры/выручка/успехи)"),
-        ("/admin_revenue", "выручка за 30 дней (пакеты, по дням)"),
-        ("/admin_flow", "нагрузка по моделям и бэкенду"),
-        ("/admin_accounts", "состояние пула аккаунтов + задания за сегодня"),
-        ("/acc_off &lt;id&gt;", "вручную отключить аккаунт пула"),
-        ("/acc_on &lt;id&gt;", "вернуть аккаунт пула в работу"),
-        ("/acc_vid_off &lt;id&gt;", "только картинки на аккаунте (видео → другой акк)"),
-        ("/acc_vid_on &lt;id&gt;", "вернуть видео на аккаунт"),
-        ("/admin_refs", "рефералы: приглашения/награды/топ"),
-        ("/admin_channels [ярлык]", "каналы (атрибуция); с ярлыком — выдать ссылку"),
-        ("/admin_errors", "ошибки бэкенда за 7 дней"),
-        ("/admin_cohort", "D1/D7/D30 retention когорты"),
-    )),
-    ("👑 Владелец (OWNER_ID)", (
-        ("/admin_help", "этот справочник команд"),
-        ("/addpromo &lt;код&gt; &lt;кредиты&gt; [N]", "создать промокод (N использований, по умолч. 1)"),
-    )),
-)
+    return _admin_help.owner_only(message)
 
 
 def _render_admin_help() -> str:
-    blocks = ["🧭 <b>Команды бота</b>"]
-    for title, rows in _HELP_SECTIONS:
-        lines = "\n".join(f"  <code>{cmd}</code> — {desc}" for cmd, desc in rows)
-        blocks.append(f"<b>{title}</b>\n{lines}")
-    return "\n\n".join(blocks)
+    return _admin_help.render_admin_help()
 
 
 # Метрики: действие → имя события запроса / тип операции для flow_jobs.

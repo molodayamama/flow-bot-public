@@ -1098,9 +1098,13 @@ class BotMenuWiringTests(unittest.TestCase):
         ):
             self.assertIn(needle, self.source)
 
-        help_start = self.source.index("_HELP_SECTIONS")
-        help_end = self.source.index("def _render_admin_help", help_start)
-        help_block = self.source[help_start:help_end]
+        # HELP_SECTIONS moved to channels.telegram.admin_help (Phase 11).
+        admin_help_src = (
+            PROJECT_ROOT / "channels" / "telegram" / "admin_help.py"
+        ).read_text(encoding="utf-8")
+        help_start = admin_help_src.index("HELP_SECTIONS")
+        help_end = admin_help_src.index("def render_admin_help", help_start)
+        help_block = admin_help_src[help_start:help_end]
         self.assertGreater(
             help_block.index('("/status"'),
             help_block.index('("/grant'),
@@ -1904,16 +1908,22 @@ class BotMenuWiringTests(unittest.TestCase):
         # /admin_help — справочник команд, доступен ТОЛЬКО владельцам (OWNER_ID).
         # The handler itself moved to the admin_accounts router (Phase 6).
         self.assertIn('Command("admin_help")', self.admin_accounts_router_source)
+        # owner_only + HELP_SECTIONS moved to channels.telegram.admin_help (Phase 11).
+        admin_help_src = (
+            PROJECT_ROOT / "channels" / "telegram" / "admin_help.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("def owner_only", admin_help_src)
+        self.assertIn("message.from_user.id in self._d.owner_ids", admin_help_src)
+        # flow_bot keeps the thin wrapper the routers bind.
         self.assertIn("def _owner_only", self.source)
-        self.assertIn("message.from_user.id in OWNER_IDS", self.source)
         start = self.admin_accounts_router_source.index("async def cmd_admin_help")
         block = self.admin_accounts_router_source[start:start + 400]
         self.assertIn("if not deps.owner_only(message):", block)
         self.assertNotIn("deps.admin_only(message)", block)  # не путать админ/владелец
         # Справочник перечисляет и пользовательские, и админские команды.
-        self.assertIn("_HELP_SECTIONS", self.source)
+        self.assertIn("HELP_SECTIONS", admin_help_src)
         for cmd in ("/grant", "/refund", "/admin_channels", "/img", "/admin_help"):
-            self.assertIn(cmd, self.source, cmd)
+            self.assertIn(cmd, admin_help_src, cmd)
 
     def test_referral_wired(self) -> None:
         # Deep-link join, payment reward, menu entry, invite buttons, clawback.
