@@ -392,11 +392,12 @@ class BotPoolWiringTests(unittest.TestCase):
         self.assertIn("d.client_for_acc(acc_id).generate_video(", vblock)
 
     def test_refs_carry_account_id(self) -> None:
-        self.assertIn("account_id=acc_id", self.source)
-        # i2i/edit delivery (account_id=ref.account_id) moved to generation_flow.
+        # account_id=acc_id now lives in the generate/video/reference-routing adapters.
         gen_flow = (
             PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py"
         ).read_text(encoding="utf-8")
+        self.assertIn("account_id=acc_id", gen_flow)
+        # i2i/edit delivery (account_id=ref.account_id) moved to generation_flow.
         self.assertIn("account_id=ref.account_id", gen_flow)
         self.assertIn("account_id: str | None = None", (PROJECT_ROOT / "flow_core.py").read_text(encoding="utf-8"))
 
@@ -433,11 +434,12 @@ class BotPoolWiringTests(unittest.TestCase):
 
     def test_flow_jobs_log_real_account(self) -> None:
         # Метрики flow_jobs пишут фактический аккаунт джобы, не статичный ярлык.
-        self.assertIn("account_id=acc_id", self.source)
-        # upscale flow-job (real account fallback) moved to generation_flow.
+        # account_id=acc_id now lives in the generate/video/reference-routing adapters.
         gen_flow = (
             PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py"
         ).read_text(encoding="utf-8")
+        self.assertIn("account_id=acc_id", gen_flow)
+        # upscale flow-job (real account fallback) moved to generation_flow.
         self.assertIn("d.account_pool.assigned_to(user_id) or d.flow_account_id", gen_flow)
 
         self.assertIn("def _account_for_image", self.source)

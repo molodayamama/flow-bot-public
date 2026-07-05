@@ -192,6 +192,7 @@ from channels.telegram.monitors import Monitors, MonitorsDeps
 from channels.telegram.photo_intake import PhotoIntake, PhotoIntakeDeps
 from channels.telegram.ideas_screens import IdeasScreens, IdeasScreensDeps
 from channels.telegram.owner_alerts import OwnerAlerts, OwnerAlertsDeps
+from channels.telegram.reference_routing import ReferenceRouting, ReferenceRoutingDeps
 from channels.telegram.marketplace_stale import MarketplaceStale, MarketplaceStaleDeps
 from channels.telegram.marketplace_sku import MarketplaceSku, MarketplaceSkuDeps
 from channels.telegram.agent_flow import (
@@ -2131,27 +2132,7 @@ _generation_flow = GenerationFlow(GenerationFlowDeps(
 
 
 async def _download_ref_image_bytes(ref: ImageRef) -> bytes | None:
-    source = ref.source if isinstance(ref.source, dict) else {}
-    tg_file_id = source.get("_tg_file_id")
-    if isinstance(tg_file_id, str) and tg_file_id:
-        try:
-            buf = await bot.download(tg_file_id)
-            return buf.read() if hasattr(buf, "read") else bytes(buf)
-        except Exception:
-            log.exception("download failover tg image failed")
-
-    url = download_url(source)
-    if not url:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(url, timeout=aiohttp.ClientTimeout(total=60)) as r:
-                if r.status == 200:
-                    return await r.read()
-                log.warning("download failover image returned HTTP %s", r.status)
-    except Exception:
-        log.exception("download failover image failed")
-    return None
+    return await _reference_routing.download_ref_image_bytes(ref)
 
 
 async def _reupload_ref_for_edit_failover(
@@ -2160,39 +2141,8 @@ async def _reupload_ref_for_edit_failover(
     *,
     current_account_id: str | None,
 ) -> ImageRef | None:
-    if not current_account_id:
-        return None
-    acc_id = _account_for_image(
-        user_id, prefer_image_only=True, exclude={current_account_id},
-    )
-    if not acc_id or acc_id == current_account_id:
-        return None
-
-    data = await _download_ref_image_bytes(ref)
-    if not data:
-        return None
-    project_id = await ensure_user_project(user_id, account_id=acc_id)
-    try:
-        source = await _keeper_for_acc(acc_id).upload_image(
-            data, filename=f"failover_{user_id}.png",
-        )
-    except Exception:
-        log.exception("failover upload_image failed")
-        source = None
-    if not source or not source.get("mediaId"):
-        return None
-
-    source.setdefault("_project_id", project_id)
-    if isinstance(ref.source, dict) and ref.source.get("_tg_file_id"):
-        source.setdefault("_tg_file_id", ref.source["_tg_file_id"])
-    upload_project = source.pop("_project_id", None) or project_id
-    return ImageRef(
-        user_id=user_id,
-        project_id=upload_project,
-        source=source,
-        prompt=ref.prompt,
-        aspect_ratio=ref.aspect_ratio,
-        account_id=acc_id,
+    return await _reference_routing.reupload_ref_for_edit_failover(
+        ref, user_id, current_account_id=current_account_id
     )
 
 
@@ -2582,6 +2532,18 @@ _video_reference_sources = video_reference.video_reference_sources
 _video_reference_project_id = video_reference.video_reference_project_id
 
 
+_reference_routing = ReferenceRouting(ReferenceRoutingDeps(
+    log=log,
+    bot_download=bot.download,
+    account_pool=account_pool,
+    account_for_image=_account_for_image,
+    account_for_video=_account_for_video,
+    ensure_user_project=ensure_user_project,
+    keeper_for_acc=_keeper_for_acc,
+    video_account_health_reason=_video_account_health_reason,
+))
+
+
 def _video_reference_account_id(st: dict, vmode: str) -> str | None:
     return video_reference.video_reference_account_id(
         st, vmode, is_reference_usable=account_pool.is_reference_usable
@@ -2591,71 +2553,17 @@ def _video_reference_account_id(st: dict, vmode: str) -> str | None:
 async def _reupload_reference_source(
     src: dict, *, user_id: int, acc_id: str, project_id: str | None
 ) -> dict | None:
-    """Re-upload a reference photo to another account from its stored Telegram
-    file id. Returns the new source dict (with _account_id/_project_id) or None."""
-    tg_file_id = src.get("_tg_file_id") if isinstance(src, dict) else None
-    if not tg_file_id:
-        return None
-    try:
-        buf = await bot.download(tg_file_id)
-        data = buf.read() if hasattr(buf, "read") else bytes(buf)
-        new_src = await _keeper_for_acc(acc_id).upload_image(
-            data, filename=f"tg_{user_id}.png", project_id=project_id
-        )
-    except Exception:
-        log.exception("re-upload reference photo failed")
-        return None
-    if not new_src or not new_src.get("mediaId"):
-        return None
-    new_src.setdefault("_tg_file_id", tg_file_id)
-    new_src.setdefault("_project_id", project_id)
-    new_src.setdefault("_account_id", acc_id)
-    return new_src
+    return await _reference_routing.reupload_reference_source(
+        src, user_id=user_id, acc_id=acc_id, project_id=project_id
+    )
 
 
 async def _ensure_reference_on_healthy_account(
     st: dict, vmode: str, *, user_id: int, model_id: str, min_credits: int
 ) -> str | None:
-    """Pick a healthy account that holds the reference photo(s), re-uploading
-    them transparently if the bound account isn't ready. Seamless: the user is
-    never told that an account was unavailable. Returns None only if the whole
-    pool is unusable for video."""
-    sources = _video_reference_sources(st, vmode)
-    if not sources:
-        return _account_for_video(user_id, model_id=model_id, min_credits=min_credits)
-
-    bound = _video_reference_account_id(st, vmode)
-    if bound and not _video_account_health_reason(bound, model_id, min_credits):
-        return bound  # bound account is healthy — use the existing upload
-
-    target = _account_for_video(user_id, model_id=model_id, min_credits=min_credits)
-    if target is None:
-        # Whole pool unusable. Fall back to the bound account if it at least
-        # has usable media there (better to try than to refuse).
-        return bound
-    if target == bound:
-        return target
-
-    project_id = await ensure_user_project(user_id, account_id=target)
-    reuploaded: list[dict] = []
-    for src in sources:
-        new_src = await _reupload_reference_source(
-            src, user_id=user_id, acc_id=target, project_id=project_id
-        )
-        if not new_src:
-            # Can't move this photo (no file id / upload failed). Keep the bound
-            # account if any — generation may still work there.
-            return bound or target
-        reuploaded.append(new_src)
-
-    if vmode == "ingredients":
-        st["ving_photos"] = reuploaded
-    elif vmode == "frames":
-        st["vfrm_start"] = reuploaded[0]
-        if len(reuploaded) > 1:
-            st["vfrm_end"] = reuploaded[1]
-    log.info("🔁 video reference re-uploaded to healthy account %s (was %s)", target, bound)
-    return target
+    return await _reference_routing.ensure_reference_on_healthy_account(
+        st, vmode, user_id=user_id, model_id=model_id, min_credits=min_credits
+    )
 
 
 _video_flow = VideoFlow(VideoFlowDeps(

@@ -529,6 +529,11 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         self.generation_flow_source = (
             PROJECT_ROOT / "channels" / "telegram" / "generation_flow.py"
         ).read_text(encoding="utf-8")
+        # Reference re-upload / edit-failover moved to
+        # channels.telegram.reference_routing (Phase 11).
+        self.reference_routing_source = (
+            PROJECT_ROOT / "channels" / "telegram" / "reference_routing.py"
+        ).read_text(encoding="utf-8")
 
     def test_edit_button_and_callback_handler_present(self) -> None:
         # Labels now come from flow_copy; the edit button uses the "edit" action.
@@ -659,7 +664,8 @@ class FlowBotWiringStaticTests(unittest.TestCase):
         # image_edit_failover msg key exists in flow_copy but is shown only in logs, not to users
         self.assertIn("_reupload_ref_for_edit_failover", self.source)
         self.assertIn("async def _reupload_ref_for_edit_failover", self.source)
-        self.assertIn("exclude={current_account_id}", self.source)
+        # exclude= filter moved to reference_routing (Phase 11).
+        self.assertIn("exclude={current_account_id}", self.reference_routing_source)
         self.assertIn("d.mark_image_account_failure(ref.account_id, result)", self.generation_flow_source)
         # edit failover retry lives in generation_flow.do_edit_and_send now.
         self.assertIn(
