@@ -193,6 +193,7 @@ from channels.telegram.photo_intake import PhotoIntake, PhotoIntakeDeps
 from channels.telegram.ideas_screens import IdeasScreens, IdeasScreensDeps
 from channels.telegram.owner_alerts import OwnerAlerts, OwnerAlertsDeps
 from channels.telegram.reference_routing import ReferenceRouting, ReferenceRoutingDeps
+from channels.telegram.animate_photo import AnimatePhotoDeps, make_animate_photo_context_factory
 from channels.telegram.marketplace_stale import MarketplaceStale, MarketplaceStaleDeps
 from channels.telegram.marketplace_sku import MarketplaceSku, MarketplaceSkuDeps
 from channels.telegram.agent_flow import (
@@ -1310,76 +1311,19 @@ def _animate_photo_scenario() -> AnimatePhotoScenario:
     )
 
 
-class _TelegramAnimatePhotoContext:
-    """Telegram adapter for the platform-independent animate-photo scenario."""
-
-    def __init__(self, message: types.Message, user_id: int):
-        self.message = message
-        self.user_id = user_id
-
-    @property
-    def state(self) -> dict:
-        return _ws(self.user_id)
-
-    def clear_pending_edit(self) -> None:
-        pending_edits.pop(self.user_id, None)
-
-    def clear_video_flow(self) -> None:
-        _vid_clear(self.user_id)
-
-    def clear_image_flow(self) -> None:
-        _clear_image_flow_keys(self.state)
-
-    def current_video_model(self) -> str:
-        return _nwiz_model(self.state)
-
-    def log_event(self, name: str, *, source: str) -> None:
-        metrics.log_event(name, user_id=self.user_id, source=source)
-
-    async def show_photo_input(self, *, edit: bool, price: int):
-        text = flow_copy.msg("animate_photo_screen", price=price)
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text=L("cancel"), callback_data="v:cancel")]
-        ])
-        if edit:
-            await _vid_edit(self.message, text, kb, self.user_id, parse_mode="HTML")
-        else:
-            sent = await self.message.answer(text, reply_markup=kb, parse_mode="HTML")
-            self.state["vmsg_id"] = sent.message_id
-
-    async def show_selected_photo_prompt(self):
-        text = (
-            "рџЋ¬ <b>РћР¶РёРІРёС‚СЊ С„РѕС‚Рѕ</b>\n\n"
-            "рџ“Ћ <b>Р¤РѕС‚Рѕ РґРѕР±Р°РІР»РµРЅРѕ.</b> РћРїРёС€РёС‚Рµ, С‡С‚Рѕ РґРѕР»Р¶РЅРѕ РїСЂРѕРёСЃС…РѕРґРёС‚СЊ РІ РІРёРґРµРѕ."
-        )
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text=L("cancel"), callback_data="v:cancel")]
-        ])
-        sent = await self.message.answer(text, reply_markup=kb, parse_mode="HTML")
-        self.state["vmsg_id"] = sent.message_id
-
-    async def show_need_photo(self):
-        await self.message.answer(flow_copy.msg("animate_photo_need_photo"))
-
-    async def upload_photo_source(self, file_id: str) -> dict | None:
-        status_msg = await self.message.answer(flow_copy.msg("uploading_photo"))
-        source = await _upload_photo_source_from_file_id(
-            self.message,
-            user_id=self.user_id,
-            status_msg=status_msg,
-            file_id=file_id,
-        )
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
-        return source
-
-    async def show_video_wizard(self, *, edit: bool):
-        await show_new_video_wizard(self.message, user_id=self.user_id, edit=edit)
-
-    async def generate_video(self, prompt: str):
-        await _video_generate_and_send(self.message, prompt, user_id=self.user_id)
+_animate_photo_deps = AnimatePhotoDeps(
+    workspace=_ws,
+    pending_edits=pending_edits,
+    vid_clear=_vid_clear,
+    clear_image_flow_keys=_clear_image_flow_keys,
+    nwiz_model=_nwiz_model,
+    metrics=metrics,
+    vid_edit=lambda *a, **k: _vid_edit(*a, **k),
+    upload_photo_source_from_file_id=lambda *a, **k: _upload_photo_source_from_file_id(*a, **k),
+    show_new_video_wizard=lambda *a, **k: show_new_video_wizard(*a, **k),
+    video_generate_and_send=lambda *a, **k: _video_generate_and_send(*a, **k),
+)
+_TelegramAnimatePhotoContext = make_animate_photo_context_factory(_animate_photo_deps)
 
 
 async def show_animate_photo_input(message: types.Message, *, user_id: int, edit: bool):
