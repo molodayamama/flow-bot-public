@@ -608,6 +608,24 @@ startup_state: dict = {
 }
 
 
+def _startup_set_phase(phase: str, **extra) -> None:
+    startup_state["phase"] = phase
+    startup_state["updated_at"] = time.time()
+    for key, value in extra.items():
+        startup_state[key] = value
+
+
+def _startup_set_account(acc_id: str, status: str, *, ready: bool = False, error: str | None = None) -> None:
+    item = startup_state.setdefault("accounts", {}).setdefault(acc_id, {})
+    item.update({"status": status, "ready": bool(ready), "updated_at": time.time()})
+    if error:
+        item["error"] = error
+    elif "error" in item:
+        item.pop("error", None)
+    ready_count = sum(1 for a in startup_state.get("accounts", {}).values() if a.get("ready"))
+    startup_state["ready_accounts"] = ready_count
+
+
 def _account_for(user_id: int) -> str | None:
     """Аккаунт пула для джобы юзера (sticky), None — весь пул недоступен."""
     return account_pool.pick_for(user_id)
