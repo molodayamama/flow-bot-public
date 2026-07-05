@@ -32,3 +32,23 @@ def render_keyboard(keyboard: Keyboard | None) -> types.InlineKeyboardMarkup | N
 to_aiogram_button = render_button
 to_aiogram_keyboard = render_keyboard
 
+
+async def edit_or_answer(
+    message: types.Message, text: str, kb, *, parse_mode: str | None = None
+) -> types.Message | None:
+    """Edit the wizard message in place; swallow the harmless "not modified" error.
+
+    Re-tapping an already-selected wizard button rebuilds an identical screen, and
+    Telegram rejects ``edit_text`` with "message is not modified". We must NOT fall
+    back to ``answer`` there — that posts a duplicate panel. Only a genuine edit
+    failure (message too old / deleted) falls through to a fresh ``answer``.
+    Returns the message that now carries the wizard (edited or freshly sent), or
+    ``None`` when the no-op edit was swallowed.
+    """
+    try:
+        return await message.edit_text(text, reply_markup=kb, parse_mode=parse_mode)
+    except Exception as exc:
+        if "not modified" in str(exc).lower():
+            return None
+        return await message.answer(text, reply_markup=kb, parse_mode=parse_mode)
+

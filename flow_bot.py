@@ -200,6 +200,7 @@ from channels.telegram.bot_factory import make_bot, BotFactoryDeps
 from channels.telegram.web_server import WebServer, WebServerDeps
 from channels.telegram.stars_topup import StarsTopup, StarsTopupDeps
 from channels.telegram.admin_help import AdminHelp, AdminHelpDeps, HELP_SECTIONS
+from channels.telegram.renderer import edit_or_answer as _edit_or_answer
 from channels.telegram.shutdown_filter import install_shutdown_exception_filter
 from channels.telegram.marketplace_stale import MarketplaceStale, MarketplaceStaleDeps
 from channels.telegram.marketplace_sku import MarketplaceSku, MarketplaceSkuDeps
@@ -1098,26 +1099,6 @@ async def _show_help_screen(message: types.Message, *, edit: bool) -> None:
 
 def _wizard_text(user_id: int) -> str:
     return tg_screens.wizard_text(user_id, deps=_image_wizard_screens_deps())
-
-
-async def _edit_or_answer(
-    message: types.Message, text: str, kb, *, parse_mode: str | None = None
-) -> types.Message | None:
-    """Edit the wizard message in place; swallow the harmless "not modified" error.
-
-    Re-tapping an already-selected wizard button rebuilds an identical screen, and
-    Telegram rejects ``edit_text`` with "message is not modified". We must NOT fall
-    back to ``answer`` there — that posts a duplicate panel. Only a genuine edit
-    failure (message too old / deleted) falls through to a fresh ``answer``.
-    Returns the message that now carries the wizard (edited or freshly sent), or
-    ``None`` when the no-op edit was swallowed.
-    """
-    try:
-        return await message.edit_text(text, reply_markup=kb, parse_mode=parse_mode)
-    except Exception as exc:
-        if "not modified" in str(exc).lower():
-            return None
-        return await message.answer(text, reply_markup=kb, parse_mode=parse_mode)
 
 
 async def show_wizard(message: types.Message, *, user_id: int, edit: bool):

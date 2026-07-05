@@ -1253,9 +1253,12 @@ class BotMenuWiringTests(unittest.TestCase):
     def test_wizard_swallows_not_modified_no_duplicate_panel(self) -> None:
         # Re-tapping an already-selected wizard option must NOT post a second
         # panel: the "message is not modified" edit error is swallowed.
-        self.assertIn("async def _edit_or_answer", self.source)
-        helper_start = self.source.index("async def _edit_or_answer")
-        helper = self.source[helper_start:helper_start + 1100]
+        # edit_or_answer moved to channels.telegram.renderer (Phase 11).
+        renderer = (
+            PROJECT_ROOT / "channels" / "telegram" / "renderer.py"
+        ).read_text(encoding="utf-8")
+        helper_start = renderer.index("async def edit_or_answer")
+        helper = renderer[helper_start:helper_start + 1100]
         self.assertIn('"not modified" in str(exc).lower()', helper)
         # edit_or_answer callers (ideas renderers) moved to ideas_screens (Phase 11).
         ideas_screens = (
