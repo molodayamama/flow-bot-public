@@ -203,6 +203,7 @@ from channels.telegram.robokassa_topup import RobokassaTopup, RobokassaTopupDeps
 from channels.telegram.max_bootstrap import MaxBootstrap, MaxBootstrapDeps
 from channels.telegram.bot_factory import make_bot, BotFactoryDeps
 from channels.telegram.backend_client import make_backend_client_cache
+from channels.telegram.account_routing import AccountRouting, AccountRoutingDeps
 from channels.telegram.web_server import WebServer, WebServerDeps
 from channels.telegram.stars_topup import StarsTopup, StarsTopupDeps
 from channels.telegram.admin_help import AdminHelp, AdminHelpDeps, HELP_SECTIONS
@@ -642,49 +643,50 @@ def _startup_set_account(acc_id: str, status: str, *, ready: bool = False, error
     startup_state["ready_accounts"] = ready_count
 
 
+_account_routing = AccountRouting(AccountRoutingDeps(
+    account_pool=account_pool,
+    video_router=_video_router,
+    keepers=keepers,
+    clients=clients,
+    default_keeper=keeper,
+    default_client=client,
+))
+
+
 def _account_for(user_id: int) -> str | None:
-    """Аккаунт пула для джобы юзера (sticky), None — весь пул недоступен."""
-    return account_pool.pick_for(user_id)
+    return _account_routing.account_for(user_id)
 
 
-def _account_for_image(
-    user_id: int,
-    *,
-    prefer_image_only: bool = False,
-    exclude: set[str] | None = None,
-) -> str | None:
-    return account_pool.pick_for_image(
-        user_id, prefer_image_only=prefer_image_only, exclude=exclude,
-    )
+def _account_for_image(user_id: int, *, prefer_image_only: bool = False, exclude: set[str] | None = None) -> str | None:
+    return _account_routing.account_for_image(user_id, prefer_image_only=prefer_image_only, exclude=exclude)
 
 
 def _cached_gcredits_hints() -> dict:
-    return _video_router.cached_gcredits_hints()
+    return _account_routing.cached_gcredits_hints()
 
 
 def _video_family_for_model(model_id: str) -> str:
-    return _video_router.family_for_model(model_id)
+    return _account_routing.video_family_for_model(model_id)
 
 
 def _video_scores_for_model(model_id: str, min_credits: int = 0) -> dict:
-    return _video_router.scores_for_model(model_id, min_credits)
+    return _account_routing.video_scores_for_model(model_id, min_credits)
 
 
 def _video_account_health_reason(account_id: str | None, model_id: str, min_credits: int = 0) -> str | None:
-    return _video_router.account_health_reason(account_id, model_id, min_credits)
+    return _account_routing.video_account_health_reason(account_id, model_id, min_credits)
 
 
 def _account_for_video(user_id: int, *, model_id: str = "omni-flash-4s", min_credits: int = 0) -> str | None:
-    """Аккаунт для видео-джобы — только среди video_capable, None — нет доступных."""
-    return _video_router.account_for_video(user_id, model_id=model_id, min_credits=min_credits)
+    return _account_routing.account_for_video(user_id, model_id=model_id, min_credits=min_credits)
 
 
 def _keeper_for_acc(account_id: str | None) -> SessionKeeper:
-    return keepers.get(account_id or "", keeper)
+    return _account_routing.keeper_for_acc(account_id)
 
 
 def _client_for_acc(account_id: str | None) -> FlowHttpClient:
-    return clients.get(account_id or "", client)
+    return _account_routing.client_for_acc(account_id)
 
 
 bot = _make_bot()
