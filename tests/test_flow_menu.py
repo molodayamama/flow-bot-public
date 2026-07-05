@@ -728,7 +728,11 @@ class BotMenuWiringTests(unittest.TestCase):
             "def register_routes(",
         ):
             self.assertIn(needle, self.robokassa_source, needle)
-        self.assertIn("_register_robokassa_routes(app)", self.source)
+        # _register_robokassa_routes(app) moved to channels.telegram.web_server (Phase 11).
+        web_server_src = (
+            PROJECT_ROOT / "channels" / "telegram" / "web_server.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("d.register_robokassa_routes(app)", web_server_src)
         self.assertNotIn("flow_bot", self.robokassa_source)
         self.assertIn('data.startswith("m:robo:")', self.menu_router_source)
         self.assertIn('callback_data=f"m:robo:{pid}"', self.kb_source)

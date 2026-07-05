@@ -235,7 +235,10 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("deps.account_for_video(user_id)", src)
 
     def test_web_server_allows_large_internal_media_payloads(self) -> None:
-        src = inspect.getsource(flow_bot._start_web_server)
+        # _start_web_server moved to channels.telegram.web_server (Phase 11);
+        # inspect the WebServer.start method the composition-root instance binds.
+        from channels.telegram.web_server import WebServer
+        src = inspect.getsource(WebServer.start)
         self.assertIn("WEB_CLIENT_MAX_SIZE", src)
         self.assertIn("client_max_size=client_max_size", src)
 

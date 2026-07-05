@@ -197,6 +197,7 @@ from channels.telegram.animate_photo import AnimatePhotoDeps, make_animate_photo
 from channels.telegram.robokassa_topup import RobokassaTopup, RobokassaTopupDeps
 from channels.telegram.max_bootstrap import MaxBootstrap, MaxBootstrapDeps
 from channels.telegram.bot_factory import make_bot, BotFactoryDeps
+from channels.telegram.web_server import WebServer, WebServerDeps
 from channels.telegram.marketplace_stale import MarketplaceStale, MarketplaceStaleDeps
 from channels.telegram.marketplace_sku import MarketplaceSku, MarketplaceSkuDeps
 from channels.telegram.agent_flow import (
@@ -2644,48 +2645,29 @@ def _register_robokassa_routes(app: web.Application) -> None:
     )
 
 
+_web_server = WebServer(WebServerDeps(
+    account_pool=account_pool,
+    keepers=keepers,
+    clients=clients,
+    startup_state=startup_state,
+    proxy_supervisor=local_proxy_sup,
+    is_seller=lambda: _cfg.IS_SELLER,
+    backend_generate=_backend_generate,
+    register_robokassa_routes=_register_robokassa_routes,
+    maybe_register_max_webhook=_maybe_register_max_webhook,
+    robokassa_configured=_robokassa_configured,
+    web_host=ROBOKASSA_WEB_HOST,
+    web_port=ROBOKASSA_WEB_PORT,
+    log=log,
+))
+
+
 async def _start_web_server() -> web.AppRunner:
-    import admin_api as _admin_api
-    try:
-        client_max_size = max(
-            1024 * 1024,
-            int(os.getenv("WEB_CLIENT_MAX_SIZE", str(32 * 1024 * 1024))),
-        )
-    except (TypeError, ValueError):
-        client_max_size = 32 * 1024 * 1024
-    app = web.Application(client_max_size=client_max_size)
-    _admin_api.register_admin_routes(app, account_pool, keepers, clients,
-                                     startup_state=startup_state,
-                                     proxy_supervisor=local_proxy_sup)
-    if local_proxy_sup is not None:
-        # Re-spawn persisted local proxies and keep them alive across crashes.
-        try:
-            await local_proxy_sup.ensure_all_running()
-            asyncio.create_task(local_proxy_sup.supervise_loop())
-        except Exception:
-            log.warning("local proxy supervisor startup failed", exc_info=True)
-    if not _cfg.IS_SELLER:
-        # Только consumer (с пулом) отдаёт генерацию для seller-бота (§A).
-        try:
-            import seller_backend
-            seller_backend.register_internal_routes(app, _backend_generate)
-        except Exception:
-            log.exception("internal generation endpoint registration failed")
-    _register_robokassa_routes(app)
-    _maybe_register_max_webhook(app)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, ROBOKASSA_WEB_HOST, ROBOKASSA_WEB_PORT)
-    await site.start()
-    log.info("Web server listening on %s:%s (admin API + robokassa=%s)",
-             ROBOKASSA_WEB_HOST, ROBOKASSA_WEB_PORT, _robokassa_configured())
-    return runner
+    return await _web_server.start()
 
 
 async def _start_robokassa_web_server() -> web.AppRunner | None:
-    return await _start_web_server()
-
-
+    return await _web_server.start_robokassa()
 
 
 async def _upload_photo_source_from_message(message, *, user_id, status_msg):
