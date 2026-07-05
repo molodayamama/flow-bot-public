@@ -202,6 +202,7 @@ from channels.telegram.animate_photo import AnimatePhotoDeps, make_animate_photo
 from channels.telegram.robokassa_topup import RobokassaTopup, RobokassaTopupDeps
 from channels.telegram.max_bootstrap import MaxBootstrap, MaxBootstrapDeps
 from channels.telegram.bot_factory import make_bot, BotFactoryDeps
+from channels.telegram.backend_client import make_backend_client_cache
 from channels.telegram.web_server import WebServer, WebServerDeps
 from channels.telegram.stars_topup import StarsTopup, StarsTopupDeps
 from channels.telegram.admin_help import AdminHelp, AdminHelpDeps, HELP_SECTIONS
@@ -1496,20 +1497,11 @@ def _render_admin_help() -> str:
 
 # Метрики: действие → имя события запроса / тип операции для flow_jobs.
 # ── Shared generation backend (SELLER_BOT_PLAN.md §A) ────────────────────
-_backend_client_cache: "object | None" = None
+_backend_client_cache = make_backend_client_cache(log=log)
 
 
 def _backend_client():
-    """Seller-side client to the consumer's /internal/generate (or None)."""
-    global _backend_client_cache
-    if _backend_client_cache is None:
-        try:
-            import seller_backend
-            _backend_client_cache = seller_backend.BackendClient.from_env()
-        except Exception:
-            log.exception("backend client init failed")
-            _backend_client_cache = None
-    return _backend_client_cache
+    return _backend_client_cache.get()
 
 
 def _backend_generation_deps():
