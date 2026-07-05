@@ -292,6 +292,8 @@ from channels.telegram.keyboards import (
     _include_test_packs,
     L,
     _menu_button,
+    zero_balance_kb as _zero_balance_kb,
+    _robokassa_configured,
     _balance_reply_label as _telegram_balance_reply_label,
     _is_balance_reply_text as _telegram_is_balance_reply_text,
     _guided_step_kb,
@@ -1416,39 +1418,8 @@ def _aspect_to_vfmt(aspect: str) -> str:
     return aspect_to_vfmt(aspect)
 
 
-def _robokassa_configured() -> bool:
-    return bool(
-        ROBOKASSA_ENABLED
-        and ROBOKASSA_MERCHANT_LOGIN
-        and ROBOKASSA_PASSWORD1
-        and ROBOKASSA_PASSWORD2
-    )
-
-
 def _topup_copy(key: str) -> str:
     return flow_copy.msg(key, image_price=_topup_image_price(), video_price=_topup_video_price())
-
-
-def _zero_balance_kb() -> types.InlineKeyboardMarkup:
-    """Клавиатура экрана «кончились кредиты»: прямые кнопки trial-пака + все пакеты."""
-    B = types.InlineKeyboardButton
-    rows: list[list[types.InlineKeyboardButton]] = []
-    try:
-        import config_store as _cs
-        _flags = _cs.get_section("flags")
-        stars_on = bool(_flags.get("stars_pay", STARS_PAYMENT_ENABLED))
-        sbp_on   = bool(_flags.get("sbp_pay",   SBP_PAYMENT_ENABLED))
-    except Exception:
-        stars_on, sbp_on = STARS_PAYMENT_ENABLED, SBP_PAYMENT_ENABLED
-
-    # Предпочтительный способ: сначала СБП (выгоднее), потом Stars
-    if sbp_on and _robokassa_configured():
-        rows.append([B(text=_robokassa_pack_label("trial"), callback_data="m:robo:trial")])
-    if stars_on:
-        rows.append([B(text=_stars_pack_label("trial"), callback_data="m:pack:trial")])
-    rows.append([_menu_button("topup", "m:topup")])  # Все пакеты
-    rows.append([_menu_button("menu", "m:menu")])
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 _request_gate = RequestGate(RequestGateDeps(

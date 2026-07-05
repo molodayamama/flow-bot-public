@@ -15,8 +15,46 @@ import flow_copy
 import prompts_lib
 
 import config.settings as _cfg
-from config.settings import SBP_PAYMENT_ENABLED, STARS_PAYMENT_ENABLED
+from config.settings import (
+    ROBOKASSA_ENABLED,
+    ROBOKASSA_MERCHANT_LOGIN,
+    ROBOKASSA_PASSWORD1,
+    ROBOKASSA_PASSWORD2,
+    SBP_PAYMENT_ENABLED,
+    STARS_PAYMENT_ENABLED,
+)
 from billing.pricing import _robokassa_pack_label, _stars_pack_label
+
+
+def _robokassa_configured() -> bool:
+    return bool(
+        ROBOKASSA_ENABLED
+        and ROBOKASSA_MERCHANT_LOGIN
+        and ROBOKASSA_PASSWORD1
+        and ROBOKASSA_PASSWORD2
+    )
+
+
+def zero_balance_kb() -> types.InlineKeyboardMarkup:
+    """Клавиатура экрана «кончились кредиты»: прямые кнопки trial-пака + все пакеты."""
+    B = types.InlineKeyboardButton
+    rows: list[list[types.InlineKeyboardButton]] = []
+    try:
+        import config_store as _cs
+        _flags = _cs.get_section("flags")
+        stars_on = bool(_flags.get("stars_pay", STARS_PAYMENT_ENABLED))
+        sbp_on = bool(_flags.get("sbp_pay", SBP_PAYMENT_ENABLED))
+    except Exception:
+        stars_on, sbp_on = STARS_PAYMENT_ENABLED, SBP_PAYMENT_ENABLED
+
+    # Предпочтительный способ: сначала СБП (выгоднее), потом Stars
+    if sbp_on and _robokassa_configured():
+        rows.append([B(text=_robokassa_pack_label("trial"), callback_data="m:robo:trial")])
+    if stars_on:
+        rows.append([B(text=_stars_pack_label("trial"), callback_data="m:pack:trial")])
+    rows.append([_menu_button("topup", "m:topup")])  # Все пакеты
+    rows.append([_menu_button("menu", "m:menu")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 from config.video import (
     SELECT_STYLE,
     VIDEO_EXTEND_MODEL,
