@@ -194,6 +194,7 @@ from channels.telegram.ideas_screens import IdeasScreens, IdeasScreensDeps
 from channels.telegram.owner_alerts import OwnerAlerts, OwnerAlertsDeps
 from channels.telegram.reference_routing import ReferenceRouting, ReferenceRoutingDeps
 from channels.telegram.animate_photo import AnimatePhotoDeps, make_animate_photo_context_factory
+from channels.telegram.robokassa_topup import RobokassaTopup, RobokassaTopupDeps
 from channels.telegram.marketplace_stale import MarketplaceStale, MarketplaceStaleDeps
 from channels.telegram.marketplace_sku import MarketplaceSku, MarketplaceSkuDeps
 from channels.telegram.agent_flow import (
@@ -2702,31 +2703,25 @@ def _robokassa_payment_url(user_id: int, pack_id: str, inv_id: int) -> str:
     )
 
 
+_robokassa_topup = RobokassaTopup(RobokassaTopupDeps(
+    credit_pack=credit_pack,
+    admin_ids=ADMIN_IDS,
+    is_configured=_robokassa_configured,
+    new_inv_id=_robokassa_new_inv_id,
+    payment_url=_robokassa_payment_url,
+    pack_amount=_robokassa_pack_amount,
+    rub_display=_rub_display,
+    menu_button=_menu_button,
+    bot_send_message=bot.send_message,
+    workspace=_ws,
+    main_menu_kb=main_menu_kb,
+    metrics=metrics,
+    log=log,
+))
+
+
 async def _start_robokassa_topup(callback: types.CallbackQuery, user_id: int, pack_id: str):
-    p = credit_pack(pack_id)
-    if not p or (p.get("test") and user_id not in ADMIN_IDS):
-        await callback.answer("Пакет не найден", show_alert=True)
-        return
-    if not _robokassa_configured():
-        await callback.answer("Оплата СБП пока не настроена", show_alert=True)
-        return
-    inv_id = _robokassa_new_inv_id()
-    try:
-        pay_url = _robokassa_payment_url(user_id, pack_id, inv_id)
-    except Exception:
-        log.exception("robokassa payment url failed")
-        await callback.answer("Оплата временно недоступна", show_alert=True)
-        return
-    await callback.answer()
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="Оплатить через СБП/карту", url=pay_url)],
-        [_menu_button("back", "m:pay:robo")],
-    ])
-    await callback.message.answer(
-        f"Счёт на {p['credits']} кр. Сумма: {_rub_display(_robokassa_pack_amount(pack_id))} ₽.\n"
-        "После оплаты баланс пополнится автоматически.",
-        reply_markup=kb,
-    )
+    await _robokassa_topup.start_topup(callback, user_id, pack_id)
 
 
 dp.include_router(
@@ -2788,22 +2783,7 @@ def _robokassa_bot_username_for_scope(scope: str) -> str:
 
 
 async def _notify_robokassa_success(user_id: int, credits: int, balance: int) -> None:
-    try:
-        await bot.send_message(
-            user_id,
-            flow_copy.msg("topup_done", credits=credits, balance=balance),
-            parse_mode="HTML",
-            reply_markup=main_menu_kb(show_repeat=bool(_ws(user_id).get("last"))),
-        )
-    except TelegramForbiddenError:
-        metrics.mark_user_blocked(user_id)
-    except TelegramBadRequest as exc:
-        if "chat not found" in str(exc).lower():
-            log.warning("robokassa success notify skipped: chat not found user_id=%s", user_id)
-        else:
-            log.exception("robokassa success notify bad request")
-    except Exception:
-        log.exception("robokassa success notify failed")
+    await _robokassa_topup.notify_success(user_id, credits, balance)
 
 
 async def robokassa_result(request: web.Request) -> web.Response:

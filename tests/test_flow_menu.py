@@ -1794,9 +1794,16 @@ class BotMenuWiringTests(unittest.TestCase):
         photo_route_offer = (
             PROJECT_ROOT / "channels" / "telegram" / "photo_route_offer.py"
         ).read_text(encoding="utf-8")
-        html_sources = self.source + "\n" + self.screens_source + "\n" + photo_route_offer
+        robokassa_topup = (
+            PROJECT_ROOT / "channels" / "telegram" / "robokassa_topup.py"
+        ).read_text(encoding="utf-8")
+        html_sources = (
+            self.source + "\n" + self.screens_source + "\n"
+            + photo_route_offer + "\n" + robokassa_topup
+        )
         self.assertIn("import html", photo_route_offer)
-        self.assertIn('parse_mode="HTML"', self.source)
+        # parse_mode="HTML" now lives in the robokassa topup notifier (Phase 11).
+        self.assertIn('parse_mode="HTML"', robokassa_topup)
         # every echoed user prompt on an HTML screen is escaped
         self.assertIn("html.escape(pending", html_sources)
         self.assertIn("html.escape(_short_prompt(caption", html_sources)
