@@ -32,6 +32,15 @@ _VID_VEO_QUALITY_CYCLE = ["lite", "fast", "quality"]
 _VID_VEO_QUAL_MODEL = {"lite": "veo-lite", "fast": "veo-fast", "quality": "veo-quality"}
 _VID_VEO_QUAL_NAMES = {"lite": "Lite", "fast": "Fast", "quality": "Quality"}
 _VID_FMT_TO_ASPECT = {"land": "landscape", "port": "portrait"}
+_VID_QUICKSTART_FAMILY = "omni-flash"
+_VID_FAMILY_CODE = {"omni-flash": "omni", "veo": "veo"}
+_VID_CODE_FAMILY = {v: k for k, v in _VID_FAMILY_CODE.items()}
+_GUIDED_TO_VID_STYLE: dict[str, str] = {
+    "anime":     "anime",
+    "3d":        "3d",
+    "realism":   "photo",
+    "cinematic": "cine",
+}
 
 
 def video_plain_text_ready(st: dict) -> bool:

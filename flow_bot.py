@@ -238,6 +238,10 @@ from config.video import (
     nwiz_price as _nwiz_price,
     _VID_FMT_TO_ASPECT,
     video_plain_text_ready as _video_plain_text_ready,
+    _VID_QUICKSTART_FAMILY,
+    _VID_FAMILY_CODE,
+    _VID_CODE_FAMILY,
+    _GUIDED_TO_VID_STYLE,
 )
 
 
@@ -1150,22 +1154,6 @@ TOPUP_TEST_PACKS_ENABLED = _cfg.TOPUP_TEST_PACKS_ENABLED
 # _video_plain_text_ready + _VID_FMT_TO_ASPECT live in config.video (imported).
 
 
-_VID_QUICKSTART_FAMILY = "omni-flash"
-
-
-# family id (в каталоге) -> короткий код в callback_data и обратно
-_VID_FAMILY_CODE = {"omni-flash": "omni", "veo": "veo"}
-_VID_CODE_FAMILY = {v: k for k, v in _VID_FAMILY_CODE.items()}
-
-
-# Продление всегда выполняется моделью veo-lite, но ИСХОДНИК может быть любым
-# veo-видео (lite/fast/quality) — оператор подтвердил. Omni продлевать нельзя.
-
-
-# Варианты модели, доступные в reference-to-video. Ingredients умеет Omni и Veo;
-# Frames/interpolation остаётся Veo-only.
-
-
 def _video_reference_screens_deps() -> tg_screens.VideoReferenceScreensDeps:
     return tg_screens.VideoReferenceScreensDeps(
         wizard_state=wizard_state,
@@ -1189,22 +1177,6 @@ async def show_video_frames(message: types.Message, *, user_id: int, edit: bool 
     await tg_screens.show_video_frames(
         message, user_id=user_id, edit=edit, deps=_video_reference_screens_deps()
     )
-
-
-# ── Новый видео wizard (prompt-first) ───────────────────────────────────
-#
-# Новый flow: юзер пишет промпт (+ опционально фото) → бот показывает
-# настройки. Без фото → Omni Flash; с фото → Veo (качество тоглом).
-#
-
-# Соответствие стилей «Подбора по шагам» (guided picker) → стили video wizard.
-# Ключи слева — значения из _GUIDED_STEPS["style"]; справа — ключи _VID_STYLES.
-_GUIDED_TO_VID_STYLE: dict[str, str] = {
-    "anime":     "anime",
-    "3d":        "3d",
-    "realism":   "photo",
-    "cinematic": "cine",
-}
 
 
 def _new_video_wizard_screens_deps() -> tg_screens.NewVideoWizardScreensDeps:
