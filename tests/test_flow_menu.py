@@ -1172,7 +1172,11 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("if not charge.ok:", billing_src)
 
     def test_stars_payment_wired(self) -> None:
-        self.assertIn("currency=\"XTR\"", self.source)
+        # Stars invoice (currency="XTR") moved to channels.telegram.stars_topup (Phase 11).
+        stars_topup_src = (
+            PROJECT_ROOT / "channels" / "telegram" / "stars_topup.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("currency=\"XTR\"", stars_topup_src)
         self.assertIn("@router.pre_checkout_query()", self.payments_router_source)
         self.assertIn("F.successful_payment", self.payments_router_source)
         self.assertIn("deps.credit_store.add", self.payments_router_source)

@@ -198,6 +198,7 @@ from channels.telegram.robokassa_topup import RobokassaTopup, RobokassaTopupDeps
 from channels.telegram.max_bootstrap import MaxBootstrap, MaxBootstrapDeps
 from channels.telegram.bot_factory import make_bot, BotFactoryDeps
 from channels.telegram.web_server import WebServer, WebServerDeps
+from channels.telegram.stars_topup import StarsTopup, StarsTopupDeps
 from channels.telegram.marketplace_stale import MarketplaceStale, MarketplaceStaleDeps
 from channels.telegram.marketplace_sku import MarketplaceSku, MarketplaceSkuDeps
 from channels.telegram.agent_flow import (
@@ -2449,31 +2450,16 @@ async def _video_repeat_last(callback: types.CallbackQuery, user_id: int) -> Non
     await _video_flow.repeat_last(callback, user_id)
 
 
+_stars_topup = StarsTopup(StarsTopupDeps(
+    credit_pack=credit_pack,
+    admin_ids=ADMIN_IDS,
+    bot_send_invoice=bot.send_invoice,
+    log=log,
+))
+
+
 async def _start_topup(callback: types.CallbackQuery, user_id: int, pack_id: str):
-    """Выставить счёт в Telegram Stars за выбранный пакет кредитов."""
-    p = credit_pack(pack_id)
-    if not p:
-        await callback.answer("Пакет не найден", show_alert=True)
-        return
-    if p.get("test") and user_id not in ADMIN_IDS:
-        await callback.answer("Пакет не найден", show_alert=True)
-        return
-    await callback.answer()
-    try:
-        prices = [types.LabeledPrice(label=f"{p['credits']} кредитов", amount=p["stars"])]
-        await bot.send_invoice(
-            chat_id=callback.message.chat.id,
-            title=f"{p['credits']} кредитов",
-            description=f"Пополнение баланса на {p['credits']} кредитов",
-            payload=f"credits:{pack_id}:{user_id}",
-            currency="XTR",  # Telegram Stars
-            prices=prices,
-        )
-    except Exception:
-        log.exception("send_invoice failed")
-        await callback.message.answer(
-            "⚠️ Оплата временно недоступна. Попробуйте позже."
-        )
+    await _stars_topup.start_topup(callback, user_id, pack_id)
 
 
 def _robokassa_runtime_config() -> robokassa_billing.RobokassaConfig:
