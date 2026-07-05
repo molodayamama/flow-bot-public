@@ -191,6 +191,7 @@ from channels.telegram.seller_flow import SellerFlow, SellerFlowDeps
 from channels.telegram.monitors import Monitors, MonitorsDeps
 from channels.telegram.photo_intake import PhotoIntake, PhotoIntakeDeps
 from channels.telegram.ideas_screens import IdeasScreens, IdeasScreensDeps
+from channels.telegram.owner_alerts import OwnerAlerts, OwnerAlertsDeps
 from channels.telegram.marketplace_stale import MarketplaceStale, MarketplaceStaleDeps
 from channels.telegram.marketplace_sku import MarketplaceSku, MarketplaceSkuDeps
 from channels.telegram.agent_flow import (
@@ -2062,22 +2063,15 @@ async def _send_result_pairs(
     )
 
 
+_owner_alerts = OwnerAlerts(OwnerAlertsDeps(owner_ids=OWNER_IDS, bot=bot))
+
+
 async def _send_owner_alert(text: str) -> None:
-    """Send a plain-text Telegram message to every OWNER_ID.  Never raises."""
-    for oid in OWNER_IDS:
-        try:
-            await bot.send_message(oid, text, parse_mode="HTML")
-        except Exception:
-            pass
+    await _owner_alerts.send(text)
 
 
 def _fire_owner_alert(text: str) -> None:
-    """Schedule owner alert from a synchronous call-site (fire-and-forget)."""
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_send_owner_alert(text))
-    except RuntimeError:
-        pass  # no running loop — silently drop
+    _owner_alerts.fire(text)
 
 
 # Account failure/cooldown policy lives in accounts.health (channel-neutral);
