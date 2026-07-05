@@ -937,14 +937,6 @@ async def _mp_reject_stale_callback(callback: types.CallbackQuery) -> None:
     await _marketplace_stale.reject_stale_callback(callback)
 
 
-# Подсказка-сид к промпту под каждую задачу (формат подставляется отдельно).
-_MP_JOB_SEED = {
-    "whitebg": "товар на чистом белом фоне для карточки маркетплейса, студийный свет",
-    "info": "инфографика-карточка товара: крупный товар, место под заголовок и буллеты",
-    "model": "товар на модели / в интерьере, реалистичная сцена для карточки",
-    "cover": "обложка/главный слайд карточки товара, цепляющий ракурс",
-    "bg": "заменить фон у фото товара на чистый и продающий",
-}
 from product.marketplace_prompts import (
     _MP_JOB_SEED,
     _mp_job_instruction,
