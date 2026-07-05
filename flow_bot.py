@@ -86,6 +86,9 @@ from flow_core import (
     VIDEO_UPLOAD_PUT_URL,
 )
 from flow_core import (
+    IMG_REQUEST_EVENT as _IMG_REQUEST_EVENT,
+)
+from flow_core import (
     CreditStore,
     CreditStoreSQLite,
     make_credit_store,
@@ -179,6 +182,8 @@ from generation.prompt_boost import boost_prompt_with_gemini as _gemini_boost_pr
 import metrics
 from mediautil import image_ext_from_bytes
 from textutil import _days_word, _short_prompt, parse_ids as _parse_ids
+import prompts_lib
+from prompts_lib import QUICK_IDEAS as _QUICK_IDEAS
 from storage.session_state import reset_image_flow as _reset_image_flow
 from product.scenarios.animate_photo import AnimatePhotoConfig, AnimatePhotoScenario
 from product import video_reference
@@ -1016,49 +1021,6 @@ async def _save_pending_sku_item(message: types.Message, user_id: int, sku: str)
 _FMT_NAMES = {"land": "16:9", "port": "9:16", "sq": "1:1", "f43": "4:3", "f34": "3:4"}
 
 
-_QUICK_IDEAS: list[str] = [
-    "котик в стиле студии Гибли, мягкий свет",
-    "киберпанк Москва ночью, неоновые вывески",
-    "акварельный портрет девушки с рыжими кудрями",
-    "уютная кофейня осенью, дождь за окном, тёплый свет",
-    "астронавт на Марсе, алый закат, одиночество",
-    "дракон из кристаллов льда, горы на фоне",
-    "магический лес с грибами-фонарями ночью",
-    "ретро-автомобиль 60-х, пастельные тона, поп-арт",
-    "детёныш лисы в снегу, крупный план, профессиональное фото",
-    "японский сад сакуры на рассвете, туман",
-    "пиратский корабль в шторм, масло, кино-кадр",
-    "город-пузырь под водой, биолюминесценция",
-    "девушка читает книгу в библиотеке с высокими потолками",
-    "волк воет на луну, силуэт, минимализм",
-    "тёплая кухня бабушки с пирогами, солнечный полдень",
-    "неоновый самурай в пустом метро",
-    "зачарованный замок в облаках, золотой час",
-    "фотореализм: капля воды на лепестке розы, макро",
-    "медведь-художник рисует пейзаж в берёзовом лесу",
-    "будущее: летающие сады над мегаполисом",
-    "лиса-шаман у костра в зимнем лесу, северное сияние",
-    "стимпанк-дирижабль над облаками, тёплый закатный свет",
-    "минималистичный логотип-горы, плоский дизайн, два цвета",
-    "котёнок-астронавт в шлеме, смотрит на Землю, мультяшно",
-    "уличная еда в Токио ночью, неон, отражения в лужах",
-    "девушка-эльф в доспехах из листьев, фэнтези, кинопостер",
-    "тёплый плед, какао и книга у окна, за окном снегопад",
-    "робот поливает цветы на заброшенной станции, мягкий свет",
-    "винтажный мотоцикл на фоне пустыни, золотой час, плёнка",
-    "подводный город с медузами-фонарями, бирюзовая дымка",
-    "пушистый корги в свитере, студийный портрет, боке",
-    "горный замок на рассвете, туман в долине, эпично",
-    "капкейк-галактика со звёздной глазурью, макро-съёмка",
-    "лес из гигантских грибов, светлячки, сказочная атмосфера",
-    "ретро-постер путешествия на Марс, плакат 50-х",
-    "кот в деловом костюме пьёт кофе в офисе, юмор, фотореализм",
-    "балерина из дыма и света на тёмной сцене, длинная выдержка",
-    "домик на дереве с гирляндами в осеннем лесу, уют",
-    "феникс из золотых искр взлетает над вулканом, динамично",
-]
-
-
 def _image_wizard_screens_deps() -> tg_screens.ImageWizardScreensDeps:
     return tg_screens.ImageWizardScreensDeps(
         workspace=_ws,
@@ -1546,13 +1508,6 @@ def _render_admin_help() -> str:
 
 
 # Метрики: действие → имя события запроса / тип операции для flow_jobs.
-_IMG_REQUEST_EVENT = {
-    "gen": "image_requested", "regen": "image_requested",
-    "revary": "variations_requested",
-    "up2x": "upscale_requested",
-    "edit": "image_edit_requested", "myphoto": "image_edit_requested",
-    "mp_series": "image_edit_requested",
-}
 # ── Shared generation backend (SELLER_BOT_PLAN.md §A) ────────────────────
 _backend_client_cache: "object | None" = None
 

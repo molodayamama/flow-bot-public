@@ -2013,6 +2013,16 @@ SELLER_SERIES_PRICES = {3: 30, 5: 45, 8: 70}
 STARTER_CREDITS = 30        # one-time grant on first /start (balanced: 3 free images)
 LOW_BALANCE_THRESHOLD = 20  # nudge to top up below this
 
+# Metrics event name per image-generation action (used by the generate/seller
+# flows' log_event calls). Falls back to "image_requested" for unknown actions.
+IMG_REQUEST_EVENT = {
+    "gen": "image_requested", "regen": "image_requested",
+    "revary": "variations_requested",
+    "up2x": "upscale_requested",
+    "edit": "image_edit_requested", "myphoto": "image_edit_requested",
+    "mp_series": "image_edit_requested",
+}
+
 
 def price_gen(num_images: int) -> int:
     """Credits for generating ``num_images`` images (10 each)."""
