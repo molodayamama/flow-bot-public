@@ -1153,12 +1153,16 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("await bot.session.close()", block)
 
     def test_shutdown_exception_filter_is_narrow(self) -> None:
-        start = self.source.index("def _install_shutdown_exception_filter")
-        end = self.source.index("async def _main_impl", start)
-        block = self.source[start:end]
+        # Filter body moved to channels.telegram.shutdown_filter (Phase 11).
+        sf = (
+            PROJECT_ROOT / "channels" / "telegram" / "shutdown_filter.py"
+        ).read_text(encoding="utf-8")
+        start = sf.index("def install_shutdown_exception_filter")
+        block = sf[start:]
         self.assertIn('message == "Future exception was never retrieved"', block)
         self.assertIn("Connection closed while reading from the driver", block)
         self.assertIn("loop.default_exception_handler(context)", block)
+        # flow_bot still calls the installer from _main_impl.
         self.assertIn("_install_shutdown_exception_filter()", self.source)
 
     def test_credits_charged_with_refund_on_failure(self) -> None:

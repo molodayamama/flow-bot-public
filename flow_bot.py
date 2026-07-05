@@ -200,6 +200,7 @@ from channels.telegram.bot_factory import make_bot, BotFactoryDeps
 from channels.telegram.web_server import WebServer, WebServerDeps
 from channels.telegram.stars_topup import StarsTopup, StarsTopupDeps
 from channels.telegram.admin_help import AdminHelp, AdminHelpDeps, HELP_SECTIONS
+from channels.telegram.shutdown_filter import install_shutdown_exception_filter
 from channels.telegram.marketplace_stale import MarketplaceStale, MarketplaceStaleDeps
 from channels.telegram.marketplace_sku import MarketplaceSku, MarketplaceSkuDeps
 from channels.telegram.agent_flow import (
@@ -2661,25 +2662,7 @@ async def _upload_image_ref_from_file_id(message, *, user_id, status_msg, file_i
 
 
 def _install_shutdown_exception_filter() -> None:
-    loop = asyncio.get_running_loop()
-    default_handler = loop.get_exception_handler()
-
-    def _handler(loop, context):
-        exc = context.get("exception")
-        message = context.get("message", "")
-        if (
-            message == "Future exception was never retrieved"
-            and exc is not None
-            and "Connection closed while reading from the driver" in str(exc)
-        ):
-            log.debug("Suppressed Playwright driver shutdown future: %s", exc)
-            return
-        if default_handler is not None:
-            default_handler(loop, context)
-        else:
-            loop.default_exception_handler(context)
-
-    loop.set_exception_handler(_handler)
+    install_shutdown_exception_filter()
 
 
 async def _main_impl():
