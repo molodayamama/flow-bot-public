@@ -2438,34 +2438,7 @@ async def _video_delivery_bytes(
 
 
 async def _repeat_last(callback: types.CallbackQuery, user_id: int):
-    last = _ws(user_id).get("last")
-    if not last:
-        await callback.message.answer("Нет предыдущей генерации.")
-        return
-    # Повтор правки фото: переприменяем ту же инструкцию к тому же исходнику.
-    if last.get("kind") == "edit":
-        ref = last.get("ref")
-        if ref is None:
-            await callback.message.answer("Нет предыдущей генерации.")
-            return
-        await _edit_and_send(
-            callback.message,
-            ref,
-            last.get("instruction", ""),
-            actor_id=user_id,
-            aspect_ratio=last.get("aspect"),
-            image_model=last.get("imodel", DEFAULT_IMAGE_MODEL),
-            price_action=last.get("price_action", "edit"),
-        )
-        return
-    await _generate_and_send(
-        callback.message,
-        last["prompt"],
-        num_images=last["count"],
-        aspect_ratio=last["aspect"],
-        actor_id=user_id,
-        image_model=last.get("imodel", DEFAULT_IMAGE_MODEL),
-    )
+    await _generation_flow.repeat_last(callback, user_id)
 
 
 # Video reference-source resolution lives in product.video_reference

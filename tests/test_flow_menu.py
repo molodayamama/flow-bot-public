@@ -1459,7 +1459,8 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn(
             "user_id = actor_id if actor_id is not None else message.from_user.id", gen
         )
-        self.assertIn("actor_id=user_id", self.source)
+        # actor_id=user_id now passed in generation_flow.repeat_last (Phase 11).
+        self.assertIn("actor_id=user_id", gen)
 
     def test_video_plain_text_ready_is_narrow(self) -> None:
         # Moved to config.video (Phase 11); body unchanged.

@@ -55,6 +55,11 @@ class _Message:
         self.documents.append((a, k))
 
 
+class _Callback:
+    def __init__(self, user_id=42):
+        self.message = _Message(user_id=user_id)
+
+
 class _Client:
     def __init__(self, result):
         self._result = result
@@ -388,6 +393,38 @@ class GenerationFlowTests(unittest.TestCase):
         ref = ImageRef(user_id=42, project_id="proj", source={}, account_id="a")
         run(flow.real_upscale_and_send(msg, ref))
         self.assertTrue(msg.answers)  # upscale_unavailable
+
+    def test_repeat_last_no_history_answers_no_previous(self):
+        deps, pool, sent = _deps(clients={}, accounts=[], workspace={})
+        flow = GenerationFlow(deps)
+        cb = _Callback()
+        run(flow.repeat_last(cb, 42))
+        self.assertTrue(cb.message.answers)  # "Нет предыдущей генерации."
+
+    def test_repeat_last_edit_replays_same_instruction(self):
+        workspace = {42: {"last": {
+            "kind": "edit", "ref": _ref(), "instruction": "make blue",
+            "aspect": "square", "imodel": "gem-pix-2", "price_action": "edit",
+        }}}
+        deps, pool, sent = _deps(
+            clients={"a": _Client(PAIRS_RESULT)}, accounts=[], workspace=workspace,
+        )
+        flow = GenerationFlow(deps)
+        cb = _Callback()
+        run(flow.repeat_last(cb, 42))
+        self.assertEqual(len(sent), 1)  # edit re-delivered
+
+    def test_repeat_last_generate_replays_same_prompt(self):
+        workspace = {42: {"last": {
+            "prompt": "cat", "count": 1, "aspect": "square", "imodel": "gem-pix-2",
+        }}}
+        deps, pool, sent = _deps(
+            clients={"a": _Client(PAIRS_RESULT)}, accounts=["a", "a"], workspace=workspace,
+        )
+        flow = GenerationFlow(deps)
+        cb = _Callback()
+        run(flow.repeat_last(cb, 42))
+        self.assertEqual(len(sent), 1)  # generate re-delivered
 
 
 if __name__ == "__main__":

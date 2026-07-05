@@ -78,6 +78,38 @@ class GenerationFlow:
     def __init__(self, deps: GenerationFlowDeps) -> None:
         self._d = deps
 
+    async def repeat_last(self, callback, user_id: int) -> None:
+        """Повторить последнюю генерацию (правку или text-to-image) с теми же настройками."""
+        d = self._d
+        last = d.workspace(user_id).get("last")
+        if not last:
+            await callback.message.answer("Нет предыдущей генерации.")
+            return
+        # Повтор правки фото: переприменяем ту же инструкцию к тому же исходнику.
+        if last.get("kind") == "edit":
+            ref = last.get("ref")
+            if ref is None:
+                await callback.message.answer("Нет предыдущей генерации.")
+                return
+            await self.edit_and_send(
+                callback.message,
+                ref,
+                last.get("instruction", ""),
+                actor_id=user_id,
+                aspect_ratio=last.get("aspect"),
+                image_model=last.get("imodel", DEFAULT_IMAGE_MODEL),
+                price_action=last.get("price_action", "edit"),
+            )
+            return
+        await self.generate_and_send(
+            callback.message,
+            last["prompt"],
+            num_images=last["count"],
+            aspect_ratio=last["aspect"],
+            actor_id=user_id,
+            image_model=last.get("imodel", DEFAULT_IMAGE_MODEL),
+        )
+
     async def generate_and_send(
         self,
         message,
