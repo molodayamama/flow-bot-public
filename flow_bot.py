@@ -196,6 +196,7 @@ from channels.telegram.reference_routing import ReferenceRouting, ReferenceRouti
 from channels.telegram.animate_photo import AnimatePhotoDeps, make_animate_photo_context_factory
 from channels.telegram.robokassa_topup import RobokassaTopup, RobokassaTopupDeps
 from channels.telegram.max_bootstrap import MaxBootstrap, MaxBootstrapDeps
+from channels.telegram.bot_factory import make_bot, BotFactoryDeps
 from channels.telegram.marketplace_stale import MarketplaceStale, MarketplaceStaleDeps
 from channels.telegram.marketplace_sku import MarketplaceSku, MarketplaceSkuDeps
 from channels.telegram.agent_flow import (
@@ -534,40 +535,7 @@ logging.basicConfig(
 
 
 def _make_bot() -> Bot:
-    """Создаёт Bot с SOCKS5 прокси если TG_PROXY_URL задан."""
-    if TG_PROXY_URL:
-        try:
-            from aiohttp_socks import ProxyConnector
-
-            _proxy_url = TG_PROXY_URL.replace("socks5h://", "socks5://", 1)
-
-            class _SocksSession(AiohttpSession):
-                # Один коннектор и одна сессия на весь процесс.
-                _connector = None
-                _shared: aiohttp.ClientSession = None
-
-                async def create_session(self) -> aiohttp.ClientSession:
-                    if (
-                        _SocksSession._shared is not None
-                        and not _SocksSession._shared.closed
-                    ):
-                        return _SocksSession._shared
-                    if _SocksSession._connector is None or _SocksSession._connector.closed:
-                        _SocksSession._connector = ProxyConnector.from_url(
-                            _proxy_url, rdns=True
-                        )
-                    _SocksSession._shared = aiohttp.ClientSession(
-                        connector=_SocksSession._connector,
-                        connector_owner=False,
-                    )
-                    return _SocksSession._shared
-
-            log.info("🧦 Telegram через SOCKS5: configured")
-            return Bot(token=TELEGRAM_TOKEN, session=_SocksSession())
-        except ImportError:
-            log.error("❌ aiohttp-socks не установлен! pip install aiohttp-socks")
-
-    return Bot(token=TELEGRAM_TOKEN)
+    return make_bot(BotFactoryDeps(token=TELEGRAM_TOKEN, proxy_url=TG_PROXY_URL, log=log))
 
 
 # Пул аккаунтов: каждый со своим Chrome-профилем, keeper'ом и HTTP-клиентом.
@@ -636,24 +604,6 @@ startup_state: dict = {
 }
 
 
-def _startup_set_phase(phase: str, **extra) -> None:
-    startup_state["phase"] = phase
-    startup_state["updated_at"] = time.time()
-    for key, value in extra.items():
-        startup_state[key] = value
-
-
-def _startup_set_account(acc_id: str, status: str, *, ready: bool = False, error: str | None = None) -> None:
-    item = startup_state.setdefault("accounts", {}).setdefault(acc_id, {})
-    item.update({"status": status, "ready": bool(ready), "updated_at": time.time()})
-    if error:
-        item["error"] = error
-    elif "error" in item:
-        item.pop("error", None)
-    ready_count = sum(1 for a in startup_state.get("accounts", {}).values() if a.get("ready"))
-    startup_state["ready_accounts"] = ready_count
-
-
 def _account_for(user_id: int) -> str | None:
     """Аккаунт пула для джобы юзера (sticky), None — весь пул недоступен."""
     return account_pool.pick_for(user_id)
@@ -697,14 +647,6 @@ def _keeper_for_acc(account_id: str | None) -> SessionKeeper:
 
 def _client_for_acc(account_id: str | None) -> FlowHttpClient:
     return clients.get(account_id or "", client)
-
-
-def _keeper_for(user_id: int) -> SessionKeeper:
-    return _keeper_for_acc(_account_for(user_id))
-
-
-def _client_for(user_id: int) -> FlowHttpClient:
-    return _client_for_acc(_account_for(user_id))
 
 
 bot = _make_bot()
