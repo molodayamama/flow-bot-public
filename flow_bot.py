@@ -1094,15 +1094,10 @@ async def show_prompt_picker(message: types.Message, *, user_id: int, edit: bool
 # всему, проблема на стороне сервиса. Видео, СГЕНЕРИРОВАННЫЕ в самом сервисе,
 # редактируются штатно (кнопка ✏️ под роликом). Весь upload-код сохранён:
 # вернуть фичу = поставить True (и обратно проверить через capture). См. HANDOFF.
-# Flag now lives in config.settings (Phase 5) and is hot-patched there; readers use
-# live _cfg.UPLOAD_VIDEO_EDIT_ENABLED. Re-exported for backward-compatible access.
-UPLOAD_VIDEO_EDIT_ENABLED = _cfg.UPLOAD_VIDEO_EDIT_ENABLED
+# Flag lives in config.settings (Phase 5); readers use live _cfg.UPLOAD_VIDEO_EDIT_ENABLED.
 
-# Payment method toggles — can be hot-patched via admin panel (config_store flags).
-# topup_method_kb() reads config_store at call-time so changes survive restarts.
-# TOPUP_TEST_PACKS_ENABLED now lives in config.settings; topup readers use _cfg
-# live reads. Re-exported for backward-compatible access.
-TOPUP_TEST_PACKS_ENABLED = _cfg.TOPUP_TEST_PACKS_ENABLED
+# Payment method toggles live in config.settings; topup_method_kb() reads
+# config_store at call-time so admin-panel changes survive restarts.
 
 
 # _video_plain_text_ready + _VID_FMT_TO_ASPECT live in config.video (imported).
