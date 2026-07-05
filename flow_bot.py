@@ -247,6 +247,11 @@ from config.video import (
     _VID_FAMILY_CODE,
     _VID_CODE_FAMILY,
     _GUIDED_TO_VID_STYLE,
+    VID_DEFAULT_COUNT,
+    VID_FRAMES_DEFAULT_MODEL,
+    _FMT_NAMES,
+    _VID_CODE_FAMILY,
+    _GUIDED_TO_VID_STYLE,
 )
 
 
@@ -1018,9 +1023,6 @@ async def _save_pending_sku_item(message: types.Message, user_id: int, sku: str)
 
 
 # DEFAULT_COUNT / DEFAULT_FMT moved to config/settings.py (Phase 11); imported above.
-_FMT_NAMES = {"land": "16:9", "port": "9:16", "sq": "1:1", "f43": "4:3", "f34": "3:4"}
-
-
 def _image_wizard_screens_deps() -> tg_screens.ImageWizardScreensDeps:
     return tg_screens.ImageWizardScreensDeps(
         workspace=_ws,
@@ -1091,11 +1093,9 @@ async def show_prompt_picker(message: types.Message, *, user_id: int, edit: bool
 # Состояние живёт в том же wizard_state[user_id], но ключи с префиксом v*,
 # чтобы не пересекаться с визардом картинок (step/count/fmt/await/...).
 
-VID_DEFAULT_COUNT = 1
 # Frames (старт/финиш-кадр) дефолтится на veo-lite: единственный interpolation-
 # ключ, подтверждённый живым захватом (veo_3_1_interpolation_lite). Остальные
 # tiers — догадка по паттерну, пока не подтверждены живым прогоном.
-VID_FRAMES_DEFAULT_MODEL = "veo-lite"
 
 # Правка ЗАГРУЖЕННОГО пользователем видео временно отключена: сервис нестабильно
 # отдаёт результат («Oops, something went wrong!» / видео недогружается) — судя по

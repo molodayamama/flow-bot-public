@@ -11,7 +11,10 @@ from flow_core import VIDEO_MODELS, video_price, video_model_meta, clamp_num_vid
 
 SELECT_STYLE = "success"  # green — Bot API 9.4 colour for the chosen wizard option
 VID_DEFAULT_FMT = "land"
+VID_DEFAULT_COUNT = 1
+VID_FRAMES_DEFAULT_MODEL = "veo-lite"
 _VID_FMT_NAMES = {"land": "16:9", "port": "9:16"}
+_FMT_NAMES = {"land": "16:9", "port": "9:16", "sq": "1:1", "f43": "4:3", "f34": "3:4"}
 _VID_QUICKSTART_MODEL = "omni-flash-4s"
 VID_REF_DEFAULT_MODEL = "omni-flash-4s"
 VIDEO_EXTEND_MODEL = "veo-lite"
