@@ -47,7 +47,12 @@ class FlowProviderExtractionTests(unittest.TestCase):
         self.assertIn("from flow_provider.client import", flow_bot_src)
 
     def test_provider_package_does_not_import_aiogram_or_flow_bot(self) -> None:
-        for name in ("client.py", "runtime_config.py", "__init__.py"):
+        for name in (
+            "client.py",
+            "request_policy.py",
+            "runtime_config.py",
+            "__init__.py",
+        ):
             src = (PROJECT_ROOT / "flow_provider" / name).read_text(encoding="utf-8")
             tree = ast.parse(src)
             for node in ast.walk(tree):

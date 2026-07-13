@@ -1735,7 +1735,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.source = _PR2A_PROVIDER_SOURCE + "\n" + self.source
         start = self.source.index("async def generate_video")
         block = self.source[start:self.source.index("if gen_status != 200:", start)]
-        self.assertIn("for _attempt in range(SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS):", block)
+        self.assertIn("for _attempt in range(VIDEO_GEN_MAX_ATTEMPTS):", block)
         self.assertNotIn("post_json_via_browser", block)
         self.assertIn('"browser_fallback": browser_fallback_used', block)
 

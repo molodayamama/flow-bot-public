@@ -114,6 +114,15 @@ from flow_core import (
 )
 
 import flow_copy
+from flow_provider.request_policy import (
+    AGENT_RECAPTCHA_ACTION,
+    AGENT_RECAPTCHA_ACTION_CANDIDATES,
+    RECAPTCHA_ACTIONS,
+    VIDEO_GEN_403_BACKOFF_SEC,
+    VIDEO_GEN_MAX_ATTEMPTS,
+    VIDEO_RECAPTCHA_ACTION,
+    build_flow_headers,
+)
 from flow_provider.runtime_config import (
     USER_DATA_DIR,
     PROXY_URL,
@@ -566,32 +575,14 @@ class SessionKeeper:
 
     # Известный sitekey для labs.google (enterprise reCAPTCHA v3)
     RECAPTCHA_SITEKEY = "REDACTED_CREDENTIAL"
-    # Один action, не перебор: PUBLIC_ERROR_UNUSUAL_ACTIVITY — это флаг на уровне
-    # аккаунта/сессии, не конкретного action. Если первый action получил его,
-    # остальные два тоже получат — перебор только тратит время (доп. capcha +
-    # HTTP round trips) без шанса на успех. IMAGE_GENERATION — самый
-    # семантически точный для картинок.
-    RECAPTCHA_ACTIONS = ["IMAGE_GENERATION"]
-    # Видео-эндпоинт использует reCAPTCHA-action "VIDEO_GENERATION" — подтверждено
-    # захватом фронта Flow 2026-06-20 (grecaptcha.enterprise.execute({action:
-    # 'VIDEO_GENERATION'})). Это ТОТ ЖЕ action, что у бота, поэтому 403 — это НЕ
-    # неверный action, а низкий score/антифрод reCAPTCHA (видео-порог строже
-    # картиночного). Перебор разных action'ов раньше только усиливал флаг
-    # аккаунта, поэтому используем единственный верный action и ретраим его со
-    # свежим токеном (score вероятностный — следующая попытка может пройти).
-    VIDEO_RECAPTCHA_ACTION = "VIDEO_GENERATION"
-    # flowCreationAgent (улучшайзер промпта) — reCAPTCHA-action ПОДТВЕРЖДЁН
-    # live-дискавери 2026-06-20: "CHAT_GENERATION" даёт HTTP 200 (тот же паттерн
-    # X_GENERATION, что IMAGE_/VIDEO_GENERATION). На фарм-аккаунтах бота агент
-    # пока отвечает пустым errorEvent (вероятно фича не opt-in на этих аккаунтах
-    # / нужен session lifecycle) — это следующий шаг расследования.
-    AGENT_RECAPTCHA_ACTION = "CHAT_GENERATION"
-    AGENT_RECAPTCHA_ACTION_CANDIDATES = [
-        "CHAT_GENERATION", "CREATIVE_AGENT", "FLOW_CREATION_AGENT",
-        "CREATION_AGENT", "AGENT", "IMAGE_GENERATION", "VIDEO_GENERATION",
-    ]
-    VIDEO_GEN_MAX_ATTEMPTS = 4          # video score стохастичен — даём больше шансов свежему токену
-    VIDEO_GEN_403_BACKOFF_SEC = 3.0     # база нарастающего бэкоффа (+jitter) между ретраями
+    # Compatibility aliases: callers historically read request policy from the
+    # keeper class.  The canonical definitions now live in request_policy.py.
+    RECAPTCHA_ACTIONS = RECAPTCHA_ACTIONS
+    VIDEO_RECAPTCHA_ACTION = VIDEO_RECAPTCHA_ACTION
+    AGENT_RECAPTCHA_ACTION = AGENT_RECAPTCHA_ACTION
+    AGENT_RECAPTCHA_ACTION_CANDIDATES = AGENT_RECAPTCHA_ACTION_CANDIDATES
+    VIDEO_GEN_MAX_ATTEMPTS = VIDEO_GEN_MAX_ATTEMPTS
+    VIDEO_GEN_403_BACKOFF_SEC = VIDEO_GEN_403_BACKOFF_SEC
 
     async def _extract_sitekey(self) -> str:
         """Вытаскивает reCAPTCHA sitekey из DOM. Если не нашёл — берём известный."""
@@ -1702,7 +1693,7 @@ class SessionKeeper:
                 async with aiohttp.ClientSession(cookies=cookies) as http:
                     async with http.post(
                         IMAGE_UPLOAD_ENDPOINT,
-                        headers=FlowHttpClient(self)._build_headers(session),
+                        headers=build_flow_headers(session),
                         json=payload,
                         proxy=proxy,
                         timeout=aiohttp.ClientTimeout(total=60),
@@ -2034,37 +2025,7 @@ class FlowHttpClient:
         return _effective_proxy_url(raw) or None
 
     def _build_headers(self, session: dict) -> dict:
-        bearer = session["bearer"]
-        extra = session["headers"]
-
-        headers = {
-            "Authorization": f"Bearer {bearer}",
-            "Content-Type": "text/plain;charset=UTF-8",
-            "Accept": "*/*",
-            "Accept-Language": "ru,ru-RU;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Origin": "https://labs.google",
-            "Referer": "https://labs.google/",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "cross-site",
-        }
-
-        # Добавляем заголовки перехваченные из реального браузера
-        mapping = {
-            "user-agent": "User-Agent",
-            "sec-ch-ua": "Sec-Ch-Ua",
-            "sec-ch-ua-platform": "Sec-Ch-Ua-Platform",
-            "x-browser-channel": "X-Browser-Channel",
-            "x-browser-copyright": "X-Browser-Copyright",
-            "x-browser-year": "X-Browser-Year",
-            "x-browser-validation": "X-Browser-Validation",
-            "x-client-data": "X-Client-Data",
-        }
-        for src, dst in mapping.items():
-            if src in extra:
-                headers[dst] = extra[src]
-
-        return headers
+        return build_flow_headers(session)
 
     @staticmethod
     def _video_ab_preview(text: str, limit: int = 240) -> str:
@@ -2103,7 +2064,7 @@ class FlowHttpClient:
 
         headers = self._build_headers(session)
         proxy = self._api_proxy()
-        action = SessionKeeper.VIDEO_RECAPTCHA_ACTION
+        action = VIDEO_RECAPTCHA_ACTION
         sess_id = f";{int(time.time() * 1000)}"
         transports = [str(t) for t in (transports or ["direct_http", "browser_fetch"])]
         transports = [t for t in transports if t in {"direct_http", "browser_fetch"}]
@@ -2273,7 +2234,7 @@ class FlowHttpClient:
         if not agent_session_id:
             return {"error": "session_create_failed"}
 
-        action = action or SessionKeeper.AGENT_RECAPTCHA_ACTION
+        action = action or AGENT_RECAPTCHA_ACTION
         captcha_token = await self.keeper.solve_captcha(action)
         if not captcha_token:
             return {"error": "captcha_unavailable", "action": action}
@@ -2427,7 +2388,7 @@ class FlowHttpClient:
         sess_id = f";{int(time.time() * 1000)}"
 
         # Ротация actions: пробуем каждый action пока Google не примет
-        actions = list(SessionKeeper.RECAPTCHA_ACTIONS)
+        actions = list(RECAPTCHA_ACTIONS)
         saw_403 = False
         saw_unusual_activity = False
 
@@ -2544,7 +2505,7 @@ class FlowHttpClient:
         project_id = project_id or session["project_id"]
         sess_id = f";{int(time.time() * 1000)}"
 
-        for idx, action in enumerate(SessionKeeper.RECAPTCHA_ACTIONS):
+        for idx, action in enumerate(RECAPTCHA_ACTIONS):
             if progress_cb:
                 await progress_cb(flow_copy.msg("upscaling"))
             captcha_token = await self.keeper.solve_captcha(action)
@@ -2610,7 +2571,7 @@ class FlowHttpClient:
         project_id = project_id or session["project_id"]
         sess_id = f";{int(time.time() * 1000)}"
 
-        for idx, action in enumerate(SessionKeeper.RECAPTCHA_ACTIONS):
+        for idx, action in enumerate(RECAPTCHA_ACTIONS):
             if progress_cb:
                 await progress_cb(flow_copy.msg("upscaling"))
             captcha_token = await self.keeper.solve_captcha(action)
@@ -2918,7 +2879,7 @@ class FlowHttpClient:
         had_403 = False
         unusual_403 = False
         attempts_made = 0
-        action = SessionKeeper.VIDEO_RECAPTCHA_ACTION
+        action = VIDEO_RECAPTCHA_ACTION
         browser_fallback_used = False
 
         def _build_submit_payload(captcha_token: str) -> dict:
@@ -2960,7 +2921,7 @@ class FlowHttpClient:
                 end_image=end_image,
             )
 
-        for _attempt in range(SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS):
+        for _attempt in range(VIDEO_GEN_MAX_ATTEMPTS):
             posted = False
             for _auth_attempt in range(2):
                 captcha_token = await self.keeper.solve_captcha(action)
@@ -3003,7 +2964,7 @@ class FlowHttpClient:
                     unusual_403 = True
                 log.warning(
                     "🎬 video → 403 (попытка %d/%d, score/антифрод), свежий токен",
-                    _attempt + 1, SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS,
+                    _attempt + 1, VIDEO_GEN_MAX_ATTEMPTS,
                 )
                 if not refreshed_after_403:
                     refreshed_after_403 = True
@@ -3012,8 +2973,8 @@ class FlowHttpClient:
                     headers = self._build_headers(session)
                 # Нарастающий бэкофф + jitter перед СЛЕДУЮЩЕЙ попыткой; после
                 # последней 403 не спим зря (всё равно выходим из цикла).
-                if _attempt < SessionKeeper.VIDEO_GEN_MAX_ATTEMPTS - 1:
-                    backoff = SessionKeeper.VIDEO_GEN_403_BACKOFF_SEC * (_attempt + 1) + random.uniform(1.0, 4.0)
+                if _attempt < VIDEO_GEN_MAX_ATTEMPTS - 1:
+                    backoff = VIDEO_GEN_403_BACKOFF_SEC * (_attempt + 1) + random.uniform(1.0, 4.0)
                     await asyncio.sleep(backoff)
                 continue
             log.info(f"🎬 video {endpoint_name} → {gen_status} (action={action})")
