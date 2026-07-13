@@ -204,6 +204,11 @@ from channels.telegram.max_bootstrap import MaxBootstrap, MaxBootstrapDeps
 from channels.telegram.bot_factory import make_bot, BotFactoryDeps
 from channels.telegram.backend_client import make_backend_client_cache
 from channels.telegram.account_routing import AccountRouting, AccountRoutingDeps
+from channels.telegram.startup_state import (
+    make_startup_state,
+    set_startup_account,
+    set_startup_phase,
+)
 from channels.telegram.web_server import WebServer, WebServerDeps
 from channels.telegram.stars_topup import StarsTopup, StarsTopupDeps
 from channels.telegram.admin_help import AdminHelp, AdminHelpDeps, HELP_SECTIONS
@@ -612,35 +617,26 @@ if not _cfg.IS_SELLER:
         log.warning("LocalProxySupervisor init failed; ISP-proxy routes disabled",
                     exc_info=True)
 
-startup_state: dict = {
-    "phase": "init",
-    "polling": False,
-    "ready_accounts": 0,
-    "total_accounts": len(keepers),
-    "min_ready": 0 if _cfg.IS_SELLER else min(MIN_READY_ACCOUNTS, len(keepers)),
-    "accounts": {
-        acc_id: {"status": "pending", "ready": False, "updated_at": None}
-        for acc_id in keepers
-    },
-}
+startup_state: dict = make_startup_state(
+    keepers,
+    total_accounts=len(keepers),
+    min_ready=0 if _cfg.IS_SELLER else min(MIN_READY_ACCOUNTS, len(keepers)),
+)
 
 
 def _startup_set_phase(phase: str, **extra) -> None:
-    startup_state["phase"] = phase
-    startup_state["updated_at"] = time.time()
-    for key, value in extra.items():
-        startup_state[key] = value
+    set_startup_phase(startup_state, phase, time.time, **extra)
 
 
 def _startup_set_account(acc_id: str, status: str, *, ready: bool = False, error: str | None = None) -> None:
-    item = startup_state.setdefault("accounts", {}).setdefault(acc_id, {})
-    item.update({"status": status, "ready": bool(ready), "updated_at": time.time()})
-    if error:
-        item["error"] = error
-    elif "error" in item:
-        item.pop("error", None)
-    ready_count = sum(1 for a in startup_state.get("accounts", {}).values() if a.get("ready"))
-    startup_state["ready_accounts"] = ready_count
+    set_startup_account(
+        startup_state,
+        acc_id,
+        status,
+        time.time,
+        ready=ready,
+        error=error,
+    )
 
 
 _account_routing = AccountRouting(AccountRoutingDeps(
