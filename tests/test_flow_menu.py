@@ -1910,7 +1910,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn('"acquired_from_channel"', self.start_router_source)
         # Атрибуция стоит внутри cmd_start (рядом с рефералкой), не где попало.
         start = self.start_router_source.index("async def cmd_start")
-        block = self.start_router_source[start:start + 4500]
+        block = self.start_router_source[start:start + 7500]
         self.assertIn("channel = parse_channel_seed(payload)", block)
         self.assertIn("metrics.record_acquisition(user_id=user_id, channel=channel)", block)
         # Админ-отчёт по каналам читает report_channels и умеет выдавать ссылку

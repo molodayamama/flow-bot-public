@@ -32,10 +32,13 @@ operator sees their own day boundaries.
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import logging
 import os
 import sqlite3
 import threading
+import time
 from contextlib import closing
 
 from core.user_identity import platform_identity, telegram_legacy_internal_id, uses_telegram_legacy_id
@@ -69,6 +72,15 @@ __all__ = [
     # credits store
     "ensure_user_identity",
     "get_user_identity",
+    "bind_web_auth_session",
+    "get_web_auth_session",
+    "delete_web_auth_session",
+    "create_web_login_challenge",
+    "claim_web_login_challenge",
+    "complete_web_login_challenge",
+    "create_web_oauth_state",
+    "consume_web_oauth_state",
+    "consume_web_auth_assertion",
     "credits_balance_for_identity",
     "credits_charge_for_identity",
     "credits_refund_for_identity",
@@ -265,6 +277,54 @@ CREATE TABLE IF NOT EXISTS user_identities (
     PRIMARY KEY (platform, platform_user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_user_identities_internal ON user_identities(internal_user_id);
+
+-- Browser cookies remain opaque capabilities.  These tables bind only a hash
+-- of that capability to a provider identity and keep short-lived login state.
+CREATE TABLE IF NOT EXISTS web_auth_sessions (
+    session_hash      TEXT PRIMARY KEY,
+    platform          TEXT NOT NULL,
+    platform_user_id  TEXT NOT NULL,
+    internal_user_id  INTEGER NOT NULL,
+    display_name      TEXT,
+    created_at        INTEGER NOT NULL,
+    last_seen_at      INTEGER NOT NULL,
+    expires_at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_web_auth_sessions_expiry
+    ON web_auth_sessions(expires_at);
+
+CREATE TABLE IF NOT EXISTS web_login_challenges (
+    challenge_hash    TEXT PRIMARY KEY,
+    session_hash      TEXT NOT NULL,
+    platform          TEXT NOT NULL,
+    platform_user_id  TEXT,
+    display_name      TEXT,
+    confirmation_hash TEXT,
+    attempts          INTEGER NOT NULL DEFAULT 0,
+    created_at        INTEGER NOT NULL,
+    expires_at        INTEGER NOT NULL,
+    consumed_at       INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_web_login_challenges_session
+    ON web_login_challenges(session_hash, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS web_oauth_states (
+    state_hash        TEXT PRIMARY KEY,
+    session_hash      TEXT NOT NULL,
+    provider          TEXT NOT NULL,
+    code_verifier     TEXT NOT NULL,
+    created_at        INTEGER NOT NULL,
+    expires_at        INTEGER NOT NULL,
+    consumed_at       INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS web_auth_assertions (
+    provider          TEXT NOT NULL,
+    assertion_hash    TEXT NOT NULL,
+    used_at           INTEGER NOT NULL,
+    expires_at        INTEGER NOT NULL,
+    PRIMARY KEY (provider, assertion_hash)
+);
 
 CREATE TABLE IF NOT EXISTS user_gallery (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1084,6 +1144,340 @@ def get_identity_by_internal_id(internal_user_id: int) -> dict | None:
     except Exception:  # noqa: BLE001
         log.warning("get_identity_by_internal_id failed", exc_info=True)
         return None
+
+
+def _web_auth_digest(namespace: str, value: str) -> str:
+    raw = f"{namespace}\0{value}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def bind_web_auth_session(
+    session_id: str,
+    platform: str,
+    platform_user_id: str | int,
+    display_name: str | None,
+    *,
+    expires_at: int,
+    now: int | None = None,
+) -> dict | None:
+    """Bind an opaque browser session to one verified provider identity."""
+    try:
+        identity = platform_identity(platform, platform_user_id)
+        internal_id = ensure_user_identity(identity.platform, identity.platform_user_id)
+        if not internal_id:
+            return None
+        timestamp = int(time.time() if now is None else now)
+        expiry = int(expires_at)
+        if expiry <= timestamp:
+            return None
+        session_hash = _web_auth_digest("session", str(session_id))
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                "INSERT INTO web_auth_sessions "
+                "(session_hash, platform, platform_user_id, internal_user_id, display_name, "
+                " created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(session_hash) DO UPDATE SET "
+                "platform=excluded.platform, platform_user_id=excluded.platform_user_id, "
+                "internal_user_id=excluded.internal_user_id, display_name=excluded.display_name, "
+                "last_seen_at=excluded.last_seen_at, expires_at=excluded.expires_at",
+                (
+                    session_hash,
+                    identity.platform,
+                    identity.platform_user_id,
+                    int(internal_id),
+                    (str(display_name).strip()[:120] if display_name else None),
+                    timestamp,
+                    timestamp,
+                    expiry,
+                ),
+            )
+            conn.execute("DELETE FROM web_auth_sessions WHERE expires_at <= ?", (timestamp,))
+            conn.commit()
+        return {
+            "platform": identity.platform,
+            "platform_user_id": identity.platform_user_id,
+            "internal_user_id": int(internal_id),
+            "display_name": str(display_name).strip()[:120] if display_name else None,
+            "expires_at": expiry,
+        }
+    except Exception:  # noqa: BLE001 - authentication must fail closed
+        log.warning("bind_web_auth_session failed", exc_info=True)
+        return None
+
+
+def get_web_auth_session(session_id: str, *, now: int | None = None) -> dict | None:
+    """Return a non-expired browser authentication binding."""
+    try:
+        timestamp = int(time.time() if now is None else now)
+        session_hash = _web_auth_digest("session", str(session_id))
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT platform, platform_user_id, internal_user_id, display_name, expires_at "
+                "FROM web_auth_sessions WHERE session_hash=? AND expires_at>?",
+                (session_hash, timestamp),
+            ).fetchone()
+            if row is None:
+                conn.execute("DELETE FROM web_auth_sessions WHERE session_hash=?", (session_hash,))
+                conn.commit()
+                return None
+            conn.execute(
+                "UPDATE web_auth_sessions SET last_seen_at=? WHERE session_hash=?",
+                (timestamp, session_hash),
+            )
+            conn.commit()
+            return dict(row)
+    except Exception:  # noqa: BLE001
+        log.warning("get_web_auth_session failed", exc_info=True)
+        return None
+
+
+def delete_web_auth_session(session_id: str) -> bool:
+    try:
+        session_hash = _web_auth_digest("session", str(session_id))
+        with _LOCK:
+            conn = _conn()
+            changed = conn.execute(
+                "DELETE FROM web_auth_sessions WHERE session_hash=?", (session_hash,)
+            ).rowcount
+            conn.commit()
+            return bool(changed)
+    except Exception:  # noqa: BLE001
+        log.warning("delete_web_auth_session failed", exc_info=True)
+        return False
+
+
+def create_web_login_challenge(
+    session_id: str,
+    challenge: str,
+    *,
+    expires_at: int,
+    now: int | None = None,
+) -> bool:
+    """Create one short-lived Telegram bot handshake for this browser."""
+    try:
+        timestamp = int(time.time() if now is None else now)
+        expiry = int(expires_at)
+        if expiry <= timestamp:
+            return False
+        session_hash = _web_auth_digest("session", str(session_id))
+        challenge_hash = _web_auth_digest("challenge", str(challenge))
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                "DELETE FROM web_login_challenges "
+                "WHERE session_hash=? OR expires_at<=?",
+                (session_hash, timestamp),
+            )
+            conn.execute(
+                "INSERT INTO web_login_challenges "
+                "(challenge_hash, session_hash, platform, created_at, expires_at) "
+                "VALUES (?, ?, 'telegram', ?, ?)",
+                (challenge_hash, session_hash, timestamp, expiry),
+            )
+            conn.commit()
+        return True
+    except Exception:  # noqa: BLE001
+        log.warning("create_web_login_challenge failed", exc_info=True)
+        return False
+
+
+def claim_web_login_challenge(
+    challenge: str,
+    platform: str,
+    platform_user_id: str | int,
+    display_name: str | None,
+    confirmation_code: str,
+    *,
+    now: int | None = None,
+) -> bool:
+    """Attach the Telegram user who opened a deep link to its challenge."""
+    try:
+        identity = platform_identity(platform, platform_user_id)
+        if identity.platform != "telegram":
+            return False
+        timestamp = int(time.time() if now is None else now)
+        challenge_hash = _web_auth_digest("challenge", str(challenge))
+        confirmation_hash = _web_auth_digest(
+            f"confirmation:{challenge_hash}", str(confirmation_code)
+        )
+        with _LOCK:
+            conn = _conn()
+            changed = conn.execute(
+                "UPDATE web_login_challenges SET platform_user_id=?, display_name=?, "
+                "confirmation_hash=? WHERE challenge_hash=? AND platform='telegram' "
+                "AND platform_user_id IS NULL AND consumed_at IS NULL AND expires_at>?",
+                (
+                    identity.platform_user_id,
+                    str(display_name).strip()[:120] if display_name else None,
+                    confirmation_hash,
+                    challenge_hash,
+                    timestamp,
+                ),
+            ).rowcount
+            conn.commit()
+            return changed == 1
+    except Exception:  # noqa: BLE001
+        log.warning("claim_web_login_challenge failed", exc_info=True)
+        return False
+
+
+def complete_web_login_challenge(
+    session_id: str,
+    confirmation_code: str,
+    *,
+    now: int | None = None,
+    max_attempts: int = 5,
+) -> dict | None:
+    """Consume a claimed Telegram challenge after the browser enters its code."""
+    try:
+        timestamp = int(time.time() if now is None else now)
+        session_hash = _web_auth_digest("session", str(session_id))
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT challenge_hash, platform, platform_user_id, display_name, "
+                "confirmation_hash, attempts FROM web_login_challenges "
+                "WHERE session_hash=? AND platform_user_id IS NOT NULL "
+                "AND consumed_at IS NULL AND expires_at>? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (session_hash, timestamp),
+            ).fetchone()
+            if row is None or int(row["attempts"] or 0) >= int(max_attempts):
+                return None
+            attempts = int(row["attempts"] or 0) + 1
+            supplied_hash = _web_auth_digest(
+                f"confirmation:{row['challenge_hash']}", str(confirmation_code)
+            )
+            valid = bool(row["confirmation_hash"]) and hmac.compare_digest(
+                supplied_hash, str(row["confirmation_hash"])
+            )
+            if valid:
+                changed = conn.execute(
+                    "UPDATE web_login_challenges SET attempts=?, consumed_at=? "
+                    "WHERE challenge_hash=? AND consumed_at IS NULL",
+                    (attempts, timestamp, row["challenge_hash"]),
+                ).rowcount
+                conn.commit()
+                if changed != 1:
+                    return None
+                return {
+                    "platform": str(row["platform"]),
+                    "platform_user_id": str(row["platform_user_id"]),
+                    "display_name": row["display_name"],
+                }
+            conn.execute(
+                "UPDATE web_login_challenges SET attempts=? WHERE challenge_hash=?",
+                (attempts, row["challenge_hash"]),
+            )
+            conn.commit()
+            return None
+    except Exception:  # noqa: BLE001
+        log.warning("complete_web_login_challenge failed", exc_info=True)
+        return None
+
+
+def create_web_oauth_state(
+    session_id: str,
+    state: str,
+    provider: str,
+    code_verifier: str,
+    *,
+    expires_at: int,
+    now: int | None = None,
+) -> bool:
+    try:
+        timestamp = int(time.time() if now is None else now)
+        expiry = int(expires_at)
+        normalized_provider = str(provider).strip().lower()
+        if not normalized_provider or expiry <= timestamp:
+            return False
+        session_hash = _web_auth_digest("session", str(session_id))
+        state_hash = _web_auth_digest(f"oauth:{normalized_provider}", str(state))
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                "DELETE FROM web_oauth_states WHERE session_hash=? OR expires_at<=?",
+                (session_hash, timestamp),
+            )
+            conn.execute(
+                "INSERT INTO web_oauth_states "
+                "(state_hash, session_hash, provider, code_verifier, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (state_hash, session_hash, normalized_provider, str(code_verifier), timestamp, expiry),
+            )
+            conn.commit()
+        return True
+    except Exception:  # noqa: BLE001
+        log.warning("create_web_oauth_state failed", exc_info=True)
+        return False
+
+
+def consume_web_oauth_state(
+    session_id: str,
+    state: str,
+    provider: str,
+    *,
+    now: int | None = None,
+) -> str | None:
+    """Atomically consume OAuth state and return its server-side PKCE verifier."""
+    try:
+        timestamp = int(time.time() if now is None else now)
+        normalized_provider = str(provider).strip().lower()
+        session_hash = _web_auth_digest("session", str(session_id))
+        state_hash = _web_auth_digest(f"oauth:{normalized_provider}", str(state))
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT code_verifier FROM web_oauth_states WHERE state_hash=? "
+                "AND session_hash=? AND provider=? AND consumed_at IS NULL AND expires_at>?",
+                (state_hash, session_hash, normalized_provider, timestamp),
+            ).fetchone()
+            if row is None:
+                return None
+            changed = conn.execute(
+                "UPDATE web_oauth_states SET consumed_at=? "
+                "WHERE state_hash=? AND consumed_at IS NULL",
+                (timestamp, state_hash),
+            ).rowcount
+            conn.commit()
+            return str(row["code_verifier"]) if changed == 1 else None
+    except Exception:  # noqa: BLE001
+        log.warning("consume_web_oauth_state failed", exc_info=True)
+        return None
+
+
+def consume_web_auth_assertion(
+    provider: str,
+    assertion: str,
+    *,
+    expires_at: int,
+    now: int | None = None,
+) -> bool:
+    """Record a signed provider assertion once to prevent replay."""
+    try:
+        timestamp = int(time.time() if now is None else now)
+        expiry = int(expires_at)
+        normalized_provider = str(provider).strip().lower()
+        if not normalized_provider or expiry <= timestamp:
+            return False
+        assertion_hash = _web_auth_digest(
+            f"assertion:{normalized_provider}", str(assertion)
+        )
+        with _LOCK:
+            conn = _conn()
+            conn.execute("DELETE FROM web_auth_assertions WHERE expires_at<=?", (timestamp,))
+            changed = conn.execute(
+                "INSERT OR IGNORE INTO web_auth_assertions "
+                "(provider, assertion_hash, used_at, expires_at) VALUES (?, ?, ?, ?)",
+                (normalized_provider, assertion_hash, timestamp, expiry),
+            ).rowcount
+            conn.commit()
+            return changed == 1
+    except Exception:  # noqa: BLE001
+        log.warning("consume_web_auth_assertion failed", exc_info=True)
+        return False
 
 
 def credits_balance_for_identity(platform: str, platform_user_id: str | int, starter: int) -> int:

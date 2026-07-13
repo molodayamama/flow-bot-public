@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import secrets
 from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +13,9 @@ from aiogram import Router, types
 from aiogram.filters import Command
 
 import flow_copy
+
+
+_WEB_LOGIN_RE = re.compile(r"^web_([A-Za-z0-9_-]{24,64})$")
 
 
 @dataclass(frozen=True)
@@ -92,6 +97,38 @@ def create_handler(deps: StartDeps) -> Callable[[types.Message], Awaitable[Any]]
             asyncio.create_task(_send_owner_alert(
                 f"\U0001f464 <b>\u041d\u043e\u0432\u044b\u0439 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c</b>\n{uname_str}"
             ))
+
+        web_login = _WEB_LOGIN_RE.fullmatch(payload)
+        if web_login and not getattr(message.from_user, "is_bot", False):
+            confirmation_code = f"{secrets.randbelow(1_000_000):06d}"
+            display_name = " ".join(
+                part for part in (
+                    str(getattr(message.from_user, "first_name", "") or "").strip(),
+                    str(getattr(message.from_user, "last_name", "") or "").strip(),
+                    f"@{_username(message)}" if _username(message) else "",
+                ) if part
+            )[:80]
+            claimed = metrics.claim_web_login_challenge(
+                web_login.group(1),
+                "telegram",
+                user_id,
+                display_name,
+                confirmation_code,
+            )
+            if claimed:
+                await message.answer(
+                    "Код для входа на photozhab.ru:\n\n"
+                    f"<code>{confirmation_code}</code>\n\n"
+                    "Введите его на сайте. Код одноразовый и действует 10 минут. "
+                    "Никому его не пересылайте.",
+                    parse_mode="HTML",
+                )
+            else:
+                await message.answer(
+                    "Ссылка для входа недействительна или уже использована. "
+                    "Вернитесь на сайт и запросите новую."
+                )
+            return
 
         _referral_welcome_bonus: int = 0
         if payload.startswith(REFERRAL_PARAM_PREFIX) and not getattr(message.from_user, "is_bot", False):

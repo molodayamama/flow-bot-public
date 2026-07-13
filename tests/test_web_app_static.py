@@ -40,6 +40,17 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertNotIn("/internal/generate", self.html + self.js)
         self.assertNotIn("innerHTML", self.js)
 
+    def test_generation_is_gated_by_three_account_providers(self) -> None:
+        for marker in ('id="login-telegram"', 'id="login-max"', 'id="login-yandex"'):
+            self.assertIn(marker, self.html)
+        self.assertIn('id="auth-dialog"', self.html)
+        self.assertIn('api("/web/api/auth/telegram/start"', self.js)
+        self.assertIn('api("/web/api/auth/telegram/complete"', self.js)
+        self.assertIn('api("/web/api/auth/max"', self.js)
+        self.assertIn('api("/web/api/auth/logout"', self.js)
+        self.assertIn("if (!state.session?.authenticated)", self.js)
+        self.assertNotIn("Баланс привязан к этому браузеру", self.html)
+
     def test_app_has_csp_noindex_and_accessible_labels(self) -> None:
         self.assertIn('http-equiv="Content-Security-Policy"', self.html)
         self.assertIn('content="noindex, follow"', self.html)

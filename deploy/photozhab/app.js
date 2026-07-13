@@ -6,7 +6,12 @@ const state = {
   imageData: null,
   imageName: "",
   busy: false,
+  maxAuthAttempted: false,
 };
+
+const launchHash = new URLSearchParams(window.location.hash.slice(1));
+const maxInitData = launchHash.get("WebAppData") || "";
+if (maxInitData) history.replaceState(null, "", `${location.pathname}${location.search}`);
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
@@ -19,6 +24,12 @@ const elements = {
   price: $("#request-price"), title: $("#chat-mode-title"), subtitle: $("#chat-mode-subtitle"),
   sidebarBalance: $("#sidebar-balance"), mobileBalance: $("#mobile-balance-value"),
   dialog: $("#payment-dialog"), packs: $("#pack-grid"), toast: $("#toast"),
+  authDialog: $("#auth-dialog"), telegramLogin: $("#login-telegram"),
+  maxLogin: $("#login-max"), yandexLogin: $("#login-yandex"),
+  telegramForm: $("#telegram-code-form"), telegramCode: $("#telegram-code"),
+  authNote: $("#auth-note"), accountCard: $("#account-card"),
+  accountName: $("#account-name"), logout: $("#logout-button"),
+  mobileAccount: $("#mobile-account"),
 };
 
 const modeCopy = {
@@ -118,6 +129,103 @@ function toast(message) {
   toast.timer = window.setTimeout(() => { elements.toast.hidden = true; }, 3600);
 }
 
+function providerLabel(provider) {
+  return {telegram: "Telegram", max: "MAX", yandex: "Яндекс"}[provider] || "аккаунт";
+}
+
+function setProviderAvailability() {
+  const providers = state.session?.auth?.providers || {};
+  const maxEnabled = Boolean(providers.max);
+  const yandexEnabled = Boolean(providers.yandex);
+  elements.maxLogin.setAttribute("aria-disabled", String(!maxEnabled));
+  elements.maxLogin.href = maxEnabled ? (state.session.auth.max_url || "#") : "#";
+  elements.yandexLogin.setAttribute("aria-disabled", String(!yandexEnabled));
+  elements.yandexLogin.href = yandexEnabled ? "/web/api/auth/yandex/start" : "#";
+  elements.authNote.textContent = maxEnabled
+    ? "MAX-вход работает внутри официального мини-приложения Photozhab."
+    : "Вход через MAX появится после подключения Mini App; Telegram доступен уже сейчас.";
+}
+
+function applyAuthState() {
+  const authenticated = Boolean(state.session?.authenticated);
+  elements.accountCard.hidden = !authenticated;
+  elements.accountName.textContent = authenticated
+    ? `${state.session.identity?.display_name || "Пользователь"} · ${providerLabel(state.session.identity?.provider)}`
+    : "—";
+  elements.mobileAccount.textContent = authenticated ? "Аккаунт" : "Войти";
+  elements.prompt.disabled = !authenticated;
+  elements.send.disabled = !authenticated || state.busy;
+  setProviderAvailability();
+  if (authenticated) {
+    if (elements.authDialog.open) elements.authDialog.close();
+  } else if (!elements.authDialog.open) {
+    elements.authDialog.showModal();
+  }
+}
+
+async function startTelegramLogin() {
+  elements.telegramLogin.disabled = true;
+  const popup = window.open("", "photozhab-telegram-login");
+  if (popup) popup.opener = null;
+  try {
+    const result = await api("/web/api/auth/telegram/start", {method: "POST", body: "{}"});
+    if (popup) popup.location.href = result.url;
+    else window.location.assign(result.url);
+    elements.telegramForm.hidden = false;
+    elements.telegramCode.value = "";
+    elements.telegramCode.focus();
+  } catch (_) {
+    if (popup) popup.close();
+    toast("Не удалось открыть вход через Telegram. Попробуйте ещё раз.");
+  } finally {
+    elements.telegramLogin.disabled = false;
+  }
+}
+
+async function completeTelegramLogin(event) {
+  event.preventDefault();
+  const code = elements.telegramCode.value.trim();
+  if (!/^[0-9]{6}$/.test(code)) {
+    toast("Введите шестизначный код из Telegram");
+    return;
+  }
+  const submit = elements.telegramForm.querySelector("button[type=submit]");
+  submit.disabled = true;
+  try {
+    await api("/web/api/auth/telegram/complete", {method: "POST", body: JSON.stringify({code})});
+    elements.telegramForm.hidden = true;
+    await refreshSession();
+    toast("Вход через Telegram выполнен");
+  } catch (error) {
+    toast(error.message === "invalid_code" ? "Код неверный, истёк или уже использован" : "Не удалось подтвердить вход");
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+async function tryMaxLogin() {
+  if (!maxInitData || state.maxAuthAttempted || state.session?.authenticated) return;
+  state.maxAuthAttempted = true;
+  try {
+    await api("/web/api/auth/max", {method: "POST", body: JSON.stringify({init_data: maxInitData})});
+    state.session = await api("/web/api/session", {headers: {}});
+    setBalance(state.session.balance); renderModels(); applyAuthState();
+    toast("Вход через MAX выполнен");
+  } catch (_) {
+    toast("MAX не смог подтвердить вход. Откройте мини-приложение заново.");
+  }
+}
+
+async function logoutUser() {
+  try {
+    await api("/web/api/auth/logout", {method: "POST", body: "{}"});
+    state.session = await api("/web/api/session", {headers: {}});
+    setBalance(0); applyAuthState();
+  } catch (_) {
+    toast("Не удалось выйти. Обновите страницу.");
+  }
+}
+
 function message(role, text, sourceImage = null) {
   elements.welcome.hidden = true;
   const article = document.createElement("article");
@@ -181,6 +289,7 @@ function renderResult(target, payload) {
 }
 
 const errorMessages = {
+  auth_required: "Сначала войдите через Telegram, MAX или Яндекс.",
   insufficient_credits: "Недостаточно кредитов. Выберите пакет для пополнения баланса.",
   invalid_image: "Нужен PNG, JPEG или WebP размером до 10 МБ.",
   generation_in_progress: "Дождитесь завершения текущей генерации.",
@@ -192,6 +301,7 @@ const errorMessages = {
 async function generate() {
   const prompt = elements.prompt.value.trim();
   if (state.busy) return;
+  if (!state.session?.authenticated) { applyAuthState(); return; }
   if (prompt.length < 3) { toast("Опишите идею хотя бы тремя символами"); elements.prompt.focus(); return; }
   if ((state.mode === "edit" || state.mode === "animate") && !state.imageData) { toast("Сначала добавьте фотографию"); elements.uploadInput.click(); return; }
   state.busy = true; elements.send.disabled = true;
@@ -215,6 +325,7 @@ async function generate() {
     pending.content.append(paragraph);
     if (error.payload && Number.isFinite(Number(error.payload.balance))) setBalance(error.payload.balance);
     if (error.message === "insufficient_credits") openPayment();
+    if (error.message === "auth_required") applyAuthState();
   } finally {
     state.busy = false; elements.send.disabled = false; elements.prompt.focus(); scrollBottom();
   }
@@ -235,7 +346,10 @@ function renderPacks() {
   });
 }
 
-function openPayment() { renderPacks(); if (!elements.dialog.open) elements.dialog.showModal(); }
+function openPayment() {
+  if (!state.session?.authenticated) { applyAuthState(); return; }
+  renderPacks(); if (!elements.dialog.open) elements.dialog.showModal();
+}
 
 async function beginPayment(packId, button) {
   button.disabled = true;
@@ -246,7 +360,7 @@ async function beginPayment(packId, button) {
 async function refreshSession() {
   try {
     state.session = await api("/web/api/session", {headers: {}});
-    setBalance(state.session.balance); renderModels();
+    setBalance(state.session.balance); renderModels(); applyAuthState(); await tryMaxLogin();
   } catch (_) { toast("Не удалось подключиться к сервису генерации"); }
 }
 
@@ -273,7 +387,16 @@ $("#open-payment").addEventListener("click", openPayment);
 $("#mobile-payment").addEventListener("click", openPayment);
 $("#close-payment").addEventListener("click", () => elements.dialog.close());
 elements.dialog.addEventListener("click", (event) => { if (event.target === elements.dialog) elements.dialog.close(); });
+elements.authDialog.addEventListener("cancel", (event) => event.preventDefault());
+elements.telegramLogin.addEventListener("click", startTelegramLogin);
+elements.telegramForm.addEventListener("submit", completeTelegramLogin);
+elements.logout.addEventListener("click", logoutUser);
+elements.mobileAccount.addEventListener("click", () => {
+  if (!state.session?.authenticated) applyAuthState();
+  else if (window.confirm("Выйти из аккаунта Photozhab на этом устройстве?")) logoutUser();
+});
 window.addEventListener("pageshow", refreshSession);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshSession(); });
 
 setMode("image");
+if (!elements.authDialog.open) elements.authDialog.showModal();

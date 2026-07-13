@@ -272,6 +272,27 @@ class ProductionPreflightTests(unittest.TestCase):
         report = validate_environment(env, root=self.root)
         self.assertIn("WEB_COOKIE_SECURE must be enabled in production", report.errors)
 
+    def test_web_external_login_settings_fail_closed(self) -> None:
+        env = dict(
+            self.env,
+            WEB_APP_ENABLED="1",
+            WEB_SESSION_SECRET="a-random-runtime-secret-over-thirty-two-chars",
+            WEB_PUBLIC_ORIGIN="https://photozhab.test",
+            WEB_YANDEX_CLIENT_ID="configured-without-secret",
+            WEB_MAX_MINI_APP_URL="https://evil.test/fake-max",
+            ROBOKASSA_ENABLED="1",
+            ROBOKASSA_MERCHANT_LOGIN="merchant",
+            ROBOKASSA_PASSWORD1="one",
+            ROBOKASSA_PASSWORD2="two",
+            ROBOKASSA_PUBLIC_BASE_URL="https://pay.photozhab.test",
+        )
+        report = validate_environment(env, root=self.root)
+        self.assertIn(
+            "WEB_YANDEX_CLIENT_ID and WEB_YANDEX_CLIENT_SECRET must be set together",
+            report.errors,
+        )
+        self.assertIn("WEB_MAX_MINI_APP_URL must use https://max.ru", report.errors)
+
     def test_legacy_json_credit_store_is_rejected_in_production(self) -> None:
         env = dict(self.env, CREDITS_SQLITE="0")
         report = validate_environment(env, root=self.root)

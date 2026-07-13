@@ -58,13 +58,19 @@ client price/user/model-key fields are ignored; upload and output media are
 bounded and validated; only one generation per session runs; failures refund;
 successful output charges once; MP4 URLs are session-bound and expire; payment
 packs are allowlisted and signed with `Shp_channel=web`; production starter
-credit is zero and Secure-cookie cannot be disabled.
+credit is zero and Secure-cookie cannot be disabled. Generation, payment and
+media must return 401/404 for an anonymous cookie. Authentication checks must
+cover Telegram's cookie-bound one-time challenge + six-digit confirmation,
+MAX Mini App HMAC/duplicate-key/auth-date/replay rejection, Yandex OAuth
+state-cookie binding + PKCE S256, session rotation and logout invalidation.
 
 For browser QA, serve `deploy/photozhab/` locally and inspect desktop plus a
-390x844 viewport. Confirm all four modes, mobile mode selection, file preview,
-composer/send visibility, payment dialog, no console syntax error and no
-horizontal overflow. A plain static server cannot satisfy `/web/api/session`;
-the resulting handled connection toast is expected in static-only QA.
+390x844 viewport. Confirm the non-dismissible account gate, Telegram code form,
+MAX/Yandex provider states, signed-in account/logout surface, all four modes,
+mobile mode selection, file preview, composer/send visibility, payment dialog,
+no console syntax error and no horizontal overflow. A plain static server
+cannot satisfy `/web/api/session`; the resulting handled connection toast is
+expected in static-only QA.
 
 After green CI, back up the protected VPS env and nginx config, set a random
 32+ character `WEB_SESSION_SECRET`, enable the consumer-only web app, keep
@@ -72,9 +78,13 @@ After green CI, back up the protected VPS env and nginx config, set a random
 `photozhab.ru` TLS host, validate nginx, deploy an immutable SHA and check:
 
 - public `/app.html`, `/app.css`, `/app.js` return 200;
-- same-origin `/web/api/session` returns no-store JSON, zero balance and a
-  Secure/HttpOnly/SameSite cookie without creating paid provider work;
+- same-origin `/web/api/session` returns no-store JSON, anonymous auth state,
+  zero balance and a Secure/HttpOnly/SameSite cookie without creating a credit
+  identity or paid provider work;
 - a cross-origin generation POST is rejected before identity/backend work;
+- anonymous generation/payment is rejected; a Telegram code from the real bot
+  creates a rotated authenticated session whose balance matches that Telegram
+  user; never print the code/cookie/id during the smoke;
 - a public pack produces an HTTPS Robokassa URL containing signed web channel
   metadata (do not complete a real charge during smoke unless requested);
 - one owner-authorized generation deducts the server-displayed price only on a

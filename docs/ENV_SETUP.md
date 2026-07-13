@@ -144,6 +144,29 @@ TG_E2E_PROXY_URL=
 
 Внешние режимы tester всегда требуют `--approve-external-action`.
 
+## Авторизация web-приложения
+
+Генерация и оплата на `photozhab.ru/app.html` требуют подтверждённый аккаунт.
+Анонимная cookie хранит только непривилегированный идентификатор браузерной
+сессии и не даёт доступа к балансу.
+
+- Telegram работает через одноразовый код из `@photozhab_bot`; дополнительных
+  OAuth-секретов не требуется. `BOT_USERNAME` должен указывать на этого бота.
+- MAX работает только как официальное Mini App: укажите в кабинете MAX URL
+  `https://photozhab.ru/app.html`. Сервер проверяет `WebAppData` с помощью уже
+  защищённого `MAX_BOT_TOKEN`; unsigned `initDataUnsafe` не используется.
+- Для Яндекс ID зарегистрируйте OAuth web-приложение с правом `login:info` и
+  callback `https://photozhab.ru/web/api/auth/yandex/callback`, затем положите
+  client credentials только в защищённый production env:
+
+```dotenv
+WEB_YANDEX_CLIENT_ID=replace_me
+WEB_YANDEX_CLIENT_SECRET=replace_me
+```
+
+Yandex access/refresh tokens не сохраняются. Authorization code защищён
+одноразовым state, привязкой к HttpOnly cookie и PKCE S256.
+
 ## Robokassa / SBP
 
 Keep Telegram Stars enabled; Robokassa is an additional top-up path. Do not

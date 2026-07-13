@@ -199,6 +199,18 @@ def validate_environment(
             "0", "false", "no", "off",
         }:
             errors.append("WEB_COOKIE_SECURE must be enabled in production")
+        yandex_client_id = source.get("WEB_YANDEX_CLIENT_ID", "").strip()
+        yandex_client_secret = source.get("WEB_YANDEX_CLIENT_SECRET", "").strip()
+        if bool(yandex_client_id) != bool(yandex_client_secret):
+            errors.append(
+                "WEB_YANDEX_CLIENT_ID and WEB_YANDEX_CLIENT_SECRET must be set together"
+            )
+        max_mini_raw = source.get(
+            "WEB_MAX_MINI_APP_URL", "https://max.ru/se13461237_bot?startapp=web"
+        ).strip()
+        max_mini_url = urlparse(max_mini_raw)
+        if max_mini_url.scheme != "https" or max_mini_url.hostname != "max.ru":
+            errors.append("WEB_MAX_MINI_APP_URL must use https://max.ru")
         media_parent = _resolved(root_path, source.get("WEB_MEDIA_DIR", "/tmp/photozhab-web-media")).parent
         if not media_parent.is_dir() or not os.access(media_parent, os.W_OK):
             errors.append("WEB_MEDIA_DIR parent directory must exist and be writable")

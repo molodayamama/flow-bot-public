@@ -29,6 +29,11 @@
 .balance-card small { color: var(--pz-muted); font-size: 11px; }
 .balance-card strong { margin-top: 2px; font: 700 16px var(--font-mono); }
 .balance-plus { display: grid; place-items: center; width: 29px; height: 29px; color: var(--pz-lime-ink); border-radius: var(--r-pill); background: var(--pz-lime); }
+.account-card { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; border: 1px solid var(--pz-line-faint); border-radius: var(--r-lg); background: rgba(21, 24, 22, 0.64); }
+.account-card small, .account-card strong { display: block; }
+.account-card small { color: var(--pz-faint); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+.account-card strong { max-width: 142px; margin-top: 3px; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.account-card button { padding: 6px 8px; color: var(--pz-muted); font: 600 10px var(--font-sans); border: 1px solid var(--pz-line); border-radius: var(--r-pill); background: transparent; cursor: pointer; }
 .session-note { margin: 0; color: var(--pz-faint); font-size: 10px; line-height: 1.45; }
 .sidebar-links { display: flex; gap: 12px; color: var(--pz-faint); font-size: 10px; }
 .sidebar-links a:hover { color: var(--pz-muted); }
@@ -38,7 +43,7 @@
 .chat-title strong, .chat-title span { display: block; }
 .chat-title strong { font-size: 14px; }
 .chat-title span { margin-top: 3px; color: var(--pz-faint); font-size: 11px; }
-.mobile-brand, .mobile-balance { display: none; }
+.mobile-brand, .mobile-balance, .mobile-account { display: none; }
 .conversation { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: smooth; padding: 42px max(24px, calc((100% - 820px) / 2)) 28px; }
 .welcome-card { max-width: 760px; margin: min(10vh, 82px) auto 0; text-align: center; }
 .welcome-mark { display: grid; place-items: center; width: 50px; height: 50px; margin: 0 auto 18px; color: var(--pz-lime-ink); font-size: 22px; font-weight: 900; border-radius: 14px; background: var(--pz-grad-brand); box-shadow: var(--glow-lime); }
@@ -91,6 +96,27 @@
 
 .payment-dialog { width: min(620px, calc(100% - 28px)); color: var(--pz-ink); padding: 24px; border: 1px solid var(--pz-line-strong); border-radius: var(--r-xl); background: var(--pz-paper-2); box-shadow: var(--shadow-lg); }
 .payment-dialog::backdrop { background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(5px); }
+.auth-dialog { width: min(520px, calc(100% - 24px)); max-height: calc(100dvh - 24px); overflow-y: auto; color: var(--pz-ink); padding: 0; border: 1px solid var(--pz-line-strong); border-radius: var(--r-xl); background: var(--pz-paper-2); box-shadow: var(--shadow-lg); }
+.auth-dialog::backdrop { background: rgba(4, 5, 5, 0.84); backdrop-filter: blur(8px); }
+.auth-panel { padding: 30px; text-align: center; }
+.auth-mark { width: 46px; height: 46px; margin-bottom: 14px; }
+.auth-panel h2 { margin: 5px 0 10px; font-size: clamp(27px, 6vw, 38px); letter-spacing: -.035em; }
+.auth-copy { max-width: 410px; margin: 0 auto; color: var(--pz-muted); font-size: 13px; line-height: 1.55; }
+.auth-providers { display: grid; gap: 9px; margin-top: 24px; }
+.auth-provider { display: grid; grid-template-columns: 42px 1fr 42px; align-items: center; min-height: 52px; padding: 5px; color: var(--pz-ink); text-align: left; border: 1px solid var(--pz-line); border-radius: var(--r-lg); background: var(--pz-surface); cursor: pointer; }
+.auth-provider::after { content: "→"; color: var(--pz-faint); text-align: center; }
+.auth-provider:hover { border-color: var(--pz-line-strong); background: var(--pz-surface-2); }
+.auth-provider > span { display: grid; place-items: center; width: 36px; height: 36px; margin-left: 2px; color: #fff; font: 800 12px var(--font-sans); border-radius: 10px; background: #2aabee; }
+.auth-provider--max > span { color: #111; background: #b9f45a; }
+.auth-provider--yandex > span { background: #fc3f1d; }
+.auth-provider[aria-disabled="true"] { opacity: .46; pointer-events: none; }
+.telegram-code { margin-top: 18px; padding: 14px; text-align: left; border: 1px solid rgba(84, 215, 214, .24); border-radius: var(--r-lg); background: rgba(84, 215, 214, .06); }
+.telegram-code p { margin: 0 0 10px; color: var(--pz-muted); font-size: 12px; line-height: 1.45; }
+.telegram-code > div { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.telegram-code input { min-width: 0; padding: 11px 12px; color: var(--pz-ink); font: 700 18px var(--font-mono); letter-spacing: .16em; border: 1px solid var(--pz-line); border-radius: var(--r-md); outline: 0; background: var(--pz-paper); }
+.telegram-code input:focus { border-color: var(--pz-cyan); }
+.telegram-code button { padding: 0 14px; color: var(--pz-lime-ink); font-weight: 800; border: 0; border-radius: var(--r-md); background: var(--pz-lime); cursor: pointer; }
+.auth-note { margin: 14px 0 0; color: var(--pz-faint); font-size: 10px; line-height: 1.45; }
 .dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .dialog-head h2 { margin: 4px 0 0; font-size: 30px; }
 .dialog-head > button { color: var(--pz-muted); font-size: 27px; border: 0; background: transparent; cursor: pointer; }
@@ -112,6 +138,7 @@
   .chat-topbar { min-height: 58px; padding: 8px 14px; }
   .mobile-brand { display: block; margin-right: 10px; }.mobile-brand .brand-mark { width: 34px; height: 34px; }
   .mobile-balance { display: block; margin-left: auto; padding: 8px 11px; color: var(--pz-ink); font: 700 11px var(--font-mono); border: 1px solid var(--pz-line); border-radius: var(--r-pill); background: var(--pz-surface); }
+  .mobile-account { display: block; margin-left: 7px; padding: 8px 10px; color: var(--pz-muted); font: 700 10px var(--font-sans); border: 1px solid var(--pz-line); border-radius: var(--r-pill); background: var(--pz-surface); }
   .conversation { padding: 28px 17px 22px; }
   .welcome-card { margin-top: min(7vh, 50px); }
   .prompt-suggestions { grid-template-columns: 1fr; }.prompt-suggestions button { min-height: auto; }
@@ -132,6 +159,9 @@
   .composer-note { display: none; }
   .pack-grid { grid-template-columns: 1fr; }
   .payment-dialog { padding: 20px; }
+  .auth-panel { padding: 24px 18px; }
+  .telegram-code > div { grid-template-columns: 1fr; }
+  .telegram-code button { min-height: 42px; }
 }
 
 @media (prefers-reduced-motion: reduce) { .conversation { scroll-behavior: auto; } .typing i { animation: none; opacity: .6; } }

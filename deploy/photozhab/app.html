@@ -31,7 +31,11 @@
           <span><small>Баланс</small><strong><span id="sidebar-balance">—</span> кр</strong></span>
           <span class="balance-plus" aria-hidden="true">＋</span>
         </button>
-        <p class="session-note">Баланс привязан к этому браузеру. Не очищайте cookies после оплаты.</p>
+        <div class="account-card" id="account-card" hidden>
+          <span><small>Аккаунт</small><strong id="account-name">—</strong></span>
+          <button id="logout-button" type="button">Выйти</button>
+        </div>
+        <p class="session-note">Баланс привязан к подтверждённому аккаунту Telegram, MAX или Яндекс.</p>
         <div class="sidebar-links"><a href="/oferta.html">Оферта</a><a href="/privacy.html">Конфиденциальность</a></div>
       </div>
     </aside>
@@ -41,6 +45,7 @@
         <a class="mobile-brand" href="/" aria-label="Photozhab — на главную"><span class="brand-mark">P</span></a>
         <div class="chat-title"><strong id="chat-mode-title">Генерация картинки</strong><span id="chat-mode-subtitle">Nano Banana создаст изображение по описанию</span></div>
         <button class="mobile-balance" id="mobile-payment" type="button"><span id="mobile-balance-value">—</span> кр <span aria-hidden="true">＋</span></button>
+        <button class="mobile-account" id="mobile-account" type="button" aria-label="Аккаунт">Войти</button>
       </header>
 
       <section class="conversation" id="conversation" aria-live="polite">
@@ -84,6 +89,26 @@
       </section>
     </main>
   </div>
+
+  <dialog class="auth-dialog" id="auth-dialog" aria-labelledby="auth-title">
+    <div class="auth-panel">
+      <span class="welcome-mark auth-mark" aria-hidden="true">P</span>
+      <p class="eyebrow">Безопасный вход</p>
+      <h2 id="auth-title">Войдите, чтобы создавать</h2>
+      <p class="auth-copy">Генерация, баланс и оплата доступны только после подтверждения аккаунта. Пароли Photozhab не получает.</p>
+      <div class="auth-providers">
+        <button class="auth-provider auth-provider--telegram" id="login-telegram" type="button"><span>✈</span><strong>Войти через Telegram</strong></button>
+        <a class="auth-provider auth-provider--max" id="login-max" href="https://max.ru/se13461237_bot?startapp=web" target="_blank" rel="noopener"><span>MAX</span><strong>Открыть в MAX</strong></a>
+        <a class="auth-provider auth-provider--yandex" id="login-yandex" href="/web/api/auth/yandex/start"><span>Я</span><strong>Войти с Яндекс ID</strong></a>
+      </div>
+      <form class="telegram-code" id="telegram-code-form" hidden>
+        <p>Бот пришлёт одноразовый шестизначный код. Введите его здесь:</p>
+        <div><input id="telegram-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="000000" aria-label="Код из Telegram"><button type="submit">Подтвердить</button></div>
+      </form>
+      <p class="auth-note" id="auth-note">MAX-вход работает внутри официального мини-приложения Photozhab.</p>
+      <p class="payment-legal">Продолжая, вы принимаете <a href="/oferta.html">оферту</a> и <a href="/privacy.html">политику конфиденциальности</a>.</p>
+    </div>
+  </dialog>
 
   <dialog class="payment-dialog" id="payment-dialog" aria-labelledby="payment-title">
     <div class="dialog-head"><div><p class="eyebrow">Пополнение</p><h2 id="payment-title">Добавить кредиты</h2></div><button id="close-payment" type="button" aria-label="Закрыть">×</button></div>
