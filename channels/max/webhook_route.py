@@ -73,3 +73,31 @@ def register_max_webhook(
         return web.Response(status=status, text=text)
 
     app.router.add_post(path, handler)
+
+
+def register_max_subscription_lifecycle(
+    app: Any,
+    *,
+    client: Any,
+    webhook_url: str,
+    secret: str,
+    update_types: tuple[str, ...] = (
+        "message_created",
+        "message_callback",
+        "bot_started",
+    ),
+) -> None:
+    """Subscribe on aiohttp startup and expose fail-closed readiness state."""
+    app["max_webhook_ready"] = False
+
+    async def subscribe(_app: Any) -> None:
+        result = await client.subscribe_webhook(
+            url=webhook_url,
+            secret=secret,
+            update_types=update_types,
+        )
+        if not isinstance(result, Mapping) or result.get("success") is not True:
+            raise RuntimeError("MAX webhook subscription was not accepted")
+        _app["max_webhook_ready"] = True
+
+    app.on_startup.append(subscribe)

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -32,6 +35,7 @@ MAX_CA_BUNDLE_ENV = "MAX_CA_BUNDLE"
 MAX_MODE_ENV = "MAX_MODE"
 DEFAULT_MAX_API_BASE_URL = "https://platform-api2.max.ru"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+_WEBHOOK_SECRET_RE = re.compile(r"^[A-Za-z0-9_-]{5,256}$")
 
 
 @dataclass(frozen=True)
@@ -56,16 +60,45 @@ def max_config_from_env(env: Mapping[str, str] | None = None) -> MaxConfig:
         webhook_url=str(source.get(MAX_WEBHOOK_URL_ENV, "") or "").strip(),
         api_base_url=str(source.get(MAX_API_BASE_URL_ENV, DEFAULT_MAX_API_BASE_URL) or DEFAULT_MAX_API_BASE_URL).rstrip("/"),
         ca_bundle=str(source.get(MAX_CA_BUNDLE_ENV, "") or ""),
-        mode="webhook" if mode == "webhook" else "poll",
+        mode=mode,
     )
+
+
+def validate_max_config(config: MaxConfig, *, production: bool = False) -> None:
+    """Fail closed on invalid enabled MAX configuration."""
+    if not config.enabled:
+        return
+    errors: list[str] = []
+    if not config.bot_token:
+        errors.append(f"{MAX_BOT_TOKEN_ENV} is required")
+    if config.mode not in {"poll", "webhook"}:
+        errors.append(f"{MAX_MODE_ENV} must be poll or webhook")
+    api = urlparse(config.api_base_url)
+    if api.scheme != "https" or not api.hostname:
+        errors.append(f"{MAX_API_BASE_URL_ENV} must be an HTTPS URL")
+    if config.ca_bundle and not Path(config.ca_bundle).is_file():
+        errors.append(f"{MAX_CA_BUNDLE_ENV} must point to a readable file")
+    if production and config.mode != "webhook":
+        errors.append("production MAX requires MAX_MODE=webhook")
+    if config.mode == "webhook":
+        hook = urlparse(config.webhook_url)
+        if hook.scheme != "https" or not hook.hostname:
+            errors.append(f"{MAX_WEBHOOK_URL_ENV} must be an HTTPS URL")
+        if hook.port not in {None, 443}:
+            errors.append(f"{MAX_WEBHOOK_URL_ENV} must use port 443")
+        if not _WEBHOOK_SECRET_RE.fullmatch(config.webhook_secret):
+            errors.append(
+                f"{MAX_WEBHOOK_SECRET_ENV} must be 5-256 URL-safe characters"
+            )
+    if errors:
+        raise ValueError("; ".join(errors))
 
 
 def build_client_from_env(env: Mapping[str, str] | None = None) -> "MaxBotClient | None":
     config = max_config_from_env(env)
     if not config.enabled:
         return None
-    if not config.bot_token:
-        raise ValueError(f"{MAX_BOT_TOKEN_ENV} is required when {MAX_ENABLED_ENV}=1")
+    validate_max_config(config)
     return MaxBotClient(token=config.bot_token, base_url=config.api_base_url, ca_bundle=config.ca_bundle)
 
 

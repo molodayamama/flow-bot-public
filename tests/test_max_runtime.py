@@ -120,7 +120,9 @@ class FlowBotWiringTests(unittest.TestCase):
     def test_registers_webhook_route_in_webhook_mode(self):
         self.assertIn("def _maybe_register_max_webhook", self.src)
         self.assertIn("_maybe_register_max_webhook(app)", self.src)
-        self.assertIn("from channels.max.webhook_route import register_max_webhook", self.max_src)
+        self.assertIn("register_max_webhook,", self.max_src)
+        self.assertIn("register_max_subscription_lifecycle,", self.max_src)
+        self.assertIn("webhook_url=config.webhook_url", self.max_src)
         self.assertIn('config.mode == "webhook"', self.max_src)
         # polling is skipped in webhook mode (return right after the check)
         idx = self.max_src.index('config.mode == "webhook":')

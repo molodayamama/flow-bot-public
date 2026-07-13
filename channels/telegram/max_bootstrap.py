@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from generation import backend_service
 
@@ -44,12 +45,17 @@ class MaxBootstrap:
         download the incoming MAX photo and feed it to i2i/video.
         """
         from channels.base import PlatformFile
-        from channels.max.client import MaxBotClient, max_config_from_env
+        from channels.max.client import (
+            MaxBotClient,
+            max_config_from_env,
+            validate_max_config,
+        )
         from channels.max.generation_adapter import BackendGenerationService
 
         config = max_config_from_env()
         if not config.enabled:
             return None
+        validate_max_config(config, production=config.mode == "webhook")
         client = MaxBotClient(
             token=config.bot_token,
             base_url=config.api_base_url,
@@ -105,10 +111,23 @@ class MaxBootstrap:
                 self._d.log.warning("MAX webhook mode requires MAX_WEBHOOK_SECRET; skipping")
                 return
             from channels.max.handler import MaxMvpBot
-            from channels.max.webhook_route import register_max_webhook
+            from channels.max.webhook_route import (
+                register_max_subscription_lifecycle,
+                register_max_webhook,
+            )
 
             bot = MaxMvpBot(platform=client, service=service)
-            register_max_webhook(app, dispatch=bot.handle, secret=config.webhook_secret)
+            path = urlparse(config.webhook_url).path or "/max/webhook"
+            register_max_webhook(
+                app, dispatch=bot.handle, secret=config.webhook_secret, path=path
+            )
+            register_max_subscription_lifecycle(
+                app,
+                client=client,
+                webhook_url=config.webhook_url,
+                secret=config.webhook_secret,
+            )
             self._d.log.info("MAX webhook route registered")
         except Exception:
             self._d.log.exception("MAX webhook registration failed")
+            raise

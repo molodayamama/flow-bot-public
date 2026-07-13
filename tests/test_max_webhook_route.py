@@ -122,6 +122,54 @@ class RegisterRouteTests(unittest.TestCase):
         self.assertEqual(len(app.router.routes), 1)
         self.assertEqual(app.router.routes[0][0], "/max/webhook")
 
+    def test_subscription_lifecycle_fails_closed_and_sets_readiness(self):
+        class _Client:
+            def __init__(self):
+                self.calls = []
+
+            async def subscribe_webhook(self, **kwargs):
+                self.calls.append(kwargs)
+                return {"success": True}
+
+        class _App(dict):
+            def __init__(self):
+                super().__init__()
+                self.on_startup = []
+
+        app = _App()
+        client = _Client()
+        webhook_route.register_max_subscription_lifecycle(
+            app,
+            client=client,
+            webhook_url="https://bot.example/max/webhook",
+            secret=SECRET,
+        )
+        self.assertFalse(app["max_webhook_ready"])
+        run(app.on_startup[0](app))
+        self.assertTrue(app["max_webhook_ready"])
+        self.assertEqual(client.calls[0]["url"], "https://bot.example/max/webhook")
+
+    def test_subscription_lifecycle_rejects_provider_failure(self):
+        class _Client:
+            async def subscribe_webhook(self, **kwargs):
+                return {"success": False}
+
+        class _App(dict):
+            def __init__(self):
+                super().__init__()
+                self.on_startup = []
+
+        app = _App()
+        webhook_route.register_max_subscription_lifecycle(
+            app,
+            client=_Client(),
+            webhook_url="https://bot.example/max/webhook",
+            secret=SECRET,
+        )
+        with self.assertRaises(RuntimeError):
+            run(app.on_startup[0](app))
+        self.assertFalse(app["max_webhook_ready"])
+
 
 if __name__ == "__main__":
     unittest.main()

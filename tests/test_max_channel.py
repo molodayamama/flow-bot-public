@@ -25,6 +25,41 @@ class MaxChannelTests(unittest.TestCase):
         assert bot is not None
         self.assertEqual(bot.token, "test-token")
 
+    def test_enabled_rejects_unknown_mode(self) -> None:
+        config = client.max_config_from_env({
+            "MAX_ENABLED": "1",
+            "MAX_BOT_TOKEN": "test-token",
+            "MAX_MODE": "weebhook",
+        })
+        with self.assertRaisesRegex(ValueError, "MAX_MODE"):
+            client.validate_max_config(config)
+
+    def test_webhook_mode_requires_production_https_contract(self) -> None:
+        base = {
+            "MAX_ENABLED": "1",
+            "MAX_BOT_TOKEN": "test-token",
+            "MAX_MODE": "webhook",
+        }
+        with self.assertRaisesRegex(ValueError, "MAX_WEBHOOK_URL"):
+            client.validate_max_config(client.max_config_from_env(base), production=True)
+
+        valid = dict(base, **{
+            "MAX_WEBHOOK_URL": "https://bot.example/max/webhook",
+            "MAX_WEBHOOK_SECRET": "safe_secret-1",
+        })
+        client.validate_max_config(client.max_config_from_env(valid), production=True)
+
+    def test_webhook_rejects_non_443_and_invalid_secret(self) -> None:
+        config = client.max_config_from_env({
+            "MAX_ENABLED": "1",
+            "MAX_BOT_TOKEN": "test-token",
+            "MAX_MODE": "webhook",
+            "MAX_WEBHOOK_URL": "https://bot.example:8443/max/webhook",
+            "MAX_WEBHOOK_SECRET": "bad secret",
+        })
+        with self.assertRaisesRegex(ValueError, "port 443"):
+            client.validate_max_config(config, production=True)
+
     def test_renderer_builds_inline_keyboard_attachment(self) -> None:
         keyboard = Keyboard.from_rows([
             [Button.callback("Create", "m:gen")],

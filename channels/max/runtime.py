@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable, Mapping
 
-from channels.max.client import MaxBotClient, max_config_from_env
+from channels.max.client import MaxBotClient, max_config_from_env, validate_max_config
 from channels.max.handler import GenerationService, MaxMvpBot, Wallet
 from channels.max.polling import run_polling
 
@@ -36,8 +36,7 @@ def build_max_bot(
     if not config.enabled:
         log.info("MAX disabled (MAX_ENABLED not set); skipping MAX bot startup")
         return None
-    if not config.bot_token:
-        raise ValueError("MAX_BOT_TOKEN is required when MAX_ENABLED=1")
+    validate_max_config(config)
     client = client or MaxBotClient(
         token=config.bot_token, base_url=config.api_base_url, ca_bundle=config.ca_bundle
     )
