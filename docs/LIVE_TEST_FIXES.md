@@ -112,7 +112,7 @@ Notes:
 ### 2026-06-14 LFX-002 video bearer refresh and retry handling
 
 - Failure id: LF-002
-- Status: implemented
+- Status: verified
 - Priority: S1
 - Fix owner: current Codex session
 - Proposed by: current Codex live E2E session
@@ -652,7 +652,10 @@ Validation:
 
 - Focused account/web/MAX tests: 46 passed.
 - Full offline suite: 1479 passed and 1 skipped.
-- Approved live recheck: pending immutable-SHA deploy.
+- Approved live recheck: exact-SHA deploy succeeded. Public image, edit, text
+  video and photo-animation requests each returned HTTP 200, charged exactly
+  their server-calculated price, returned fetchable JPEG/MP4 media and ended at
+  zero smoke balance.
 
 Notes:
 

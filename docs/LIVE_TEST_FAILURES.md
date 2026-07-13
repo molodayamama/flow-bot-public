@@ -789,7 +789,7 @@ Resolution:
 ### 2026-07-13 LF-011 new web identity has no Flow project
 
 - Severity: S1
-- Status: fix implemented, live recheck pending
+- Status: verified fixed
 - Next fix owner: current Codex session
 - Live check approved by: operator in the active VPS/web-app request
 - Environment: VPS `/opt/geminifree`; commit `6e4cd8f`; public web API
@@ -845,6 +845,17 @@ Next fix notes:
   selected account prefix. Keep positive Telegram per-user creation unchanged
   and never borrow a project from another account.
 
+Resolution:
+
+- `ProjectManager` now reuses an existing project from the exact selected
+  account for negative external identities before attempting browser UI project
+  creation. Positive Telegram identities retain personal project creation.
+- Full offline suite passed with 1479 tests and one skip.
+- Post-deploy web image generation returned HTTP 200, charged exactly the
+  server price, returned one fetchable JPEG and left the smoke balance at zero.
+- The same deployed API also returned valid results for photo edit, text video
+  and photo animation, proving the shared project path across all web modes.
+
 ## Closed Failures
 
 - `LF-001`: fixed by Flow upload API path and live-verified with `kotenok.jpg`.
@@ -861,3 +872,5 @@ Next fix notes:
   moving the command to the admin help section.
 - `LF-010`: fixed by preserving video photo-wait states on plain text and
   live-verified for Ingredients and Frames-start on the VPS.
+- `LF-011`: fixed by account-local shared project fallback for negative web/MAX
+  identities and live-verified across all four first-party web modes.
