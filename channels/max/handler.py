@@ -289,7 +289,9 @@ class MaxMvpBot:
         elif data == CB_TOPUP:
             await self._show_topup(chat)
 
-        await self.platform.answer_callback(self._callback_id(cb))
+        callback_id = self._callback_id(cb)
+        if callback_id:
+            await self.platform.answer_callback(callback_id)
 
     async def handle_message(self, msg: IncomingMessage) -> None:
         uid = msg.user.platform_user_id
@@ -516,4 +518,4 @@ class MaxMvpBot:
         inner = raw.get("callback")
         if isinstance(inner, Mapping) and inner.get("callback_id"):
             return str(inner["callback_id"])
-        return str(cb.message_id or "")
+        return ""

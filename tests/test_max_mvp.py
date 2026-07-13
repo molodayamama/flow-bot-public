@@ -108,13 +108,15 @@ def _msg(text="", user_id="u1", chat_id="c1", photos=()):
         {
             "update_type": "message_created",
             "message": {
-                "id": "m1",
-                "chat_id": chat_id,
-                "text": text,
                 "sender": {"user_id": user_id},
-                "attachments": [
-                    {"type": "image", "payload": {"file_id": fid}} for fid in photos
-                ],
+                "recipient": {"chat_id": chat_id, "chat_type": "dialog", "user_id": user_id},
+                "body": {
+                    "mid": "m1",
+                    "text": text,
+                    "attachments": [
+                        {"type": "image", "payload": {"url": fid}} for fid in photos
+                    ],
+                },
             },
         }
     )
@@ -123,13 +125,13 @@ def _msg(text="", user_id="u1", chat_id="c1", photos=()):
 def _cb(data, user_id="u1", chat_id="c1"):
     return webhook.parse_update(
         {
-            "update_type": "callback",
+            "update_type": "message_callback",
+            "chat_id": chat_id,
+            "message_id": "m1",
             "callback": {
-                "chat_id": chat_id,
-                "message_id": "m1",
                 "callback_id": "cbid-1",
                 "payload": data,
-                "user": {"id": user_id},
+                "user": {"user_id": user_id},
             },
         }
     )

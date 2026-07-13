@@ -160,6 +160,10 @@ MAX webhook/runtime change:
 - `/max/health` is a local readiness check only: test subscription state,
   worker-task state, inbox counts, and dead-letter degradation with fakes. It
   must not call the MAX API.
+- Inbound fixtures must use the official nested shape: message text/id/media in
+  `message.body`, chat in `message.recipient.chat_id`, sender in
+  `message.sender`, callback identity in top-level `chat_id`/`message_id` plus
+  `callback.callback_id`, and start events with `update_type=bot_started`.
 - Do not register a live subscription, send a MAX message, or call the MAX API
   without explicit approval; those actions mutate external state.
 

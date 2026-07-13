@@ -45,7 +45,11 @@ async def _nosleep(_):
 def _msg(uid, text, marker_hint=None):
     return {
         "update_type": "message_created",
-        "message": {"sender": {"user_id": uid}, "chat_id": uid, "text": text},
+        "message": {
+            "sender": {"user_id": uid},
+            "recipient": {"chat_id": uid},
+            "body": {"mid": f"m-{uid}", "text": text},
+        },
     }
 
 

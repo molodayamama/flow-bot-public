@@ -21,10 +21,9 @@ def _payload(text: str = "hello", chat_id: str = "c1") -> dict:
     return {
         "update_type": "message_created",
         "message": {
-            "id": "m1",
-            "chat_id": chat_id,
-            "text": text,
             "sender": {"user_id": "u1"},
+            "recipient": {"chat_id": chat_id},
+            "body": {"mid": f"m1-{text}", "text": text},
         },
     }
 
@@ -63,7 +62,7 @@ class MaxWebhookInboxTests(unittest.TestCase):
         second = inbox.claim_ready()
         self.assertIsNotNone(second)
         assert second is not None
-        self.assertEqual(second.payload["message"]["text"], "second")
+        self.assertEqual(second.payload["message"]["body"]["text"], "second")
 
     def test_claim_is_exclusive_and_stale_owner_cannot_finish_new_claim(self) -> None:
         first = MaxWebhookInbox(self.path, claim_lease_seconds=2)

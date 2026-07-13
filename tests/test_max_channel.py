@@ -99,15 +99,17 @@ class MaxChannelTests(unittest.TestCase):
         self.assertEqual(payload["text"], "Hello")
         self.assertEqual(payload["attachments"][0]["type"], "inline_keyboard")
 
-    def test_parse_fake_message_update(self) -> None:
+    def test_parse_official_message_update(self) -> None:
         update = {
             "update_type": "message_created",
             "message": {
-                "id": "msg-1",
-                "chat_id": "chat-1",
-                "text": "prompt",
                 "sender": {"user_id": "u1", "username": "tema", "first_name": "Tema"},
-                "attachments": [{"type": "image", "payload": {"file_id": "photo-1"}}],
+                "recipient": {"chat_id": "chat-1", "chat_type": "dialog", "user_id": "u1"},
+                "body": {
+                    "mid": "msg-1",
+                    "text": "prompt",
+                    "attachments": [{"type": "image", "payload": {"url": "https://cdn/p.png"}}],
+                },
             },
         }
 
@@ -115,8 +117,10 @@ class MaxChannelTests(unittest.TestCase):
 
         self.assertEqual(event.platform, "max")
         self.assertEqual(event.user.platform_user_id, "u1")
+        self.assertEqual(event.chat_id, "chat-1")
+        self.assertEqual(event.message_id, "msg-1")
         self.assertEqual(event.text, "prompt")
-        self.assertEqual(event.photo_file_ids, ("photo-1",))
+        self.assertEqual(event.photo_file_ids, ("https://cdn/p.png",))
 
     def test_parse_photo_prefers_downloadable_url(self) -> None:
         # When an image attachment carries a url, the parser captures it (the
@@ -124,25 +128,25 @@ class MaxChannelTests(unittest.TestCase):
         update = {
             "update_type": "message_created",
             "message": {
-                "id": "msg-2",
-                "chat_id": "chat-1",
                 "sender": {"user_id": "u1"},
-                "attachments": [
-                    {"type": "image", "payload": {"url": "https://cdn/p.png", "file_id": "photo-9"}}
-                ],
+                "recipient": {"chat_id": "chat-1"},
+                "body": {"mid": "msg-2", "attachments": [
+                    {"type": "image", "payload": {"url": "https://cdn/p.png", "token": "photo-9"}}
+                ]},
             },
         }
         event = webhook.parse_update(update)
         self.assertEqual(event.photo_file_ids, ("https://cdn/p.png",))
 
-    def test_parse_fake_callback_update(self) -> None:
+    def test_parse_official_callback_update(self) -> None:
         update = {
-            "update_type": "callback",
+            "update_type": "message_callback",
+            "chat_id": "chat-1",
+            "message_id": "msg-1",
             "callback": {
-                "chat_id": "chat-1",
-                "message_id": "msg-1",
+                "callback_id": "cb-1",
                 "payload": "m:gen",
-                "user": {"id": "u1"},
+                "user": {"user_id": "u1"},
             },
         }
 
@@ -150,7 +154,25 @@ class MaxChannelTests(unittest.TestCase):
 
         self.assertEqual(event.platform, "max")
         self.assertEqual(event.user.platform_user_id, "u1")
+        self.assertEqual(event.chat_id, "chat-1")
+        self.assertEqual(event.message_id, "msg-1")
         self.assertEqual(event.data, "m:gen")
+
+    def test_parse_bot_started_as_start_message(self) -> None:
+        event = webhook.parse_update({
+            "update_type": "bot_started",
+            "chat_id": 123,
+            "user": {"user_id": 7, "first_name": "Tema"},
+        })
+        self.assertEqual(event.chat_id, "123")
+        self.assertEqual(event.user.platform_user_id, "7")
+        self.assertEqual(event.text, "/start")
+
+    def test_parse_rejects_missing_identity_or_chat(self) -> None:
+        self.assertIsNone(webhook.parse_update({
+            "update_type": "message_created",
+            "message": {"sender": {"first_name": "No id"}, "body": {"text": "x"}},
+        }))
 
     def test_webhook_secret_compare(self) -> None:
         header = "X-Max-Bot-Api-Secret"

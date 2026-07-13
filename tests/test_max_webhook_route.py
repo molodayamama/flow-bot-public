@@ -33,7 +33,11 @@ GOOD_HEADERS = {MAX_SECRET_HEADER: SECRET}
 def _msg_body():
     return json.dumps({
         "update_type": "message_created",
-        "message": {"sender": {"user_id": "1"}, "chat_id": "1", "text": "hi"},
+        "message": {
+            "sender": {"user_id": "1"},
+            "recipient": {"chat_id": "1"},
+            "body": {"mid": "m1", "text": "hi"},
+        },
     })
 
 
@@ -102,7 +106,11 @@ class ProcessWebhookTests(unittest.TestCase):
         sink = _Sink()
         payload = {
             "update_type": "message_created",
-            "message": {"sender": {"user_id": "1"}, "chat_id": "1", "text": "hi"},
+            "message": {
+                "sender": {"user_id": "1"},
+                "recipient": {"chat_id": "1"},
+                "body": {"mid": "m1", "text": "hi"},
+            },
         }
         status, _ = run(webhook_route.process_webhook(
             headers=GOOD_HEADERS, body=payload, secret=SECRET, dispatch=sink.dispatch,
