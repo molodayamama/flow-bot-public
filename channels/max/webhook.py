@@ -6,7 +6,7 @@ from typing import Any, Mapping
 from channels.base import IncomingCallback, IncomingMessage, PlatformUser
 
 
-MAX_SECRET_HEADER = "X-Max-Bot-Secret"
+MAX_SECRET_HEADER = "X-Max-Bot-Api-Secret"
 
 
 def verify_webhook_secret(headers: Mapping[str, str], expected_secret: str) -> bool:
@@ -105,4 +105,3 @@ def _attachment_ids(message: Mapping[str, Any], attachment_type: str) -> list[st
             if ref:
                 result.append(str(ref))
     return result
-

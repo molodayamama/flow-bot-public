@@ -45,7 +45,7 @@ class MaxChannelTests(unittest.TestCase):
 
         payload = bot.build_send_message_payload(chat_id="chat-1", text="Hello", keyboard=keyboard)
 
-        self.assertEqual(payload["chat_id"], "chat-1")
+        self.assertNotIn("chat_id", payload)
         self.assertEqual(payload["text"], "Hello")
         self.assertEqual(payload["attachments"][0]["type"], "inline_keyboard")
 
@@ -103,9 +103,10 @@ class MaxChannelTests(unittest.TestCase):
         self.assertEqual(event.data, "m:gen")
 
     def test_webhook_secret_compare(self) -> None:
-        self.assertTrue(webhook.verify_webhook_secret({"X-Max-Bot-Secret": "s"}, "s"))
-        self.assertFalse(webhook.verify_webhook_secret({"X-Max-Bot-Secret": "bad"}, "s"))
-        self.assertFalse(webhook.verify_webhook_secret({"X-Max-Bot-Secret": "s"}, ""))
+        header = "X-Max-Bot-Api-Secret"
+        self.assertTrue(webhook.verify_webhook_secret({header: "s"}, "s"))
+        self.assertFalse(webhook.verify_webhook_secret({header: "bad"}, "s"))
+        self.assertFalse(webhook.verify_webhook_secret({header: "s"}, ""))
 
     def test_max_modules_do_not_import_telegram_or_flow_bot(self) -> None:
         src = "\n".join(
@@ -119,4 +120,3 @@ class MaxChannelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

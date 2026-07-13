@@ -65,8 +65,8 @@ class _FakeSession:
         self.calls.append(("get", "GET", url, kwargs))
         return self._next()
 
-    def put(self, url, **kwargs):
-        self.calls.append(("put", "PUT", url, kwargs))
+    def post(self, url, **kwargs):
+        self.calls.append(("post", "POST", url, kwargs))
         return self._next()
 
 
@@ -106,7 +106,7 @@ class MediaPayloadTests(unittest.TestCase):
         body = c.build_media_message_payload(
             chat_id="7", media=PlatformMedia(kind="photo", url="http://u/i.png", caption="hi")
         )
-        self.assertEqual(body["chat_id"], "7")
+        self.assertNotIn("chat_id", body)
         self.assertEqual(body["text"], "hi")
         att = body["attachments"][0]
         self.assertEqual(att["type"], "image")
@@ -146,10 +146,11 @@ class SendTests(unittest.TestCase):
         self.assertEqual(method, "POST")
         self.assertTrue(url.endswith("/messages"))
         sent = sess.calls[0][3]["json"]
+        self.assertEqual(sess.calls[0][3]["params"], {"chat_id": "7"})
         self.assertEqual(sent["attachments"][0]["payload"], {"url": "http://u/i.png"})
 
     def test_send_video_bytes_uploads_then_sends_with_token(self):
-        # POST /uploads -> {url}; PUT bytes -> {token}; POST /messages -> ok
+        # POST /uploads -> {url}; multipart POST -> {token}; POST /messages -> ok
         responses = [
             _FakeResp(json_body={"url": "http://upload/here"}),
             _FakeResp(json_body={"token": "UPLOADED"}),
@@ -161,10 +162,10 @@ class SendTests(unittest.TestCase):
         last = sess.calls[-1]
         self.assertTrue(last[2].endswith("/messages"))
         self.assertEqual(last[3]["json"]["attachments"][0]["payload"], {"token": "UPLOADED"})
-        # a PUT to the upload url happened with the raw bytes
-        put = [c for c in sess.calls if c[0] == "put"][0]
-        self.assertEqual(put[2], "http://upload/here")
-        self.assertEqual(put[3]["data"], b"\x00\x01")
+        upload = [call for call in sess.calls if call[0] == "post"][0]
+        self.assertEqual(upload[2], "http://upload/here")
+        self.assertEqual(upload[3]["headers"], {"Authorization": "TESTTOKEN"})
+        self.assertIn("data", upload[3])
 
     def test_get_file_bytes_downloads_url(self):
         c, sess = _client([_FakeResp(raw=b"IMGDATA")])
@@ -186,6 +187,47 @@ class SendTests(unittest.TestCase):
         self.assertTrue(url.endswith("/messages"))
         self.assertEqual(kwargs["params"]["message_id"], "42")
         self.assertEqual(kwargs["json"]["text"], "new text")
+
+    def test_send_message_passes_chat_id_as_query_parameter(self):
+        c, sess = _client([_FakeResp(json_body={"ok": True})])
+        run(c.send_message("7", "hello"))
+        kwargs = sess.calls[0][3]
+        self.assertEqual(kwargs["params"], {"chat_id": "7"})
+        self.assertNotIn("chat_id", kwargs["json"])
+
+    def test_answer_callback_passes_callback_id_as_query_parameter(self):
+        c, sess = _client([_FakeResp(json_body={"ok": True})])
+        run(c.answer_callback("cb-1", "done"))
+        kwargs = sess.calls[0][3]
+        self.assertEqual(kwargs["params"], {"callback_id": "cb-1"})
+        self.assertEqual(kwargs["json"], {"notification": "done"})
+
+    def test_get_updates_supports_documented_limit_timeout_and_types(self):
+        c, sess = _client([_FakeResp(json_body={"updates": []})])
+        run(c.get_updates(marker=12, limit=5000, timeout=120, types=("message_created", "message_callback")))
+        self.assertEqual(sess.calls[0][3]["params"], {
+            "limit": 1000,
+            "timeout": 90,
+            "marker": 12,
+            "types": "message_created,message_callback",
+        })
+
+    def test_subscription_methods_match_documented_contract(self):
+        c, sess = _client([
+            _FakeResp(json_body=[]),
+            _FakeResp(json_body={"success": True}),
+            _FakeResp(json_body={"success": True}),
+        ])
+        run(c.get_subscriptions())
+        run(c.subscribe_webhook(
+            url="https://bot.example/max/webhook",
+            secret="secret-1",
+            update_types=("message_created", "message_callback"),
+        ))
+        run(c.unsubscribe_webhook(url="https://bot.example/max/webhook"))
+        self.assertEqual(sess.calls[0][1:3], ("GET", f"{c.base_url}/subscriptions"))
+        self.assertEqual(sess.calls[1][3]["json"]["secret"], "secret-1")
+        self.assertEqual(sess.calls[2][3]["params"], {"url": "https://bot.example/max/webhook"})
 
 
 if __name__ == "__main__":

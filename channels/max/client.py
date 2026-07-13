@@ -21,6 +21,7 @@ _MEDIA_KIND_TO_MAX_TYPE = {
 MAX_ENABLED_ENV = "MAX_ENABLED"
 MAX_BOT_TOKEN_ENV = "MAX_BOT_TOKEN"
 MAX_WEBHOOK_SECRET_ENV = "MAX_WEBHOOK_SECRET"
+MAX_WEBHOOK_URL_ENV = "MAX_WEBHOOK_URL"
 MAX_API_BASE_URL_ENV = "MAX_API_BASE_URL"
 # Path to a CA bundle (PEM) that trusts the MAX API root. platform-api2.max.ru
 # presents a chain rooted in the Russian Trusted Root CA, which is not in the
@@ -38,6 +39,7 @@ class MaxConfig:
     enabled: bool = False
     bot_token: str = ""
     webhook_secret: str = ""
+    webhook_url: str = ""
     api_base_url: str = DEFAULT_MAX_API_BASE_URL
     ca_bundle: str = ""
     mode: str = "poll"
@@ -51,6 +53,7 @@ def max_config_from_env(env: Mapping[str, str] | None = None) -> MaxConfig:
         enabled=enabled,
         bot_token=str(source.get(MAX_BOT_TOKEN_ENV, "") or ""),
         webhook_secret=str(source.get(MAX_WEBHOOK_SECRET_ENV, "") or ""),
+        webhook_url=str(source.get(MAX_WEBHOOK_URL_ENV, "") or "").strip(),
         api_base_url=str(source.get(MAX_API_BASE_URL_ENV, DEFAULT_MAX_API_BASE_URL) or DEFAULT_MAX_API_BASE_URL).rstrip("/"),
         ca_bundle=str(source.get(MAX_CA_BUNDLE_ENV, "") or ""),
         mode="webhook" if mode == "webhook" else "poll",
@@ -68,11 +71,7 @@ def build_client_from_env(env: Mapping[str, str] | None = None) -> "MaxBotClient
 
 @dataclass
 class MaxBotClient:
-    """Small async client skeleton for MAX Bot API calls.
-
-    The refactor branch does not instantiate or call this client from production
-    code yet. Tests use payload builders and fakes only.
-    """
+    """Async client for the MAX Bot API transport used by poll/webhook runtimes."""
 
     token: str
     base_url: str = DEFAULT_MAX_API_BASE_URL
@@ -106,7 +105,7 @@ class MaxBotClient:
         text: str,
         keyboard: Keyboard | None = None,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
+        payload: dict[str, Any] = {"text": text}
         attachment = render_keyboard(keyboard)
         if attachment:
             payload["attachments"] = [attachment]
@@ -119,7 +118,9 @@ class MaxBotClient:
         keyboard: Keyboard | None = None,
     ) -> Any:
         payload = self.build_send_message_payload(chat_id=chat_id, text=text, keyboard=keyboard)
-        return await self._request("POST", "/messages", json=payload)
+        return await self._request(
+            "POST", "/messages", params={"chat_id": chat_id}, json=payload
+        )
 
     async def edit_message(
         self,
@@ -138,10 +139,12 @@ class MaxBotClient:
         )
 
     async def answer_callback(self, callback_id: str, text: str | None = None) -> Any:
-        payload: dict[str, Any] = {"callback_id": callback_id}
+        payload: dict[str, Any] = {}
         if text:
             payload["notification"] = text
-        return await self._request("POST", "/answers", json=payload)
+        return await self._request(
+            "POST", "/answers", params={"callback_id": callback_id}, json=payload
+        )
 
     # ── media ────────────────────────────────────────────────────────────
     def build_media_message_payload(
@@ -164,7 +167,6 @@ class MaxBotClient:
         elif media.url:
             attach_payload["url"] = media.url
         body: dict[str, Any] = {
-            "chat_id": chat_id,
             "attachments": [{"type": max_type, "payload": attach_payload}],
         }
         if media.caption:
@@ -193,11 +195,17 @@ class MaxBotClient:
             # Some responses hand back the token directly.
             token = start.get("token")
             return str(token) if token else None
-        done = await self._raw_put_bytes(str(upload_url), media.bytes_data)
+        initial_token = start.get("token")
+        done = await self._raw_post_multipart(
+            str(upload_url),
+            media.bytes_data,
+            filename=(media.file.file_id if media.file and media.file.file_id else "upload.bin"),
+        )
         if isinstance(done, Mapping):
             token = done.get("token") or (done.get("image") or {}).get("token")
-            return str(token) if token else None
-        return None
+            if token:
+                return str(token)
+        return str(initial_token) if initial_token else None
 
     async def _send_media(
         self, chat_id: str, media: PlatformMedia, keyboard: Keyboard | None
@@ -207,7 +215,9 @@ class MaxBotClient:
         payload = self.build_media_message_payload(
             chat_id=chat_id, media=media, token=token, keyboard=keyboard
         )
-        return await self._request("POST", "/messages", json=payload)
+        return await self._request(
+            "POST", "/messages", params={"chat_id": chat_id}, json=payload
+        )
 
     async def send_photo(
         self, chat_id: str, media: PlatformMedia, keyboard: Keyboard | None = None
@@ -230,11 +240,41 @@ class MaxBotClient:
             raise ValueError("PlatformFile has no url to download from")
         return await self._raw_get_bytes(file.url)
 
-    async def get_updates(self, marker: int | None = None, limit: int = 100) -> Any:
-        params: dict[str, Any] = {"limit": max(1, min(int(limit), 100))}
+    async def get_updates(
+        self,
+        marker: int | None = None,
+        limit: int = 100,
+        *,
+        timeout: int = 30,
+        types: tuple[str, ...] | list[str] | None = None,
+    ) -> Any:
+        params: dict[str, Any] = {
+            "limit": max(1, min(int(limit), 1000)),
+            "timeout": max(0, min(int(timeout), 90)),
+        }
         if marker is not None:
             params["marker"] = int(marker)
+        if types:
+            params["types"] = ",".join(str(item) for item in types)
         return await self._request("GET", "/updates", params=params)
+
+    async def get_subscriptions(self) -> Any:
+        return await self._request("GET", "/subscriptions")
+
+    async def subscribe_webhook(
+        self,
+        *,
+        url: str,
+        secret: str,
+        update_types: tuple[str, ...] | list[str] | None = None,
+    ) -> Any:
+        payload: dict[str, Any] = {"url": url, "secret": secret}
+        if update_types:
+            payload["update_types"] = [str(item) for item in update_types]
+        return await self._request("POST", "/subscriptions", json=payload)
+
+    async def unsubscribe_webhook(self, *, url: str) -> Any:
+        return await self._request("DELETE", "/subscriptions", params={"url": url})
 
     async def _raw_get_bytes(self, url: str) -> bytes:
         """GET raw bytes from an absolute URL (file download, no JSON parse)."""
@@ -250,14 +290,28 @@ class MaxBotClient:
             if owns_session:
                 await session.close()
 
-    async def _raw_put_bytes(self, url: str, data: bytes) -> Any:
-        """PUT raw bytes to an upload URL; parse a JSON response when present."""
+    async def _raw_post_multipart(
+        self, url: str, data: bytes, *, filename: str = "upload.bin"
+    ) -> Any:
+        """POST one multipart ``data`` file to a MAX-provided upload URL."""
         session = self.session
         owns_session = session is None
         if session is None:
             session = aiohttp.ClientSession()
         try:
-            async with session.put(url, data=data, ssl=self._ssl_arg()) as response:
+            form = aiohttp.FormData()
+            form.add_field(
+                "data",
+                data,
+                filename=filename,
+                content_type="application/octet-stream",
+            )
+            async with session.post(
+                url,
+                data=form,
+                headers={"Authorization": self.token},
+                ssl=self._ssl_arg(),
+            ) as response:
                 response.raise_for_status()
                 if response.content_type == "application/json":
                     return await response.json()
@@ -286,4 +340,3 @@ class MaxBotClient:
         finally:
             if owns_session:
                 await session.close()
-
