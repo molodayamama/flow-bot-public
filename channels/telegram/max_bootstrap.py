@@ -111,21 +111,30 @@ class MaxBootstrap:
                 self._d.log.warning("MAX webhook mode requires MAX_WEBHOOK_SECRET; skipping")
                 return
             from channels.max.handler import MaxMvpBot
+            from channels.max.inbox import MaxWebhookInbox
             from channels.max.webhook_route import (
                 register_max_subscription_lifecycle,
                 register_max_webhook,
             )
 
             bot = MaxMvpBot(platform=client, service=service)
+            inbox = MaxWebhookInbox(config.inbox_db)
             path = urlparse(config.webhook_url).path or "/max/webhook"
             register_max_webhook(
-                app, dispatch=bot.handle, secret=config.webhook_secret, path=path
+                app,
+                dispatch=bot.handle,
+                secret=config.webhook_secret,
+                path=path,
+                inbox=inbox,
             )
             register_max_subscription_lifecycle(
                 app,
                 client=client,
                 webhook_url=config.webhook_url,
                 secret=config.webhook_secret,
+                inbox=inbox,
+                dispatch=bot.handle,
+                worker_count=config.inbox_workers,
             )
             self._d.log.info("MAX webhook route registered")
         except Exception:

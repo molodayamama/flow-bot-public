@@ -25,6 +25,8 @@ MAX_ENABLED_ENV = "MAX_ENABLED"
 MAX_BOT_TOKEN_ENV = "MAX_BOT_TOKEN"
 MAX_WEBHOOK_SECRET_ENV = "MAX_WEBHOOK_SECRET"
 MAX_WEBHOOK_URL_ENV = "MAX_WEBHOOK_URL"
+MAX_INBOX_DB_ENV = "MAX_INBOX_DB"
+MAX_INBOX_WORKERS_ENV = "MAX_INBOX_WORKERS"
 MAX_API_BASE_URL_ENV = "MAX_API_BASE_URL"
 # Path to a CA bundle (PEM) that trusts the MAX API root. platform-api2.max.ru
 # presents a chain rooted in the Russian Trusted Root CA, which is not in the
@@ -44,6 +46,8 @@ class MaxConfig:
     bot_token: str = ""
     webhook_secret: str = ""
     webhook_url: str = ""
+    inbox_db: str = "max_webhook_inbox.db"
+    inbox_workers: int = 4
     api_base_url: str = DEFAULT_MAX_API_BASE_URL
     ca_bundle: str = ""
     mode: str = "poll"
@@ -53,11 +57,17 @@ def max_config_from_env(env: Mapping[str, str] | None = None) -> MaxConfig:
     source = os.environ if env is None else env
     enabled = str(source.get(MAX_ENABLED_ENV, "0")).strip().lower() in _TRUE_VALUES
     mode = str(source.get(MAX_MODE_ENV, "poll") or "poll").strip().lower()
+    try:
+        inbox_workers = int(str(source.get(MAX_INBOX_WORKERS_ENV, "4") or "4"))
+    except ValueError:
+        inbox_workers = 0
     return MaxConfig(
         enabled=enabled,
         bot_token=str(source.get(MAX_BOT_TOKEN_ENV, "") or ""),
         webhook_secret=str(source.get(MAX_WEBHOOK_SECRET_ENV, "") or ""),
         webhook_url=str(source.get(MAX_WEBHOOK_URL_ENV, "") or "").strip(),
+        inbox_db=str(source.get(MAX_INBOX_DB_ENV, "max_webhook_inbox.db") or "max_webhook_inbox.db"),
+        inbox_workers=inbox_workers,
         api_base_url=str(source.get(MAX_API_BASE_URL_ENV, DEFAULT_MAX_API_BASE_URL) or DEFAULT_MAX_API_BASE_URL).rstrip("/"),
         ca_bundle=str(source.get(MAX_CA_BUNDLE_ENV, "") or ""),
         mode=mode,
@@ -90,6 +100,10 @@ def validate_max_config(config: MaxConfig, *, production: bool = False) -> None:
             errors.append(
                 f"{MAX_WEBHOOK_SECRET_ENV} must be 5-256 URL-safe characters"
             )
+        if config.inbox_db == ":memory:":
+            errors.append(f"{MAX_INBOX_DB_ENV} must be durable in webhook mode")
+        if not 1 <= config.inbox_workers <= 32:
+            errors.append(f"{MAX_INBOX_WORKERS_ENV} must be between 1 and 32")
     if errors:
         raise ValueError("; ".join(errors))
 

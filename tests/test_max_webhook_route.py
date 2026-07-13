@@ -62,6 +62,15 @@ class ProcessWebhookTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(sink.events, [])
 
+    def test_oversized_body_is_413(self):
+        sink = _Sink()
+        status, _ = run(webhook_route.process_webhook(
+            headers=GOOD_HEADERS, body="x" * 11, secret=SECRET,
+            dispatch=sink.dispatch, max_body_bytes=10,
+        ))
+        self.assertEqual(status, 413)
+        self.assertEqual(sink.events, [])
+
     def test_valid_message_dispatches_and_200(self):
         sink = _Sink()
         status, text = run(webhook_route.process_webhook(
@@ -101,6 +110,30 @@ class ProcessWebhookTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(sink.events), 1)
 
+    def test_inbox_acknowledges_after_enqueue_and_deduplicates(self):
+        class _Inbox:
+            def __init__(self):
+                self.payloads = []
+
+            def enqueue(self, payload):
+                inserted = not self.payloads
+                self.payloads.append(dict(payload))
+                return "event-id", inserted
+
+        sink = _Sink()
+        inbox = _Inbox()
+        first = run(webhook_route.process_webhook(
+            headers=GOOD_HEADERS, body=_msg_body(), secret=SECRET,
+            dispatch=sink.dispatch, inbox=inbox,
+        ))
+        second = run(webhook_route.process_webhook(
+            headers=GOOD_HEADERS, body=_msg_body(), secret=SECRET,
+            dispatch=sink.dispatch, inbox=inbox,
+        ))
+        self.assertEqual(first, (200, "queued"))
+        self.assertEqual(second, (200, "duplicate"))
+        self.assertEqual(sink.events, [])
+
 
 class RegisterRouteTests(unittest.TestCase):
     def test_registers_post_route(self):
@@ -135,6 +168,7 @@ class RegisterRouteTests(unittest.TestCase):
             def __init__(self):
                 super().__init__()
                 self.on_startup = []
+                self.on_cleanup = []
 
         app = _App()
         client = _Client()
@@ -148,6 +182,7 @@ class RegisterRouteTests(unittest.TestCase):
         run(app.on_startup[0](app))
         self.assertTrue(app["max_webhook_ready"])
         self.assertEqual(client.calls[0]["url"], "https://bot.example/max/webhook")
+        self.assertEqual(len(app.on_cleanup), 1)
 
     def test_subscription_lifecycle_rejects_provider_failure(self):
         class _Client:
@@ -158,6 +193,7 @@ class RegisterRouteTests(unittest.TestCase):
             def __init__(self):
                 super().__init__()
                 self.on_startup = []
+                self.on_cleanup = []
 
         app = _App()
         webhook_route.register_max_subscription_lifecycle(

@@ -143,6 +143,10 @@ metrics.db
 metrics.db-journal
 metrics.db-wal
 metrics.db-shm
+max_webhook_inbox.db
+max_webhook_inbox.db-journal
+max_webhook_inbox.db-wal
+max_webhook_inbox.db-shm
 
 # Привязки user→account пула Flow-аккаунтов (runtime state)
 flow_accounts_state.json

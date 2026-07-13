@@ -143,6 +143,20 @@ Python code change:
 - Add targeted offline tests before external validation where possible.
 - Avoid running Telegram/Google scripts unless explicitly approved.
 
+MAX webhook/runtime change:
+
+- Syntax check, assumption: `python -m py_compile channels/max/*.py
+  channels/telegram/max_bootstrap.py`.
+- Focused offline suite, assumption: `python -m unittest discover -s tests -p
+  "test_max_*.py"`.
+- Run the full offline suite before merge because MAX shares generation,
+  billing, and aiohttp composition surfaces with Telegram.
+- Inbox tests must use temporary SQLite files and confirm duplicate suppression,
+  cross-worker lease exclusion, FIFO within one chat, retry/dead-letter state,
+  retention, and redaction of exception text.
+- Do not register a live subscription, send a MAX message, or call the MAX API
+  without explicit approval; those actions mutate external state.
+
 Admin UI/API change:
 
 - Syntax check, assumption:

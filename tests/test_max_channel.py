@@ -60,6 +60,21 @@ class MaxChannelTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "port 443"):
             client.validate_max_config(config, production=True)
 
+    def test_webhook_requires_durable_inbox_and_bounded_workers(self) -> None:
+        base = {
+            "MAX_ENABLED": "1",
+            "MAX_BOT_TOKEN": "test-token",
+            "MAX_MODE": "webhook",
+            "MAX_WEBHOOK_URL": "https://bot.example/max/webhook",
+            "MAX_WEBHOOK_SECRET": "safe_secret-1",
+        }
+        memory = client.max_config_from_env(dict(base, MAX_INBOX_DB=":memory:"))
+        with self.assertRaisesRegex(ValueError, "MAX_INBOX_DB"):
+            client.validate_max_config(memory, production=True)
+        workers = client.max_config_from_env(dict(base, MAX_INBOX_WORKERS="many"))
+        with self.assertRaisesRegex(ValueError, "MAX_INBOX_WORKERS"):
+            client.validate_max_config(workers, production=True)
+
     def test_renderer_builds_inline_keyboard_attachment(self) -> None:
         keyboard = Keyboard.from_rows([
             [Button.callback("Create", "m:gen")],
