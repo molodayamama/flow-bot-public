@@ -43,6 +43,7 @@ previous_sha="$(git rev-parse HEAD)"
 checked_out_target=0
 backup_tool=""
 backup_tool_dir=""
+compile_dir=""
 declare -a restarted_units=()
 
 unit_is_installed() {
@@ -90,6 +91,9 @@ rollback_code() {
     fi
     if [ -n "$backup_tool_dir" ]; then
         rmdir -- "$backup_tool_dir" 2>/dev/null || true
+    fi
+    if [[ "$compile_dir" == /tmp/geminifree-compile.* ]] && [ -d "$compile_dir" ]; then
+        rm -rf -- "$compile_dir"
     fi
     if [ "$checked_out_target" -eq 1 ]; then
         echo "Deploy failed; rolling code back to $previous_sha" >&2
@@ -140,7 +144,17 @@ git checkout --detach "$target_sha"
 checked_out_target=1
 
 "$PYTHON" tools/check_tracked_secrets.py
-run_as_service "$PYTHON" -m compileall -q -x 'google_profile|\.git' .
+mapfile -d '' tracked_python < <(git ls-files -z -- '*.py')
+if [ "${#tracked_python[@]}" -eq 0 ]; then
+    echo "Refusing deploy: target contains no tracked Python files" >&2
+    exit 1
+fi
+compile_dir="$(mktemp -d /tmp/geminifree-compile.XXXXXX)"
+chown "$SERVICE_USER" "$compile_dir"
+run_as_service env PYTHONPYCACHEPREFIX="$compile_dir" \
+    "$PYTHON" -m py_compile "${tracked_python[@]}"
+rm -rf -- "$compile_dir"
+compile_dir=""
 run_as_service "$PYTHON" tools/production_preflight.py --root "$APP_ROOT" --env-file "$ENV_FILE"
 if [ -r "$SELLER_ENV_FILE" ]; then
     run_as_service "$PYTHON" tools/production_preflight.py --root "$APP_ROOT" --env-file "$SELLER_ENV_FILE"

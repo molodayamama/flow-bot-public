@@ -57,6 +57,13 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn("rollback_code", self.deploy)
         self.assertIn('runuser -u "$SERVICE_USER"', self.deploy)
 
+    def test_deploy_compiles_only_tracked_python_in_service_writable_cache(self) -> None:
+        self.assertIn("git ls-files -z -- '*.py'", self.deploy)
+        self.assertIn('PYTHONPYCACHEPREFIX="$compile_dir"', self.deploy)
+        self.assertIn('"$PYTHON" -m py_compile "${tracked_python[@]}"', self.deploy)
+        self.assertIn('chown "$SERVICE_USER" "$compile_dir"', self.deploy)
+        self.assertNotIn('compileall -q', self.deploy)
+
     def test_services_limit_restart_loops_and_private_file_modes(self) -> None:
         for unit in (self.consumer_unit, self.seller_unit):
             self.assertIn("StartLimitIntervalSec=300", unit)
