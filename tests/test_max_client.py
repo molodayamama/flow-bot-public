@@ -228,6 +228,13 @@ class SendTests(unittest.TestCase):
         self.assertEqual(kwargs["params"], {"chat_id": "7"})
         self.assertNotIn("chat_id", kwargs["json"])
 
+    def test_send_message_to_user_passes_user_id_as_query_parameter(self):
+        c, sess = _client([_FakeResp(json_body={"ok": True})])
+        run(c.send_message_to_user("user-7", "payment received"))
+        kwargs = sess.calls[0][3]
+        self.assertEqual(kwargs["params"], {"user_id": "user-7"})
+        self.assertEqual(kwargs["json"]["text"], "payment received")
+
     def test_answer_callback_passes_callback_id_as_query_parameter(self):
         c, sess = _client([_FakeResp(json_body={"ok": True})])
         run(c.answer_callback("cb-1", "done"))

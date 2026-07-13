@@ -158,6 +158,12 @@ MAX webhook/runtime change:
 - Wizard-state tests must use temporary SQLite files and confirm persistence
   across store/bot recreation, TTL cleanup, explicit clear, successful-delivery
   cleanup, and refund plus state retention when media delivery raises.
+- MAX Robokassa tests must remain provider-free and confirm invoice links carry
+  the negative internal identity inside the signed `Shp_user`, callback parsing
+  accepts only non-zero signed 64-bit integers after signature verification,
+  duplicate callbacks do not re-credit, credits land in the metrics SQLite
+  namespace, and MAX identities never fall through to Telegram notification or
+  a Telegram success-page link.
 - Transport tests must prove that `POST /messages` is not retried on ambiguous
   failures, rate limiting stays below 30 rps, `Retry-After` is bounded, unknown
   provider bodies/codes are redacted, and owned sessions close on shutdown.

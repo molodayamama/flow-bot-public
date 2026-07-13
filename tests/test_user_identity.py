@@ -57,6 +57,16 @@ class UserIdentityTests(unittest.TestCase):
         self.assertNotEqual(max_id, telegram_id)
         self.assertNotEqual(second_max_id, max_id)
 
+    def test_identity_can_be_resolved_from_internal_id(self) -> None:
+        internal_id = metrics.ensure_user_identity("max", "42")
+
+        row = metrics.get_identity_by_internal_id(internal_id)
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["platform"], "max")
+        self.assertEqual(row["platform_user_id"], "42")
+        self.assertIsNone(metrics.get_identity_by_internal_id(-999999))
+
     def test_identity_credit_balances_are_separate_by_platform(self) -> None:
         telegram_balance = metrics.credits_balance_for_identity("telegram", "42", starter=30)
         max_balance = metrics.credits_balance_for_identity("max", "42", starter=30)
@@ -89,4 +99,3 @@ class UserIdentityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

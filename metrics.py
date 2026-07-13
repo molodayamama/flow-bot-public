@@ -982,6 +982,22 @@ def get_user_identity(platform: str, platform_user_id: str | int) -> dict | None
         return None
 
 
+def get_identity_by_internal_id(internal_user_id: int) -> dict | None:
+    """Return the platform identity owning an internal id, or ``None``."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT platform, platform_user_id, internal_user_id, created_at, last_seen_at "
+                "FROM user_identities WHERE internal_user_id=?",
+                (int(internal_user_id),),
+            ).fetchone()
+            return dict(row) if row else None
+    except Exception:  # noqa: BLE001
+        log.warning("get_identity_by_internal_id failed", exc_info=True)
+        return None
+
+
 def credits_balance_for_identity(platform: str, platform_user_id: str | int, starter: int) -> int:
     internal_id = ensure_user_identity(platform, platform_user_id)
     return credits_balance(internal_id, starter) if internal_id else 0

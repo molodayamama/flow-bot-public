@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import inspect
 import logging
+from collections.abc import Sequence
 from typing import Any, Awaitable, Callable, Mapping
 
 from channels.max.client import MaxBotClient, max_config_from_env, validate_max_config
-from channels.max.handler import GenerationService, MaxMvpBot, Wallet
+from channels.max.handler import GenerationService, MaxMvpBot, PendingStateStore, Wallet
 from channels.max.polling import run_polling
 
 log = logging.getLogger(__name__)
@@ -28,6 +29,8 @@ def build_max_bot(
     env: Mapping[str, str] | None = None,
     wallet: Wallet | None = None,
     client: MaxBotClient | None = None,
+    state_store: PendingStateStore | None = None,
+    topup_options: Callable[[str], Sequence[tuple[str, str]]] | None = None,
 ) -> tuple[MaxBotClient, MaxMvpBot] | None:
     """Build (client, MaxMvpBot) from env, or None when MAX is disabled.
 
@@ -41,7 +44,13 @@ def build_max_bot(
     client = client or MaxBotClient(
         token=config.bot_token, base_url=config.api_base_url, ca_bundle=config.ca_bundle
     )
-    bot = MaxMvpBot(platform=client, service=service, wallet=wallet)
+    bot = MaxMvpBot(
+        platform=client,
+        service=service,
+        wallet=wallet,
+        state_store=state_store,
+        topup_options=topup_options,
+    )
     return client, bot
 
 
@@ -51,12 +60,21 @@ async def run_max(
     env: Mapping[str, str] | None = None,
     wallet: Wallet | None = None,
     client: MaxBotClient | None = None,
+    state_store: PendingStateStore | None = None,
+    topup_options: Callable[[str], Sequence[tuple[str, str]]] | None = None,
     should_stop: Callable[[], bool] | None = None,
     idle_delay: float = 1.0,
     sleep: Callable[[float], Awaitable[None]] | None = None,
 ) -> Any:
     """Start the MAX polling runtime; a no-op (returns None) when MAX is disabled."""
-    built = build_max_bot(service, env=env, wallet=wallet, client=client)
+    built = build_max_bot(
+        service,
+        env=env,
+        wallet=wallet,
+        client=client,
+        state_store=state_store,
+        topup_options=topup_options,
+    )
     if built is None:
         return None
     max_client, bot = built

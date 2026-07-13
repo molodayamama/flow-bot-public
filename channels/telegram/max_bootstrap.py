@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -30,12 +31,15 @@ from generation import backend_service
 @dataclass(frozen=True)
 class MaxBootstrapDeps:
     backend_generation_deps: Callable[[], Any]
+    topup_options: Callable[[str], Sequence[tuple[str, str]]]
+    identity_for_internal_id: Callable[[int], dict | None]
     log: Any
 
 
 class MaxBootstrap:
     def __init__(self, deps: MaxBootstrapDeps) -> None:
         self._d = deps
+        self._active_client: Any | None = None
 
     def build_runtime(self):
         """Build (config, client, service) for MAX, or None when disabled/failed.
@@ -89,8 +93,17 @@ class MaxBootstrap:
             if config.mode == "webhook":
                 return  # webhook mode is registered on the web app, not polled
             from channels.max.runtime import run_max
+            from channels.max.state import MaxUserStateStore
 
-            asyncio.create_task(run_max(service, client=client))
+            self._active_client = client
+            asyncio.create_task(
+                run_max(
+                    service,
+                    client=client,
+                    state_store=MaxUserStateStore(config.inbox_db),
+                    topup_options=self._d.topup_options,
+                )
+            )
         except Exception:
             self._d.log.exception("MAX bot startup failed")
 
@@ -120,7 +133,13 @@ class MaxBootstrap:
             )
 
             state_store = MaxUserStateStore(config.inbox_db)
-            bot = MaxMvpBot(platform=client, service=service, state_store=state_store)
+            self._active_client = client
+            bot = MaxMvpBot(
+                platform=client,
+                service=service,
+                state_store=state_store,
+                topup_options=self._d.topup_options,
+            )
             inbox = MaxWebhookInbox(config.inbox_db)
             path = urlparse(config.webhook_url).path or "/max/webhook"
             register_max_webhook(
@@ -144,3 +163,27 @@ class MaxBootstrap:
         except Exception:
             self._d.log.exception("MAX webhook registration failed")
             raise
+
+    async def notify_payment(self, internal_user_id: int, credits: int, balance: int) -> bool:
+        """Notify a MAX identity; return whether this payment belongs to MAX."""
+        identity = self._d.identity_for_internal_id(internal_user_id)
+        if not identity or identity.get("platform") != "max":
+            return False
+        client = self._active_client
+        if client is None:
+            self._d.log.warning(
+                "MAX payment notification skipped: runtime is not active internal_user_id=%s",
+                internal_user_id,
+            )
+            return True
+        try:
+            await client.send_message_to_user(
+                str(identity["platform_user_id"]),
+                f"Баланс пополнен: +{int(credits)} кр. Сейчас: {int(balance)} кр.",
+            )
+        except Exception:
+            self._d.log.exception(
+                "MAX payment notification failed internal_user_id=%s",
+                internal_user_id,
+            )
+        return True

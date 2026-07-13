@@ -326,12 +326,26 @@ class MaxMvpTests(unittest.TestCase):
         self.assertIn("30", self.platform.last_text)
 
     def test_topup_shows_external_link(self) -> None:
-        bot = self._bot()
+        bot = MaxMvpBot(
+            platform=self.platform,
+            service=self.service,
+            config=self.config,
+            wallet=self.wallet,
+            topup_options=lambda uid: ((f"Pack for {uid}", "https://pay.example/invoice"),),
+        )
         run(bot.handle(_cb(CB_TOPUP)))
 
         kb = self.platform.last_keyboard
         urls = [b.url for row in kb.rows for b in row if b.url]
-        self.assertIn(self.config.topup_url, urls)
+        self.assertEqual(urls, ["https://pay.example/invoice"])
+
+    def test_topup_without_identity_aware_options_has_no_payment_link(self) -> None:
+        bot = self._bot()
+        run(bot.handle(_cb(CB_TOPUP)))
+
+        kb = self.platform.last_keyboard
+        self.assertFalse([b.url for row in kb.rows for b in row if b.url])
+        self.assertEqual(self.platform.last_text, bot.copy.topup_unavailable)
 
     # -- identity separation ----------------------------------------------
 

@@ -7,6 +7,7 @@ import unittest
 
 from channels.max import runtime
 from channels.max.client import MaxBotClient
+from channels.telegram.max_bootstrap import MaxBootstrap, MaxBootstrapDeps
 
 
 def run(coro):
@@ -44,6 +45,14 @@ class _ClosingClient(_FakeClient):
 
     async def close(self):
         self.closed = True
+
+
+class _NotifyClient:
+    def __init__(self):
+        self.messages = []
+
+    async def send_message_to_user(self, user_id, text):
+        self.messages.append((user_id, text))
 
 
 async def _nosleep(_):
@@ -104,6 +113,36 @@ class RunTests(unittest.TestCase):
         self.assertTrue(fake.closed)
 
 
+class PaymentNotificationTests(unittest.TestCase):
+    def _bootstrap(self, identity):
+        return MaxBootstrap(MaxBootstrapDeps(
+            backend_generation_deps=lambda: None,
+            topup_options=lambda user_id: (),
+            identity_for_internal_id=lambda internal_id: identity,
+            log=__import__("logging").getLogger(__name__),
+        ))
+
+    def test_max_payment_is_sent_to_platform_user_id(self):
+        bootstrap = self._bootstrap({"platform": "max", "platform_user_id": "u7"})
+        client = _NotifyClient()
+        bootstrap._active_client = client
+
+        handled = run(bootstrap.notify_payment(-7, 45, 75))
+
+        self.assertTrue(handled)
+        self.assertEqual(client.messages[0][0], "u7")
+        self.assertIn("45", client.messages[0][1])
+        self.assertIn("75", client.messages[0][1])
+
+    def test_max_payment_without_runtime_is_handled_without_telegram_fallback(self):
+        bootstrap = self._bootstrap({"platform": "max", "platform_user_id": "u7"})
+        self.assertTrue(run(bootstrap.notify_payment(-7, 45, 75)))
+
+    def test_telegram_payment_is_not_claimed(self):
+        bootstrap = self._bootstrap({"platform": "telegram", "platform_user_id": "7"})
+        self.assertFalse(run(bootstrap.notify_payment(7, 45, 75)))
+
+
 class FlowBotWiringTests(unittest.TestCase):
     """flow_bot composition root must wire MAX startup (source-level, no import)."""
 
@@ -125,7 +164,8 @@ class FlowBotWiringTests(unittest.TestCase):
         self.assertIn("from channels.max.runtime import run_max", self.max_src)
         self.assertIn("BackendGenerationService(", self.max_src)
         self.assertIn("generate_images=backend_service.generate_images", self.max_src)
-        self.assertIn("run_max(service, client=client)", self.max_src)
+        self.assertIn("run_max(", self.max_src)
+        self.assertIn("client=client", self.max_src)
 
     def test_wires_photo_bridge_backend_fns(self):
         # edit/animate need i2i + video + a downloader threaded from the client.
@@ -144,6 +184,7 @@ class FlowBotWiringTests(unittest.TestCase):
         self.assertIn("MaxWebhookInbox(config.inbox_db)", self.max_src)
         self.assertIn("MaxUserStateStore(config.inbox_db)", self.max_src)
         self.assertIn("state_store=state_store", self.max_src)
+        self.assertIn("topup_options=self._d.topup_options", self.max_src)
         self.assertIn("inbox=inbox", self.max_src)
         self.assertIn("dispatch=bot.handle", self.max_src)
         self.assertIn("worker_count=config.inbox_workers", self.max_src)

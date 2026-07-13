@@ -2458,6 +2458,7 @@ class RobokassaWebhookTests(unittest.TestCase):
         events: list[tuple[str, int, str, dict | None]] = []
         tx_calls: list[dict] = []
         credits_added: list[tuple[int, int]] = []
+        metric_credits_added: list[tuple[int, int, int]] = []
 
         class FakeCreditStore:
             def add(self, user_id, credits):
@@ -2491,10 +2492,23 @@ class RobokassaWebhookTests(unittest.TestCase):
             record_transaction_status=record_transaction_status,
             log_event=log_event,
             mark_user_blocked=lambda user_id: None,
+            get_identity_by_internal_id=lambda user_id: (
+                {"platform": "max", "platform_user_id": "max-user"}
+                if int(user_id) < 0 else None
+            ),
+            credits_add=lambda user_id, credits, starter: (
+                metric_credits_added.append((int(user_id), int(credits), int(starter)))
+                or int(starter) + int(credits)
+            ),
         )
         fb._notify_robokassa_success = notify
         fb._maybe_apply_referral_rewards = referral
-        return SimpleNamespace(events=events, tx_calls=tx_calls, credits_added=credits_added)
+        return SimpleNamespace(
+            events=events,
+            tx_calls=tx_calls,
+            credits_added=credits_added,
+            metric_credits_added=metric_credits_added,
+        )
 
     def test_robokassa_payment_url_carries_fiscal_receipt(self) -> None:
         import json as _json
@@ -2605,6 +2619,21 @@ class RobokassaWebhookTests(unittest.TestCase):
         self.assertEqual(state.credits_added, [(456, 45)])
         self.assertEqual(state.tx_calls[0]["user_id"], 456)
         self.assertEqual(state.tx_calls[0]["package_id"], "trial")
+
+    def test_robokassa_signed_max_identity_credits_metrics_namespace(self) -> None:
+        fb = self._load_bot()
+        state = self._configure(fb)
+        params = self._signed_result_params(
+            fb, inv_id="9004", pack="trial", user="-7", bot_scope="consumer"
+        )
+
+        response = asyncio.run(fb.robokassa_result(self._request(params)))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.text, "OK9004")
+        self.assertEqual(state.credits_added, [])
+        self.assertEqual(state.metric_credits_added, [(-7, 45, flow_core.STARTER_CREDITS)])
+        self.assertEqual(state.tx_calls[0]["user_id"], -7)
 
     def test_robokassa_unmatched_payment_is_logged_for_manual_reconcile(self) -> None:
         fb = self._load_bot()

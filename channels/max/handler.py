@@ -11,22 +11,22 @@ Scope is intentionally small (see ``Photozhab Core Split`` plan, Phase 7):
 * edit photo
 * animate photo
 * balance / help
-* external top-up link
+* identity-bound Robokassa top-up links
 
 Out of scope for the MVP: Telegram Stars, cross-platform referrals, shared
 Telegram+MAX balance, seller flow, gallery/history/support, and the full video
 wizard. Billing is identity-aware (a MAX user gets a separate negative internal
 id, so a colliding Telegram numeric id never shares a balance).
 
-The handler performs no network or provider calls itself. The chat platform, the
-wallet and the generation service are injected, so the whole flow is exercised
-by fakes in the offline test suite. Real MAX API wiring, webhook/polling startup
-and media (photo/video) attachment delivery are deliberately left for later.
+The handler performs no network or provider calls itself. The chat platform,
+wallet, generation service and signed top-up link builder are injected, so the
+whole flow is exercised by fakes in the offline test suite.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
 from typing import Any, Mapping, MutableMapping, Protocol, runtime_checkable
 
 from channels.base import (
@@ -83,7 +83,8 @@ class MaxCopy:
     delivered_image: str = "Готово!"
     delivered_video: str = "Видео готово!"
     balance_tpl: str = "Ваш баланс: {balance} кр."
-    topup_text: str = "Пополнить баланс можно по ссылке ниже."
+    topup_text: str = "Выберите пакет. Счёт будет привязан к вашему MAX-профилю."
+    topup_unavailable: str = "Пополнение временно недоступно. Попробуйте позже."
     help_text: str = (
         "Я делаю картинки и короткие видео.\n\n"
         "• Создать картинку — опишите словами.\n"
@@ -103,7 +104,7 @@ class MaxMvpConfig:
     Telegram monolith without duplicating pricing logic.
     """
 
-    topup_url: str = "https://pay.photozhab.ru"
+    topup_url: str = ""
     starter_credits: int = STARTER_CREDITS
     image_price: int = PRICE_PER_IMAGE
     edit_price: int = field(default_factory=lambda: action_price("edit"))
@@ -272,6 +273,7 @@ class MaxMvpBot:
         copy: MaxCopy | None = None,
         state: MutableMapping[str, dict] | None = None,
         state_store: PendingStateStore | None = None,
+        topup_options: Callable[[str], Sequence[tuple[str, str]]] | None = None,
     ) -> None:
         self.platform = platform
         self.service = service
@@ -281,6 +283,7 @@ class MaxMvpBot:
         self._state_store = state_store or _MappingStateStore(
             state if state is not None else {}
         )
+        self._topup_options = topup_options
 
     # -- dispatch ---------------------------------------------------------
 
@@ -316,7 +319,7 @@ class MaxMvpBot:
                 chat, self.copy.help_text, self._menu_keyboard()
             )
         elif data == CB_TOPUP:
-            await self._show_topup(chat)
+            await self._show_topup(chat, uid)
 
         callback_id = self._callback_id(cb)
         if callback_id:
@@ -411,7 +414,7 @@ class MaxMvpBot:
         internal_id = self.wallet.internal_id(MAX_PLATFORM, uid)
 
         async def _on_insufficient(have: int, needed: int) -> None:
-            await self._show_low_balance(chat)
+            await self._show_low_balance(chat, uid)
 
         try:
             async with open_credit_gate(
@@ -495,14 +498,20 @@ class MaxMvpBot:
             self._menu_keyboard(),
         )
 
-    async def _show_topup(self, chat: str) -> None:
+    async def _show_topup(self, chat: str, uid: str) -> None:
+        keyboard = self._topup_keyboard(uid)
+        text = (
+            self.copy.topup_text
+            if len(keyboard.rows) > 1
+            else self.copy.topup_unavailable
+        )
         await self.platform.send_message(
-            chat, self.copy.topup_text, self._topup_keyboard()
+            chat, text, keyboard
         )
 
-    async def _show_low_balance(self, chat: str) -> None:
+    async def _show_low_balance(self, chat: str, uid: str) -> None:
         await self.platform.send_message(
-            chat, self.copy.low_balance, self._topup_keyboard()
+            chat, self.copy.low_balance, self._topup_keyboard(uid)
         )
 
     async def _fail(self, chat: str) -> None:
@@ -527,13 +536,15 @@ class MaxMvpBot:
             ]
         )
 
-    def _topup_keyboard(self) -> Keyboard:
-        return Keyboard.from_rows(
-            [
-                [Button.link(self.copy.topup_button, self.config.topup_url)],
-                [Button.callback(self.copy.menu_button, CB_MENU)],
-            ]
-        )
+    def _topup_keyboard(self, uid: str) -> Keyboard:
+        options: Sequence[tuple[str, str]] = ()
+        if self._topup_options is not None and uid:
+            options = self._topup_options(uid)
+        elif self.config.topup_url:
+            options = ((self.copy.topup_button, self.config.topup_url),)
+        rows = [[Button.link(label, url)] for label, url in options]
+        rows.append([Button.callback(self.copy.menu_button, CB_MENU)])
+        return Keyboard.from_rows(rows)
 
     # -- helpers ----------------------------------------------------------
 

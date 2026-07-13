@@ -200,6 +200,20 @@ class MaxBotClient:
             "POST", "/messages", params={"chat_id": chat_id}, json=payload
         )
 
+    async def send_message_to_user(
+        self,
+        user_id: str,
+        text: str,
+        keyboard: Keyboard | None = None,
+    ) -> Any:
+        """Send a direct message using the official ``user_id`` target."""
+        payload = self.build_send_message_payload(
+            chat_id="", text=text, keyboard=keyboard
+        )
+        return await self._request(
+            "POST", "/messages", params={"user_id": user_id}, json=payload
+        )
+
     async def edit_message(
         self,
         chat_id: str,

@@ -8,6 +8,7 @@ from __future__ import annotations
 import html
 import json
 import random
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -44,7 +45,7 @@ class RobokassaWebDeps:
     payment_signature: Callable[..., str]
     result_signature: Callable[..., str]
     clean_scope: Callable[[str], str]
-    credit_store: Any
+    add_credits: Callable[[int, int], int]
     metrics: Any
     log: Any
     maybe_apply_referral_rewards: Callable[..., Any]
@@ -146,6 +147,17 @@ def amount_matches(actual: str, expected: str) -> bool:
         return False
 
 
+def internal_user_id(value: str) -> int | None:
+    """Parse a signed SQLite user id without accepting floats or overflow."""
+    raw = str(value or "").strip()
+    if not re.fullmatch(r"-?[1-9][0-9]*", raw):
+        return None
+    parsed = int(raw)
+    if not -(2**63) <= parsed <= 2**63 - 1:
+        return None
+    return parsed
+
+
 def target_scope(shp: dict[str, str], *, clean_scope: Callable[[str], str]) -> str:
     # Old Robokassa invoices did not carry Shp_bot; keep them on consumer.
     return clean_scope(shp.get("Shp_bot", "") or "consumer")
@@ -212,8 +224,9 @@ async def handle_result(request: web.Request, deps: RobokassaWebDeps) -> web.Res
 
     pack_id = shp.get("Shp_pack", "")
     user_raw = shp.get("Shp_user", "")
+    user_id = internal_user_id(user_raw)
     p = deps.credit_pack(pack_id)
-    if not p or not user_raw.isdigit() or not inv_id:
+    if not p or user_id is None or not inv_id:
         deps.log.warning(
             "robokassa unmatched payment inv_id=%s pack=%r user=%r amount=%r",
             inv_id[:32],
@@ -223,7 +236,7 @@ async def handle_result(request: web.Request, deps: RobokassaWebDeps) -> web.Res
         )
         deps.metrics.log_event(
             "robokassa_unmatched_payment",
-            user_id=int(user_raw) if user_raw.isdigit() else 0,
+            user_id=user_id or 0,
             source="robokassa",
             payload={
                 "inv_id": inv_id[:64],
@@ -239,7 +252,6 @@ async def handle_result(request: web.Request, deps: RobokassaWebDeps) -> web.Res
         deps.log.warning("robokassa amount mismatch inv_id=%s", inv_id[:32])
         return web.Response(status=400, text="bad amount")
 
-    user_id = int(user_raw)
     pay_id = provider_payment_id(inv_id, scope, legacy=("Shp_bot" not in shp))
     tx_status = deps.metrics.record_transaction_status(
         provider="robokassa",
@@ -256,7 +268,7 @@ async def handle_result(request: web.Request, deps: RobokassaWebDeps) -> web.Res
     if tx_status == "error":
         return web.Response(status=500, text="temporary error")
 
-    new_balance = deps.credit_store.add(user_id, p["credits"])
+    new_balance = deps.add_credits(user_id, p["credits"])
     deps.metrics.log_event(
         "payment_success",
         user_id=user_id,
@@ -276,14 +288,25 @@ async def handle_result(request: web.Request, deps: RobokassaWebDeps) -> web.Res
 
 async def status_page(request: web.Request, deps: RobokassaWebDeps, *, ok: bool) -> web.Response:
     data = await request_data(request)
-    scope = target_scope(shp_params(data), clean_scope=deps.clean_scope)
+    shp = shp_params(data)
+    scope = target_scope(shp, clean_scope=deps.clean_scope)
     username = html.escape(bot_username_for_scope(scope, deps.config))
+    is_external_identity = (internal_user_id(shp.get("Shp_user", "")) or 0) < 0
     if ok:
         title = "Оплата прошла"
-        body = "Баланс пополнится автоматически. Можно вернуться в Telegram."
+        body = (
+            "Баланс пополнится автоматически. Можно вернуться в бот MAX."
+            if is_external_identity
+            else "Баланс пополнится автоматически. Можно вернуться в Telegram."
+        )
     else:
         title = "Оплата не завершена"
-        body = "Деньги не списаны или платёж отменён. Вернись в бот и попробуй ещё раз."
+        body = "Деньги не списаны или платёж отменён. Вернитесь в бот и попробуйте ещё раз."
+    return_link = (
+        ""
+        if is_external_identity
+        else f"<p><a href='https://t.me/{username}'>Открыть бота</a></p>"
+    )
     return web.Response(
         text=(
             "<!doctype html><meta charset='utf-8'>"
@@ -291,7 +314,7 @@ async def status_page(request: web.Request, deps: RobokassaWebDeps, *, ok: bool)
             "<body style='font-family:system-ui;max-width:560px;margin:48px auto;padding:0 20px'>"
             f"<h1>{html.escape(title)}</h1>"
             f"<p>{html.escape(body)}</p>"
-            f"<p><a href='https://t.me/{username}'>Открыть бота</a></p>"
+            f"{return_link}"
             "</body>"
         ),
         content_type="text/html",

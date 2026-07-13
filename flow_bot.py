@@ -94,6 +94,7 @@ from flow_core import (
     make_credit_store,
     PaymentStore,
     STARS_PACKS,
+    STARTER_CREDITS,
     action_price,
     pack as credit_pack,
     public_pack_ids,
@@ -1540,8 +1541,34 @@ async def _backend_generate_video_ingredients(req: dict) -> dict:
     return await backend_service.generate_video_ingredients(_backend_generation_deps(), req)
 
 
+def _max_topup_options(platform_user_id: str) -> list[tuple[str, str]]:
+    """Build signed Robokassa invoices bound to one MAX identity."""
+    if not _robokassa_configured():
+        return []
+    internal_user_id = metrics.ensure_user_identity("max", platform_user_id)
+    if internal_user_id >= 0:
+        log.warning("MAX topup identity allocation failed")
+        return []
+    options: list[tuple[str, str]] = []
+    for pack_id in public_pack_ids():
+        try:
+            options.append(
+                (
+                    _robokassa_pack_label(pack_id),
+                    _robokassa_payment_url(
+                        internal_user_id, pack_id, _robokassa_new_inv_id()
+                    ),
+                )
+            )
+        except Exception:
+            log.exception("MAX Robokassa invoice build failed pack=%s", pack_id)
+    return options
+
+
 _max_bootstrap = MaxBootstrap(MaxBootstrapDeps(
     backend_generation_deps=_backend_generation_deps,
+    topup_options=_max_topup_options,
+    identity_for_internal_id=metrics.get_identity_by_internal_id,
     log=log,
 ))
 
@@ -2193,7 +2220,7 @@ def _robokassa_web_deps() -> robokassa_billing.RobokassaWebDeps:
         payment_signature=robokassa_payment_signature,
         result_signature=robokassa_result_signature,
         clean_scope=_robokassa_clean_scope,
-        credit_store=credit_store,
+        add_credits=_robokassa_add_credits,
         metrics=metrics,
         log=log,
         maybe_apply_referral_rewards=_maybe_apply_referral_rewards,
@@ -2220,6 +2247,15 @@ def _robokassa_payment_url(user_id: int, pack_id: str, inv_id: int) -> str:
         robokassa_pack_amount=_robokassa_pack_amount,
         payment_signature=robokassa_payment_signature,
     )
+
+
+def _robokassa_add_credits(user_id: int, credits: int) -> int:
+    """Credit external identities in metrics SQLite; preserve Telegram legacy."""
+    lookup = getattr(metrics, "get_identity_by_internal_id", None)
+    identity = lookup(user_id) if callable(lookup) else None
+    if identity and identity.get("platform") != "telegram":
+        return metrics.credits_add(user_id, credits, STARTER_CREDITS)
+    return credit_store.add(user_id, credits)
 
 
 _robokassa_topup = RobokassaTopup(RobokassaTopupDeps(
@@ -2270,6 +2306,8 @@ async def _robokassa_forward_result(target_scope: str, data: dict[str, str]) -> 
 
 
 async def _notify_robokassa_success(user_id: int, credits: int, balance: int) -> None:
+    if await _max_bootstrap.notify_payment(user_id, credits, balance):
+        return
     await _robokassa_topup.notify_success(user_id, credits, balance)
 
 
