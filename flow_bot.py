@@ -209,6 +209,11 @@ from channels.telegram.startup_state import (
     set_startup_account,
     set_startup_phase,
 )
+from accounts.startup import (
+    AccountWarmupDeps,
+    AccountWarmupResult,
+    warm_account_pool,
+)
 from channels.telegram.web_server import WebServer, WebServerDeps
 from channels.telegram.stars_topup import StarsTopup, StarsTopupDeps
 from channels.telegram.admin_help import AdminHelp, AdminHelpDeps, HELP_SECTIONS
@@ -636,6 +641,27 @@ def _startup_set_account(acc_id: str, status: str, *, ready: bool = False, error
         time.time,
         ready=ready,
         error=error,
+    )
+
+
+async def _warm_accounts() -> AccountWarmupResult:
+    try:
+        warmup_concurrency = max(1, int(os.getenv("WARMUP_CONCURRENCY", "3")))
+    except (TypeError, ValueError):
+        warmup_concurrency = 3
+    return await warm_account_pool(
+        AccountWarmupDeps(
+            account_pool=account_pool,
+            keepers=keepers,
+            startup_state=startup_state,
+            set_startup_account=_startup_set_account,
+            set_startup_phase=_startup_set_phase,
+            min_ready_accounts=MIN_READY_ACCOUNTS,
+            warmup_concurrency=warmup_concurrency,
+            clock=time.time,
+            log=log,
+        ),
+        seller_mode=_cfg.IS_SELLER,
     )
 
 
@@ -2620,71 +2646,10 @@ async def _main_impl():
 
         if _cfg.IS_SELLER:
             log.info("🛒 Seller mode: пропускаю прогрев пула (генерация через основной бот)")
-            startup_state["min_ready"] = 0
-            for acc_id in keepers:
-                account_pool.set_runtime_ready(acc_id, True, "skipped")
-                _startup_set_account(acc_id, "skipped", ready=True)
-            _startup_set_phase("ready", ready_accounts=len(keepers))
-        else:
-            try:
-                warmup_concurrency = max(1, int(os.getenv("WARMUP_CONCURRENCY", "3")))
-            except (TypeError, ValueError):
-                warmup_concurrency = 3
-            warmup_sem = asyncio.Semaphore(warmup_concurrency)
-            total_accounts = len(keepers)
-            min_ready = min(max(1, MIN_READY_ACCOUNTS), total_accounts)
-            startup_state["min_ready"] = min_ready
-            startup_state["total_accounts"] = total_accounts
-            ready_event = asyncio.Event()
-            warm_started = time.time()
-            ready_count = 0
-            completed_count = 0
-
-            for acc_id in keepers:
-                account_pool.set_runtime_ready(acc_id, False, "warming")
-                _startup_set_account(acc_id, "pending", ready=False)
-            _startup_set_phase("warming")
-
-            async def _warm_account(acc_id: str, kp: "SessionKeeper") -> bool:
-                nonlocal ready_count, completed_count
-                ok = False
-                async with warmup_sem:
-                    try:
-                        account_pool.set_runtime_ready(acc_id, False, "warming")
-                        _startup_set_account(acc_id, "running", ready=False)
-                        log.info("🌐 Запускаю аккаунт пула: %s", acc_id)
-                        await kp.start()
-                        ok = True
-                        ready_count += 1
-                        account_pool.set_runtime_ready(acc_id, True, "ready")
-                        _startup_set_account(acc_id, "ready", ready=True)
-                    except Exception as exc:
-                        log.exception("❌ Аккаунт %s не стартовал — отключаю в пуле", acc_id)
-                        account_pool.set_runtime_ready(acc_id, False, "failed")
-                        account_pool.set_disabled(acc_id, True)
-                        _startup_set_account(acc_id, "failed", ready=False, error=exc.__class__.__name__)
-                    finally:
-                        completed_count += 1
-                        if ready_count >= min_ready or completed_count >= total_accounts:
-                            ready_event.set()
-                return ok
-
-            warmup_tasks = [
-                asyncio.create_task(_warm_account(acc_id, kp))
-                for acc_id, kp in keepers.items()
-            ]
-            await ready_event.wait()
-            if ready_count < min_ready:
-                await asyncio.gather(*warmup_tasks, return_exceptions=True)
-                _startup_set_phase("blocked", ready_accounts=ready_count)
-                log.error("❌ Прогрев пула не достиг threshold %d/%d — выходим.", ready_count, min_ready)
-                return
-            _startup_set_phase("ready_threshold_met", ready_accounts=ready_count)
-            log.info(
-                "🌐 Прогрев threshold: %d/%d аккаунтов за %.1f c (минимум %d, лимит %d)",
-                ready_count, total_accounts, time.time() - warm_started,
-                min_ready, warmup_concurrency,
-            )
+        warmup_result = await _warm_accounts()
+        warmup_tasks = list(warmup_result.tasks)
+        if not warmup_result.threshold_met:
+            return
 
         log.info("🤖 Бот запущен!")
         asyncio.create_task(_daily_digest_loop())

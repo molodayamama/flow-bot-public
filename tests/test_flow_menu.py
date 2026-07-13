@@ -1134,8 +1134,11 @@ class BotMenuWiringTests(unittest.TestCase):
         block = self.source[start:end]
         self.assertIn("robokassa_runner = None", block)
         self.assertIn("robokassa_runner = await _start_robokassa_web_server()", block)
-        self.assertIn("await ready_event.wait()", block)
-        self.assertLess(block.index("await ready_event.wait()"), block.index("await dp.start_polling(bot)"))
+        self.assertIn("warmup_result = await _warm_accounts()", block)
+        self.assertLess(
+            block.index("warmup_result = await _warm_accounts()"),
+            block.index("await dp.start_polling(bot)"),
+        )
         self.assertIn("finally:", block)
         self.assertIn("startup_state[\"polling\"] = False", block)
         self.assertIn("await asyncio.gather(*warmup_tasks, return_exceptions=True)", block)

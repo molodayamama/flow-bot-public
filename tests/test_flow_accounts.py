@@ -415,15 +415,19 @@ class BotPoolWiringTests(unittest.TestCase):
     def test_main_starts_all_keepers_and_disables_failed(self) -> None:
         start = self.source.index("async def _main_impl")
         block = self.source[start:start + 7000]
+        startup_source = (
+            PROJECT_ROOT / "accounts" / "startup.py"
+        ).read_text(encoding="utf-8")
         self.assertLess(block.index("await _start_robokassa_web_server()"),
-                        block.index("await kp.start()"))
-        self.assertLess(block.index("await ready_event.wait()"),
+                        block.index("warmup_result = await _warm_accounts()"))
+        self.assertLess(block.index("warmup_result = await _warm_accounts()"),
                         block.index("await dp.start_polling(bot)"))
-        self.assertIn("MIN_READY_ACCOUNTS", block)
-        self.assertIn("await kp.start()", block)
-        self.assertIn("account_pool.set_runtime_ready(acc_id, False, \"warming\")", block)
-        self.assertIn("account_pool.set_disabled(acc_id, True)", block)
-        self.assertIn("if ready_count < min_ready:", block)
+        self.assertIn("min_ready_accounts=MIN_READY_ACCOUNTS", self.source)
+        self.assertIn("await keeper.start()", startup_source)
+        self.assertIn('d.account_pool.set_runtime_ready(acc_id, False, "warming")', startup_source)
+        self.assertIn("d.account_pool.set_disabled(acc_id, True)", startup_source)
+        self.assertIn("if ready_count < min_ready:", startup_source)
+        self.assertIn("await ready_event.wait()", startup_source)
 
     def test_admin_pool_commands(self) -> None:
         # /acc_off and /acc_on live in the admin_accounts router (Phase 6).
