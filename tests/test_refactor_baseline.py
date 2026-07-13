@@ -95,8 +95,9 @@ class RefactorBaselineTests(unittest.TestCase):
         self.assertIn('"video_model"', self.seller_backend)
 
         start = self.flow_bot.index("async def _backend_generate(req")
-        block = self.flow_bot[start:start + 450]
+        block = self.flow_bot[start:start + 700]
         self.assertIn('req.get("kind") == "i2i"', block)
+        self.assertIn('req.get("kind") == "video_text"', block)
         self.assertIn('req.get("kind") == "video_ingredients"', block)
         self.assertIn("_backend_generate_images(req)", block)
 

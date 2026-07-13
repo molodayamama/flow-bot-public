@@ -63,6 +63,7 @@ copy_static() {
     install -m 0644 \
         deploy/photozhab/*.html \
         deploy/photozhab/*.css \
+        deploy/photozhab/*.js \
         deploy/photozhab/*.txt \
         deploy/photozhab/*.xml \
         /var/www/photozhab/

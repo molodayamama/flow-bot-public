@@ -2552,6 +2552,53 @@ class RobokassaWebhookTests(unittest.TestCase):
         self.assertEqual(qs["Shp_bot"][0], "consumer")
         self.assertEqual(qs["SignatureValue"][0], expected_sig)
 
+    def test_web_external_payment_never_receives_resettable_starter_credit(self) -> None:
+        fb = self._load_bot()
+        captured = []
+        old_metrics = fb.metrics
+        self.addCleanup(setattr, fb, "metrics", old_metrics)
+        fb.metrics = SimpleNamespace(
+            get_identity_by_internal_id=lambda user_id: {
+                "platform": "web", "platform_user_id": "opaque-session"
+            },
+            record_transaction_and_credit_status=lambda **kwargs: (
+                captured.append(kwargs) or ("new", kwargs["credits_issued"])
+            ),
+        )
+        status, balance = fb._robokassa_settle_external_payment(
+            provider="robokassa",
+            provider_payment_id="private-id",
+            user_id=-7,
+            package_id="trial",
+            amount_rub=40.95,
+            stars_amount=0,
+            credits_issued=45,
+            status="paid",
+        )
+        self.assertEqual((status, balance), ("new", 45))
+        self.assertEqual(captured[0]["starter_credits"], 0)
+
+    def test_web_payment_success_does_not_message_telegram_or_max(self) -> None:
+        fb = self._load_bot()
+        old_metrics = fb.metrics
+        old_max = fb._max_bootstrap
+        old_topup = fb._robokassa_topup
+        self.addCleanup(setattr, fb, "metrics", old_metrics)
+        self.addCleanup(setattr, fb, "_max_bootstrap", old_max)
+        self.addCleanup(setattr, fb, "_robokassa_topup", old_topup)
+        fb.metrics = SimpleNamespace(
+            get_identity_by_internal_id=lambda user_id: {
+                "platform": "web", "platform_user_id": "opaque-session"
+            }
+        )
+        fb._max_bootstrap = SimpleNamespace(
+            notify_payment=lambda *args: (_ for _ in ()).throw(AssertionError("MAX notify"))
+        )
+        fb._robokassa_topup = SimpleNamespace(
+            notify_success=lambda *args: (_ for _ in ()).throw(AssertionError("Telegram notify"))
+        )
+        asyncio.run(fb._notify_robokassa_success(-7, 45, 45))
+
     def test_robokassa_webhook_is_idempotent_by_inv_id(self) -> None:
         fb = self._load_bot()
         state = self._configure(fb)

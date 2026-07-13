@@ -211,6 +211,67 @@ class ProductionPreflightTests(unittest.TestCase):
         report = validate_environment(env, root=self.root)
         self.assertIn("ROBOKASSA_PUBLIC_BASE_URL is required", report.errors)
 
+    def test_web_app_requires_payment_secret_and_https_origin(self) -> None:
+        env = dict(
+            self.env,
+            WEB_APP_ENABLED="1",
+            WEB_SESSION_SECRET="short",
+            WEB_PUBLIC_ORIGIN="http://photozhab.test/path",
+        )
+        report = validate_environment(env, root=self.root)
+        self.assertIn("WEB app production requires ROBOKASSA_ENABLED=1 for top-up", report.errors)
+        self.assertIn("WEB_SESSION_SECRET must contain at least 32 characters", report.errors)
+        self.assertIn("WEB_PUBLIC_ORIGIN must be an HTTPS origin without a path", report.errors)
+
+    def test_valid_web_app_config_passes_with_zero_starter(self) -> None:
+        env = dict(
+            self.env,
+            WEB_APP_ENABLED="1",
+            WEB_SESSION_SECRET="a-random-runtime-secret-over-thirty-two-chars",
+            WEB_PUBLIC_ORIGIN="https://photozhab.test",
+            WEB_STARTER_CREDITS="0",
+            WEB_MEDIA_DIR=str(self.root / "state" / "web-media"),
+            ROBOKASSA_ENABLED="1",
+            ROBOKASSA_MERCHANT_LOGIN="merchant",
+            ROBOKASSA_PASSWORD1="one",
+            ROBOKASSA_PASSWORD2="two",
+            ROBOKASSA_PUBLIC_BASE_URL="https://pay.photozhab.test",
+        )
+        report = validate_environment(env, root=self.root)
+        self.assertTrue(report.ok, report.errors)
+
+    def test_web_starter_credit_is_rejected_in_production(self) -> None:
+        env = dict(
+            self.env,
+            WEB_APP_ENABLED="1",
+            WEB_SESSION_SECRET="a-random-runtime-secret-over-thirty-two-chars",
+            WEB_PUBLIC_ORIGIN="https://photozhab.test",
+            WEB_STARTER_CREDITS="30",
+            ROBOKASSA_ENABLED="1",
+            ROBOKASSA_MERCHANT_LOGIN="merchant",
+            ROBOKASSA_PASSWORD1="one",
+            ROBOKASSA_PASSWORD2="two",
+            ROBOKASSA_PUBLIC_BASE_URL="https://pay.photozhab.test",
+        )
+        report = validate_environment(env, root=self.root)
+        self.assertIn("WEB_STARTER_CREDITS must be 0 in production", report.errors)
+
+    def test_web_secure_cookie_cannot_be_disabled_in_production(self) -> None:
+        env = dict(
+            self.env,
+            WEB_APP_ENABLED="1",
+            WEB_SESSION_SECRET="a-random-runtime-secret-over-thirty-two-chars",
+            WEB_PUBLIC_ORIGIN="https://photozhab.test",
+            WEB_COOKIE_SECURE="0",
+            ROBOKASSA_ENABLED="1",
+            ROBOKASSA_MERCHANT_LOGIN="merchant",
+            ROBOKASSA_PASSWORD1="one",
+            ROBOKASSA_PASSWORD2="two",
+            ROBOKASSA_PUBLIC_BASE_URL="https://pay.photozhab.test",
+        )
+        report = validate_environment(env, root=self.root)
+        self.assertIn("WEB_COOKIE_SECURE must be enabled in production", report.errors)
+
     def test_legacy_json_credit_store_is_rejected_in_production(self) -> None:
         env = dict(self.env, CREDITS_SQLITE="0")
         report = validate_environment(env, root=self.root)

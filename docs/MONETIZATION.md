@@ -1,6 +1,6 @@
 # MONETIZATION.md - current pricing model
 
-Last sync: 2026-06-11.
+Last sync: 2026-07-13.
 
 This document is the business/pricing view. Runtime prices live in
 `flow_core.py`; if a value here disagrees with code, fix the doc or the code in
@@ -50,6 +50,17 @@ Current code baseline:
 | First-start grant | 30 |
 | Prompt enhance / service upscale | 5 |
 | Original download | 0 |
+
+Channel acquisition policy:
+
+- Telegram and MAX receive the one-time 30-credit first-start grant.
+- The anonymous first-party website starts at 0 credits and uses Robokassa
+  card/SBP top-up. A browser cookie can be cleared at will, so granting starter
+  credit there would create an unlimited reset abuse path.
+- Website prices are calculated only on the server from the same `flow_core`
+  helpers as the bots; JavaScript display values are never accepted for charge.
+- A web balance belongs to its signed browser session. Until account login is
+  implemented, clearing that cookie loses access to the corresponding balance.
 
 Image edit, variation, regeneration, and upscale prices are resolved through
 `action_price(...)` in `flow_core.py`. Keep user-facing labels dynamic.

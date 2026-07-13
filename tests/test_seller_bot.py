@@ -179,6 +179,7 @@ class SellerMenuTests(unittest.TestCase):
             orig_i2i = flow_bot._backend_generate_i2i
             orig_img = flow_bot._backend_generate_images
             orig_vid = flow_bot._backend_generate_video_ingredients
+            orig_text_vid = flow_bot._backend_generate_video_text
 
             async def fake_i2i(req):  # noqa: ANN001
                 calls.append("i2i")
@@ -192,19 +193,26 @@ class SellerMenuTests(unittest.TestCase):
                 calls.append("video")
                 return {"videos": []}
 
+            async def fake_text_vid(req):  # noqa: ANN001
+                calls.append("text_video")
+                return {"videos": []}
+
             flow_bot._backend_generate_i2i = fake_i2i
             flow_bot._backend_generate_images = fake_img
             flow_bot._backend_generate_video_ingredients = fake_vid
+            flow_bot._backend_generate_video_text = fake_text_vid
             try:
                 await flow_bot._backend_generate({"kind": "i2i"})
                 await flow_bot._backend_generate({"kind": "video_ingredients"})
+                await flow_bot._backend_generate({"kind": "video_text"})
                 await flow_bot._backend_generate({"kind": "image"})
                 await flow_bot._backend_generate({})
             finally:
                 flow_bot._backend_generate_i2i = orig_i2i
                 flow_bot._backend_generate_images = orig_img
                 flow_bot._backend_generate_video_ingredients = orig_vid
-            self.assertEqual(calls, ["i2i", "video", "image", "image"])
+                flow_bot._backend_generate_video_text = orig_text_vid
+            self.assertEqual(calls, ["i2i", "video", "text_video", "image", "image"])
 
         asyncio.run(run())
 
@@ -216,6 +224,7 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn("async def generate_images", src)
         self.assertIn("async def generate_i2i", src)
         self.assertIn("async def generate_video_ingredients", src)
+        self.assertIn("async def generate_video_text", src)
 
     def test_backend_i2i_uses_account_failover(self) -> None:
         src = inspect.getsource(backend_service.generate_i2i)

@@ -30,6 +30,7 @@ class WebServerDeps:
     backend_generate: Callable[[dict], Awaitable[dict]]
     register_robokassa_routes: Callable[[web.Application], None]
     maybe_register_max_webhook: Callable[[web.Application], None]
+    maybe_register_public_web: Callable[[web.Application], None]
     robokassa_configured: Callable[[], bool]
     web_host: str
     web_port: int
@@ -78,6 +79,8 @@ class WebServer:
                 d.log.exception("internal generation endpoint registration failed")
         d.register_robokassa_routes(app)
         d.maybe_register_max_webhook(app)
+        if not d.is_seller():
+            d.maybe_register_public_web(app)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, d.web_host, d.web_port)

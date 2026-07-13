@@ -4,6 +4,7 @@ import ast
 import asyncio
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from generation import backend_service
 from generation.contracts import (
@@ -159,6 +160,47 @@ class ServiceTests(unittest.TestCase):
         self.assertIs(ImageService(DEPS)._backend, backend_service.generate_images)
         self.assertIs(EditService(DEPS)._backend, backend_service.generate_i2i)
         self.assertIs(VideoService(DEPS)._backend, backend_service.generate_video_ingredients)
+
+    def test_text_video_backend_uses_plain_model_and_returns_mp4(self) -> None:
+        calls = []
+
+        class Slot:
+            async def __aenter__(self): return None
+            async def __aexit__(self, *args): return None
+
+        class Pool:
+            def video_slot(self, account_id): return Slot()
+            def mark_success(self, account_id): calls.append(("success", account_id))
+
+        class Client:
+            async def generate_video(self, prompt, **kwargs):
+                calls.append((prompt, kwargs))
+                return {"media_id": "media", "workflow_id": "workflow"}
+
+            async def fetch_video_bytes(self, media_id):
+                self.media_id = media_id
+                return b"\x00\x00\x00\x18ftypmp42"
+
+        client = Client()
+        deps = SimpleNamespace(
+            video_model_meta=lambda model: {"key": "abra_t2v_4s"},
+            account_for_video=lambda user_id: "account",
+            ensure_user_project=lambda user_id, account_id: asyncio.sleep(0, result="project"),
+            account_pool=Pool(),
+            client_for_acc=lambda account_id: client,
+            mark_video_account_failure=lambda *args: None,
+            log=SimpleNamespace(exception=lambda *args, **kwargs: None),
+        )
+        result = run(backend_service.generate_video_text(deps, {
+            "prompt": "moving clouds", "video_model": "omni-flash-4s",
+            "aspect_ratio": "landscape", "user_id": -1,
+        }))
+        self.assertIn("videos", result)
+        self.assertEqual(result["videos"][0]["model_id"], "omni-flash-4s")
+        self.assertEqual(client.media_id, "media")
+        generation = calls[0][1]
+        self.assertEqual(generation["model_key"], "abra_t2v_4s")
+        self.assertIsNone(generation["reference_sources"])
 
 
 class PurityTests(unittest.TestCase):

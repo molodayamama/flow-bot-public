@@ -141,6 +141,67 @@ async def generate_i2i(deps: Any, req: dict) -> dict:
     return {"error": last_error}
 
 
+async def generate_video_text(deps: Any, req: dict) -> dict:
+    """Run text-to-video and return downloaded MP4 bytes as base64."""
+    prompt = str(req.get("prompt") or "").strip()
+    if len(prompt) < 3:
+        return {"error": "empty prompt"}
+    model_id = str(req.get("video_model") or "omni-flash-4s")
+    meta = deps.video_model_meta(model_id)
+    if not meta:
+        return {"error": "bad video model"}
+    aspect = str(req.get("aspect_ratio") or "portrait")
+    if aspect not in {"portrait", "landscape"}:
+        aspect = "portrait"
+    user_id = int(req.get("user_id") or 0)
+
+    acc_id = deps.account_for_video(user_id)
+    if acc_id is None:
+        return {"error": "accounts_unavailable"}
+    project_id = await deps.ensure_user_project(user_id, account_id=acc_id)
+    try:
+        async with deps.account_pool.video_slot(acc_id):
+            result = await deps.client_for_acc(acc_id).generate_video(
+                prompt,
+                model_key=meta["key"],
+                aspect=aspect,
+                project_id=project_id,
+                reference_sources=None,
+                operation="generate",
+            )
+    except Exception:
+        deps.log.exception("backend text video generation failed (account %s)", acc_id)
+        deps.mark_video_account_failure(acc_id)
+        return {"error": "generation failed"}
+    if "error" in result:
+        deps.mark_video_account_failure(acc_id, result)
+        return {"error": str(result.get("error"))[:300]}
+
+    media_id = result.get("media_id")
+    if not media_id:
+        return {"error": "media_id missing"}
+    try:
+        video_bytes = await deps.client_for_acc(acc_id).fetch_video_bytes(media_id)
+    except Exception:
+        deps.log.exception("backend text video download failed (account %s)", acc_id)
+        return {"error": "download failed"}
+    if not video_bytes:
+        return {"error": "download failed"}
+    deps.account_pool.mark_success(acc_id)
+    return {
+        "videos": [{
+            "video_b64": base64.b64encode(video_bytes).decode("ascii"),
+            "media_id": media_id,
+            "model_id": model_id,
+            "aspect_ratio": aspect,
+            "workflow_id": result.get("workflow_id"),
+            "scene_id": result.get("scene_id"),
+        }],
+        "account_id": acc_id,
+        "project_id": result.get("project_id") or project_id,
+    }
+
+
 async def generate_video_ingredients(deps: Any, req: dict) -> dict:
     """Run photo+prompt reference-to-video and return mp4 bytes as base64."""
     prompt = str(req.get("prompt") or "").strip()

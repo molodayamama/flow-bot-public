@@ -21,6 +21,9 @@ class DeploymentAssetTests(unittest.TestCase):
         cls.nginx = (
             ROOT / "deploy/nginx/geminifree-locations.conf.example"
         ).read_text(encoding="utf-8")
+        cls.web_nginx = (
+            ROOT / "deploy/nginx/photozhab-web-app-locations.conf.example"
+        ).read_text(encoding="utf-8")
         cls.consumer_runner = (
             ROOT / "deploy/bin/geminifree-bot-run"
         ).read_text(encoding="utf-8")
@@ -67,6 +70,14 @@ class DeploymentAssetTests(unittest.TestCase):
     def test_deploy_publishes_search_discovery_assets(self) -> None:
         self.assertIn("deploy/photozhab/*.txt", self.deploy)
         self.assertIn("deploy/photozhab/*.xml", self.deploy)
+        self.assertIn("deploy/photozhab/*.js", self.deploy)
+
+    def test_main_site_proxies_only_bounded_public_web_api(self) -> None:
+        self.assertIn("location /web/api/", self.web_nginx)
+        self.assertIn("client_max_body_size 12m", self.web_nginx)
+        self.assertIn("proxy_pass http://127.0.0.1:8081", self.web_nginx)
+        self.assertIn("proxy_read_timeout 480s", self.web_nginx)
+        self.assertNotIn("/internal/", self.web_nginx)
 
     def test_services_limit_restart_loops_and_private_file_modes(self) -> None:
         for unit in (self.consumer_unit, self.seller_unit):

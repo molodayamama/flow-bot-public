@@ -168,6 +168,41 @@ def validate_environment(
         }:
             errors.append("ROBOKASSA_SCOPE must be consumer or seller")
 
+    web_app_enabled = _enabled(source, "WEB_APP_ENABLED")
+    if web_app_enabled:
+        if bot_mode == "seller":
+            errors.append("WEB_APP_ENABLED is supported only by the consumer process")
+        if not robokassa_enabled:
+            errors.append("WEB app production requires ROBOKASSA_ENABLED=1 for top-up")
+        if len(source.get("WEB_SESSION_SECRET", "")) < 32:
+            errors.append("WEB_SESSION_SECRET must contain at least 32 characters")
+        origin_raw = source.get("WEB_PUBLIC_ORIGIN", "https://photozhab.ru").strip()
+        origin = urlparse(origin_raw)
+        if (
+            origin.scheme != "https"
+            or not origin.hostname
+            or origin.path not in {"", "/"}
+            or origin.params
+            or origin.query
+            or origin.fragment
+            or origin.username
+            or origin.password
+        ):
+            errors.append("WEB_PUBLIC_ORIGIN must be an HTTPS origin without a path")
+        try:
+            web_starter = int(source.get("WEB_STARTER_CREDITS", "0"))
+        except ValueError:
+            web_starter = -1
+        if production and web_starter != 0:
+            errors.append("WEB_STARTER_CREDITS must be 0 in production")
+        if production and source.get("WEB_COOKIE_SECURE", "1").strip().lower() in {
+            "0", "false", "no", "off",
+        }:
+            errors.append("WEB_COOKIE_SECURE must be enabled in production")
+        media_parent = _resolved(root_path, source.get("WEB_MEDIA_DIR", "/tmp/photozhab-web-media")).parent
+        if not media_parent.is_dir() or not os.access(media_parent, os.W_OK):
+            errors.append("WEB_MEDIA_DIR parent directory must exist and be writable")
+
     max_enabled = _enabled(source, "MAX_ENABLED")
     if max_enabled:
         if not robokassa_enabled:

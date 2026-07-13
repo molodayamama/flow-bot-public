@@ -5,15 +5,17 @@ import asyncio
 import logging
 import unittest
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 from billing.robokassa import (
     RobokassaConfig,
     RobokassaWebDeps,
     handle_result,
     internal_user_id,
+    payment_url,
     success,
 )
-from flow_core import robokassa_result_signature
+from flow_core import robokassa_payment_signature, robokassa_result_signature
 
 
 class _Metrics:
@@ -165,6 +167,31 @@ class RobokassaExternalIdentityTests(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         self.assertIn("MAX", response.text)
+        self.assertNotIn("t.me/", response.text)
+
+    def test_web_invoice_signs_channel_metadata(self):
+        url = payment_url(
+            -7,
+            "trial",
+            9001,
+            self.config,
+            credit_pack=lambda pack: {"credits": 45},
+            robokassa_pack_amount=lambda pack: "45.00",
+            payment_signature=robokassa_payment_signature,
+            channel="web",
+        )
+        query = parse_qs(urlparse(url).query)
+        self.assertEqual(query["Shp_channel"], ["web"])
+        self.assertEqual(query["Shp_user"], ["-7"])
+        self.assertTrue(query["SignatureValue"][0])
+
+    def test_web_success_page_returns_to_site(self):
+        deps, _, _, _, _ = self._deps()
+        params = self._params()
+        params["Shp_channel"] = "web"
+        response = asyncio.run(success(self._request(params), deps))
+        self.assertIn("вернуться к генерации на сайте", response.text)
+        self.assertIn("https://photozhab.ru/app.html", response.text)
         self.assertNotIn("t.me/", response.text)
 
 

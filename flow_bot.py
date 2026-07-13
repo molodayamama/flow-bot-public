@@ -217,6 +217,7 @@ from accounts.startup import (
     warm_account_pool,
 )
 from channels.telegram.web_server import WebServer, WebServerDeps
+from channels.web import WebAppConfig, WebAppDeps, register_web_app
 from channels.telegram.stars_topup import StarsTopup, StarsTopupDeps
 from channels.telegram.admin_help import AdminHelp, AdminHelpDeps, HELP_SECTIONS
 from channels.telegram.renderer import edit_or_answer as _edit_or_answer
@@ -1596,6 +1597,11 @@ async def _backend_generate_video_ingredients(req: dict) -> dict:
     return await backend_service.generate_video_ingredients(_backend_generation_deps(), req)
 
 
+async def _backend_generate_video_text(req: dict) -> dict:
+    """Compatibility wrapper for the internal text-to-video backend."""
+    return await backend_service.generate_video_text(_backend_generation_deps(), req)
+
+
 def _max_topup_options(platform_user_id: str) -> list[tuple[str, str]]:
     """Build signed Robokassa invoices bound to one MAX identity."""
     if not _robokassa_configured():
@@ -1611,7 +1617,10 @@ def _max_topup_options(platform_user_id: str) -> list[tuple[str, str]]:
                 (
                     _robokassa_pack_label(pack_id),
                     _robokassa_payment_url(
-                        internal_user_id, pack_id, _robokassa_new_inv_id()
+                        internal_user_id,
+                        pack_id,
+                        _robokassa_new_inv_id(),
+                        channel="max",
                     ),
                 )
             )
@@ -1638,9 +1647,11 @@ def _maybe_register_max_webhook(app) -> None:
 
 
 async def _backend_generate(req: dict) -> dict:
-    """Internal endpoint dispatcher by ``kind`` (image | i2i | video_ingredients)."""
+    """Internal endpoint dispatcher for shared image and video generation."""
     if req.get("kind") == "i2i":
         return await _backend_generate_i2i(req)
+    if req.get("kind") == "video_text":
+        return await _backend_generate_video_text(req)
     if req.get("kind") == "video_ingredients":
         return await _backend_generate_video_ingredients(req)
     return await _backend_generate_images(req)
@@ -2341,7 +2352,9 @@ def _robokassa_receipt_json(pack_id: str, out_sum: str, credits: int) -> str:
     return robokassa_billing.receipt_json(pack_id, out_sum, credits)
 
 
-def _robokassa_payment_url(user_id: int, pack_id: str, inv_id: int) -> str:
+def _robokassa_payment_url(
+    user_id: int, pack_id: str, inv_id: int, *, channel: str = ""
+) -> str:
     return robokassa_billing.payment_url(
         user_id,
         pack_id,
@@ -2350,6 +2363,7 @@ def _robokassa_payment_url(user_id: int, pack_id: str, inv_id: int) -> str:
         credit_pack=credit_pack,
         robokassa_pack_amount=_robokassa_pack_amount,
         payment_signature=robokassa_payment_signature,
+        channel=channel,
     )
 
 
@@ -2363,9 +2377,11 @@ def _robokassa_add_credits(user_id: int, credits: int) -> int:
 
 
 def _robokassa_settle_external_payment(**payment) -> tuple[str, int | None]:
+    identity = metrics.get_identity_by_internal_id(int(payment.get("user_id") or 0))
+    starter_credits = 0 if identity and identity.get("platform") == "web" else STARTER_CREDITS
     return metrics.record_transaction_and_credit_status(
         **payment,
-        starter_credits=STARTER_CREDITS,
+        starter_credits=starter_credits,
     )
 
 
@@ -2417,6 +2433,9 @@ async def _robokassa_forward_result(target_scope: str, data: dict[str, str]) -> 
 
 
 async def _notify_robokassa_success(user_id: int, credits: int, balance: int) -> None:
+    identity = metrics.get_identity_by_internal_id(user_id)
+    if identity and identity.get("platform") == "web":
+        return
     if await _max_bootstrap.notify_payment(user_id, credits, balance):
         return
     await _robokassa_topup.notify_success(user_id, credits, balance)
@@ -2449,6 +2468,29 @@ def _register_robokassa_routes(app: web.Application) -> None:
     )
 
 
+_web_app_config = WebAppConfig.from_env()
+
+
+def _register_public_web(app: web.Application) -> None:
+    register_web_app(
+        app,
+        WebAppDeps(
+            config=_web_app_config,
+            backend_generate=_backend_generate,
+            metrics=metrics,
+            credit_pack=credit_pack,
+            public_pack_ids=lambda: public_pack_ids(seller=False),
+            robokassa_pack_amount=_robokassa_pack_amount,
+            robokassa_configured=_robokassa_configured,
+            new_inv_id=_robokassa_new_inv_id,
+            payment_url=lambda user_id, pack_id, inv_id, channel: _robokassa_payment_url(
+                user_id, pack_id, inv_id, channel=channel
+            ),
+            log=log,
+        ),
+    )
+
+
 _web_server = WebServer(WebServerDeps(
     account_pool=account_pool,
     keepers=keepers,
@@ -2459,6 +2501,7 @@ _web_server = WebServer(WebServerDeps(
     backend_generate=_backend_generate,
     register_robokassa_routes=_register_robokassa_routes,
     maybe_register_max_webhook=_maybe_register_max_webhook,
+    maybe_register_public_web=_register_public_web,
     robokassa_configured=_robokassa_configured,
     web_host=ROBOKASSA_WEB_HOST,
     web_port=ROBOKASSA_WEB_PORT,

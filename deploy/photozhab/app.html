@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Создать изображение или видео | Photozhab</title>
+  <meta name="description" content="Чат-интерфейс Photozhab для генерации изображений, видео, редактирования и оживления фото.">
+  <meta name="robots" content="noindex, follow">
+  <meta name="theme-color" content="#111312">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self' https://auth.robokassa.ru">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body class="web-app-body">
+  <div class="web-app-shell">
+    <aside class="app-sidebar" aria-label="Режимы генерации">
+      <a class="brand app-brand" href="/" aria-label="Photozhab — на главную">
+        <span class="brand-mark" aria-hidden="true">P</span>
+        <span>Photozhab</span>
+      </a>
+      <button class="new-chat-button" id="new-chat" type="button"><span aria-hidden="true">＋</span> Новый чат</button>
+      <nav class="mode-nav" id="mode-nav" aria-label="Выбор режима">
+        <button class="mode-nav-button is-active" type="button" data-mode="image"><span>✦</span><span><strong>Картинка</strong><small>по тексту</small></span></button>
+        <button class="mode-nav-button" type="button" data-mode="edit"><span>◫</span><span><strong>Редактировать</strong><small>загруженное фото</small></span></button>
+        <button class="mode-nav-button" type="button" data-mode="video"><span>▶</span><span><strong>Видео</strong><small>по описанию</small></span></button>
+        <button class="mode-nav-button" type="button" data-mode="animate"><span>◉</span><span><strong>Оживить фото</strong><small>фото в видео</small></span></button>
+      </nav>
+      <div class="sidebar-bottom">
+        <button class="balance-card" id="open-payment" type="button">
+          <span><small>Баланс</small><strong><span id="sidebar-balance">—</span> кр</strong></span>
+          <span class="balance-plus" aria-hidden="true">＋</span>
+        </button>
+        <p class="session-note">Баланс привязан к этому браузеру. Не очищайте cookies после оплаты.</p>
+        <div class="sidebar-links"><a href="/oferta.html">Оферта</a><a href="/privacy.html">Конфиденциальность</a></div>
+      </div>
+    </aside>
+
+    <main class="chat-main">
+      <header class="chat-topbar">
+        <a class="mobile-brand" href="/" aria-label="Photozhab — на главную"><span class="brand-mark">P</span></a>
+        <div class="chat-title"><strong id="chat-mode-title">Генерация картинки</strong><span id="chat-mode-subtitle">Nano Banana создаст изображение по описанию</span></div>
+        <button class="mobile-balance" id="mobile-payment" type="button"><span id="mobile-balance-value">—</span> кр <span aria-hidden="true">＋</span></button>
+      </header>
+
+      <section class="conversation" id="conversation" aria-live="polite">
+        <div class="welcome-card" id="welcome-card">
+          <span class="welcome-mark" aria-hidden="true">P</span>
+          <p class="eyebrow">Photozhab AI</p>
+          <h1>Что создадим?</h1>
+          <p>Опиши идею обычными словами. Выбери модель и формат — стоимость видна до запуска.</p>
+          <div class="prompt-suggestions" id="prompt-suggestions">
+            <button type="button">Кинематографичный портрет в неоновом городе</button>
+            <button type="button">Предметная фотография аромата на чёрном камне</button>
+            <button type="button">Уютный дом в лесу после летнего дождя</button>
+          </div>
+        </div>
+        <div class="message-list" id="message-list"></div>
+      </section>
+
+      <section class="composer-wrap" aria-label="Новый запрос">
+        <div class="upload-preview" id="upload-preview" hidden>
+          <img id="upload-preview-image" alt="Загруженное изображение">
+          <span id="upload-file-name"></span>
+          <button id="remove-upload" type="button" aria-label="Удалить изображение">×</button>
+        </div>
+        <div class="composer" id="composer">
+          <textarea id="prompt" rows="1" maxlength="2000" placeholder="Опиши изображение, которое хочешь создать…" aria-label="Описание результата"></textarea>
+          <div class="composer-toolbar">
+            <div class="composer-controls">
+              <label class="compact-select mobile-mode-select"><span class="sr-only">Режим</span><select id="mode-select" aria-label="Режим"><option value="image">Картинка</option><option value="edit">Редактировать</option><option value="video">Видео</option><option value="animate">Оживить фото</option></select></label>
+              <label class="compact-select"><span class="sr-only">Модель</span><select id="model-select" aria-label="Модель"></select></label>
+              <label class="compact-select"><span class="sr-only">Формат</span><select id="aspect-select" aria-label="Формат"><option value="portrait">9:16</option><option value="landscape">16:9</option><option value="square">1:1</option><option value="portrait_34">3:4</option><option value="landscape_43">4:3</option></select></label>
+              <label class="compact-select count-select"><span class="sr-only">Количество</span><select id="count-select" aria-label="Количество"><option value="1">1 шт.</option><option value="2">2 шт.</option><option value="3">3 шт.</option><option value="4">4 шт.</option></select></label>
+              <label class="upload-button" id="upload-button" hidden><input id="image-upload" type="file" accept="image/png,image/jpeg,image/webp"><span aria-hidden="true">＋</span> Фото</label>
+            </div>
+            <div class="send-group">
+              <span class="request-price" id="request-price">10 кр</span>
+              <button class="send-button" id="send-button" type="button" aria-label="Отправить запрос"><span aria-hidden="true">↑</span></button>
+            </div>
+          </div>
+        </div>
+        <p class="composer-note" id="composer-note">Нажимая «отправить», вы принимаете <a href="/oferta.html">условия сервиса</a>. AI может ошибаться.</p>
+      </section>
+    </main>
+  </div>
+
+  <dialog class="payment-dialog" id="payment-dialog" aria-labelledby="payment-title">
+    <div class="dialog-head"><div><p class="eyebrow">Пополнение</p><h2 id="payment-title">Добавить кредиты</h2></div><button id="close-payment" type="button" aria-label="Закрыть">×</button></div>
+    <p class="dialog-copy">Оплата картой или через СБП. Баланс обновится автоматически после подтверждения.</p>
+    <div class="pack-grid" id="pack-grid"></div>
+    <p class="payment-legal">Продолжая, вы принимаете <a href="/oferta.html">оферту</a>. Не закрывайте этот браузер до возврата на сайт.</p>
+  </dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

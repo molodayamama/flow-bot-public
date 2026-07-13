@@ -93,12 +93,18 @@ def payment_url(
     credit_pack: Callable[[str], dict[str, Any] | None],
     robokassa_pack_amount: Callable[[str], str],
     payment_signature: Callable[..., str],
+    channel: str = "",
 ) -> str:
     p = credit_pack(pack_id)
     if not p:
         raise ValueError(f"unknown pack: {pack_id!r}")
     out_sum = robokassa_pack_amount(pack_id)
     shp = {"Shp_bot": config.scope, "Shp_pack": pack_id, "Shp_user": int(user_id)}
+    normalized_channel = str(channel or "").strip().lower()
+    if normalized_channel:
+        if normalized_channel not in {"web", "max", "telegram"}:
+            raise ValueError("unsupported payment channel")
+        shp["Shp_channel"] = normalized_channel
     raw_receipt = receipt_json(pack_id, out_sum, int(p["credits"]))
     signature = payment_signature(
         config.merchant_login,
@@ -309,21 +315,24 @@ async def status_page(request: web.Request, deps: RobokassaWebDeps, *, ok: bool)
     scope = target_scope(shp, clean_scope=deps.clean_scope)
     username = html.escape(bot_username_for_scope(scope, deps.config))
     is_external_identity = (internal_user_id(shp.get("Shp_user", "")) or 0) < 0
+    channel = str(shp.get("Shp_channel", "")).strip().lower()
     if ok:
         title = "Оплата прошла"
-        body = (
-            "Баланс пополнится автоматически. Можно вернуться в бот MAX."
-            if is_external_identity
-            else "Баланс пополнится автоматически. Можно вернуться в Telegram."
-        )
+        if channel == "web":
+            body = "Баланс пополнится автоматически. Можно вернуться к генерации на сайте."
+        elif is_external_identity:
+            body = "Баланс пополнится автоматически. Можно вернуться в бот MAX."
+        else:
+            body = "Баланс пополнится автоматически. Можно вернуться в Telegram."
     else:
         title = "Оплата не завершена"
-        body = "Деньги не списаны или платёж отменён. Вернитесь в бот и попробуйте ещё раз."
-    return_link = (
-        ""
-        if is_external_identity
-        else f"<p><a href='https://t.me/{username}'>Открыть бота</a></p>"
-    )
+        body = "Деньги не списаны или платёж отменён. Вернитесь и попробуйте ещё раз."
+    if channel == "web":
+        return_link = "<p><a href='https://photozhab.ru/app.html'>Вернуться к генерации</a></p>"
+    elif is_external_identity:
+        return_link = ""
+    else:
+        return_link = f"<p><a href='https://t.me/{username}'>Открыть бота</a></p>"
     return web.Response(
         text=(
             "<!doctype html><meta charset='utf-8'>"

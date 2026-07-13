@@ -43,6 +43,46 @@ After an immutable-SHA deploy, request the public home, each sitemap URL,
 Search-engine indexing, snippet selection and ranking are external outcomes and
 must not be reported as testable deployment guarantees.
 
+## First-party web app checks
+
+The browser app is a paid/stateful surface. Run its focused contract first:
+
+```bash
+python -m pytest tests/test_web_app.py tests/test_web_app_static.py tests/test_generation_services.py tests/test_robokassa_billing.py tests/test_production_preflight.py tests/test_deployment_assets.py -q
+python -m py_compile channels/web/app.py generation/backend_service.py billing/robokassa.py channels/telegram/web_server.py flow_bot.py tools/production_preflight.py
+```
+
+Required assertions include: anonymous GET/invalid requests do not allocate a
+SQLite identity; mutation Origin is exact; cookies are signed and HttpOnly;
+client price/user/model-key fields are ignored; upload and output media are
+bounded and validated; only one generation per session runs; failures refund;
+successful output charges once; MP4 URLs are session-bound and expire; payment
+packs are allowlisted and signed with `Shp_channel=web`; production starter
+credit is zero and Secure-cookie cannot be disabled.
+
+For browser QA, serve `deploy/photozhab/` locally and inspect desktop plus a
+390x844 viewport. Confirm all four modes, mobile mode selection, file preview,
+composer/send visibility, payment dialog, no console syntax error and no
+horizontal overflow. A plain static server cannot satisfy `/web/api/session`;
+the resulting handled connection toast is expected in static-only QA.
+
+After green CI, back up the protected VPS env and nginx config, set a random
+32+ character `WEB_SESSION_SECRET`, enable the consumer-only web app, keep
+`WEB_STARTER_CREDITS=0`, add the `/web/api/` reverse proxy to the
+`photozhab.ru` TLS host, validate nginx, deploy an immutable SHA and check:
+
+- public `/app.html`, `/app.css`, `/app.js` return 200;
+- same-origin `/web/api/session` returns no-store JSON, zero balance and a
+  Secure/HttpOnly/SameSite cookie without creating paid provider work;
+- a cross-origin generation POST is rejected before identity/backend work;
+- a public pack produces an HTTPS Robokassa URL containing signed web channel
+  metadata (do not complete a real charge during smoke unless requested);
+- one owner-authorized generation deducts the server-displayed price only on a
+  valid result and returns displayable image/MP4 media.
+
+Never output the session secret, cookie, signed payment URL, prompt/upload,
+provider response, account/project/media ids or internal negative user id.
+
 ## MAX transport smoke
 
 The harness is offline by default and documents each external side effect:
