@@ -74,6 +74,13 @@ def parse_page(name: str) -> HeadParser:
 
 
 class LandingSeoTests(unittest.TestCase):
+    def test_home_exposes_google_site_verification_in_head(self) -> None:
+        page = parse_page("index.html")
+        self.assertEqual(
+            page.meta.get("google-site-verification"),
+            "MpOJ7m9ATx7X2lWmJgJK8WfbfmsN-ajkSWTaETlAi6U",
+        )
+
     def test_public_pages_have_unique_search_metadata(self) -> None:
         titles: set[str] = set()
         descriptions: set[str] = set()
