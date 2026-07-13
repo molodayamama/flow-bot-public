@@ -25,8 +25,9 @@ Observed stack:
 - External APIs: Telegram Bot API, Google Labs Flow web/API surface, 2Captcha.
 - Python dependency manifest: `requirements.txt` (moderate version floors,
   derived from imports). No Node manifest needed.
-- Git **is** initialized (branch `main`); initial import committed 2026-06-08.
-  Commit per new feature/change going forward. `.gitignore` excludes all
+- Git **is** initialized with `main` and the active refactor branch
+  `refactor`; `origin` points to the GitHub repository. Commit and push focused
+  changes to the branch requested by the operator. `.gitignore` excludes all
   secrets/runtime state — keep it that way.
 - No external application database service is configured. Runtime state is local
   JSON plus SQLite `metrics.db` managed by `metrics.py`.
@@ -192,16 +193,23 @@ changes.
 
 Purpose: package the change for version control.
 
-Current workspace note: git **is** initialized (branch `main`). Committer creates
-one focused commit per feature/change. Before committing, run `git status` and
-confirm no secret/runtime files are staged (they should be `.gitignore`d).
-End commit messages with a `Co-Authored-By:` line when AI-authored.
+Current workspace note: git **is** initialized; `main` is the primary branch and
+refactor work currently targets `refactor`. Committer creates one focused commit
+per feature/change. Before committing or pushing, run `git status`, inspect the
+staged path set, and confirm no secret/runtime files are staged (they should be
+`.gitignore`d). End commit messages with a `Co-Authored-By:` line when
+AI-authored.
 
-**Hardcoded-secret caveat:** removed/historical files may still carry
+**Historical-secret caveat:** removed/historical files may still carry
 hardcoded material in git history. `login.py` was cleaned (proxy is now optional
 via `BROWSER_PROXY_URL`, no secrets), but the **initial commit** `e0c2cd3` still
-contains its old hardcoded proxy line in history. Scrub + rotate before adding
-any git remote or pushing — the repo is local-only until then.
+contains its old hardcoded proxy line and is already present in the history of
+`origin/refactor`. Treat that credential as compromised and rotate it if this
+has not already been done. Routine non-force branch pushes are allowed after
+the staged path/secret checks above. Do not rewrite or force-push shared history,
+or claim the history is scrubbed, without explicit operator approval and
+confirmation that the credential has been rotated; coordinate cleanup as a
+separate operation.
 
 Required output:
 
