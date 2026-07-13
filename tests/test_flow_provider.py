@@ -64,6 +64,23 @@ class FlowProviderExtractionTests(unittest.TestCase):
                     root = (node.module or "").split(".")[0]
                     self.assertNotIn(root, {"aiogram", "flow_bot"}, name)
 
+    def test_keeper_has_no_unreachable_paid_captcha_or_generation_paths(self) -> None:
+        source = (PROJECT_ROOT / "flow_provider" / "client.py").read_text(encoding="utf-8")
+        keeper = source[source.index("class SessionKeeper:"):source.index("class FlowHttpClient:")]
+
+        solve_start = keeper.index("async def solve_captcha")
+        solve_end = keeper.index("async def _ensure_flow_page_loaded", solve_start)
+        solve_block = keeper[solve_start:solve_end]
+        self.assertIn("return await self._solve_via_browser_js(action)", solve_block)
+        for dead_name in (
+            "_provider_order",
+            "_solve_via_2captcha",
+            "_solve_via_capmonster",
+            "_proxy_fields_for_capmonster",
+            "_get_fresh_captcha",
+        ):
+            self.assertNotIn(f"def {dead_name}", keeper)
+
 
 if __name__ == "__main__":
     unittest.main()

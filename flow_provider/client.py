@@ -15,7 +15,6 @@ import re
 import time
 from collections import deque
 from pathlib import Path
-from urllib.parse import unquote, urlparse
 
 import aiohttp
 from playwright.async_api import BrowserContext, async_playwright
@@ -128,13 +127,8 @@ from flow_provider.runtime_config import (
     PROXY_URL,
     BROWSER_PROXY_URL,
     API_PROXY_URL,
-    CAPMONSTER_PROXY_URL,
     TWOCAPTCHA_KEY,
     CAPMONSTER_KEY,
-    CAPTCHA_PROVIDER,
-    TWOCAPTCHA_SCORE,
-    TWOCAPTCHA_SOLVE_TIMEOUT,
-    CAPMONSTER_SOLVE_TIMEOUT,
     FLOW_URL,
     FLOW_PROJECT_CTA_RE,
     FLOW_NEW_PROJECT_RE,
@@ -607,18 +601,6 @@ class SessionKeeper:
         log.info(f"🔑 Использую известный sitekey: {self.RECAPTCHA_SITEKEY[:20]}...")
         return self.RECAPTCHA_SITEKEY
 
-    @staticmethod
-    def _provider_order() -> list[str]:
-        """Очередь провайдеров решения капчи по CAPTCHA_PROVIDER (см. .env)."""
-        if CAPTCHA_PROVIDER == "2captcha":
-            return ["2captcha", "browser"]
-        if CAPTCHA_PROVIDER == "capmonster":
-            return ["capmonster", "browser"]
-        if CAPTCHA_PROVIDER == "browser":
-            return ["browser"]
-        # auto: browser (бесплатно, лучший скор) → capmonster → 2captcha
-        return ["browser", "capmonster", "2captcha"]
-
     async def solve_captcha(self, action: str = "IMAGE_GENERATION") -> str:
         """Решает reCAPTCHA через browser JS (grecaptcha.enterprise.execute).
 
@@ -943,174 +925,6 @@ class SessionKeeper:
         except Exception as exc:
             log.warning("🎬 browser video POST failed: %s", exc.__class__.__name__)
             return None
-
-    async def _solve_via_2captcha(self, action: str) -> str:
-        """Решает reCAPTCHA v3 Enterprise через 2captcha и возвращает токен.
-
-        Тонкости обёртки ``2captcha-python`` (учтены ниже, иначе сервис работает
-        «вхолостую»):
-        - порог скора задаётся параметром ``score`` (НЕ ``min_score``); неизвестные
-          kwargs молча уходят в API и игнорируются — из-за чего прежняя версия
-          фактически не задавала порог вообще;
-        - скор выше ~0.3 на v3 получить почти невозможно (по доке 2captcha),
-          поэтому дефолт ``TWOCAPTCHA_SCORE`` умеренный;
-        - дефолтный ``recaptchaTimeout`` либы — 600 c: неудачный солв подвешивал
-          запрос на 10 минут, поэтому укорачиваем до ``TWOCAPTCHA_SOLVE_TIMEOUT``.
-        Блокирующий вызов вынесен в executor, чтобы не стопорить event loop.
-        """
-        try:
-            from twocaptcha import TwoCaptcha
-        except ImportError:
-            log.error("❌ pip install 2captcha-python")
-            return ""
-
-        sitekey = self._recaptcha_sitekey or self.RECAPTCHA_SITEKEY
-        solver = TwoCaptcha(
-            TWOCAPTCHA_KEY,
-            recaptchaTimeout=TWOCAPTCHA_SOLVE_TIMEOUT,
-            pollingInterval=5,
-        )
-        captcha_url = "https://labs.google/fx/tools/flow"
-
-        try:
-            log.info(
-                f"🔐 2captcha: action={action} score≥{TWOCAPTCHA_SCORE} "
-                f"timeout={TWOCAPTCHA_SOLVE_TIMEOUT}s url={captcha_url}..."
-            )
-            result = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: solver.recaptcha(
-                    sitekey,
-                    captcha_url,
-                    version="v3",
-                    enterprise=1,
-                    action=action,
-                    score=TWOCAPTCHA_SCORE,
-                ),
-            )
-            token = result.get("code", "") if isinstance(result, dict) else ""
-            if token:
-                log.info(f"✅ 2captcha решена action={action} (len={len(token)})")
-                return token
-            log.warning(f"⚠️ 2captcha вернула пустой ответ action={action}: {result!r}")
-        except Exception as e:
-            log.error(f"❌ 2captcha action={action}: {e}")
-
-        return ""
-
-    async def _solve_via_capmonster(self, action: str) -> str:
-        """Решает reCAPTCHA v3 Enterprise через CapMonster Cloud.
-
-        Передаёт куки живого браузера и user-agent — сервис решает капчу
-        от имени залогиненного Google-аккаунта. Если PROXY_URL задан,
-        передаёт и прокси: тогда IP совпадает с IP API-запроса → 403 маловероятен.
-        """
-        try:
-            sitekey = self._recaptcha_sitekey or self.RECAPTCHA_SITEKEY
-
-            # Куки из живого Chrome (NID, SID, HSID… — ключ к высокому скору)
-            cookies_str = ""
-            try:
-                raw = await self._context.cookies("https://labs.google")
-                cookies_str = "; ".join(f"{c['name']}={c['value']}" for c in raw)
-            except Exception:
-                pass
-
-            ua = ""
-            try:
-                ua = await self._page.evaluate("navigator.userAgent")
-            except Exception:
-                pass
-
-            task: dict = {
-                "type": "RecaptchaV3EnterpriseTask",
-                "websiteURL": "https://labs.google/fx/tools/flow",
-                "websiteKey": sitekey,
-                "minScore": float(TWOCAPTCHA_SCORE),
-                "pageAction": action,
-            }
-            if cookies_str:
-                task["cookies"] = cookies_str
-            if ua:
-                task["userAgent"] = ua
-
-            proxy_fields = self._proxy_fields_for_capmonster()
-            if proxy_fields:
-                task.update(proxy_fields)
-
-            log.info(
-                f"🔐 CapMonster: action={action} score≥{TWOCAPTCHA_SCORE} "
-                f"cookies={'yes' if cookies_str else 'no'} "
-                f"proxy={'yes' if proxy_fields else 'no'}..."
-            )
-
-            async with aiohttp.ClientSession() as http:
-                async with http.post(
-                    "https://api.capmonster.cloud/createTask",
-                    json={"clientKey": CAPMONSTER_KEY, "task": task},
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    data = await resp.json(content_type=None)
-
-            if data.get("errorId") or not data.get("taskId"):
-                log.warning(f"⚠️ CapMonster createTask error: {data}")
-                return ""
-
-            task_id = data["taskId"]
-            deadline = asyncio.get_event_loop().time() + CAPMONSTER_SOLVE_TIMEOUT
-
-            while asyncio.get_event_loop().time() < deadline:
-                await asyncio.sleep(4)
-                async with aiohttp.ClientSession() as http:
-                    async with http.post(
-                        "https://api.capmonster.cloud/getTaskResult",
-                        json={"clientKey": CAPMONSTER_KEY, "taskId": task_id},
-                        timeout=aiohttp.ClientTimeout(total=10),
-                    ) as resp:
-                        result = await resp.json(content_type=None)
-
-                status = result.get("status")
-                if status == "ready":
-                    token = (result.get("solution") or {}).get("gRecaptchaResponse", "")
-                    if token:
-                        log.info(f"✅ CapMonster решена action={action} (len={len(token)})")
-                    else:
-                        log.warning(f"⚠️ CapMonster пустой токен: {result}")
-                    return token
-                if status != "processing":
-                    log.warning(f"⚠️ CapMonster ошибка: {result}")
-                    return ""
-
-            log.warning(f"⚠️ CapMonster timeout action={action}")
-            return ""
-
-        except Exception as e:
-            log.error(f"❌ CapMonster action={action}: {e}")
-            return ""
-
-    @staticmethod
-    def _proxy_fields_for_capmonster() -> dict:
-        """Парсит прокси в поля CapMonster task (proxyType/Address/Port/…)."""
-        proxy_url = _effective_proxy_url(CAPMONSTER_PROXY_URL)
-        if not proxy_url:
-            return {}
-        try:
-            p = urlparse(proxy_url)
-            scheme = p.scheme.lower()
-            if scheme not in ("http", "https", "socks4", "socks5"):
-                return {}
-            fields: dict = {
-                "proxyType": scheme,
-                "proxyAddress": p.hostname or "",
-                "proxyPort": p.port or 80,
-            }
-            if p.username:
-                fields["proxyLogin"] = p.username
-            if p.password:
-                fields["proxyPassword"] = p.password
-            return fields
-        except Exception:
-            return {}
 
     async def get_2captcha_balance(self) -> str:
         """Возвращает баланс 2captcha в виде строки."""
@@ -1481,69 +1295,6 @@ class SessionKeeper:
             )
         except Exception as e:
             log.warning(f"⚠️ Ошибка при обновлении Bearer: {e}")
-
-    # ── получение свежей капчи ─────────────
-
-    async def _get_fresh_captcha(self) -> str | None:
-        """
-        Запускаем ОДНУ генерацию в браузере с пустым промптом,
-        перехватываем тело запроса и достаём оттуда reCAPTCHA токен.
-        Это настоящий токен из реального Chrome — Google его принимает.
-        """
-        captcha_token = None
-
-        async def intercept(request):
-            nonlocal captcha_token
-            if (
-                "batchGenerateImages" in request.url
-                or "batchGenerateVideos" in request.url
-            ):
-                try:
-                    body = request.post_data
-                    if body:
-                        import json as _json
-
-                        data = _json.loads(body)
-                        token = (
-                            data.get("clientContext", {})
-                            .get("recaptchaContext", {})
-                            .get("token")
-                        )
-                        if token:
-                            captcha_token = token
-                            log.info(f"🎯 Капча перехвачена (len={len(token)})")
-                except Exception:
-                    pass
-
-        self._page.on("request", intercept)
-
-        try:
-            # Вводим короткий нейтральный промпт, нажимаем Enter
-            ta = self._page.locator("#PINHOLE_TEXT_AREA_ELEMENT_ID")
-            await ta.wait_for(state="visible", timeout=10_000)
-            await ta.click()
-            await self._page.keyboard.press("Control+A")
-            await self._page.keyboard.press("Backspace")
-            await ta.type("test", delay=50)
-
-            # Ждём запрос (капча генерируется при нажатии Enter)
-            try:
-                async with self._page.expect_request(
-                    lambda r: "batchGenerate" in r.url, timeout=15_000
-                ):
-                    await self._page.keyboard.press("Enter")
-            except Exception:
-                pass
-
-            await asyncio.sleep(2)
-
-        finally:
-            try:
-                self._page.remove_listener("request", intercept)
-            except Exception:
-                pass
-
-        return captcha_token
 
     # ── публичный метод ────────────────────
 
