@@ -30,6 +30,9 @@ class _Store:
     def set(self, key, value):
         self.data[key] = value
 
+    def as_dict(self):
+        return dict(self.data)
+
 
 class _Keeper:
     def __init__(self, pid="proj-new", boom=False):
@@ -95,6 +98,29 @@ class EnsureTests(unittest.TestCase):
         mgr, kp = _mgr(store=store, keeper=_Keeper(pid="proj-x"))
         self.assertEqual(run(mgr.ensure(9, account_id="acc-9")), "proj-x")
         self.assertEqual(store.get("acc-9:9"), "proj-x")
+        self.assertEqual(kp.calls, 1)
+
+    def test_external_identity_reuses_project_from_same_account(self):
+        store = _Store({"acc-9:42": "shared-project", "acc-other:7": "wrong"})
+        mgr, kp = _mgr(store=store)
+        self.assertEqual(
+            run(mgr.ensure(-7, account_id="acc-9")), "shared-project"
+        )
+        self.assertEqual(kp.calls, 0)
+        self.assertIsNone(store.get("acc-9:-7"))
+
+    def test_external_identity_never_borrows_project_from_other_account(self):
+        store = _Store({"acc-other:7": "wrong"})
+        mgr, kp = _mgr(store=store, keeper=_Keeper(pid="fresh"))
+        self.assertEqual(run(mgr.ensure(-7, account_id="acc-9")), "fresh")
+        self.assertEqual(store.get("acc-9:-7"), "fresh")
+        self.assertEqual(kp.calls, 1)
+
+    def test_positive_identity_keeps_per_user_project_creation(self):
+        store = _Store({"acc-9:42": "shared-project"})
+        mgr, kp = _mgr(store=store, keeper=_Keeper(pid="personal"))
+        self.assertEqual(run(mgr.ensure(7, account_id="acc-9")), "personal")
+        self.assertEqual(store.get("acc-9:7"), "personal")
         self.assertEqual(kp.calls, 1)
 
     def test_disabled_returns_none_without_creating(self):

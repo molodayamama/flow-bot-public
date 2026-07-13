@@ -786,6 +786,65 @@ Resolution:
   frame photo request. Recent service logs showed handled Telegram updates only
   for these checks; no provider generation was started.
 
+### 2026-07-13 LF-011 new web identity has no Flow project
+
+- Severity: S1
+- Status: fix implemented, live recheck pending
+- Next fix owner: current Codex session
+- Live check approved by: operator in the active VPS/web-app request
+- Environment: VPS `/opt/geminifree`; commit `6e4cd8f`; public web API
+- Surface: first-party website / image generation
+
+Web input/output:
+
+- Session: fresh opaque browser session; no user value recorded.
+- Path: `POST /web/api/generate`, text-to-image, Nano Banana 2, one image.
+- Prompt: harmless synthetic studio scene; no private user content.
+- Output: HTTP 502 with generic `generation_failed`; no media.
+- Credits/refund observed: temporary smoke credit fully restored.
+
+Flow account:
+
+- Account label: sanitized pool account.
+- Project/media ownership notes: new negative identity had no stored project.
+- Proxy/profile notes: no profile recreation; `login.py` was not run.
+
+Google/Flow evidence:
+
+- Endpoint/action: project selection followed by browser image fallback.
+- HTTP status: browser timeout before a direct generation request.
+- Error class/code: `TimeoutError`; no provider body retained.
+- Body snippet: n/a.
+
+Reproduction:
+
+1. Create a fresh web session and provide exactly the server image price.
+2. Submit a valid same-origin text-to-image request.
+3. Observe project creation fail because the current Flow UI has no matching
+   New Project control, then browser fallback time out waiting for its textarea.
+
+Expected:
+
+- A fresh external identity uses a valid project on its selected pool account
+  and returns one image, charging only on valid media.
+
+Actual:
+
+- The external identity attempted fragile per-user UI project creation, received
+  no project id and fell into browser generation fallback.
+
+Suspected cause:
+
+- `ProjectManager.ensure()` treated negative web/MAX identities like Telegram
+  users even though external identities are cheap/anonymous and the documented
+  fallback already allows a shared session project.
+
+Next fix notes:
+
+- For negative identities only, reuse an existing stored project with the exact
+  selected account prefix. Keep positive Telegram per-user creation unchanged
+  and never borrow a project from another account.
+
 ## Closed Failures
 
 - `LF-001`: fixed by Flow upload API path and live-verified with `kotenok.jpg`.

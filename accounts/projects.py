@@ -47,6 +47,23 @@ class ProjectManager:
         """Ключ проекта в сторе: проект юзера живёт на конкретном аккаунте пула."""
         return f"{account_id}:{user_id}"
 
+    def _shared_project_for_account(self, account_id: str) -> str | None:
+        """Return one existing project owned by exactly this pool account.
+
+        External browser/MAX identities are cheap to create and should not
+        drive fragile browser UI project creation. Sharing an existing project
+        is the documented fallback when per-user creation is unavailable; the
+        account prefix prevents returning a project from another Google login.
+        """
+        snapshot = getattr(self._store, "as_dict", None)
+        if not callable(snapshot):
+            return None
+        prefix = f"{account_id}:"
+        for key, project_id in snapshot().items():
+            if str(key).startswith(prefix) and project_id:
+                return str(project_id)
+        return None
+
     async def ensure(self, user_id: int, *, account_id: str | None = None) -> str | None:
         """Вернуть Flow-проект пользователя, создав его при первом обращении.
 
@@ -69,6 +86,14 @@ class ProjectManager:
             if legacy:
                 self._store.set(key, legacy)
                 return legacy
+        if int(user_id) < 0:
+            shared = self._shared_project_for_account(acc_id)
+            if shared:
+                self._log.info(
+                    "External identity uses an existing shared project (account %s)",
+                    acc_id,
+                )
+                return shared
         if not self._enabled:
             return None
 

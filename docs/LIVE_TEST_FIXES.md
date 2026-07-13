@@ -620,3 +620,41 @@ Validation:
 Notes:
 
 - No browser profiles were recreated and `login.py` was not run.
+
+### 2026-07-13 LFX-015 reuse account-local project for external identities
+
+- Failure id: LF-011
+- Status: implemented
+- Priority: S1
+- Fix owner: current Codex session
+- Proposed by: current Codex live web session
+
+Root cause hypothesis:
+
+- Fresh web/MAX identities had no project mapping and entered browser UI project
+  creation. The current Flow UI did not expose the expected control, leaving no
+  project id and forcing a browser fallback that timed out.
+- Confidence: high.
+
+Implemented fix:
+
+- Before UI creation, negative external identities may reuse one existing
+  project whose key has the exact selected account prefix. Positive identities
+  preserve personal project creation; cross-account borrowing is forbidden.
+
+Owner files:
+
+- `accounts/projects.py` - account-local external identity fallback.
+- `tests/test_account_projects.py` - same-account, cross-account and positive-ID
+  regression coverage.
+
+Validation:
+
+- Focused account/web/MAX tests: 46 passed.
+- Full offline suite: 1479 passed and 1 skipped.
+- Approved live recheck: pending immutable-SHA deploy.
+
+Notes:
+
+- The fallback stores no extra mapping for anonymous external identities and
+  does not expose project ids to the browser or logs.
