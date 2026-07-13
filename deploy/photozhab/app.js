@@ -12,6 +12,8 @@ const state = {
 const launchHash = new URLSearchParams(window.location.hash.slice(1));
 const maxInitData = launchHash.get("WebAppData") || "";
 if (maxInitData) history.replaceState(null, "", `${location.pathname}${location.search}`);
+const TELEGRAM_PENDING_KEY = "photozhabTelegramPendingAt";
+const TELEGRAM_PENDING_MAX_AGE = 11 * 60 * 1000;
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
@@ -141,9 +143,15 @@ function setProviderAvailability() {
   elements.maxLogin.href = maxEnabled ? (state.session.auth.max_url || "#") : "#";
   elements.yandexLogin.setAttribute("aria-disabled", String(!yandexEnabled));
   elements.yandexLogin.href = yandexEnabled ? "/web/api/auth/yandex/start" : "#";
-  elements.authNote.textContent = maxEnabled
+  elements.yandexLogin.querySelector("strong").textContent = yandexEnabled
+    ? "Войти с Яндекс ID"
+    : "Яндекс ID пока недоступен";
+  const maxNote = maxEnabled
     ? "MAX-вход работает внутри официального мини-приложения Photozhab."
-    : "Вход через MAX появится после подключения Mini App; Telegram доступен уже сейчас.";
+    : "Вход через MAX появится после подключения Mini App.";
+  elements.authNote.textContent = yandexEnabled
+    ? maxNote
+    : `${maxNote} Яндекс ID включим после регистрации OAuth-приложения.`;
 }
 
 function applyAuthState() {
@@ -165,14 +173,22 @@ function applyAuthState() {
 
 async function startTelegramLogin() {
   elements.telegramLogin.disabled = true;
-  const popup = window.open("", "photozhab-telegram-login");
+  const userAgent = globalThis.navigator?.userAgent || "";
+  const useSameTab = window.innerWidth <= 820
+    || window.matchMedia("(pointer: coarse)").matches
+    || /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent);
+  const popup = useSameTab ? null : window.open("", "photozhab-telegram-login");
   if (popup) popup.opener = null;
   try {
     const result = await api("/web/api/auth/telegram/start", {method: "POST", body: "{}"});
-    if (popup) popup.location.href = result.url;
-    else window.location.assign(result.url);
     elements.telegramForm.hidden = false;
     elements.telegramCode.value = "";
+    sessionStorage.setItem(TELEGRAM_PENDING_KEY, String(Date.now()));
+    if (popup) popup.location.href = result.url;
+    else {
+      window.location.assign(result.url);
+      return;
+    }
     elements.telegramCode.focus();
   } catch (_) {
     if (popup) popup.close();
@@ -193,6 +209,7 @@ async function completeTelegramLogin(event) {
   submit.disabled = true;
   try {
     await api("/web/api/auth/telegram/complete", {method: "POST", body: JSON.stringify({code})});
+    sessionStorage.removeItem(TELEGRAM_PENDING_KEY);
     elements.telegramForm.hidden = true;
     await refreshSession();
     toast("Вход через Telegram выполнен");
@@ -201,6 +218,32 @@ async function completeTelegramLogin(event) {
   } finally {
     submit.disabled = false;
   }
+}
+
+function restoreTelegramPending() {
+  const pendingAt = Number(sessionStorage.getItem(TELEGRAM_PENDING_KEY));
+  if (!Number.isFinite(pendingAt) || pendingAt <= 0 || Date.now() - pendingAt > TELEGRAM_PENDING_MAX_AGE) {
+    sessionStorage.removeItem(TELEGRAM_PENDING_KEY);
+    return;
+  }
+  elements.telegramForm.hidden = false;
+}
+
+function handleYandexLogin(event) {
+  if (elements.yandexLogin.getAttribute("aria-disabled") !== "true") return;
+  event.preventDefault();
+  toast("Вход через Яндекс пока подключается. Сейчас используйте Telegram или MAX.");
+}
+
+function consumeAuthResult() {
+  const url = new URL(window.location.href);
+  const result = url.searchParams.get("auth");
+  if (!result) return;
+  url.searchParams.delete("auth");
+  history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  if (result === "success") toast("Вход через Яндекс выполнен");
+  else if (result === "unavailable") toast("Вход через Яндекс пока не подключён");
+  else toast("Не удалось войти через Яндекс. Попробуйте ещё раз.");
 }
 
 async function tryMaxLogin() {
@@ -390,13 +433,16 @@ elements.dialog.addEventListener("click", (event) => { if (event.target === elem
 elements.authDialog.addEventListener("cancel", (event) => event.preventDefault());
 elements.telegramLogin.addEventListener("click", startTelegramLogin);
 elements.telegramForm.addEventListener("submit", completeTelegramLogin);
+elements.yandexLogin.addEventListener("click", handleYandexLogin);
 elements.logout.addEventListener("click", logoutUser);
 elements.mobileAccount.addEventListener("click", () => {
   if (!state.session?.authenticated) applyAuthState();
   else if (window.confirm("Выйти из аккаунта Photozhab на этом устройстве?")) logoutUser();
 });
-window.addEventListener("pageshow", refreshSession);
+window.addEventListener("pageshow", () => { restoreTelegramPending(); refreshSession(); });
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshSession(); });
 
 setMode("image");
+restoreTelegramPending();
+consumeAuthResult();
 if (!elements.authDialog.open) elements.authDialog.showModal();

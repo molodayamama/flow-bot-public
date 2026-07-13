@@ -72,6 +72,16 @@ no console syntax error and no horizontal overflow. A plain static server
 cannot satisfy `/web/api/session`; the resulting handled connection toast is
 expected in static-only QA.
 
+For mobile Telegram login, the 820px/coarse-pointer branch must use same-tab
+navigation to the server-issued `t.me` universal link and persist only a numeric
+pending timestamp in `sessionStorage`; never persist the challenge URL/token or
+six-digit code. Browser return/back must restore the code form for at most 11
+minutes. Desktop may retain the named popup. When Yandex credentials are absent,
+its control must remain fail-closed but tappable enough to explain that setup is
+pending; it must not silently ignore the user or navigate to a non-working OAuth
+route. OAuth callback `auth` query markers must be shown once and removed from
+the address bar.
+
 After green CI, back up the protected VPS env and nginx config, set a random
 32+ character `WEB_SESSION_SECRET`, enable the consumer-only web app, keep
 `WEB_STARTER_CREDITS=0`, add the `/web/api/` reverse proxy to the

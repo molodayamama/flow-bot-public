@@ -109,7 +109,7 @@
 .auth-provider > span { display: grid; place-items: center; width: 36px; height: 36px; margin-left: 2px; color: #fff; font: 800 12px var(--font-sans); border-radius: 10px; background: #2aabee; }
 .auth-provider--max > span { color: #111; background: #b9f45a; }
 .auth-provider--yandex > span { background: #fc3f1d; }
-.auth-provider[aria-disabled="true"] { opacity: .46; pointer-events: none; }
+.auth-provider[aria-disabled="true"] { opacity: .56; cursor: not-allowed; }
 .telegram-code { margin-top: 18px; padding: 14px; text-align: left; border: 1px solid rgba(84, 215, 214, .24); border-radius: var(--r-lg); background: rgba(84, 215, 214, .06); }
 .telegram-code p { margin: 0 0 10px; color: var(--pz-muted); font-size: 12px; line-height: 1.45; }
 .telegram-code > div { display: grid; grid-template-columns: 1fr auto; gap: 8px; }

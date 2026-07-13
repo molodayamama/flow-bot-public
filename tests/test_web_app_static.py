@@ -51,6 +51,22 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertIn("if (!state.session?.authenticated)", self.js)
         self.assertNotIn("Баланс привязан к этому браузеру", self.html)
 
+    def test_mobile_telegram_login_uses_same_tab_and_restores_code_form(self) -> None:
+        self.assertIn('matchMedia("(pointer: coarse)")', self.js)
+        self.assertIn("window.innerWidth <= 820", self.js)
+        self.assertIn("window.location.assign(result.url)", self.js)
+        self.assertIn('sessionStorage.setItem(TELEGRAM_PENDING_KEY', self.js)
+        self.assertIn("TELEGRAM_PENDING_MAX_AGE", self.js)
+        self.assertIn("restoreTelegramPending()", self.js)
+        self.assertNotIn('sessionStorage.setItem(TELEGRAM_PENDING_KEY, result.url)', self.js)
+
+    def test_unavailable_yandex_login_explains_state(self) -> None:
+        self.assertIn('id="login-yandex" href="#" aria-disabled="true"', self.html)
+        self.assertIn("handleYandexLogin", self.js)
+        self.assertIn("Яндекс ID пока недоступен", self.js)
+        self.assertIn("consumeAuthResult", self.js)
+        self.assertNotIn('pointer-events: none', self.css)
+
     def test_app_has_csp_noindex_and_accessible_labels(self) -> None:
         self.assertIn('http-equiv="Content-Security-Policy"', self.html)
         self.assertIn('content="noindex, follow"', self.html)
