@@ -467,7 +467,7 @@ from flow_provider.runtime_config import (
     _playwright_proxy_config,
     _host_path,
 )
-from flow_provider.client import FlowHttpClient, SessionKeeper
+from flow_provider import FlowHttpClient, SessionKeeper
 
 
 # ───────────────────────────────────────────

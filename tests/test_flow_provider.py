@@ -20,9 +20,13 @@ class FlowProviderExtractionTests(unittest.TestCase):
             FlowHttpClient as C2,
             SessionKeeper as K2,
         )
+        from flow_provider.http_client import FlowHttpClient as C3
+        from flow_provider.session_keeper import SessionKeeper as K3
 
         self.assertIs(FlowHttpClient, C2)
         self.assertIs(SessionKeeper, K2)
+        self.assertIs(FlowHttpClient, C3)
+        self.assertIs(SessionKeeper, K3)
 
     def test_flow_bot_reexports_the_same_objects(self) -> None:
         import flow_bot
@@ -36,23 +40,30 @@ class FlowProviderExtractionTests(unittest.TestCase):
         self.assertTrue(hasattr(flow_bot, "IDLE_PARK_SEC"))
         self.assertTrue(hasattr(flow_bot, "_effective_proxy_url"))
 
-    def test_provider_classes_defined_in_flow_provider_not_flow_bot(self) -> None:
+    def test_provider_classes_have_separate_canonical_modules(self) -> None:
         client_src = (PROJECT_ROOT / "flow_provider" / "client.py").read_text(encoding="utf-8")
+        keeper_src = (PROJECT_ROOT / "flow_provider" / "session_keeper.py").read_text(encoding="utf-8")
+        http_src = (PROJECT_ROOT / "flow_provider" / "http_client.py").read_text(encoding="utf-8")
         flow_bot_src = (PROJECT_ROOT / "flow_bot.py").read_text(encoding="utf-8")
 
-        self.assertIn("class SessionKeeper:", client_src)
-        self.assertIn("class FlowHttpClient:", client_src)
-        # The monolith must no longer DEFINE them (only import/re-export).
+        self.assertIn("class SessionKeeper:", keeper_src)
+        self.assertNotIn("class FlowHttpClient:", keeper_src)
+        self.assertIn("class FlowHttpClient:", http_src)
+        self.assertNotIn("class SessionKeeper:", http_src)
+        self.assertNotIn("class SessionKeeper:", client_src)
+        self.assertNotIn("class FlowHttpClient:", client_src)
         self.assertNotIn("class SessionKeeper:", flow_bot_src)
         self.assertNotIn("class FlowHttpClient:", flow_bot_src)
-        self.assertIn("from flow_provider.client import", flow_bot_src)
+        self.assertIn("from flow_provider import FlowHttpClient, SessionKeeper", flow_bot_src)
 
     def test_provider_package_does_not_import_aiogram_or_flow_bot(self) -> None:
         for name in (
             "client.py",
+            "http_client.py",
             "interfaces.py",
             "request_policy.py",
             "runtime_config.py",
+            "session_keeper.py",
             "__init__.py",
         ):
             src = (PROJECT_ROOT / "flow_provider" / name).read_text(encoding="utf-8")
@@ -67,8 +78,7 @@ class FlowProviderExtractionTests(unittest.TestCase):
                     self.assertNotIn(root, {"aiogram", "flow_bot"}, name)
 
     def test_keeper_has_no_unreachable_paid_captcha_or_generation_paths(self) -> None:
-        source = (PROJECT_ROOT / "flow_provider" / "client.py").read_text(encoding="utf-8")
-        keeper = source[source.index("class SessionKeeper:"):source.index("class FlowHttpClient:")]
+        keeper = (PROJECT_ROOT / "flow_provider" / "session_keeper.py").read_text(encoding="utf-8")
 
         solve_start = keeper.index("async def solve_captcha")
         solve_end = keeper.index("async def _ensure_flow_page_loaded", solve_start)
@@ -84,8 +94,9 @@ class FlowProviderExtractionTests(unittest.TestCase):
             self.assertNotIn(f"def {dead_name}", keeper)
 
     def test_http_client_depends_on_the_narrow_session_protocol(self) -> None:
-        from flow_provider.client import FlowHttpClient, SessionKeeper
+        from flow_provider.http_client import FlowHttpClient
         from flow_provider.interfaces import FlowSession
+        from flow_provider.session_keeper import SessionKeeper
 
         self.assertEqual(
             inspect.signature(FlowHttpClient.__init__).parameters["keeper"].annotation,

@@ -3,6 +3,7 @@
 PR-2a extraction. ``flow_bot`` re-exports these for backward compatibility.
 """
 
-from flow_provider.client import FlowHttpClient, SessionKeeper
+from flow_provider.http_client import FlowHttpClient
+from flow_provider.session_keeper import SessionKeeper
 
 __all__ = ["SessionKeeper", "FlowHttpClient"]

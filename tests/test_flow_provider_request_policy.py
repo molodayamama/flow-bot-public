@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from flow_provider.client import FlowHttpClient, SessionKeeper
+from flow_provider.http_client import FlowHttpClient
 from flow_provider.request_policy import (
     AGENT_RECAPTCHA_ACTION,
     AGENT_RECAPTCHA_ACTION_CANDIDATES,
@@ -13,6 +13,7 @@ from flow_provider.request_policy import (
     VIDEO_RECAPTCHA_ACTION,
     build_flow_headers,
 )
+from flow_provider.session_keeper import SessionKeeper
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -66,12 +67,11 @@ class FlowProviderRequestPolicyTests(unittest.TestCase):
         self.assertEqual(client._build_headers(session), build_flow_headers(session))
 
     def test_provider_classes_have_no_runtime_cross_references(self) -> None:
-        source = (PROJECT_ROOT / "flow_provider" / "client.py").read_text(encoding="utf-8")
-        keeper_block = source[source.index("class SessionKeeper:"):source.index("class FlowHttpClient:")]
-        http_block = source[source.index("class FlowHttpClient:"):]
+        keeper_block = (PROJECT_ROOT / "flow_provider" / "session_keeper.py").read_text(encoding="utf-8")
+        http_block = (PROJECT_ROOT / "flow_provider" / "http_client.py").read_text(encoding="utf-8")
 
-        self.assertNotIn("FlowHttpClient(", keeper_block)
-        self.assertNotIn("SessionKeeper.", http_block)
+        self.assertNotIn("FlowHttpClient", keeper_block)
+        self.assertNotIn("SessionKeeper", http_block)
 
 
 if __name__ == "__main__":

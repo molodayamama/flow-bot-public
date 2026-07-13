@@ -17,9 +17,10 @@ from flow_core import AccountPool, FlowAccount, parse_flow_accounts
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _PR2A_PROVIDER_SOURCE = (
-    (PROJECT_ROOT / "flow_provider" / "client.py").read_text(encoding="utf-8")
-    + "\n"
-    + (PROJECT_ROOT / "flow_provider" / "runtime_config.py").read_text(encoding="utf-8")
+    "\n".join(
+        (PROJECT_ROOT / "flow_provider" / name).read_text(encoding="utf-8")
+        for name in ("session_keeper.py", "http_client.py", "runtime_config.py")
+    )
 )
 
 
