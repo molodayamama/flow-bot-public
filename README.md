@@ -81,7 +81,10 @@ python -m py_compile flow_bot.py flow_core.py flow_copy.py
 
 | Путь | Назначение |
 | --- | --- |
-| `flow_bot.py` | основной бот: aiogram-хендлеры, SessionKeeper (Playwright), HTTP-клиент |
+| `flow_bot.py` | composition root: конфигурирует runtime, зависимости и Telegram-роутеры |
+| `flow_provider/session_keeper.py` | живая Playwright-сессия, Bearer/cookies/reCAPTCHA и upload |
+| `flow_provider/http_client.py` | прямые Flow HTTP-запросы картинок, видео, правок и апскейла |
+| `flow_provider/client.py` | совместимый re-export старого import-path; реализации классов здесь нет |
 | `flow_core.py` | чистая логика: payload/парсинг, кредиты и цены, сторы (stdlib-only) |
 | `flow_copy.py` | весь русский микрокопирайт UI (кнопки, экраны, ошибки) |
 | `metrics.py` | метрики в SQLite (`metrics.db`): латентность, джобы, выручка |
