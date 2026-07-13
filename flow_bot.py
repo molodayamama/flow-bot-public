@@ -1718,19 +1718,6 @@ def _log_image_job(user_id, action, image_model, started, *, ok, charged=0, erro
     )
 
 
-async def _do_generate_and_send(
-    message: types.Message,
-    prompt: str,
-    num_images: int,
-    aspect_ratio: str,
-    user_id: int,
-    image_model: str = DEFAULT_IMAGE_MODEL,
-) -> bool:
-    return await _generation_flow.do_generate_and_send(
-        message, prompt, num_images, aspect_ratio, user_id, image_model=image_model,
-    )
-
-
 def _streak_note(user_id: int) -> str | None:
     # Streak congratulation copy lives in product.streak (channel-neutral);
     # bind the runtime metrics reader here.
@@ -1856,21 +1843,6 @@ async def _edit_and_send(
     )
 
 
-async def _do_edit_and_send(
-    message: types.Message,
-    ref: ImageRef,
-    instruction: str,
-    image_inputs: list,
-    user_id: int,
-    *,
-    aspect_ratio: str | None = None,
-    image_model: str = DEFAULT_IMAGE_MODEL,
-) -> bool:
-    return await _generation_flow.do_edit_and_send(
-        message, ref, instruction, image_inputs, user_id,
-        aspect_ratio=aspect_ratio, image_model=image_model,
-    )
-
 async def _run_i2i(
     message: types.Message,
     ref: ImageRef,
@@ -1884,22 +1856,6 @@ async def _run_i2i(
     return await _generation_flow.run_i2i(
         message, ref, prompt, num_images=num_images, emoji=emoji,
         fail_text=fail_text, action=action,
-    )
-
-
-async def _do_run_i2i(
-    message: types.Message,
-    ref: ImageRef,
-    prompt: str,
-    image_inputs: list,
-    *,
-    num_images: int,
-    emoji: str,
-    fail_text: str,
-) -> bool:
-    return await _generation_flow.do_run_i2i(
-        message, ref, prompt, image_inputs,
-        num_images=num_images, emoji=emoji, fail_text=fail_text,
     )
 
 
@@ -1930,10 +1886,6 @@ async def _real_upscale_and_send(message: types.Message, ref: ImageRef):
     await _generation_flow.real_upscale_and_send(message, ref)
 
 
-async def _do_real_upscale(message: types.Message, ref: ImageRef, media_id: str) -> bool:
-    return await _generation_flow.do_real_upscale(message, ref, media_id)
-
-
 async def _regen_and_send(message: types.Message, ref: ImageRef):
     """🔄 Ещё: новая text-to-image генерация по тому же промпту (новый seed)."""
     if not ref.prompt:
@@ -1953,24 +1905,8 @@ async def _send_original_file(message: types.Message, ref: ImageRef, *, marketpl
     await _generation_flow.send_original_file(message, ref, marketplace_export=marketplace_export)
 
 
-async def _do_send_original_file(
-    message: types.Message,
-    ref: ImageRef,
-    url: str,
-    *,
-    marketplace_export: bool = False,
-):
-    await _generation_flow.do_send_original_file(message, ref, url, marketplace_export=marketplace_export)
-
-
 async def _mix_and_send(message: types.Message, prompt: str):
     await _generation_flow.mix_and_send(message, prompt)
-
-
-async def _do_mix_and_send(
-    message: types.Message, prompt: str, image_inputs: list, user_id: int
-):
-    await _generation_flow.do_mix_and_send(message, prompt, image_inputs, user_id)
 
 
 def _profile_screens_deps() -> tg_screens.ProfileScreensDeps:
@@ -2277,27 +2213,6 @@ async def _video_generate_and_send(
     source_scene_id: str | None = None,
 ) -> None:
     await _video_flow.generate_and_send(
-        message, prompt, user_id=user_id,
-        unit_price_override=unit_price_override,
-        prompt_edited=prompt_edited, status_text=status_text,
-        source_video=source_video, video_operation=video_operation,
-        source_scene_id=source_scene_id,
-    )
-
-
-async def _do_video_generate_and_send(
-    message: types.Message,
-    prompt: str,
-    *,
-    user_id: int,
-    unit_price_override: int | None = None,
-    prompt_edited: bool = False,
-    status_text: str | None = None,
-    source_video: VideoRef | None = None,
-    video_operation: str = "generate",
-    source_scene_id: str | None = None,
-) -> None:
-    await _video_flow.do_generate_and_send(
         message, prompt, user_id=user_id,
         unit_price_override=unit_price_override,
         prompt_edited=prompt_edited, status_text=status_text,
