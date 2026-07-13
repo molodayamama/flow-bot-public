@@ -1,0 +1,30 @@
+# Include these locations inside the existing TLS server for the public payment
+# and MAX webhook hostname. TLS termination and certificate renewal stay with
+# the host's existing nginx/certbot configuration.
+
+location /robokassa/ {
+    proxy_pass http://127.0.0.1:8081;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location = /max/webhook {
+    client_max_body_size 1m;
+    proxy_pass http://127.0.0.1:8081;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Max-Bot-Api-Secret $http_x_max_bot_api_secret;
+}
+
+# The detailed queue counters are operational data; monitor them locally.
+location = /max/health {
+    allow 127.0.0.1;
+    allow ::1;
+    deny all;
+    proxy_pass http://127.0.0.1:8081;
+    proxy_http_version 1.1;
+}

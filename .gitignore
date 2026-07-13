@@ -17,6 +17,7 @@ cookies.pkl
 *.session-journal
 chrome_profile/
 google_profile/
+/runtime-backup-*/
 google_profile_acc2/
 google_profile_acc3/
 google_profile_acc4/

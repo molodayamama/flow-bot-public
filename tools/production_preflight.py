@@ -1,0 +1,212 @@
+"""Offline, values-free production configuration validation."""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import stat
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Mapping, Sequence
+from urllib.parse import urlparse
+
+from dotenv import dotenv_values
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from channels.max.client import max_config_from_env, validate_max_config
+from accounts.pool import parse_flow_accounts
+
+
+_TRUE = {"1", "true", "yes", "on"}
+_TG_TOKEN = re.compile(r"^[0-9]+:[A-Za-z0-9_-]{3,}$")
+
+
+@dataclass(frozen=True)
+class PreflightReport:
+    errors: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+
+def _enabled(env: Mapping[str, str], name: str) -> bool:
+    return str(env.get(name, "") or "").strip().lower() in _TRUE
+
+
+def _require(env: Mapping[str, str], names: Sequence[str], errors: list[str]) -> None:
+    for name in names:
+        if not str(env.get(name, "") or "").strip():
+            errors.append(f"{name} is required")
+
+
+def _valid_id_list(raw: str) -> bool:
+    parts = [part.strip() for part in str(raw or "").split(",") if part.strip()]
+    return bool(parts) and all(part.isdigit() and int(part) > 0 for part in parts)
+
+
+def _profile_paths(env: Mapping[str, str]) -> list[tuple[str, str]]:
+    configured = str(env.get("FLOW_ACCOUNTS", "") or "").strip()
+    default_dir = str(env.get("USER_DATA_DIR", "google_profile"))
+    accounts = parse_flow_accounts(
+        configured,
+        default_id=str(env.get("FLOW_ACCOUNT_ID", "main") or "main"),
+        default_dir=default_dir,
+    )
+    label = "FLOW_ACCOUNTS" if configured else "USER_DATA_DIR"
+    return [(f"{label} account {account.id}", account.profile_dir) for account in accounts]
+
+
+def _robokassa_enabled(env: Mapping[str, str]) -> bool:
+    raw = str(env.get("ROBOKASSA_ENABLED", "") or "").strip()
+    if raw:
+        return raw.lower() in _TRUE
+    return all(
+        str(env.get(name, "") or "").strip()
+        for name in (
+            "ROBOKASSA_MERCHANT_LOGIN",
+            "ROBOKASSA_PASSWORD1",
+            "ROBOKASSA_PASSWORD2",
+        )
+    )
+
+
+def _resolved(root: Path, raw: str) -> Path:
+    path = Path(raw)
+    return path if path.is_absolute() else root / path
+
+
+def validate_environment(
+    env: Mapping[str, str],
+    *,
+    root: str | Path = ".",
+    production: bool = True,
+    env_file: str | Path | None = None,
+) -> PreflightReport:
+    """Validate configuration without printing or contacting external services."""
+    root_path = Path(root).resolve()
+    source = {str(key): str(value or "") for key, value in env.items()}
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    bot_mode = source.get("BOT_MODE", "consumer").strip().lower() or "consumer"
+    if bot_mode not in {"consumer", "seller"}:
+        errors.append("BOT_MODE must be consumer or seller")
+
+    token = source.get("TELEGRAM_TOKEN", "").strip()
+    if not _TG_TOKEN.fullmatch(token):
+        errors.append("TELEGRAM_TOKEN is missing or malformed")
+    owner = source.get("OWNER_ID", "")
+    admins = source.get("ADMIN_IDS", "")
+    if not (_valid_id_list(owner) or _valid_id_list(admins)):
+        errors.append("OWNER_ID or ADMIN_IDS must contain a positive numeric id")
+
+    if bot_mode != "seller":
+        for label, raw_path in _profile_paths(source):
+            if not raw_path:
+                errors.append(f"{label} has no profile path")
+            elif not _resolved(root_path, raw_path).is_dir():
+                errors.append(f"{label} profile directory does not exist")
+
+    robokassa_enabled = _robokassa_enabled(source)
+    if robokassa_enabled:
+        _require(
+            source,
+            (
+                "ROBOKASSA_MERCHANT_LOGIN",
+                "ROBOKASSA_PASSWORD1",
+                "ROBOKASSA_PASSWORD2",
+                "ROBOKASSA_PUBLIC_BASE_URL",
+            ),
+            errors,
+        )
+        public_raw = source.get("ROBOKASSA_PUBLIC_BASE_URL", "").strip()
+        public_url = urlparse(public_raw)
+        if public_raw and (public_url.scheme != "https" or not public_url.hostname):
+            errors.append("ROBOKASSA_PUBLIC_BASE_URL must be an HTTPS URL")
+        default_scope = "seller" if bot_mode == "seller" else "consumer"
+        if source.get("ROBOKASSA_SCOPE", default_scope).strip() not in {
+            "consumer",
+            "seller",
+        }:
+            errors.append("ROBOKASSA_SCOPE must be consumer or seller")
+
+    max_enabled = _enabled(source, "MAX_ENABLED")
+    if max_enabled:
+        if not robokassa_enabled:
+            errors.append("MAX production requires ROBOKASSA_ENABLED=1 for top-up")
+        try:
+            validate_max_config(
+                max_config_from_env(source), production=production
+            )
+        except ValueError as exc:
+            errors.extend(part.strip() for part in str(exc).split(";") if part.strip())
+
+    for name, default in (
+        ("METRICS_DB", "metrics.db"),
+        ("MAX_INBOX_DB", "max_webhook_inbox.db"),
+        ("USER_PROJECTS_FILE", "user_projects.json"),
+        ("USER_CREDITS_FILE", "user_credits.json"),
+        ("PAYMENTS_FILE", "payments.json"),
+    ):
+        if name == "MAX_INBOX_DB" and not max_enabled:
+            continue
+        parent = _resolved(root_path, source.get(name, default)).parent
+        if not parent.is_dir():
+            errors.append(f"{name} parent directory does not exist")
+        elif not os.access(parent, os.W_OK):
+            errors.append(f"{name} parent directory is not writable")
+
+    if env_file is not None and os.name == "posix":
+        path = Path(env_file)
+        try:
+            mode = stat.S_IMODE(path.stat().st_mode)
+            if mode & 0o077:
+                errors.append("ENV_FILE permissions must be 0600 or stricter")
+        except OSError:
+            errors.append("ENV_FILE is not readable")
+
+    if not _enabled(source, "CREDITS_SQLITE"):
+        message = "CREDITS_SQLITE=1 is required for atomic production credits"
+        if production:
+            errors.append(message)
+        else:
+            warnings.append(message)
+    return PreflightReport(tuple(dict.fromkeys(errors)), tuple(dict.fromkeys(warnings)))
+
+
+def load_environment(path: str | Path) -> dict[str, str]:
+    values = {key: str(value or "") for key, value in dotenv_values(path).items()}
+    values.update({key: value for key, value in os.environ.items()})
+    return values
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--env-file", default=os.getenv("ENV_FILE", ".env"))
+    parser.add_argument("--root", default=".")
+    args = parser.parse_args(argv)
+    report = validate_environment(
+        load_environment(args.env_file),
+        root=args.root,
+        production=True,
+        env_file=args.env_file,
+    )
+    for message in report.errors:
+        print(f"ERROR: {message}")
+    for message in report.warnings:
+        print(f"WARNING: {message}")
+    if report.ok:
+        print("production preflight passed")
+        return 0
+    print(f"production preflight failed: {len(report.errors)} issue(s)")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -21,6 +21,7 @@ class CiWorkflowTests(unittest.TestCase):
 
     def test_secret_audit_compile_and_full_tests_are_mandatory(self) -> None:
         self.assertIn("python tools/check_tracked_secrets.py", self.source)
+        self.assertIn("bash -n deploy.sh", self.source)
         self.assertIn("python -m compileall", self.source)
         self.assertIn('python -m unittest discover -s tests -p "test_*.py"', self.source)
 

@@ -1,0 +1,61 @@
+"""Offline source guards for production deployment assets."""
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class DeploymentAssetTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.deploy = (ROOT / "deploy.sh").read_text(encoding="utf-8")
+        cls.consumer_unit = (
+            ROOT / "deploy/systemd/geminifree-bot.service"
+        ).read_text(encoding="utf-8")
+        cls.seller_unit = (
+            ROOT / "deploy/systemd/geminifree-seller-bot.service"
+        ).read_text(encoding="utf-8")
+        cls.nginx = (
+            ROOT / "deploy/nginx/geminifree-locations.conf.example"
+        ).read_text(encoding="utf-8")
+
+    def test_deploy_uses_immutable_remote_target_and_no_pull(self) -> None:
+        self.assertIn('git fetch --prune origin "$DEPLOY_BRANCH"', self.deploy)
+        self.assertIn('git checkout --detach "$target_sha"', self.deploy)
+        self.assertIn("git merge-base --is-ancestor", self.deploy)
+        self.assertIn("DEPLOY_SHA must be a full 40-character commit id", self.deploy)
+        self.assertIn('git rev-parse --verify "${target_ref}^{commit}"', self.deploy)
+        self.assertNotIn("git pull", self.deploy)
+        self.assertNotIn("git reset --hard", self.deploy)
+
+    def test_backup_precedes_checkout_and_preflight_precedes_restart(self) -> None:
+        backup = self.deploy.index("tools/runtime_backup.py backup")
+        checkout = self.deploy.index('git checkout --detach "$target_sha"')
+        preflight = self.deploy.index("tools/production_preflight.py")
+        restart = self.deploy.index("restart_if_installed geminifree-bot\n")
+        self.assertLess(backup, checkout)
+        self.assertLess(checkout, preflight)
+        self.assertLess(preflight, restart)
+        self.assertIn("tools/runtime_backup.py verify", self.deploy)
+        self.assertIn("rollback_code", self.deploy)
+        self.assertIn('runuser -u "$SERVICE_USER"', self.deploy)
+
+    def test_services_limit_restart_loops_and_private_file_modes(self) -> None:
+        for unit in (self.consumer_unit, self.seller_unit):
+            self.assertIn("StartLimitIntervalSec=300", unit)
+            self.assertIn("StartLimitBurst=5", unit)
+            self.assertIn("UMask=0077", unit)
+
+    def test_nginx_routes_public_ingress_but_limits_health_details(self) -> None:
+        self.assertIn("location /robokassa/", self.nginx)
+        self.assertIn("location = /max/webhook", self.nginx)
+        self.assertIn("X-Max-Bot-Api-Secret", self.nginx)
+        self.assertIn("location = /max/health", self.nginx)
+        self.assertIn("deny all", self.nginx)
+
+
+if __name__ == "__main__":
+    unittest.main()

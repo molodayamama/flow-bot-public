@@ -735,6 +735,29 @@ Residual risk:
 - After every workflow repair, push the focused commit and watch the resulting
   `offline-validation` GitHub Actions run until its final conclusion is success.
 
+## Production operations (offline-safe)
+
+- Validate config names and paths without printing values or contacting any
+  provider: `python tools/production_preflight.py --root . --env-file .env`.
+  A non-zero exit is a deploy blocker. On POSIX, the env file must be mode 0600
+  or stricter. Run separately for `.env.seller` when present.
+- Validate shell assets: `bash -n deploy.sh deploy/bin/geminifree-bot-run
+  deploy/bin/geminifree-seller-bot-run`.
+- Create a consistent state backup using every configured consumer/seller path:
+  `python tools/runtime_backup.py backup --root . --env-file .env
+  --env-file .env.seller --output <outside-repo-directory>`, omitting the second
+  env file when seller is absent.
+- Verify before relying on a backup: `python tools/runtime_backup.py verify
+  <backup-directory>`. This checks hashes and SQLite integrity without restoring.
+- Restore is destructive and must only run with services stopped and explicit
+  operator approval: `python tools/runtime_backup.py restore <backup-directory>
+  --root /opt/geminifree --approve-restore --service-stopped`.
+- Safe focused suites: `test_production_preflight.py`, `test_runtime_backup.py`,
+  `test_deployment_assets.py`, `test_ci_workflow.py`, and `test_seller_bot.py`.
+- Post-deploy service/MAX checks and rollback procedure are authoritative in
+  `docs/PRODUCTION_RUNBOOK.md`. A real payment, media generation, captcha solve,
+  profile login, or MAX provider call is never part of an offline deploy check.
+
 ## Current Bootstrap Validation
 
 For the documentation bootstrap task:
