@@ -60,7 +60,12 @@ run_as_service() {
 
 copy_static() {
     install -d -m 0755 /var/www/photozhab/assets
-    install -m 0644 deploy/photozhab/*.html deploy/photozhab/styles.css /var/www/photozhab/
+    install -m 0644 \
+        deploy/photozhab/*.html \
+        deploy/photozhab/*.css \
+        deploy/photozhab/*.txt \
+        deploy/photozhab/*.xml \
+        /var/www/photozhab/
     if compgen -G "deploy/photozhab/assets/*" >/dev/null; then
         install -m 0644 deploy/photozhab/assets/* /var/www/photozhab/assets/
     fi

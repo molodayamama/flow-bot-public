@@ -331,7 +331,29 @@ h1 {
   background: #ffffff;
 }
 
+.secondary-action {
+  min-height: 54px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--sp-6);
+  border: 1px solid var(--pz-line-strong);
+  border-radius: var(--r-md);
+  color: var(--pz-ink);
+  background: var(--pz-glass);
+  font-weight: var(--fw-bold);
+  backdrop-filter: var(--blur-glass);
+  transition: transform var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out);
+}
+
+.secondary-action:hover {
+  transform: translateY(var(--hover-lift));
+  border-color: var(--pz-cyan);
+}
+
 .primary-action:focus-visible,
+.secondary-action:focus-visible,
+.text-link:focus-visible,
 .topbar-link:focus-visible,
 .brand:focus-visible {
   outline: var(--focus-ring);
@@ -415,6 +437,143 @@ h1 {
   color: var(--pz-muted);
   font-size: var(--fs-base);
   line-height: var(--lh-normal);
+}
+
+/* ── Search landing cards / CTA groups ────────────────────── */
+.service-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-4);
+  margin-top: var(--sp-10);
+}
+
+.service-card {
+  min-height: 250px;
+  padding: clamp(24px, 4vw, 38px);
+  border: 1px solid var(--pz-line);
+  border-radius: var(--r-lg);
+  background: var(--pz-surface);
+}
+
+.service-card h3,
+.faq-item h3 {
+  margin: var(--sp-6) 0 var(--sp-3);
+  font-size: var(--fs-h3);
+  line-height: var(--lh-tight);
+}
+
+.service-card p,
+.faq-item p {
+  margin: 0;
+  color: var(--pz-muted);
+  line-height: var(--lh-relaxed);
+}
+
+.text-link {
+  display: inline-flex;
+  margin-top: var(--sp-6);
+  color: var(--pz-cyan);
+  font-weight: var(--fw-bold);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.inline-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-5);
+  margin-top: var(--sp-6);
+}
+
+/* ── Dedicated SEO pages ──────────────────────────────────── */
+.seo-page {
+  padding-top: var(--sp-6);
+}
+
+.seo-hero {
+  padding: clamp(48px, 8vw, 100px) var(--pad-gutter) var(--pad-section);
+  border-bottom: 1px solid var(--pz-line);
+  background:
+    radial-gradient(circle at 82% 16%, rgba(84, 215, 214, 0.14), transparent 34%),
+    radial-gradient(circle at 18% 84%, rgba(200, 242, 95, 0.10), transparent 30%),
+    var(--pz-paper);
+}
+
+.seo-hero-inner {
+  width: min(var(--w-content), 100%);
+  margin: 0 auto;
+}
+
+.seo-hero h1 {
+  max-width: 980px;
+  margin: 0;
+  font-size: var(--fs-h1);
+  line-height: var(--lh-tight);
+}
+
+.seo-hero .lead {
+  max-width: 760px;
+}
+
+.breadcrumb {
+  margin: 0 0 var(--sp-8);
+  color: var(--pz-muted);
+  font-size: var(--fs-sm);
+}
+
+.breadcrumb a,
+.cross-links a {
+  color: var(--pz-cyan);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.comparison {
+  width: 100%;
+  margin-top: var(--sp-8);
+  border-collapse: collapse;
+  border: 1px solid var(--pz-line);
+  background: var(--pz-surface);
+}
+
+.comparison th,
+.comparison td {
+  padding: 16px 18px;
+  border: 1px solid var(--pz-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.comparison th {
+  color: var(--pz-lime);
+  background: var(--pz-surface-2);
+}
+
+.faq-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-4);
+  margin-top: var(--sp-8);
+}
+
+.faq-item {
+  padding: var(--sp-6);
+  border: 1px solid var(--pz-line);
+  border-radius: var(--r-lg);
+  background: var(--pz-surface);
+}
+
+.faq-item h3 {
+  margin-top: 0;
+  font-size: 20px;
+}
+
+.cross-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin-top: var(--sp-6);
 }
 
 /* ── Info sections ────────────────────────────────────────── */
@@ -616,6 +775,11 @@ h1 {
     grid-template-columns: 1fr;
   }
 
+  .service-grid,
+  .faq-grid {
+    grid-template-columns: 1fr;
+  }
+
   .hero-proof {
     grid-template-columns: 1fr;
   }
@@ -659,5 +823,14 @@ h1 {
 
   .primary-action {
     width: min(100%, 320px);
+  }
+
+  .secondary-action {
+    width: min(100%, 320px);
+  }
+
+  .comparison {
+    display: block;
+    overflow-x: auto;
   }
 }

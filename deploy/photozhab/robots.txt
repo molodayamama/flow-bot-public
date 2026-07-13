@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /admin.html
+Disallow: /api/
+Disallow: /internal/
+
+Sitemap: https://photozhab.ru/sitemap.xml

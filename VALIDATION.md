@@ -23,6 +23,26 @@ must never be copied into source, templates, test fixtures, logs, or HANDOFF.
 The task-supervisor test locks ownership and deterministic shutdown for every
 composition-level long-running loop; aiohttp continues to own webhook workers.
 
+## Public landing and SEO checks
+
+Run the static contracts whenever public landing, legal, crawl or deploy-copy
+assets change:
+
+```bash
+python -m pytest tests/test_landing_seo.py tests/test_deployment_assets.py tests/test_flow_menu.py::LandingStaticContentTests -q
+bash -n deploy.sh
+```
+
+The SEO contract checks unique title, description, H1 and canonical metadata;
+parseable JSON-LD; descriptive internal links; real sitemap targets; restrictive
+robots directives for admin/API surfaces; and `noindex` on the admin page.
+Also serve `deploy/photozhab/` locally and inspect both a desktop viewport and a
+390px-class mobile viewport for horizontal overflow and usable primary actions.
+After an immutable-SHA deploy, request the public home, each sitemap URL,
+`/robots.txt` and `/sitemap.xml`; all public crawl targets must return HTTP 200.
+Search-engine indexing, snippet selection and ranking are external outcomes and
+must not be reported as testable deployment guarantees.
+
 ## MAX transport smoke
 
 The harness is offline by default and documents each external side effect:

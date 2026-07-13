@@ -64,6 +64,10 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn('chown "$SERVICE_USER" "$compile_dir"', self.deploy)
         self.assertNotIn('compileall -q', self.deploy)
 
+    def test_deploy_publishes_search_discovery_assets(self) -> None:
+        self.assertIn("deploy/photozhab/*.txt", self.deploy)
+        self.assertIn("deploy/photozhab/*.xml", self.deploy)
+
     def test_services_limit_restart_loops_and_private_file_modes(self) -> None:
         for unit in (self.consumer_unit, self.seller_unit):
             self.assertIn("StartLimitIntervalSec=300", unit)
