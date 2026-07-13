@@ -67,6 +67,17 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertIn("consumeAuthResult", self.js)
         self.assertNotIn('pointer-events: none', self.css)
 
+    def test_oauth_return_waits_for_authoritative_session_before_dialog(self) -> None:
+        self.assertIn("async function initializeApp()", self.js)
+        self.assertIn('await refreshSession({retryAuthenticated: authResult === "success"})', self.js)
+        self.assertIn("state.initialized = true", self.js)
+        self.assertIn("state.session?.authenticated", self.js)
+        self.assertIn("if (state.initialized) refreshSession()", self.js)
+        self.assertNotIn(
+            "consumeAuthResult();\nif (!elements.authDialog.open) elements.authDialog.showModal();",
+            self.js,
+        )
+
     def test_app_has_csp_noindex_and_accessible_labels(self) -> None:
         self.assertIn('http-equiv="Content-Security-Policy"', self.html)
         self.assertIn('content="noindex, follow"', self.html)

@@ -82,6 +82,14 @@ pending; it must not silently ignore the user or navigate to a non-working OAuth
 route. OAuth callback `auth` query markers must be shown once and removed from
 the address bar.
 
+OAuth return initialization must never open the auth dialog before the first
+authoritative `/web/api/session` response. An `auth=success` query marker is
+display-only and cannot authenticate the browser; after a short bounded retry,
+the dialog stays closed only when the server returns `authenticated=true`.
+Anonymous initialization must still open the dialog, API failure must leave
+generation controls disabled, and pageshow/visibility refresh must run only
+after initial session loading completes.
+
 After green CI, back up the protected VPS env and nginx config, set a random
 32+ character `WEB_SESSION_SECRET`, enable the consumer-only web app, keep
 `WEB_STARTER_CREDITS=0`, add the `/web/api/` reverse proxy to the

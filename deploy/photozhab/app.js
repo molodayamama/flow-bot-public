@@ -7,6 +7,7 @@ const state = {
   imageName: "",
   busy: false,
   maxAuthAttempted: false,
+  initialized: false,
 };
 
 const launchHash = new URLSearchParams(window.location.hash.slice(1));
@@ -238,12 +239,10 @@ function handleYandexLogin(event) {
 function consumeAuthResult() {
   const url = new URL(window.location.href);
   const result = url.searchParams.get("auth");
-  if (!result) return;
+  if (!result) return "";
   url.searchParams.delete("auth");
   history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
-  if (result === "success") toast("Вход через Яндекс выполнен");
-  else if (result === "unavailable") toast("Вход через Яндекс пока не подключён");
-  else toast("Не удалось войти через Яндекс. Попробуйте ещё раз.");
+  return result;
 }
 
 async function tryMaxLogin() {
@@ -400,11 +399,45 @@ async function beginPayment(packId, button) {
   catch (_) { toast("Не удалось создать счёт. Попробуйте ещё раз."); button.disabled = false; }
 }
 
-async function refreshSession() {
-  try {
-    state.session = await api("/web/api/session", {headers: {}});
-    setBalance(state.session.balance); renderModels(); applyAuthState(); await tryMaxLogin();
-  } catch (_) { toast("Не удалось подключиться к сервису генерации"); }
+async function refreshSession({retryAuthenticated = false} = {}) {
+  const attempts = retryAuthenticated ? 3 : 1;
+  let session = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      session = await api("/web/api/session", {headers: {}});
+    } catch (_) {
+      if (attempt === attempts - 1) {
+        elements.prompt.disabled = true;
+        elements.send.disabled = true;
+        toast("Не удалось подключиться к сервису генерации");
+        return false;
+      }
+    }
+    if (session?.authenticated || !retryAuthenticated) break;
+    await new Promise((resolve) => window.setTimeout(resolve, 180));
+  }
+  state.session = session;
+  setBalance(state.session.balance); renderModels(); applyAuthState(); await tryMaxLogin();
+  return true;
+}
+
+async function initializeApp() {
+  elements.prompt.disabled = true;
+  elements.send.disabled = true;
+  setMode("image");
+  restoreTelegramPending();
+  const authResult = consumeAuthResult();
+  await refreshSession({retryAuthenticated: authResult === "success"});
+  state.initialized = true;
+  if (authResult === "success") {
+    toast(state.session?.authenticated
+      ? "Вход через Яндекс выполнен"
+      : "Не удалось завершить вход через Яндекс. Попробуйте ещё раз.");
+  } else if (authResult === "unavailable") {
+    toast("Вход через Яндекс пока не подключён");
+  } else if (authResult) {
+    toast("Не удалось войти через Яндекс. Попробуйте ещё раз.");
+  }
 }
 
 elements.prompt.addEventListener("input", resizePrompt);
@@ -439,10 +472,12 @@ elements.mobileAccount.addEventListener("click", () => {
   if (!state.session?.authenticated) applyAuthState();
   else if (window.confirm("Выйти из аккаунта Photozhab на этом устройстве?")) logoutUser();
 });
-window.addEventListener("pageshow", () => { restoreTelegramPending(); refreshSession(); });
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshSession(); });
+window.addEventListener("pageshow", () => {
+  restoreTelegramPending();
+  if (state.initialized) refreshSession();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && state.initialized) refreshSession();
+});
 
-setMode("image");
-restoreTelegramPending();
-consumeAuthResult();
-if (!elements.authDialog.open) elements.authDialog.showModal();
+initializeApp();
