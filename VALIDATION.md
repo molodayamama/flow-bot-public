@@ -904,3 +904,6 @@ For the documentation bootstrap task:
 - Callback acknowledgement happens after the callback's business action and is
   therefore best-effort. A stale/rejected acknowledgement must not escape into
   the durable inbox, which would replay the already completed action.
+- Ingredients/Reference Veo model keys encode both tier and orientation:
+  `veo_3_1_r2v_{tier}_{portrait|landscape}`. A key without the orientation was
+  observed live to reach the correct endpoint but return provider HTTP 500.

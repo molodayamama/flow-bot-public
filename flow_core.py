@@ -1027,16 +1027,25 @@ def video_frames_model_key(model_key: str) -> str:
 def video_reference_model_key(model_key: str, aspect: str = "portrait") -> str:
     """Resolve a friendly model id to the Ingredients (r2v) videoModelKey.
 
-    Семейство-зависимо (подтверждено живыми Ingredients-захватами 2026-06-20):
-      * Omni Flash (abra) -> ``abra_r2v_{duration}s`` (напр. ``abra_r2v_6s``);
-      * Veo 3.1          -> ``veo_3_1_r2v_{tier}``   (напр. ``veo_3_1_r2v_lite``).
-    Оба ключа подтверждены успешной генерацией. Ориентацию несёт ``aspectRatio``,
-    поэтому ``aspect`` в ключ не входит (оставлен для стабильности сигнатуры).
+    Family-specific live captures show:
+      * Omni Flash (abra) -> ``abra_r2v_{duration}s``;
+      * Veo 3.1 -> ``veo_3_1_r2v_{tier}_{orientation}``.
+
+    Unlike Frames/interpolation, the Veo reference key encodes orientation in
+    addition to the request's ``aspectRatio`` field. The confirmed live key is
+    ``veo_3_1_r2v_fast_portrait``.
     """
     meta = VIDEO_MODELS.get(model_key) or {}
     if meta.get("family") == "omni-flash":
         return f"abra_r2v_{int(meta.get('duration', 6))}s"
-    return f"veo_3_1_r2v_{_veo_tier(model_key)}"
+    normalized_aspect = (aspect or "portrait").strip().lower()
+    orientation = (
+        "portrait"
+        if normalized_aspect
+        in {"portrait", "vertical", "9:16", "video_aspect_ratio_portrait"}
+        else "landscape"
+    )
+    return f"veo_3_1_r2v_{_veo_tier(model_key)}_{orientation}"
 
 
 def video_edit_model_key() -> str:
