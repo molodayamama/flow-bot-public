@@ -126,6 +126,31 @@ After explicit operator approval, run `subscription`, then `message`, then
 content to the configured operator-owned MAX target; none of the modes print
 configuration values or response bodies.
 
+## MAX generation parity
+
+Run the channel, durable-state, shared-facade and backend contracts together:
+
+```bash
+python -m pytest -q tests/test_max_state.py tests/test_max_generation_adapter.py tests/test_max_mvp.py tests/test_max_runtime.py tests/test_generation_facade.py tests/test_generation_services.py
+```
+
+Required assertions include migration from the legacy action-only SQLite
+schema, corrupt-state recovery, allowlisted image/video model and aspect
+callbacks, image count capped at four, server-side prices, text-to-video,
+Ingredients capped at four photos, Frames requiring exactly two photos,
+insufficient-balance rejection, refund on provider/delivery failure and
+callback acknowledgement failure not replaying a completed business action.
+All adapter/backend tests use fake downloads and provider calls.
+
+After an immutable-SHA production deploy, an unpaid menu smoke may open each
+flow and change every setting, then restart the service and confirm one pending
+selection survives. Do not submit a prompt/photo during that smoke. A real
+image, text-video, Ingredients or Frames check spends quota and credits and
+requires the operator's explicit approval. The official MAX keyboard currently
+allows up to seven callback buttons per row; keep every generated row within
+that limit and keep `MAX_API_BASE_URL` on `platform-api2.max.ru` before the
+provider's announced 2026-07-19 endpoint cutover.
+
 When an approved live/stateful check fails, record a sanitized entry in
 `docs/LIVE_TEST_FAILURES.md`. Include Telegram input/output, Flow account label,
 Google HTTP status/body snippet, user-facing text, reproduction steps, severity,

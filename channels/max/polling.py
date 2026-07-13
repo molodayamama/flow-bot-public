@@ -1,11 +1,11 @@
-"""MAX long-polling loop (MAX MVP runtime glue).
+"""MAX long-polling loop (runtime glue).
 
 Pulls updates from the MAX Bot API, parses each into a platform-neutral event
 and dispatches it to a handler. Everything it needs is injected (client, handler,
 parser, sleep), so the loop is exercised fully by fakes with no network.
 
 Long polling is documented by MAX as non-production; a webhook subscription is
-preferred for production. This loop is enough to run the MVP and to smoke-test
+preferred for production. This loop is enough to run the bot and to smoke-test
 against the live API under operator approval.
 """
 

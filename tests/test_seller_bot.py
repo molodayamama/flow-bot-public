@@ -240,7 +240,8 @@ class SellerMenuTests(unittest.TestCase):
         self.assertIn('"video_ingredients"', inspect.getsource(flow_bot._backend_generate))
         self.assertIn("video_b64", src)
         self.assertIn("fetch_video_bytes(media_id)", src)
-        self.assertIn("reference_sources=[source]", src)
+        self.assertIn("reference_sources=sources", src)
+        self.assertIn("sources.append(source)", src)
         self.assertIn("deps.account_for_video(user_id)", src)
 
     def test_web_server_allows_large_internal_media_payloads(self) -> None:

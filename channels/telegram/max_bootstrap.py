@@ -73,7 +73,9 @@ class MaxBootstrap:
         service = BackendGenerationService(
             generate_images=backend_service.generate_images,
             generate_i2i=backend_service.generate_i2i,
+            generate_video_text=backend_service.generate_video_text,
             generate_video_ingredients=backend_service.generate_video_ingredients,
+            generate_video_frames=backend_service.generate_video_frames,
             download_bytes=_download,
             deps=self._d.backend_generation_deps(),
         )

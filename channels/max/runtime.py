@@ -1,6 +1,6 @@
-"""MAX MVP runtime startup (glue).
+"""MAX bot runtime startup (glue).
 
-Builds a `MaxBotClient` from env, wires it into `MaxMvpBot` with an injected
+Builds a `MaxBotClient` from env, wires it into the MAX handler with an injected
 generation service (and optional wallet), and runs the long-polling loop. The
 generation service is injected by the caller (the app owns generation), so this
 module stays free of any flow_bot import and is fully testable with fakes.

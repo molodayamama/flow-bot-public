@@ -170,7 +170,9 @@ class FlowBotWiringTests(unittest.TestCase):
     def test_wires_photo_bridge_backend_fns(self):
         # edit/animate need i2i + video + a downloader threaded from the client.
         self.assertIn("generate_i2i=backend_service.generate_i2i", self.max_src)
+        self.assertIn("generate_video_text=backend_service.generate_video_text", self.max_src)
         self.assertIn("generate_video_ingredients=backend_service.generate_video_ingredients", self.max_src)
+        self.assertIn("generate_video_frames=backend_service.generate_video_frames", self.max_src)
         self.assertIn("download_bytes=_download", self.max_src)
         self.assertIn("client.get_file_bytes(PlatformFile(", self.max_src)
 

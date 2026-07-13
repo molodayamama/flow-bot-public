@@ -81,7 +81,7 @@ class AdapterTests(unittest.TestCase):
 
 
 class PhotoBridgeTests(unittest.TestCase):
-    def _bridged(self, *, i2i=None, video=None, downloaded=b"IMG"):
+    def _bridged(self, *, i2i=None, video=None, text_video=None, frames=None, downloaded=b"IMG"):
         seen = {}
 
         async def _dl(url):
@@ -96,11 +96,21 @@ class PhotoBridgeTests(unittest.TestCase):
             seen["video_req"] = req
             return {"videos": [{"url": "http://u/v.mp4"}]}
 
+        async def _text_video(deps, req):
+            seen["text_video_req"] = req
+            return {"videos": [{"url": "http://u/t.mp4"}]}
+
+        async def _frames(deps, req):
+            seen["frames_req"] = req
+            return {"videos": [{"url": "http://u/f.mp4"}]}
+
         svc = BackendGenerationService(
             generate_images=lambda d, r: None,
             deps=_Deps(),
             generate_i2i=i2i or _i2i,
+            generate_video_text=text_video or _text_video,
             generate_video_ingredients=video or _video,
+            generate_video_frames=frames or _frames,
             download_bytes=_dl,
         )
         return svc, seen
@@ -124,6 +134,37 @@ class PhotoBridgeTests(unittest.TestCase):
         ))
         self.assertEqual(out, {"videos": [{"url": "http://u/v.mp4"}]})
         self.assertIn("image_b64", seen["video_req"])
+
+    def test_create_video_forwards_selected_settings(self):
+        svc, seen = self._bridged()
+        out = run(svc.create_video(
+            internal_user_id=4, prompt="fly", video_model="veo-fast",
+            aspect_ratio="landscape",
+        ))
+        self.assertEqual(out, {"videos": [{"url": "http://u/t.mp4"}]})
+        self.assertEqual(seen["text_video_req"]["video_model"], "veo-fast")
+        self.assertEqual(seen["text_video_req"]["aspect_ratio"], "landscape")
+
+    def test_ingredients_downloads_all_references(self):
+        svc, seen = self._bridged(downloaded=b"RAW")
+        run(svc.create_video_ingredients(
+            internal_user_id=5, prompt="meet", photo_file_ids=(
+                "https://cdn/1.png", "https://cdn/2.png", "https://cdn/3.png"
+            ), video_model="veo-lite", aspect_ratio="portrait",
+        ))
+        self.assertEqual(len(seen["video_req"]["images_b64"]), 3)
+        self.assertEqual(seen["video_req"]["image_b64"], seen["video_req"]["images_b64"][0])
+
+    def test_frames_requires_and_forwards_two_references(self):
+        svc, seen = self._bridged()
+        out = run(svc.create_video_frames(
+            internal_user_id=6, prompt="morph",
+            photo_file_ids=("https://cdn/start.png", "https://cdn/end.png"),
+            video_model="veo-quality", aspect_ratio="landscape",
+        ))
+        self.assertEqual(out, {"videos": [{"url": "http://u/f.mp4"}]})
+        self.assertEqual(len(seen["frames_req"]["images_b64"]), 2)
+        self.assertEqual(seen["frames_req"]["video_model"], "veo-quality")
 
     def test_non_url_photo_ref_is_graceful_error(self):
         # a token/file-id ref (not http) can't be downloaded here

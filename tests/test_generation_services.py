@@ -202,6 +202,89 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(generation["model_key"], "abra_t2v_4s")
         self.assertIsNone(generation["reference_sources"])
 
+    def test_reference_backend_uploads_all_images_on_one_account(self) -> None:
+        calls = []
+
+        class Slot:
+            async def __aenter__(self): return None
+            async def __aexit__(self, *args): return None
+
+        class Pool:
+            def video_slot(self, account_id): return Slot()
+            def mark_success(self, account_id): pass
+
+        class Keeper:
+            async def upload_image(self, data, **kwargs):
+                calls.append(("upload", data, kwargs))
+                return {"mediaId": f"m{len(calls)}", "_project_id": "project"}
+
+        class Client:
+            async def generate_video(self, prompt, **kwargs):
+                calls.append(("generate", prompt, kwargs))
+                return {"media_id": "video"}
+            async def fetch_video_bytes(self, media_id): return b"mp4"
+
+        deps = SimpleNamespace(
+            vid_ref_default_model="veo-lite",
+            video_model_meta=lambda model: {"key": "veo_3_1_t2v_lite", "family": "veo"},
+            account_for_video=lambda user_id: "account",
+            ensure_user_project=lambda *args, **kwargs: asyncio.sleep(0, result="project"),
+            keeper_for_acc=lambda account_id: Keeper(),
+            account_pool=Pool(), client_for_acc=lambda account_id: Client(),
+            mark_video_account_failure=lambda *args: None,
+            log=SimpleNamespace(exception=lambda *args, **kwargs: None),
+        )
+        result = run(backend_service.generate_video_ingredients(deps, {
+            "prompt": "three friends walk", "user_id": -5,
+            "images_b64": ["QQ==", "Qg==", "Qw=="], "video_model": "veo-lite",
+        }))
+        self.assertIn("videos", result)
+        self.assertEqual(len([call for call in calls if call[0] == "upload"]), 3)
+        generation = [call for call in calls if call[0] == "generate"][0][2]
+        self.assertEqual(len(generation["reference_sources"]), 3)
+
+    def test_frames_backend_uses_start_and_end_sources(self) -> None:
+        generation = {}
+
+        class Slot:
+            async def __aenter__(self): return None
+            async def __aexit__(self, *args): return None
+
+        class Pool:
+            def video_slot(self, account_id): return Slot()
+            def mark_success(self, account_id): pass
+
+        class Keeper:
+            index = 0
+            async def upload_image(self, data, **kwargs):
+                self.index += 1
+                return {"mediaId": f"frame-{self.index}"}
+
+        class Client:
+            async def generate_video(self, prompt, **kwargs):
+                generation.update(kwargs)
+                return {"media_id": "video"}
+            async def fetch_video_bytes(self, media_id): return b"mp4"
+
+        keeper = Keeper()
+        deps = SimpleNamespace(
+            video_model_meta=lambda model: {"key": "veo_3_1_t2v_lite", "family": "veo"},
+            account_for_video=lambda user_id: "account",
+            ensure_user_project=lambda *args, **kwargs: asyncio.sleep(0, result="project"),
+            keeper_for_acc=lambda account_id: keeper,
+            account_pool=Pool(), client_for_acc=lambda account_id: Client(),
+            mark_video_account_failure=lambda *args: None,
+            log=SimpleNamespace(exception=lambda *args, **kwargs: None),
+        )
+        result = run(backend_service.generate_video_frames(deps, {
+            "prompt": "day becomes night", "user_id": -6,
+            "images_b64": ["QQ==", "Qg=="], "video_model": "veo-lite",
+        }))
+        self.assertIn("videos", result)
+        self.assertEqual(generation["start_source"]["mediaId"], "frame-1")
+        self.assertEqual(generation["end_source"]["mediaId"], "frame-2")
+        self.assertIsNone(generation.get("reference_sources"))
+
 
 class PurityTests(unittest.TestCase):
     def test_generation_modules_are_channel_free(self) -> None:

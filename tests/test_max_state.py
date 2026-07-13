@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from channels.max.state import MaxUserStateStore
@@ -30,6 +32,36 @@ class MaxUserStateStoreTests(unittest.TestCase):
 
         self.assertIsNone(store.get("u1", now=10**12))
         self.assertIsNone(store.get("u1"))
+
+    def test_settings_survive_restart_and_corrupt_json_is_ignored(self) -> None:
+        store = MaxUserStateStore(self.path)
+        store.set("u1", "create_image", {"image_model": "nbpro", "count": 4})
+        self.assertEqual(
+            MaxUserStateStore(self.path).get("u1"),
+            {"await": "create_image", "image_model": "nbpro", "count": 4},
+        )
+        with closing(sqlite3.connect(self.path)) as conn, conn:
+            conn.execute(
+                "UPDATE max_user_state SET data_json='not-json' WHERE user_id='u1'"
+            )
+        self.assertEqual(store.get("u1"), {"await": "create_image"})
+
+    def test_old_action_only_schema_is_migrated(self) -> None:
+        with closing(sqlite3.connect(self.path)) as conn, conn:
+            conn.execute(
+                "CREATE TABLE max_user_state ("
+                "user_id TEXT PRIMARY KEY, action TEXT NOT NULL, updated_at REAL NOT NULL)"
+            )
+            conn.execute(
+                "INSERT INTO max_user_state VALUES ('legacy','edit_photo',9999999999)"
+            )
+        store = MaxUserStateStore(self.path)
+        self.assertEqual(store.get("legacy"), {"await": "edit_photo"})
+        store.set("legacy", "create_video", {"video_model": "veo-lite"})
+        self.assertEqual(
+            store.get("legacy"),
+            {"await": "create_video", "video_model": "veo-lite"},
+        )
 
 
 if __name__ == "__main__":

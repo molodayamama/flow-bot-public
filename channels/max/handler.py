@@ -1,4 +1,4 @@
-"""MAX MVP handler.
+"""MAX bot handler.
 
 Platform-neutral router that turns parsed MAX updates
 (:class:`channels.base.IncomingMessage` / :class:`channels.base.IncomingCallback`)
@@ -7,16 +7,14 @@ into menu, balance, top-up and generation actions.
 Scope is intentionally small (see ``Photozhab Core Split`` plan, Phase 7):
 
 * ``/start`` / menu
-* create image
-* edit photo
-* animate photo
+* create/edit images with model, format and count settings
+* text-to-video, photo references and start/end frame video
 * balance / help
 * identity-bound Robokassa top-up links
 
-Out of scope for the MVP: Telegram Stars, cross-platform referrals, shared
-Telegram+MAX balance, seller flow, gallery/history/support, and the full video
-wizard. Billing is identity-aware (a MAX user gets a separate negative internal
-id, so a colliding Telegram numeric id never shares a balance).
+Telegram-only Stars, seller/admin/community flows and video edit/extend remain
+out of scope. Billing is identity-aware (a MAX user gets a separate negative
+internal id, so a colliding Telegram numeric id never shares a balance).
 
 The handler performs no network or provider calls itself. The chat platform,
 wallet, generation service and signed top-up link builder are injected, so the
@@ -42,9 +40,15 @@ from channels.base import (
 )
 from billing.credit_gate import NotEnoughCredits, open_credit_gate
 from flow_core import (
+    DEFAULT_IMAGE_MODEL,
+    IMAGE_MODELS,
     PRICE_PER_IMAGE,
     STARTER_CREDITS,
+    VIDEO_MODELS,
     action_price,
+    image_model_extra,
+    price_gen,
+    video_price,
     video_animate_min_price,
 )
 
@@ -63,7 +67,10 @@ class _UndeliverableMediaError(ValueError):
 CB_MENU = "m:menu"
 CB_CREATE_IMAGE = "m:gen"
 CB_EDIT_PHOTO = "m:edit"
+CB_CREATE_VIDEO = "m:video"
 CB_ANIMATE = "m:animate"
+CB_VIDEO_INGREDIENTS = "m:ving"
+CB_VIDEO_FRAMES = "m:vframes"
 CB_BALANCE = "m:balance"
 CB_HELP = "m:help"
 CB_TOPUP = "m:topup"
@@ -72,6 +79,27 @@ CB_TOPUP = "m:topup"
 AWAIT_CREATE_IMAGE = "create_image"
 AWAIT_EDIT_PHOTO = "edit_photo"
 AWAIT_ANIMATE_PHOTO = "animate_photo"
+AWAIT_CREATE_VIDEO = "create_video"
+AWAIT_VIDEO_INGREDIENTS = "video_ingredients"
+AWAIT_VIDEO_FRAMES = "video_frames"
+
+_IMAGE_ACTIONS = {AWAIT_CREATE_IMAGE, AWAIT_EDIT_PHOTO}
+_VIDEO_ACTIONS = {
+    AWAIT_CREATE_VIDEO,
+    AWAIT_ANIMATE_PHOTO,
+    AWAIT_VIDEO_INGREDIENTS,
+    AWAIT_VIDEO_FRAMES,
+}
+_IMAGE_ASPECTS = {
+    "portrait": "9:16",
+    "landscape": "16:9",
+    "square": "1:1",
+    "portrait_34": "3:4",
+    "landscape_43": "4:3",
+}
+_VIDEO_ASPECTS = {"portrait": "9:16", "landscape": "16:9"}
+_MAX_IMAGE_COUNT = 4
+_MAX_REFERENCE_PHOTOS = 4
 
 _START_COMMANDS = {"/start", "/menu", "start", "menu", "меню"}
 _HELP_COMMANDS = {"/help", "help", "помощь"}
@@ -87,6 +115,9 @@ class MaxCopy:
     ask_image_prompt: str = "Опишите картинку одним сообщением."
     ask_edit_photo: str = "Пришлите фото и добавьте, что изменить."
     ask_animate_photo: str = "Пришлите фото — оживим его в короткое видео."
+    ask_video_prompt: str = "Опишите короткое видео одним сообщением."
+    ask_ingredients: str = "Пришлите от 1 до 4 фото и описание движения в подписи."
+    ask_frames: str = "Пришлите ровно 2 фото: первый и последний кадр, а в подписи — движение."
     need_photo: str = "Нужно фото. Пришлите изображение."
     prompt_too_short: str = "Слишком короткое описание. Добавьте деталей."
     low_balance: str = "Недостаточно кредитов. Пополните баланс и попробуйте снова."
@@ -97,10 +128,10 @@ class MaxCopy:
     topup_text: str = "Выберите пакет. Счёт будет привязан к вашему MAX-профилю."
     topup_unavailable: str = "Пополнение временно недоступно. Попробуйте позже."
     help_text: str = (
-        "Я делаю картинки и короткие видео.\n\n"
-        "• Создать картинку — опишите словами.\n"
-        "• Изменить фото — пришлите фото и опишите правку.\n"
-        "• Оживить фото — пришлите фото, получите видео.\n\n"
+        "Я создаю и редактирую картинки, а также делаю короткие видео.\n\n"
+        "• Картинки: Nano Banana 2/Pro, 5 форматов, до 4 результатов.\n"
+        "• Видео: Omni Flash или Veo, вертикальное и горизонтальное.\n"
+        "• Фото → видео: одно фото, 1–4 референса или первый/последний кадр.\n\n"
         "Баланс и пополнение — в меню."
     )
     menu_button: str = "⬅️ Меню"
@@ -120,6 +151,9 @@ class MaxMvpConfig:
     image_price: int = PRICE_PER_IMAGE
     edit_price: int = field(default_factory=lambda: action_price("edit"))
     animate_price: int = field(default_factory=video_animate_min_price)
+    default_image_model: str = DEFAULT_IMAGE_MODEL
+    default_video_model: str = "omni-flash-4s"
+    default_reference_model: str = "veo-lite"
 
 
 @runtime_checkable
@@ -154,17 +188,38 @@ class GenerationService(Protocol):
     """
 
     async def create_image(
-        self, *, internal_user_id: int, prompt: str
+        self, *, internal_user_id: int, prompt: str, image_model: str,
+        aspect_ratio: str, count: int,
     ) -> Mapping[str, Any]:
         ...
 
     async def edit_photo(
-        self, *, internal_user_id: int, prompt: str, photo_file_id: str
+        self, *, internal_user_id: int, prompt: str, photo_file_id: str,
+        image_model: str, aspect_ratio: str, count: int,
     ) -> Mapping[str, Any]:
         ...
 
     async def animate_photo(
-        self, *, internal_user_id: int, prompt: str, photo_file_id: str
+        self, *, internal_user_id: int, prompt: str, photo_file_id: str,
+        video_model: str, aspect_ratio: str,
+    ) -> Mapping[str, Any]:
+        ...
+
+    async def create_video(
+        self, *, internal_user_id: int, prompt: str, video_model: str,
+        aspect_ratio: str,
+    ) -> Mapping[str, Any]:
+        ...
+
+    async def create_video_ingredients(
+        self, *, internal_user_id: int, prompt: str,
+        photo_file_ids: tuple[str, ...], video_model: str, aspect_ratio: str,
+    ) -> Mapping[str, Any]:
+        ...
+
+    async def create_video_frames(
+        self, *, internal_user_id: int, prompt: str,
+        photo_file_ids: tuple[str, str], video_model: str, aspect_ratio: str,
     ) -> Mapping[str, Any]:
         ...
 
@@ -191,7 +246,7 @@ class PendingStateStore(Protocol):
     def get(self, user_id: str) -> dict | None:
         ...
 
-    def set(self, user_id: str, action: str) -> None:
+    def set(self, user_id: str, action: str, data: dict | None = None) -> None:
         ...
 
     def clear(self, user_id: str) -> None:
@@ -205,8 +260,8 @@ class _MappingStateStore:
     def get(self, user_id: str) -> dict | None:
         return self._state.get(user_id)
 
-    def set(self, user_id: str, action: str) -> None:
-        self._state[user_id] = {"await": action}
+    def set(self, user_id: str, action: str, data: dict | None = None) -> None:
+        self._state[user_id] = {"await": action, **(data or {})}
 
     def clear(self, user_id: str) -> None:
         self._state.pop(user_id, None)
@@ -315,14 +370,19 @@ class MaxMvpBot:
             self._clear(uid)
             await self._show_menu(chat)
         elif data == CB_CREATE_IMAGE:
-            self._set_await(uid, AWAIT_CREATE_IMAGE)
-            await self.platform.send_message(chat, self.copy.ask_image_prompt)
+            await self._begin(chat, uid, AWAIT_CREATE_IMAGE)
         elif data == CB_EDIT_PHOTO:
-            self._set_await(uid, AWAIT_EDIT_PHOTO)
-            await self.platform.send_message(chat, self.copy.ask_edit_photo)
+            await self._begin(chat, uid, AWAIT_EDIT_PHOTO)
+        elif data == CB_CREATE_VIDEO:
+            await self._begin(chat, uid, AWAIT_CREATE_VIDEO)
         elif data == CB_ANIMATE:
-            self._set_await(uid, AWAIT_ANIMATE_PHOTO)
-            await self.platform.send_message(chat, self.copy.ask_animate_photo)
+            await self._begin(chat, uid, AWAIT_ANIMATE_PHOTO)
+        elif data == CB_VIDEO_INGREDIENTS:
+            await self._begin(chat, uid, AWAIT_VIDEO_INGREDIENTS)
+        elif data == CB_VIDEO_FRAMES:
+            await self._begin(chat, uid, AWAIT_VIDEO_FRAMES)
+        elif data.startswith("s:"):
+            await self._update_setting(chat, uid, data)
         elif data == CB_BALANCE:
             await self._show_balance(chat, uid)
         elif data == CB_HELP:
@@ -371,19 +431,103 @@ class MaxMvpBot:
 
         action = pending.get("await")
         if action == AWAIT_CREATE_IMAGE:
-            await self._run_create_image(chat, uid, prompt=text)
-        elif action in (AWAIT_EDIT_PHOTO, AWAIT_ANIMATE_PHOTO):
-            photo = msg.photo_file_ids[0] if msg.photo_file_ids else None
-            if not photo:
-                await self.platform.send_message(chat, self.copy.need_photo)
-                return
-            await self._run_photo_job(
-                chat, uid, action=action, photo_file_id=photo, prompt=text
+            await self._run_create_image(chat, uid, pending=pending, prompt=text)
+        elif action in _IMAGE_ACTIONS | _VIDEO_ACTIONS:
+            await self._run_configured_job(
+                chat,
+                uid,
+                pending=pending,
+                prompt=text,
+                photos=tuple(msg.photo_file_ids[:_MAX_REFERENCE_PHOTOS]),
             )
 
     # -- flows ------------------------------------------------------------
 
-    async def _run_create_image(self, chat: str, uid: str, *, prompt: str) -> None:
+    async def _begin(self, chat: str, uid: str, action: str) -> None:
+        if action in _IMAGE_ACTIONS:
+            data = {
+                "image_model": self.config.default_image_model,
+                "aspect_ratio": "portrait",
+                "count": 1,
+            }
+        else:
+            model = (
+                self.config.default_video_model
+                if action == AWAIT_CREATE_VIDEO
+                else self.config.default_reference_model
+            )
+            data = {"video_model": model, "aspect_ratio": "portrait"}
+        self._set_await(uid, action, data)
+        await self._show_flow_prompt(chat, {"await": action, **data})
+
+    async def _update_setting(self, chat: str, uid: str, callback: str) -> None:
+        pending = self._state_store.get(uid)
+        if not pending:
+            await self._show_menu(chat)
+            return
+        action = str(pending.get("await") or "")
+        parts = callback.split(":", 2)
+        if len(parts) != 3:
+            return
+        _, key, value = parts
+        if key == "im" and action in _IMAGE_ACTIONS and value in IMAGE_MODELS:
+            pending["image_model"] = value
+        elif key == "ia" and action in _IMAGE_ACTIONS and value in _IMAGE_ASPECTS:
+            pending["aspect_ratio"] = value
+        elif key == "ic" and action in _IMAGE_ACTIONS and value.isdigit():
+            pending["count"] = max(1, min(int(value), _MAX_IMAGE_COUNT))
+        elif key == "vm" and action in _VIDEO_ACTIONS and value in VIDEO_MODELS:
+            if action != AWAIT_CREATE_VIDEO and VIDEO_MODELS[value]["family"] != "veo":
+                return
+            pending["video_model"] = value
+        elif key == "va" and action in _VIDEO_ACTIONS and value in _VIDEO_ASPECTS:
+            pending["aspect_ratio"] = value
+        else:
+            return
+        data = {key: value for key, value in pending.items() if key != "await"}
+        self._set_await(uid, action, data)
+        await self._show_flow_prompt(chat, pending)
+
+    async def _show_flow_prompt(self, chat: str, pending: Mapping[str, Any]) -> None:
+        action = pending.get("await")
+        prompts = {
+            AWAIT_CREATE_IMAGE: self.copy.ask_image_prompt,
+            AWAIT_EDIT_PHOTO: self.copy.ask_edit_photo,
+            AWAIT_CREATE_VIDEO: self.copy.ask_video_prompt,
+            AWAIT_ANIMATE_PHOTO: self.copy.ask_animate_photo,
+            AWAIT_VIDEO_INGREDIENTS: self.copy.ask_ingredients,
+            AWAIT_VIDEO_FRAMES: self.copy.ask_frames,
+        }
+        price = self._price_for(pending)
+        await self.platform.send_message(
+            chat,
+            f"{prompts.get(action, self.copy.menu_title)}\n\nСтоимость: {price} кр.",
+            self._settings_keyboard(pending),
+        )
+
+    def _price_for(self, pending: Mapping[str, Any]) -> int:
+        action = str(pending.get("await") or "")
+        count = self._image_count(pending)
+        if action in _IMAGE_ACTIONS:
+            if action == AWAIT_CREATE_IMAGE and self.config.image_price == PRICE_PER_IMAGE:
+                base_total = price_gen(count)
+            else:
+                base = self.config.image_price if action == AWAIT_CREATE_IMAGE else self.config.edit_price
+                base_total = int(base) * count
+            model = self._image_model(pending)
+            return base_total + image_model_extra(model) * count
+        model = self._video_model(pending, action)
+        if action == AWAIT_CREATE_VIDEO:
+            return video_price(model, 1, "text")
+        if action == AWAIT_VIDEO_FRAMES:
+            return video_price(model, 1, "frames")
+        if action == AWAIT_ANIMATE_PHOTO and model == self.config.default_reference_model:
+            return int(self.config.animate_price)
+        return video_price(model, 1, "ingredients")
+
+    async def _run_create_image(
+        self, chat: str, uid: str, *, pending: Mapping[str, Any], prompt: str
+    ) -> None:
         prompt = (prompt or "").strip()
         if len(prompt) < _MIN_PROMPT_LEN:
             await self.platform.send_message(chat, self.copy.prompt_too_short)
@@ -391,37 +535,91 @@ class MaxMvpBot:
         await self._charged_generation(
             chat,
             uid,
-            price=self.config.image_price,
+            price=self._price_for(pending),
             call=lambda internal_id: self.service.create_image(
-                internal_user_id=internal_id, prompt=prompt
+                internal_user_id=internal_id,
+                prompt=prompt,
+                image_model=self._image_model(pending),
+                aspect_ratio=self._aspect(pending, video=False),
+                count=self._image_count(pending),
             ),
         )
 
-    async def _run_photo_job(
+    async def _run_configured_job(
         self,
         chat: str,
         uid: str,
         *,
-        action: str,
-        photo_file_id: str,
+        pending: Mapping[str, Any],
         prompt: str,
+        photos: tuple[str, ...],
     ) -> None:
         prompt = (prompt or "").strip()
+        if len(prompt) < _MIN_PROMPT_LEN:
+            await self.platform.send_message(chat, self.copy.prompt_too_short)
+            return
+        action = str(pending.get("await") or "")
+        image_model = self._image_model(pending)
+        video_model = self._video_model(pending, action)
+        aspect = self._aspect(pending, video=action in _VIDEO_ACTIONS)
+        count = self._image_count(pending)
         if action == AWAIT_EDIT_PHOTO:
-            price = self.config.edit_price
+            if not photos:
+                await self.platform.send_message(chat, self.copy.need_photo)
+                return
             call = lambda internal_id: self.service.edit_photo(  # noqa: E731
                 internal_user_id=internal_id,
                 prompt=prompt,
-                photo_file_id=photo_file_id,
+                photo_file_id=photos[0],
+                image_model=image_model,
+                aspect_ratio=aspect,
+                count=count,
             )
-        else:
-            price = self.config.animate_price
+        elif action == AWAIT_CREATE_VIDEO:
+            call = lambda internal_id: self.service.create_video(  # noqa: E731
+                internal_user_id=internal_id,
+                prompt=prompt,
+                video_model=video_model,
+                aspect_ratio=aspect,
+            )
+        elif action == AWAIT_ANIMATE_PHOTO:
+            if not photos:
+                await self.platform.send_message(chat, self.copy.need_photo)
+                return
             call = lambda internal_id: self.service.animate_photo(  # noqa: E731
                 internal_user_id=internal_id,
                 prompt=prompt,
-                photo_file_id=photo_file_id,
+                photo_file_id=photos[0],
+                video_model=video_model,
+                aspect_ratio=aspect,
             )
-        await self._charged_generation(chat, uid, price=price, call=call)
+        elif action == AWAIT_VIDEO_INGREDIENTS:
+            if not photos:
+                await self.platform.send_message(chat, self.copy.need_photo)
+                return
+            call = lambda internal_id: self.service.create_video_ingredients(  # noqa: E731
+                internal_user_id=internal_id,
+                prompt=prompt,
+                photo_file_ids=photos,
+                video_model=video_model,
+                aspect_ratio=aspect,
+            )
+        elif action == AWAIT_VIDEO_FRAMES:
+            if len(photos) != 2:
+                await self.platform.send_message(chat, self.copy.ask_frames)
+                return
+            call = lambda internal_id: self.service.create_video_frames(  # noqa: E731
+                internal_user_id=internal_id,
+                prompt=prompt,
+                photo_file_ids=(photos[0], photos[1]),
+                video_model=video_model,
+                aspect_ratio=aspect,
+            )
+        else:
+            return
+        await self._charged_generation(
+            chat, uid, price=self._price_for(pending), call=call
+        )
 
     async def _charged_generation(self, chat: str, uid: str, *, price: int, call) -> None:
         """Run the injected generation behind the shared billing credit gate.
@@ -576,11 +774,16 @@ class MaxMvpBot:
 
     def _menu_keyboard(self) -> Keyboard:
         c = self.config
+        text_video_price = video_price(c.default_video_model, 1, "text")
+        image_price = price_gen(1) if c.image_price == PRICE_PER_IMAGE else c.image_price
         return Keyboard.from_rows(
             [
-                [Button.callback(f"🎨 Создать картинку · {c.image_price} кр", CB_CREATE_IMAGE)],
+                [Button.callback(f"🎨 Создать картинку · {image_price} кр", CB_CREATE_IMAGE)],
                 [Button.callback(f"✏️ Изменить фото · {c.edit_price} кр", CB_EDIT_PHOTO)],
+                [Button.callback(f"🎥 Создать видео · от {text_video_price} кр", CB_CREATE_VIDEO)],
                 [Button.callback(f"🎬 Оживить фото · от {c.animate_price} кр", CB_ANIMATE)],
+                [Button.callback("🧩 Видео из 1–4 фото", CB_VIDEO_INGREDIENTS)],
+                [Button.callback("🎞 Первый + последний кадр", CB_VIDEO_FRAMES)],
                 [
                     Button.callback("💰 Баланс", CB_BALANCE),
                     Button.callback("❓ Помощь", CB_HELP),
@@ -588,6 +791,117 @@ class MaxMvpBot:
                 [Button.callback(self.copy.topup_button, CB_TOPUP)],
             ]
         )
+
+    def _settings_keyboard(self, pending: Mapping[str, Any]) -> Keyboard:
+        action = str(pending.get("await") or "")
+        rows: list[list[Button]] = []
+        if action in _IMAGE_ACTIONS:
+            selected_model = str(pending.get("image_model") or self.config.default_image_model)
+            rows.append([
+                Button.callback(
+                    ("✓ " if model_id == selected_model else "") + str(meta["label"]),
+                    f"s:im:{model_id}",
+                )
+                for model_id, meta in IMAGE_MODELS.items()
+            ])
+            selected_aspect = str(pending.get("aspect_ratio") or "portrait")
+            rows.extend([
+                [
+                    Button.callback(
+                        ("✓ " if key == selected_aspect else "") + label,
+                        f"s:ia:{key}",
+                    )
+                    for key, label in list(_IMAGE_ASPECTS.items())[:3]
+                ],
+                [
+                    Button.callback(
+                        ("✓ " if key == selected_aspect else "") + label,
+                        f"s:ia:{key}",
+                    )
+                    for key, label in list(_IMAGE_ASPECTS.items())[3:]
+                ],
+            ])
+            selected_count = self._image_count(pending)
+            rows.append([
+                Button.callback(
+                    ("✓ " if count == selected_count else "") + f"{count} шт.",
+                    f"s:ic:{count}",
+                )
+                for count in range(1, _MAX_IMAGE_COUNT + 1)
+            ])
+        else:
+            selected_model = str(pending.get("video_model") or self.config.default_video_model)
+            models = [
+                (model_id, meta)
+                for model_id, meta in VIDEO_MODELS.items()
+                if action == AWAIT_CREATE_VIDEO or meta["family"] == "veo"
+            ]
+            for index in range(0, len(models), 2):
+                mode = "text" if action == AWAIT_CREATE_VIDEO else (
+                    "frames" if action == AWAIT_VIDEO_FRAMES else "ingredients"
+                )
+                rows.append([
+                    Button.callback(
+                        ("✓ " if model_id == selected_model else "")
+                        + self._video_model_label(model_id, meta, mode),
+                        f"s:vm:{model_id}",
+                    )
+                    for model_id, meta in models[index:index + 2]
+                ])
+            selected_aspect = str(pending.get("aspect_ratio") or "portrait")
+            rows.append([
+                Button.callback(
+                    ("✓ " if key == selected_aspect else "") + label,
+                    f"s:va:{key}",
+                )
+                for key, label in _VIDEO_ASPECTS.items()
+            ])
+        rows.append([Button.callback(self.copy.menu_button, CB_MENU)])
+        return Keyboard.from_rows(rows)
+
+    @staticmethod
+    def _video_model_label(
+        model_id: str, meta: Mapping[str, Any], mode: str
+    ) -> str:
+        labels = {
+            "veo-lite": "Veo Lite",
+            "veo-fast": "Veo Fast",
+            "veo-quality": "Veo Quality",
+        }
+        price = video_price(model_id, 1, mode)
+        if model_id in labels:
+            return f"{labels[model_id]} · {price} кр"
+        return f"Omni {meta['duration']}с · {price} кр"
+
+    def _image_model(self, pending: Mapping[str, Any]) -> str:
+        value = str(pending.get("image_model") or self.config.default_image_model)
+        return value if value in IMAGE_MODELS else self.config.default_image_model
+
+    def _video_model(self, pending: Mapping[str, Any], action: str) -> str:
+        default = (
+            self.config.default_video_model
+            if action == AWAIT_CREATE_VIDEO
+            else self.config.default_reference_model
+        )
+        value = str(pending.get("video_model") or default)
+        meta = VIDEO_MODELS.get(value)
+        if not meta or (action != AWAIT_CREATE_VIDEO and meta["family"] != "veo"):
+            return default
+        return value
+
+    @staticmethod
+    def _aspect(pending: Mapping[str, Any], *, video: bool) -> str:
+        value = str(pending.get("aspect_ratio") or "portrait")
+        allowed = _VIDEO_ASPECTS if video else _IMAGE_ASPECTS
+        return value if value in allowed else "portrait"
+
+    @staticmethod
+    def _image_count(pending: Mapping[str, Any]) -> int:
+        try:
+            value = int(pending.get("count") or 1)
+        except (TypeError, ValueError):
+            value = 1
+        return max(1, min(value, _MAX_IMAGE_COUNT))
 
     def _topup_keyboard(self, uid: str) -> Keyboard:
         options: Sequence[tuple[str, str]] = ()
@@ -601,8 +915,8 @@ class MaxMvpBot:
 
     # -- helpers ----------------------------------------------------------
 
-    def _set_await(self, uid: str, action: str) -> None:
-        self._state_store.set(uid, action)
+    def _set_await(self, uid: str, action: str, data: dict | None = None) -> None:
+        self._state_store.set(uid, action, data)
 
     def _clear(self, uid: str) -> None:
         self._state_store.clear(uid)

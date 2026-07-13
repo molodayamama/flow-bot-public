@@ -14,7 +14,10 @@ from channels.max.handler import (
     CB_ANIMATE,
     CB_BALANCE,
     CB_CREATE_IMAGE,
+    CB_CREATE_VIDEO,
     CB_TOPUP,
+    CB_VIDEO_FRAMES,
+    CB_VIDEO_INGREDIENTS,
     MaxCopy,
     MaxMvpBot,
     MaxMvpConfig,
@@ -103,17 +106,42 @@ class FakeService:
             return {"error": self.error}
         return self.result
 
-    async def create_image(self, *, internal_user_id, prompt):
-        return await self._run("create_image", internal_user_id=internal_user_id, prompt=prompt)
-
-    async def edit_photo(self, *, internal_user_id, prompt, photo_file_id):
+    async def create_image(self, *, internal_user_id, prompt, **settings):
         return await self._run(
-            "edit_photo", internal_user_id=internal_user_id, prompt=prompt, photo_file_id=photo_file_id
+            "create_image", internal_user_id=internal_user_id, prompt=prompt, **settings
         )
 
-    async def animate_photo(self, *, internal_user_id, prompt, photo_file_id):
+    async def edit_photo(self, *, internal_user_id, prompt, photo_file_id, **settings):
         return await self._run(
-            "animate_photo", internal_user_id=internal_user_id, prompt=prompt, photo_file_id=photo_file_id
+            "edit_photo", internal_user_id=internal_user_id, prompt=prompt,
+            photo_file_id=photo_file_id, **settings
+        )
+
+    async def animate_photo(self, *, internal_user_id, prompt, photo_file_id, **settings):
+        return await self._run(
+            "animate_photo", internal_user_id=internal_user_id, prompt=prompt,
+            photo_file_id=photo_file_id, **settings
+        )
+
+    async def create_video(self, *, internal_user_id, prompt, **settings):
+        return await self._run(
+            "create_video", internal_user_id=internal_user_id, prompt=prompt, **settings
+        )
+
+    async def create_video_ingredients(
+        self, *, internal_user_id, prompt, photo_file_ids, **settings
+    ):
+        return await self._run(
+            "video_ingredients", internal_user_id=internal_user_id, prompt=prompt,
+            photo_file_ids=photo_file_ids, **settings
+        )
+
+    async def create_video_frames(
+        self, *, internal_user_id, prompt, photo_file_ids, **settings
+    ):
+        return await self._run(
+            "video_frames", internal_user_id=internal_user_id, prompt=prompt,
+            photo_file_ids=photo_file_ids, **settings
         )
 
 
@@ -187,7 +215,10 @@ class MaxMvpTests(unittest.TestCase):
         kb = self.platform.last_keyboard
         payloads = {b.callback_data for row in kb.rows for b in row}
         self.assertIn(CB_CREATE_IMAGE, payloads)
+        self.assertIn(CB_CREATE_VIDEO, payloads)
         self.assertIn(CB_ANIMATE, payloads)
+        self.assertIn(CB_VIDEO_INGREDIENTS, payloads)
+        self.assertIn(CB_VIDEO_FRAMES, payloads)
         self.assertIn(CB_BALANCE, payloads)
         self.assertIn(CB_TOPUP, payloads)
 
@@ -275,7 +306,8 @@ class MaxMvpTests(unittest.TestCase):
             run(bot.handle(_msg("deliver this prompt")))
 
         self.assertEqual(self._balance(), 30)
-        self.assertEqual(state, {"u1": {"await": "create_image"}})
+        self.assertEqual(state["u1"]["await"], "create_image")
+        self.assertEqual(state["u1"]["image_model"], "nb2")
 
     def test_create_image_failure_refunds(self) -> None:
         self.service.error = "generation failed"
@@ -311,6 +343,92 @@ class MaxMvpTests(unittest.TestCase):
 
         self.assertEqual(self.service.calls, [])
         self.assertIn("Недостаточно", self.platform.last_text)
+
+    def test_image_settings_are_persisted_priced_and_forwarded(self) -> None:
+        state_store = MaxUserStateStore(Path(self._tmp.name) / "settings.db")
+        bot = MaxMvpBot(
+            platform=self.platform,
+            service=self.service,
+            config=self.config,
+            wallet=self.wallet,
+            state_store=state_store,
+        )
+        metrics.credits_add_for_identity("max", "u1", 100, self.config.starter_credits)
+
+        run(bot.handle(_cb(CB_CREATE_IMAGE)))
+        run(bot.handle(_cb("s:im:nbpro")))
+        run(bot.handle(_cb("s:ia:landscape_43")))
+        run(bot.handle(_cb("s:ic:3")))
+
+        restored = MaxUserStateStore(Path(self._tmp.name) / "settings.db").get("u1")
+        self.assertEqual(restored["image_model"], "nbpro")
+        self.assertEqual(restored["aspect_ratio"], "landscape_43")
+        self.assertEqual(restored["count"], 3)
+        run(bot.handle(_msg("три рыжих кота")))
+
+        call = self.service.calls[-1]
+        self.assertEqual(call["image_model"], "nbpro")
+        self.assertEqual(call["aspect_ratio"], "landscape_43")
+        self.assertEqual(call["count"], 3)
+        self.assertEqual(self._balance(), 85)  # 130 - (10 + 5) * 3
+
+    def test_unknown_setting_callback_does_not_mutate_state(self) -> None:
+        state = {}
+        bot = MaxMvpBot(
+            platform=self.platform, service=self.service, config=self.config,
+            wallet=self.wallet, state=state,
+        )
+        run(bot.handle(_cb(CB_CREATE_IMAGE)))
+        before = dict(state["u1"])
+        run(bot.handle(_cb("s:im:not-a-model")))
+        self.assertEqual(state["u1"], before)
+
+    def test_text_video_model_and_aspect_are_forwarded(self) -> None:
+        self.service.result = {"videos": [{"url": "https://img/text.mp4"}]}
+        metrics.credits_add_for_identity("max", "u1", 500, self.config.starter_credits)
+        bot = self._bot()
+
+        run(bot.handle(_cb(CB_CREATE_VIDEO)))
+        run(bot.handle(_cb("s:vm:veo-quality")))
+        run(bot.handle(_cb("s:va:landscape")))
+        run(bot.handle(_msg("камера летит над горами")))
+
+        call = self.service.calls[-1]
+        self.assertEqual(call["kind"], "create_video")
+        self.assertEqual(call["video_model"], "veo-quality")
+        self.assertEqual(call["aspect_ratio"], "landscape")
+        self.assertEqual(self._balance(), 80)  # 530 - 450
+
+    def test_ingredients_accepts_up_to_four_photos(self) -> None:
+        self.service.result = {"videos": [{"url": "https://img/ref.mp4"}]}
+        metrics.credits_add_for_identity("max", "u1", 100, self.config.starter_credits)
+        bot = self._bot()
+
+        run(bot.handle(_cb(CB_VIDEO_INGREDIENTS)))
+        run(bot.handle(_msg(
+            "персонажи идут навстречу",
+            photos=("p1", "p2", "p3", "p4", "p5"),
+        )))
+
+        call = self.service.calls[-1]
+        self.assertEqual(call["kind"], "video_ingredients")
+        self.assertEqual(call["photo_file_ids"], ("p1", "p2", "p3", "p4"))
+        self.assertEqual(self._balance(), 70)  # 130 - Veo Lite 60
+
+    def test_frames_requires_exactly_two_photos(self) -> None:
+        metrics.credits_add_for_identity("max", "u1", 100, self.config.starter_credits)
+        bot = self._bot()
+        run(bot.handle(_cb(CB_VIDEO_FRAMES)))
+        run(bot.handle(_msg("плавный переход", photos=("start",))))
+        self.assertEqual(self.service.calls, [])
+        self.assertIn("ровно 2", self.platform.last_text)
+
+        self.service.result = {"videos": [{"url": "https://img/frames.mp4"}]}
+        run(bot.handle(_msg("плавный переход", photos=("start", "end"))))
+        call = self.service.calls[-1]
+        self.assertEqual(call["kind"], "video_frames")
+        self.assertEqual(call["photo_file_ids"], ("start", "end"))
+        self.assertEqual(self._balance(), 45)  # 130 - (Veo Lite 60 + 25)
 
     # -- photo flows ------------------------------------------------------
 

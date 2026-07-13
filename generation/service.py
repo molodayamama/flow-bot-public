@@ -18,10 +18,12 @@ from __future__ import annotations
 import base64
 from typing import Any, Awaitable, Callable, Mapping
 
+from generation import backend_service
 from generation.contracts import (
     GenerateEditRequest,
     GenerateImageRequest,
     GenerateVideoRequest,
+    result_from_backend,
 )
 from generation.edit_service import EditService
 from generation.image_service import ImageService
@@ -51,6 +53,8 @@ class BackendGenerationService:
         self._video = video_service
         self._fetch_bytes = fetch_bytes
         self._source = source
+        self._deps = image_service._deps
+        self._video_backend = video_service._backend
 
     @classmethod
     def from_deps(
@@ -70,17 +74,21 @@ class BackendGenerationService:
         )
 
     async def create_image(
-        self, *, internal_user_id: int, prompt: str
+        self, *, internal_user_id: int, prompt: str, image_model: str = "nb2",
+        aspect_ratio: str = "portrait", count: int = 1,
     ) -> Mapping[str, Any]:
         result = await self._image.generate(
             GenerateImageRequest(
-                user_id=internal_user_id, prompt=prompt, source=self._source
+                user_id=internal_user_id, prompt=prompt, source=self._source,
+                image_model=image_model, aspect_ratio=aspect_ratio,
+                num_images=count,
             )
         )
         return result.as_backend_dict()
 
     async def edit_photo(
-        self, *, internal_user_id: int, prompt: str, photo_file_id: str
+        self, *, internal_user_id: int, prompt: str, photo_file_id: str,
+        image_model: str = "nb2", aspect_ratio: str = "portrait", count: int = 1,
     ) -> Mapping[str, Any]:
         image_b64 = await self._photo_b64(photo_file_id)
         if image_b64 is None:
@@ -91,12 +99,16 @@ class BackendGenerationService:
                 prompt=prompt,
                 image_b64=image_b64,
                 source=self._source,
+                image_model=image_model,
+                aspect_ratio=aspect_ratio,
+                num_images=count,
             )
         )
         return result.as_backend_dict()
 
     async def animate_photo(
-        self, *, internal_user_id: int, prompt: str, photo_file_id: str
+        self, *, internal_user_id: int, prompt: str, photo_file_id: str,
+        video_model: str = "veo-lite", aspect_ratio: str = "portrait",
     ) -> Mapping[str, Any]:
         image_b64 = await self._photo_b64(photo_file_id)
         if image_b64 is None:
@@ -107,9 +119,51 @@ class BackendGenerationService:
                 prompt=prompt,
                 image_b64=image_b64,
                 source=self._source,
+                video_model=video_model,
+                aspect_ratio=aspect_ratio,
             )
         )
         return result.as_backend_dict()
+
+    async def create_video(
+        self, *, internal_user_id: int, prompt: str,
+        video_model: str = "omni-flash-4s", aspect_ratio: str = "portrait",
+    ) -> Mapping[str, Any]:
+        raw = await backend_service.generate_video_text(self._deps, {
+            "user_id": internal_user_id, "prompt": prompt,
+            "video_model": video_model, "aspect_ratio": aspect_ratio,
+        })
+        return result_from_backend(raw).as_backend_dict()
+
+    async def create_video_ingredients(
+        self, *, internal_user_id: int, prompt: str,
+        photo_file_ids: tuple[str, ...], video_model: str = "veo-lite",
+        aspect_ratio: str = "portrait",
+    ) -> Mapping[str, Any]:
+        images_b64 = await self._photos_b64(photo_file_ids[:4])
+        if not images_b64:
+            return dict(_UPLOAD_FAILED)
+        raw = await self._video_backend(self._deps, {
+            "user_id": internal_user_id, "prompt": prompt,
+            "images_b64": images_b64, "image_b64": images_b64[0],
+            "video_model": video_model, "aspect_ratio": aspect_ratio,
+        })
+        return result_from_backend(raw).as_backend_dict()
+
+    async def create_video_frames(
+        self, *, internal_user_id: int, prompt: str,
+        photo_file_ids: tuple[str, str], video_model: str = "veo-lite",
+        aspect_ratio: str = "portrait",
+    ) -> Mapping[str, Any]:
+        images_b64 = await self._photos_b64(tuple(photo_file_ids))
+        if not images_b64 or len(images_b64) != 2:
+            return dict(_UPLOAD_FAILED)
+        raw = await backend_service.generate_video_frames(self._deps, {
+            "user_id": internal_user_id, "prompt": prompt,
+            "images_b64": images_b64, "video_model": video_model,
+            "aspect_ratio": aspect_ratio,
+        })
+        return result_from_backend(raw).as_backend_dict()
 
     async def _photo_b64(self, photo_file_id: str) -> str | None:
         if self._fetch_bytes is None:
@@ -118,3 +172,12 @@ class BackendGenerationService:
         if not data:
             return None
         return base64.b64encode(data).decode("ascii")
+
+    async def _photos_b64(self, photo_file_ids: tuple[str, ...]) -> list[str] | None:
+        encoded: list[str] = []
+        for photo_file_id in photo_file_ids:
+            image_b64 = await self._photo_b64(photo_file_id)
+            if image_b64 is None:
+                return None
+            encoded.append(image_b64)
+        return encoded

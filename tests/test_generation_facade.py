@@ -199,7 +199,7 @@ class MaxOnSharedEngineTests(unittest.TestCase):
 
     def test_animate_flows_through_video_core_with_photo_bytes(self) -> None:
         run(self.bot.handle(_cb(CB_ANIMATE)))
-        run(self.bot.handle(_msg("go", photos=("photo-9",))))
+        run(self.bot.handle(_msg("go!", photos=("photo-9",))))
         self.assertEqual(self.fetched, ["photo-9"])
         self.assertEqual(len(self.vid.calls), 1)
         self.assertEqual(self.platform.videos[-1]["media"].bytes_data, b"VIDEO")
