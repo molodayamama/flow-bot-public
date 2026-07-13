@@ -113,6 +113,7 @@ from flow_core import (
 )
 
 import flow_copy
+from flow_provider.interfaces import FlowSession
 from flow_provider.request_policy import (
     AGENT_RECAPTCHA_ACTION,
     AGENT_RECAPTCHA_ACTION_CANDIDATES,
@@ -1764,7 +1765,7 @@ class FlowHttpClient:
 
     API_BASE = "https://aisandbox-pa.googleapis.com/v1"
 
-    def __init__(self, keeper: SessionKeeper):
+    def __init__(self, keeper: FlowSession):
         self.keeper = keeper
 
     def _api_proxy(self) -> str | None:

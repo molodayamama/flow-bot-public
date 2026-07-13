@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import unittest
 from pathlib import Path
 
@@ -49,6 +50,7 @@ class FlowProviderExtractionTests(unittest.TestCase):
     def test_provider_package_does_not_import_aiogram_or_flow_bot(self) -> None:
         for name in (
             "client.py",
+            "interfaces.py",
             "request_policy.py",
             "runtime_config.py",
             "__init__.py",
@@ -80,6 +82,30 @@ class FlowProviderExtractionTests(unittest.TestCase):
             "_get_fresh_captcha",
         ):
             self.assertNotIn(f"def {dead_name}", keeper)
+
+    def test_http_client_depends_on_the_narrow_session_protocol(self) -> None:
+        from flow_provider.client import FlowHttpClient, SessionKeeper
+        from flow_provider.interfaces import FlowSession
+
+        self.assertEqual(
+            inspect.signature(FlowHttpClient.__init__).parameters["keeper"].annotation,
+            "FlowSession",
+        )
+        required_members = {
+            "account_id",
+            "api_proxy_url",
+            "get_session",
+            "solve_captcha",
+            "post_json_via_browser",
+            "generate_via_browser",
+            "_refresh_bearer",
+            "_flag_needs_relogin",
+        }
+        protocol_members = set(FlowSession.__annotations__) | set(FlowSession.__dict__)
+        self.assertTrue(required_members <= protocol_members)
+        keeper = SessionKeeper(account_id="test-protocol", api_proxy_url=None)
+        for member in required_members:
+            self.assertTrue(hasattr(keeper, member))
 
 
 if __name__ == "__main__":
