@@ -32,6 +32,25 @@ python -m unittest discover -s tests -p "test_max_smoke.py"
 python tools/max_smoke.py --mode plan --env-file .env
 ```
 
+Production preflight also validates MAX TLS trust without contacting the
+provider. For the default `platform-api2.max.ru` endpoint it requires the
+pinned Russian Trusted Root CA fingerprint either in `MAX_CA_BUNDLE` or in the
+system trust store; a merely existing or parseable unrelated PEM is not enough.
+The current pinned DER SHA-256 is documented in
+`tools/production_preflight.py`. After obtaining the certificate from
+`https://www.gosuslugi.ru/crt`, validate with:
+
+```bash
+python tools/production_preflight.py --root . --env-file .env
+python tools/max_smoke.py --mode subscription --env-file .env --approve-external-action
+```
+
+MAX media transport must reject non-HTTPS inbound URLs, enforce the 50 MiB
+incoming-image limit, and send generated video through the documented
+download -> `/uploads` -> token -> `/messages` sequence. Upload URLs are
+accepted only on the provider hosts named in the current official MAX upload
+contract.
+
 After explicit operator approval, run `subscription`, then `message`, then
 `media` as documented in `docs/MAX_SMOKE.md`. The last two modes send visible
 content to the configured operator-owned MAX target; none of the modes print

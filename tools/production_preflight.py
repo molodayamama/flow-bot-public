@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
+import ssl
 import stat
 import sys
 from dataclasses import dataclass
@@ -23,6 +25,12 @@ from accounts.pool import parse_flow_accounts
 
 _TRUE = {"1", "true", "yes", "on"}
 _TG_TOKEN = re.compile(r"^[0-9]+:[A-Za-z0-9_-]{3,}$")
+_MAX_RUSSIAN_TLS_HOSTS = {"platform-api.max.ru", "platform-api2.max.ru"}
+# SHA-256 of the DER-encoded Russian Trusted Root CA published by Gosuslugi.
+# Keep this as a set so an announced root rotation can overlap safely.
+_MAX_TRUSTED_CA_SHA256 = {
+    "d26d2d0231b7c39f92cc738512ba54103519e4405d68b5bd703e9788ca8ecf31",
+}
 
 
 @dataclass(frozen=True)
@@ -79,6 +87,29 @@ def _robokassa_enabled(env: Mapping[str, str]) -> bool:
 def _resolved(root: Path, raw: str) -> Path:
     path = Path(raw)
     return path if path.is_absolute() else root / path
+
+
+def _max_tls_trust_error(config) -> str | None:
+    """Validate MAX TLS trust offline, without opening a provider connection."""
+    try:
+        context = ssl.create_default_context(cafile=config.ca_bundle or None)
+    except (OSError, ssl.SSLError, ValueError):
+        return "MAX_CA_BUNDLE is not a valid CA bundle"
+
+    hostname = (urlparse(config.api_base_url).hostname or "").lower()
+    if hostname not in _MAX_RUSSIAN_TLS_HOSTS:
+        return None
+
+    fingerprints = {
+        hashlib.sha256(cert).hexdigest()
+        for cert in context.get_ca_certs(binary_form=True)
+    }
+    if fingerprints.isdisjoint(_MAX_TRUSTED_CA_SHA256):
+        return (
+            "MAX TLS trust is missing: configure MAX_CA_BUNDLE with the "
+            "Russian Trusted Root CA or install it system-wide"
+        )
+    return None
 
 
 def validate_environment(
@@ -141,12 +172,15 @@ def validate_environment(
     if max_enabled:
         if not robokassa_enabled:
             errors.append("MAX production requires ROBOKASSA_ENABLED=1 for top-up")
+        max_config = max_config_from_env(source)
         try:
-            validate_max_config(
-                max_config_from_env(source), production=production
-            )
+            validate_max_config(max_config, production=production)
         except ValueError as exc:
             errors.extend(part.strip() for part in str(exc).split(";") if part.strip())
+        else:
+            tls_error = _max_tls_trust_error(max_config)
+            if tls_error:
+                errors.append(tls_error)
 
     for name, default in (
         ("METRICS_DB", "metrics.db"),

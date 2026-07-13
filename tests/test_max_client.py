@@ -34,6 +34,7 @@ class _FakeResp:
         status=200,
         headers=None,
         text_body="",
+        content_length=None,
     ):
         self._json = json_body if json_body is not None else {}
         self._raw = raw
@@ -41,6 +42,7 @@ class _FakeResp:
         self.status = status
         self.headers = dict(headers or {})
         self._text = text_body
+        self.content_length = content_length
 
     async def __aenter__(self):
         return self
@@ -185,7 +187,7 @@ class SendTests(unittest.TestCase):
     def test_send_video_bytes_uploads_then_sends_with_token(self):
         # POST /uploads -> {url}; multipart POST -> {token}; POST /messages -> ok
         responses = [
-            _FakeResp(json_body={"url": "http://upload/here"}),
+            _FakeResp(json_body={"url": "https://iu.oneme.ru/upload"}),
             _FakeResp(json_body={"token": "UPLOADED"}),
             _FakeResp(json_body={"ok": True}),
         ]
@@ -196,16 +198,66 @@ class SendTests(unittest.TestCase):
         self.assertTrue(last[2].endswith("/messages"))
         self.assertEqual(last[3]["json"]["attachments"][0]["payload"], {"token": "UPLOADED"})
         upload = [call for call in sess.calls if call[0] == "post"][0]
-        self.assertEqual(upload[2], "http://upload/here")
+        self.assertEqual(upload[2], "https://iu.oneme.ru/upload")
         self.assertEqual(upload[3]["headers"], {"Authorization": "TESTTOKEN"})
         self.assertIn("data", upload[3])
 
+    def test_send_video_url_downloads_then_uploads_before_message(self):
+        responses = [
+            _FakeResp(raw=b"VIDEO"),
+            _FakeResp(json_body={"url": "https://vu.okcdn.ru/upload", "token": "INITIAL"}),
+            _FakeResp(json_body={"retval": 1}),
+            _FakeResp(json_body={"ok": True}),
+        ]
+        c, sess = _client(responses)
+
+        run(c.send_video("7", PlatformMedia(kind="video", url="https://media.example/video.mp4")))
+
+        self.assertEqual(sess.calls[0][0], "get")
+        self.assertEqual(sess.calls[0][2], "https://media.example/video.mp4")
+        upload = next(call for call in sess.calls if call[0] == "post")
+        self.assertEqual(upload[2], "https://vu.okcdn.ru/upload")
+        sent = sess.calls[-1][3]["json"]["attachments"][0]
+        self.assertEqual(sent, {"type": "video", "payload": {"token": "INITIAL"}})
+
+    def test_send_image_url_remains_direct_without_download(self):
+        c, sess = _client([_FakeResp(json_body={"ok": True})])
+
+        run(c.send_photo("7", PlatformMedia(kind="photo", url="https://media.example/image.png")))
+
+        self.assertEqual(len(sess.calls), 1)
+        self.assertEqual(
+            sess.calls[0][3]["json"]["attachments"][0],
+            {"type": "image", "payload": {"url": "https://media.example/image.png"}},
+        )
+
     def test_get_file_bytes_downloads_url(self):
         c, sess = _client([_FakeResp(raw=b"IMGDATA")])
-        got = run(c.get_file_bytes(PlatformFile(file_id="f", url="http://cdn/f.png")))
+        got = run(c.get_file_bytes(PlatformFile(file_id="f", url="https://cdn.example/f.png")))
         self.assertEqual(got, b"IMGDATA")
         self.assertEqual(sess.calls[0][0], "get")
-        self.assertEqual(sess.calls[0][2], "http://cdn/f.png")
+        self.assertEqual(sess.calls[0][2], "https://cdn.example/f.png")
+
+    def test_get_file_bytes_rejects_non_https_url_before_request(self):
+        c, sess = _client()
+        with self.assertRaises(MaxApiError) as raised:
+            run(c.get_file_bytes(PlatformFile(file_id="f", url="http://127.0.0.1/private")))
+        self.assertEqual(raised.exception.code, "media_url_invalid")
+        self.assertEqual(sess.calls, [])
+
+    def test_get_file_bytes_rejects_oversized_response(self):
+        c, _ = _client([_FakeResp(raw=b"12345", content_length=5)])
+        c.max_download_bytes = 4
+        with self.assertRaises(MaxApiError) as raised:
+            run(c.get_file_bytes(PlatformFile(file_id="f", url="https://cdn.example/f.png")))
+        self.assertEqual(raised.exception.code, "media_too_large")
+
+    def test_upload_rejects_unexpected_host_without_leaking_token(self):
+        c, sess = _client()
+        with self.assertRaises(MaxApiError) as raised:
+            run(c._raw_post_multipart("https://evil.example/upload", b"data"))
+        self.assertEqual(raised.exception.code, "upload_url_invalid")
+        self.assertEqual(sess.calls, [])
 
     def test_get_file_bytes_without_url_raises(self):
         c, _ = _client()

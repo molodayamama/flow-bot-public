@@ -14,9 +14,12 @@ _SAFE_CODES = frozenset({
     "invalid_request",
     "invalid_response",
     "media_download_failed",
+    "media_too_large",
     "media_upload_failed",
+    "media_url_invalid",
     "rate_limit",
     "transport_error",
+    "upload_url_invalid",
 })
 
 

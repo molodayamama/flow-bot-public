@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from tools.production_preflight import validate_environment
@@ -85,11 +86,97 @@ class ProductionPreflightTests(unittest.TestCase):
             MAX_WEBHOOK_SECRET="safe-secret",
             MAX_INBOX_DB="state/max.db",
             MAX_INBOX_WORKERS="4",
+            MAX_API_BASE_URL="https://max.example.test",
         )
 
         report = validate_environment(env, root=self.root)
 
         self.assertTrue(report.ok, report.errors)
+
+    def test_default_max_api_requires_pinned_russian_root(self) -> None:
+        env = dict(
+            self.env,
+            ROBOKASSA_ENABLED="1",
+            ROBOKASSA_MERCHANT_LOGIN="merchant",
+            ROBOKASSA_PASSWORD1="password-one",
+            ROBOKASSA_PASSWORD2="password-two",
+            ROBOKASSA_PUBLIC_BASE_URL="https://pay.example.test",
+            MAX_ENABLED="1",
+            MAX_BOT_TOKEN="max-token",
+            MAX_MODE="webhook",
+            MAX_WEBHOOK_URL="https://bot.example.test/max/webhook",
+            MAX_WEBHOOK_SECRET="safe-secret",
+            MAX_INBOX_DB="state/max.db",
+        )
+
+        class _Context:
+            def get_ca_certs(self, *, binary_form=False):
+                self.assert_binary = binary_form
+                return [b"unrelated-root"]
+
+        with patch("tools.production_preflight.ssl.create_default_context", return_value=_Context()):
+            report = validate_environment(env, root=self.root)
+
+        self.assertIn(
+            "MAX TLS trust is missing: configure MAX_CA_BUNDLE with the Russian Trusted Root CA or install it system-wide",
+            report.errors,
+        )
+
+    def test_default_max_api_accepts_pinned_russian_root(self) -> None:
+        import hashlib
+        import tools.production_preflight as preflight
+
+        trusted_der = b"trusted-root-fixture"
+        env = dict(
+            self.env,
+            ROBOKASSA_ENABLED="1",
+            ROBOKASSA_MERCHANT_LOGIN="merchant",
+            ROBOKASSA_PASSWORD1="password-one",
+            ROBOKASSA_PASSWORD2="password-two",
+            ROBOKASSA_PUBLIC_BASE_URL="https://pay.example.test",
+            MAX_ENABLED="1",
+            MAX_BOT_TOKEN="max-token",
+            MAX_MODE="webhook",
+            MAX_WEBHOOK_URL="https://bot.example.test/max/webhook",
+            MAX_WEBHOOK_SECRET="safe-secret",
+            MAX_INBOX_DB="state/max.db",
+        )
+
+        class _Context:
+            def get_ca_certs(self, *, binary_form=False):
+                return [trusted_der] if binary_form else []
+
+        fingerprint = hashlib.sha256(trusted_der).hexdigest()
+        with (
+            patch("tools.production_preflight.ssl.create_default_context", return_value=_Context()),
+            patch.object(preflight, "_MAX_TRUSTED_CA_SHA256", {fingerprint}),
+        ):
+            report = validate_environment(env, root=self.root)
+
+        self.assertTrue(report.ok, report.errors)
+
+    def test_invalid_max_ca_bundle_fails_preflight_without_path_value(self) -> None:
+        env = dict(
+            self.env,
+            ROBOKASSA_ENABLED="1",
+            ROBOKASSA_MERCHANT_LOGIN="merchant",
+            ROBOKASSA_PASSWORD1="password-one",
+            ROBOKASSA_PASSWORD2="password-two",
+            ROBOKASSA_PUBLIC_BASE_URL="https://pay.example.test",
+            MAX_ENABLED="1",
+            MAX_BOT_TOKEN="max-token",
+            MAX_MODE="webhook",
+            MAX_WEBHOOK_URL="https://bot.example.test/max/webhook",
+            MAX_WEBHOOK_SECRET="safe-secret",
+            MAX_INBOX_DB="state/max.db",
+            MAX_CA_BUNDLE=str(self.root / "private-ca.pem"),
+        )
+        (self.root / "private-ca.pem").write_text("not a certificate", encoding="utf-8")
+
+        report = validate_environment(env, root=self.root)
+
+        self.assertIn("MAX_CA_BUNDLE is not a valid CA bundle", report.errors)
+        self.assertNotIn("private-ca.pem", "\n".join(report.errors))
 
     def test_runtime_parent_must_exist(self) -> None:
         env = dict(self.env, METRICS_DB="missing/metrics.db")

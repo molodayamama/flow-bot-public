@@ -26,6 +26,9 @@ _MEDIA_KIND_TO_MAX_TYPE = {
     "video": "video",
     "document": "file",
 }
+_MAX_UPLOAD_HOSTS = frozenset({"fu.oneme.ru", "iu.oneme.ru", "vu.okcdn.ru"})
+_MAX_INCOMING_IMAGE_BYTES = 50 * 1024 * 1024
+_MAX_OUTGOING_VIDEO_BYTES = 250 * 1024 * 1024
 
 
 MAX_ENABLED_ENV = "MAX_ENABLED"
@@ -135,6 +138,7 @@ class MaxBotClient:
     request_timeout: float = 30.0
     max_retries: int = 2
     requests_per_second: int = 28
+    max_download_bytes: int = _MAX_INCOMING_IMAGE_BYTES
     sleep: Callable[[float], Awaitable[None]] = field(default=asyncio.sleep, repr=False)
     _owns_session: bool = field(default=False, init=False, repr=False)
     _limiter: SlidingWindowRateLimiter = field(init=False, repr=False)
@@ -275,7 +279,17 @@ class MaxBotClient:
         then multipart POST; the upload response yields the attachment token).
         URL-only or already-tokenised media needs no upload.
         """
-        if media.bytes_data is None:
+        media_bytes = media.bytes_data
+        if media_bytes is None and media.url and max_type != "image":
+            # MAX accepts direct URLs for images only. Generated video/document
+            # URLs must be downloaded and uploaded to MAX before /messages.
+            limit = (
+                _MAX_OUTGOING_VIDEO_BYTES
+                if max_type == "video"
+                else self.max_download_bytes
+            )
+            media_bytes = await self._raw_get_bytes(media.url, max_bytes=limit)
+        if media_bytes is None:
             if media.file is not None and media.file.file_id:
                 return media.file.file_id
             return None
@@ -292,7 +306,7 @@ class MaxBotClient:
         initial_token = start.get("token")
         done = await self._raw_post_multipart(
             str(upload_url),
-            media.bytes_data,
+            media_bytes,
             filename=(media.file.file_id if media.file and media.file.file_id else "upload.bin"),
         )
         if isinstance(done, Mapping):
@@ -381,9 +395,15 @@ class MaxBotClient:
     async def unsubscribe_webhook(self, *, url: str) -> Any:
         return await self._request("DELETE", "/subscriptions", params={"url": url})
 
-    async def _raw_get_bytes(self, url: str) -> bytes:
+    async def _raw_get_bytes(self, url: str, *, max_bytes: int | None = None) -> bytes:
         """GET raw bytes from an absolute URL (file download, no JSON parse)."""
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise MaxApiError(
+                status=None, code="media_url_invalid", retryable=False
+            )
         session = await self._get_session()
+        byte_limit = self.max_download_bytes if max_bytes is None else max(1, int(max_bytes))
         try:
             async with session.get(
                 url,
@@ -391,13 +411,44 @@ class MaxBotClient:
                 timeout=aiohttp.ClientTimeout(total=120.0),
             ) as response:
                 status = int(getattr(response, "status", 200))
+                final_url = urlparse(str(getattr(response, "url", None) or url))
+                if final_url.scheme != "https" or not final_url.hostname:
+                    raise MaxApiError(
+                        status=status, code="media_url_invalid", retryable=False
+                    )
                 if status >= 400:
                     raise MaxApiError(
                         status=status,
                         code="media_download_failed",
                         retryable=False,
                     )
-                return await response.read()
+                raw_length = getattr(response, "content_length", None)
+                try:
+                    content_length = int(raw_length) if raw_length is not None else None
+                except (TypeError, ValueError):
+                    content_length = None
+                if content_length is not None and content_length > byte_limit:
+                    raise MaxApiError(
+                        status=status, code="media_too_large", retryable=False
+                    )
+
+                content = getattr(response, "content", None)
+                if content is not None and callable(getattr(content, "iter_chunked", None)):
+                    data = bytearray()
+                    async for chunk in content.iter_chunked(64 * 1024):
+                        data.extend(chunk)
+                        if len(data) > byte_limit:
+                            raise MaxApiError(
+                                status=status, code="media_too_large", retryable=False
+                            )
+                    return bytes(data)
+
+                data = await response.read()
+                if len(data) > byte_limit:
+                    raise MaxApiError(
+                        status=status, code="media_too_large", retryable=False
+                    )
+                return data
         except MaxApiError:
             raise
         except (aiohttp.ClientError, asyncio.TimeoutError):
@@ -409,6 +460,15 @@ class MaxBotClient:
         self, url: str, data: bytes, *, filename: str = "upload.bin"
     ) -> Any:
         """POST one multipart ``data`` file to a MAX-provided upload URL."""
+        parsed = urlparse(url)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.hostname.lower() not in _MAX_UPLOAD_HOSTS
+        ):
+            raise MaxApiError(
+                status=None, code="upload_url_invalid", retryable=False
+            )
         session = await self._get_session()
         try:
             form = aiohttp.FormData()

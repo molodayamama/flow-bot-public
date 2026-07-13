@@ -14,6 +14,13 @@ MAX_SMOKE_USER_ID=
 MAX_SMOKE_CHAT_ID=
 ```
 
+`platform-api2.max.ru` currently chains to the Russian Trusted Root CA. Obtain
+the PEM only from the official Gosuslugi certificate page
+`https://www.gosuslugi.ru/crt` and point `MAX_CA_BUNDLE` at it (or install the
+same root in the OS trust store). Production preflight pins the root certificate
+fingerprint and rejects a missing, unrelated, or malformed bundle without a
+network request. Never disable TLS verification.
+
 Offline validation:
 
 ```bash

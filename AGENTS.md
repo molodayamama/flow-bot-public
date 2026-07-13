@@ -9,6 +9,18 @@ Do not skip roles for non-trivial work. If a task is tiny documentation-only
 work, the same human/AI may perform several roles, but the outputs below must
 still be present in the task notes.
 
+## Execution Model
+
+- One Codex instance may and, when the operator requests solo work, must perform
+  all five roles sequentially. The role flow is a review discipline, not a
+  requirement to spawn subagents.
+- Do not spawn or delegate to subagents unless the operator explicitly requests
+  delegation in the current task. Record each role's output in `HANDOFF.md`.
+- Production access does not waive the safety gates below. Even with broad
+  operator approval, take and verify a runtime backup before deployment, avoid
+  printing secret values, deploy an immutable commit SHA, and retain a tested
+  rollback path.
+
 ## Project Snapshot
 
 This is a Telegram automation workspace for AI chat/image bots and Google Labs
