@@ -74,6 +74,7 @@ class DeploymentAssetTests(unittest.TestCase):
 
     def test_main_site_proxies_only_bounded_public_web_api(self) -> None:
         self.assertIn("location /web/api/", self.web_nginx)
+        self.assertIn("if ($host != photozhab.ru) { return 404; }", self.web_nginx)
         self.assertIn("client_max_body_size 12m", self.web_nginx)
         self.assertIn("proxy_pass http://127.0.0.1:8081", self.web_nginx)
         self.assertIn("proxy_read_timeout 480s", self.web_nginx)
