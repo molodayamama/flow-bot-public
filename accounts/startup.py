@@ -65,6 +65,19 @@ async def warm_account_pool(
             threshold_met=True,
         )
 
+    if total_accounts == 0:
+        d.startup_state["min_ready"] = 0
+        d.startup_state["total_accounts"] = 0
+        d.set_startup_phase("blocked", ready_accounts=0)
+        d.log.error("Account-pool warmup cannot start: no consumer accounts configured")
+        return AccountWarmupResult(
+            tasks=(),
+            ready_count=0,
+            total_accounts=0,
+            min_ready=0,
+            threshold_met=False,
+        )
+
     warmup_sem = asyncio.Semaphore(d.warmup_concurrency)
     min_ready = min(max(1, d.min_ready_accounts), total_accounts)
     d.startup_state["min_ready"] = min_ready

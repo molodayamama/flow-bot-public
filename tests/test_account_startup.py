@@ -127,6 +127,39 @@ class AccountWarmupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["min_ready"], 0)
         self.assertEqual(state["ready_accounts"], 2)
 
+    async def test_empty_seller_pool_is_ready_without_local_keepers(self) -> None:
+        deps, _pool, state = self.make_deps({})
+
+        result = await asyncio.wait_for(
+            warm_account_pool(deps, seller_mode=True),
+            timeout=0.1,
+        )
+
+        self.assertTrue(result.threshold_met)
+        self.assertEqual(result.tasks, ())
+        self.assertEqual(result.ready_count, 0)
+        self.assertEqual(result.total_accounts, 0)
+        self.assertEqual(result.min_ready, 0)
+        self.assertEqual(state["phase"], "ready")
+
+    async def test_empty_consumer_pool_blocks_without_waiting_forever(self) -> None:
+        deps, _pool, state = self.make_deps({})
+
+        result = await asyncio.wait_for(
+            warm_account_pool(deps, seller_mode=False),
+            timeout=0.1,
+        )
+
+        self.assertFalse(result.threshold_met)
+        self.assertEqual(result.tasks, ())
+        self.assertEqual(result.ready_count, 0)
+        self.assertEqual(result.total_accounts, 0)
+        self.assertEqual(result.min_ready, 0)
+        self.assertEqual(state["phase"], "blocked")
+        self.assertEqual(state["ready_accounts"], 0)
+        self.assertEqual(state["total_accounts"], 0)
+        self.assertEqual(state["min_ready"], 0)
+
     async def test_threshold_returns_while_remaining_keeper_warms_in_background(self) -> None:
         slow_gate = asyncio.Event()
         fast = Keeper()
