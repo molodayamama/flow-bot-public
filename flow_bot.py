@@ -480,6 +480,7 @@ from flow_provider.runtime_config import (
     _host_path,
 )
 from flow_provider import FlowHttpClient, SessionKeeper
+from accounts.keep_warm import AccountKeepWarmPolicy, KeepWarmConfig
 
 
 # ───────────────────────────────────────────
@@ -494,6 +495,21 @@ FLOW_ACCOUNT_ID = os.getenv("FLOW_ACCOUNT_ID", "default")
 # раньше). Второй аккаунт = вторая запись в env, код менять не нужно.
 FLOW_ACCOUNTS_RAW = os.getenv("FLOW_ACCOUNTS", "")
 FLOW_ACCOUNTS_STATE_FILE = os.getenv("FLOW_ACCOUNTS_STATE_FILE", "flow_accounts_state.json")
+try:
+    KEEP_WARM_IMAGE_ACCOUNTS = max(0, int(os.getenv("KEEP_WARM_IMAGE_ACCOUNTS", "1")))
+except (TypeError, ValueError):
+    KEEP_WARM_IMAGE_ACCOUNTS = 1
+try:
+    KEEP_WARM_VIDEO_ACCOUNTS = max(0, int(os.getenv("KEEP_WARM_VIDEO_ACCOUNTS", "1")))
+except (TypeError, ValueError):
+    KEEP_WARM_VIDEO_ACCOUNTS = 1
+try:
+    KEEP_WARM_AFTER_REQUEST_SEC = max(
+        60.0,
+        float(os.getenv("KEEP_WARM_AFTER_REQUEST_SEC", os.getenv("KEEP_WARM_HOLD_SEC", "1800"))),
+    )
+except (TypeError, ValueError):
+    KEEP_WARM_AFTER_REQUEST_SEC = 1800.0
 
 
 ROBOKASSA_HASH_ALGO = _env_any("ROBOKASSA_HASH_ALGO", "ROBOKASSA_HASH_ALGORITHM", default="md5")
@@ -610,6 +626,17 @@ DEFAULT_ACCOUNT_ID = FLOW_ACCOUNTS[0].id
 keeper = keepers[DEFAULT_ACCOUNT_ID]
 client = clients[DEFAULT_ACCOUNT_ID]
 
+_keep_warm_policy = AccountKeepWarmPolicy(
+    account_pool=account_pool,
+    keepers=keepers,
+    config=KeepWarmConfig(
+        image_accounts=KEEP_WARM_IMAGE_ACCOUNTS,
+        video_accounts=KEEP_WARM_VIDEO_ACCOUNTS,
+        hold_seconds=KEEP_WARM_AFTER_REQUEST_SEC,
+    ),
+    log=log,
+)
+
 # Video account routing/health scoring moved to accounts/routing.py (Phase 11
 # core split). Instantiated with the live pool + keepers so runtime state stays
 # visible; the flow_bot-level names below stay as thin backward-compatible
@@ -685,6 +712,7 @@ _account_routing = AccountRouting(AccountRoutingDeps(
     clients=clients,
     default_keeper=keeper,
     default_client=client,
+    keep_warm=_keep_warm_policy,
 ))
 
 
@@ -704,8 +732,13 @@ def _video_account_health_reason(account_id: str | None, model_id: str, min_cred
     return _account_routing.video_account_health_reason(account_id, model_id, min_credits)
 
 
-def _account_for_video(user_id: int, *, model_id: str = "omni-flash-4s", min_credits: int = 0) -> str | None:
-    return _account_routing.account_for_video(user_id, model_id=model_id, min_credits=min_credits)
+def _account_for_video(
+    user_id: int, *, model_id: str = "omni-flash-4s", min_credits: int = 0,
+    exclude: set[str] | None = None,
+) -> str | None:
+    return _account_routing.account_for_video(
+        user_id, model_id=model_id, min_credits=min_credits, exclude=exclude,
+    )
 
 
 def _keeper_for_acc(account_id: str | None) -> SessionKeeper:
@@ -725,6 +758,7 @@ from storage.session_state import (
     user_last_request,
     user_busy,
     pending_edits,
+    pending_edit_groups,
     pending_photo_routes,
     mix_baskets,
     wizard_state,
@@ -732,7 +766,14 @@ from storage.session_state import (
     _vid_clear,
     _clear_image_flow_keys,
     _vid_clear_reference_inputs,
+    clear_pending_edit as _clear_pending_edit,
+    store_pending_edit_refs as _store_pending_edit_refs,
+    pending_edit_refs as _pending_edit_refs_from_registry,
 )
+
+
+def _pending_edit_refs(user_id: int) -> list[ImageRef]:
+    return _pending_edit_refs_from_registry(user_id, image_registry)
 from storage.media_registry import image_registry, video_registry
 
 BUSY_MAX_SEC = 300  # старше — считаем зависшим и отпускаем
@@ -1412,6 +1453,7 @@ dp.include_router(
             album_tasks=lambda: _album_tasks,
             create_task=asyncio.create_task,
             flush_album=lambda *args, **kwargs: _flush_album(*args, **kwargs),
+            should_buffer_album=lambda st, caption: _photo_intake.should_buffer_album(st, caption),
             prepare_photo_edit_from_file_id=lambda *args, **kwargs: _prepare_photo_edit_from_file_id(*args, **kwargs),
             upload_photo_source_from_message=lambda *args, **kwargs: _upload_photo_source_from_message(*args, **kwargs),
             show_video_ingredients=lambda *args, **kwargs: show_video_ingredients(*args, **kwargs),
@@ -1772,6 +1814,9 @@ _generation_flow = GenerationFlow(GenerationFlowDeps(
     reupload_ref_for_edit_failover=(
         lambda *args, **kwargs: _reupload_ref_for_edit_failover(*args, **kwargs)
     ),
+    reupload_refs_for_edit_failover=(
+        lambda *args, **kwargs: _reupload_refs_for_edit_failover(*args, **kwargs)
+    ),
     is_rate_limit_error=_is_rate_limit_error,
     post_generation_referral_hooks=_post_generation_referral_hooks,
     flow_account_id=FLOW_ACCOUNT_ID,
@@ -1791,6 +1836,14 @@ async def _reupload_ref_for_edit_failover(
     )
 
 
+async def _reupload_refs_for_edit_failover(
+    refs: list[ImageRef], user_id: int, *, current_account_id: str | None,
+) -> list[ImageRef] | None:
+    return await _reference_routing.reupload_refs_for_edit_failover(
+        refs, user_id, current_account_id=current_account_id,
+    )
+
+
 async def _edit_and_send(
     message: types.Message,
     ref: ImageRef,
@@ -1800,10 +1853,11 @@ async def _edit_and_send(
     aspect_ratio: str | None = None,
     image_model: str = DEFAULT_IMAGE_MODEL,
     price_action: str = "edit",
+    refs: list[ImageRef] | None = None,
 ) -> bool:
     return await _generation_flow.edit_and_send(
         message, ref, instruction, actor_id=actor_id, aspect_ratio=aspect_ratio,
-        image_model=image_model, price_action=price_action,
+        image_model=image_model, price_action=price_action, refs=refs,
     )
 
 
@@ -1920,6 +1974,14 @@ async def _offer_photo_route_choice(message: types.Message, *, user_id: int, cap
     await _photo_route_offer.offer(message, user_id=user_id, caption=caption)
 
 
+async def _offer_photo_album_route_choice(
+    message: types.Message, *, user_id: int, file_ids: list[str], caption: str,
+) -> None:
+    await _photo_route_offer.offer_many(
+        message, user_id=user_id, file_ids=file_ids, caption=caption,
+    )
+
+
 _photo_intake = PhotoIntake(PhotoIntakeDeps(
     bot_download=bot.download,
     log=log,
@@ -1930,6 +1992,9 @@ _photo_intake = PhotoIntake(PhotoIntakeDeps(
     workspace=_ws,
     image_registry=image_registry,
     pending_edits=pending_edits,
+    store_pending_edit_refs=(
+        lambda user_id, refs: _store_pending_edit_refs(user_id, refs, image_registry)
+    ),
     fmt_to_aspect=_fmt_to_aspect,
     show_edit_confirm=lambda *a, **k: show_edit_confirm(*a, **k),
     edit_settings_kb=edit_settings_kb,
@@ -1938,6 +2003,7 @@ _photo_intake = PhotoIntake(PhotoIntakeDeps(
     show_new_video_wizard=lambda *a, **k: show_new_video_wizard(*a, **k),
     show_video_frames=lambda *a, **k: show_video_frames(*a, **k),
     show_video_ingredients=lambda *a, **k: show_video_ingredients(*a, **k),
+    offer_photo_album_route_choice=_offer_photo_album_route_choice,
     nwiz_model=_nwiz_model,
     default_fmt=DEFAULT_FMT,
     default_image_model=DEFAULT_IMAGE_MODEL,
@@ -1956,12 +2022,33 @@ async def _prepare_photo_edit_from_file_id(
     )
 
 
+async def _prepare_photo_edit_from_file_ids(
+    message: types.Message, *, user_id: int, file_ids: list[str], caption: str,
+    aspect_fmt: str = DEFAULT_FMT, image_model: str | None = None,
+    as_generation: bool = False,
+) -> bool:
+    return await _photo_intake.prepare_photo_edit_from_file_ids(
+        message, user_id=user_id, file_ids=file_ids, caption=caption,
+        aspect_fmt=aspect_fmt, image_model=image_model, as_generation=as_generation,
+    )
+
+
 async def _prepare_photo_video_from_file_id(
     message: types.Message, *, user_id: int, file_id: str, caption: str,
     vfmt: str | None = None, vstyle: str | None = None,
 ) -> bool:
     return await _photo_intake.prepare_photo_video_from_file_id(
         message, user_id=user_id, file_id=file_id, caption=caption, vfmt=vfmt, vstyle=vstyle,
+    )
+
+
+async def _prepare_photo_video_from_file_ids(
+    message: types.Message, *, user_id: int, file_ids: list[str], caption: str,
+    vfmt: str | None = None, vstyle: str | None = None,
+) -> bool:
+    return await _photo_intake.prepare_photo_video_from_file_ids(
+        message, user_id=user_id, file_ids=file_ids, caption=caption,
+        vfmt=vfmt, vstyle=vstyle,
     )
 
 
@@ -2100,10 +2187,12 @@ def _video_reference_account_id(st: dict, vmode: str) -> str | None:
 
 
 async def _ensure_reference_on_healthy_account(
-    st: dict, vmode: str, *, user_id: int, model_id: str, min_credits: int
+    st: dict, vmode: str, *, user_id: int, model_id: str, min_credits: int,
+    exclude: set[str] | None = None, force_reupload: bool = False,
 ) -> str | None:
     return await _reference_routing.ensure_reference_on_healthy_account(
-        st, vmode, user_id=user_id, model_id=model_id, min_credits=min_credits
+        st, vmode, user_id=user_id, model_id=model_id, min_credits=min_credits,
+        exclude=exclude, force_reupload=force_reupload,
     )
 
 
@@ -2611,6 +2700,8 @@ dp.include_router(
         tg_edit_settings_router.EditSettingsDeps(
             workspace=_ws,
             pending_edits=pending_edits,
+            pending_edit_refs=_pending_edit_refs,
+            clear_pending_edit=_clear_pending_edit,
             image_registry=image_registry,
             edit_and_send=_edit_and_send,
             fmt_to_aspect=_fmt_to_aspect,
@@ -2758,6 +2849,8 @@ dp.include_router(
             pending_photo_routes=pending_photo_routes,
             prepare_photo_edit_from_file_id=_prepare_photo_edit_from_file_id,
             prepare_photo_video_from_file_id=_prepare_photo_video_from_file_id,
+            prepare_photo_edit_from_file_ids=_prepare_photo_edit_from_file_ids,
+            prepare_photo_video_from_file_ids=_prepare_photo_video_from_file_ids,
         )
     )
 )

@@ -411,6 +411,9 @@ class RecordingPhotoInputDeps:
             album_tasks=lambda: self.album_tasks,
             create_task=self._create_task,
             flush_album=self._async("flush_album"),
+            should_buffer_album=lambda st, caption: bool(
+                st.get("vawait") in {"ving_photo", "vfrm_start", "vfrm_end"} or caption
+            ),
             prepare_photo_edit_from_file_id=self._async("prepare_photo_edit_from_file_id"),
             upload_photo_source_from_message=self._upload_photo_source_from_message,
             show_video_ingredients=self._async("show_video_ingredients"),
@@ -2351,10 +2354,23 @@ class ImageRetryRouterTests(unittest.TestCase):
 
 def _photo_route_deps() -> tuple[photo_route_router.PhotoRouteDeps, RecordingPhotoRouteDeps]:
     rec = RecordingPhotoRouteDeps()
+
+    async def prepare_photo_edit_from_file_ids(message, *, file_ids, **kwargs):
+        return await rec.prepare_photo_edit_from_file_id(
+            message, file_id=file_ids[0], **kwargs,
+        )
+
+    async def prepare_photo_video_from_file_ids(message, *, file_ids, **kwargs):
+        return await rec.prepare_photo_video_from_file_id(
+            message, file_id=file_ids[0], **kwargs,
+        )
+
     deps = photo_route_router.PhotoRouteDeps(
         pending_photo_routes=rec.pending_photo_routes,
         prepare_photo_edit_from_file_id=rec.prepare_photo_edit_from_file_id,
         prepare_photo_video_from_file_id=rec.prepare_photo_video_from_file_id,
+        prepare_photo_edit_from_file_ids=prepare_photo_edit_from_file_ids,
+        prepare_photo_video_from_file_ids=prepare_photo_video_from_file_ids,
     )
     return deps, rec
 

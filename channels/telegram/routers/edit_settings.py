@@ -25,6 +25,8 @@ class EditSettingsDeps:
     edit_settings_kb: Callable[..., types.InlineKeyboardMarkup]
     default_fmt: str
     default_image_model: str
+    pending_edit_refs: Callable[[int], list] | None = None
+    clear_pending_edit: Callable[[int], None] | None = None
 
 
 def create_router(deps: EditSettingsDeps) -> Router:
@@ -40,7 +42,10 @@ def create_router(deps: EditSettingsDeps) -> Router:
 
         if data == "es:cancel":
             st["await"] = None
-            deps.pending_edits.pop(user_id, None)
+            if deps.clear_pending_edit is not None:
+                deps.clear_pending_edit(user_id)
+            else:
+                deps.pending_edits.pop(user_id, None)
             st.pop("edit_instruction", None)
             st.pop("ag_variants", None)
             await callback.answer("Отменено")
@@ -65,8 +70,13 @@ def create_router(deps: EditSettingsDeps) -> Router:
 
         if data == "es:apply":
             instr = (st.get("edit_instruction") or "").strip()
-            token = deps.pending_edits.get(user_id)
-            ref = deps.image_registry.get(token) if token else None
+            if deps.pending_edit_refs is not None:
+                refs = deps.pending_edit_refs(user_id)
+            else:
+                token = deps.pending_edits.get(user_id)
+                old_ref = deps.image_registry.get(token) if token else None
+                refs = [old_ref] if old_ref is not None else []
+            ref = refs[0] if refs else None
             if not instr or ref is None or ref.user_id != user_id:
                 await callback.answer(flow_copy.msg("expired"), show_alert=True)
                 return
@@ -81,12 +91,16 @@ def create_router(deps: EditSettingsDeps) -> Router:
                 ),
                 image_model=st.get("edit_imodel", deps.default_image_model),
                 price_action="gen" if st.get("edit_as_gen") else "edit",
+                refs=refs,
             )
             if ok:
                 st["await"] = None
                 st.pop("edit_instruction", None)
                 st.pop("ag_variants", None)
-                deps.pending_edits.pop(user_id, None)
+                if deps.clear_pending_edit is not None:
+                    deps.clear_pending_edit(user_id)
+                else:
+                    deps.pending_edits.pop(user_id, None)
             return
 
         changed = False

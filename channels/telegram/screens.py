@@ -427,7 +427,8 @@ async def show_video_frames(
 def new_video_wizard_text(user_id: int, *, deps: NewVideoWizardScreensDeps) -> str:
     st = deps.wizard_state[user_id]
     prompt = st.get("vprompt", "")
-    has_photo = bool(st.get("vphoto"))
+    photo_count = len(st.get("vphotos") or ([st.get("vphoto")] if st.get("vphoto") else []))
+    has_photo = photo_count > 0
     vfmt = st.get("vfmt", deps.vid_default_fmt)
     dur = st.get("vdur", 4)
     style_key = st.get("vstyle", "")
@@ -440,6 +441,8 @@ def new_video_wizard_text(user_id: int, *, deps: NewVideoWizardScreensDeps) -> s
         lines.append(f"<blockquote>{html.escape(prompt[:300])}</blockquote>")
     if has_photo:
         lines.append("📎 <b>Фото (1 шт.) добавлено</b>")
+    if has_photo and photo_count != 1:
+        lines[-1] = f"📎 <b>Фото ({photo_count} шт.) добавлено</b>"
     lines.append("")
     fmt_name = deps.vid_fmt_names.get(vfmt, vfmt)
     if deps.nwiz_engine(st) == "veo":
@@ -459,7 +462,7 @@ def new_video_wizard_kb(
 ) -> types.InlineKeyboardMarkup:
     B = types.InlineKeyboardButton
     st = deps.wizard_state[user_id]
-    has_photo = bool(st.get("vphoto"))
+    has_photo = bool(st.get("vphotos") or st.get("vphoto"))
     vfmt = st.get("vfmt", deps.vid_default_fmt)
     dur = st.get("vdur", 4)
     style_key = st.get("vstyle", "")
@@ -557,7 +560,7 @@ async def show_new_video_wizard(
     st["vstep"] = "vnewwiz"
     st["vawait"] = None
     st["vmodel"] = deps.nwiz_model(st)
-    st["vmode"] = "ingredients" if st.get("vphoto") else "text"
+    st["vmode"] = "ingredients" if (st.get("vphotos") or st.get("vphoto")) else "text"
     text = new_video_wizard_text(user_id, deps=deps)
     kb = new_video_wizard_kb(user_id, deps=deps)
     if edit:

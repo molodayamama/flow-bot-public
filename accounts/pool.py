@@ -514,6 +514,7 @@ class AccountPool:
         *,
         model_family: str | None = None,
         health_scores: dict | None = None,
+        exclude: set[str] | None = None,
     ) -> str | None:
         """Pick the healthiest video-capable account for a fresh video job.
 
@@ -523,9 +524,11 @@ class AccountPool:
         key = str(user_id)
         sticky = self._assign.get(key)
         health_scores = health_scores or {}
+        excluded = set(exclude or set())
         candidates = [
             aid for aid in self._accounts
             if self.is_video_capable(aid)
+            and aid not in excluded
             and not bool((health_scores.get(aid) or {}).get("proxy_failed"))
         ]
         if not candidates:

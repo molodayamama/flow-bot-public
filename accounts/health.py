@@ -93,7 +93,7 @@ class AccountFailurePolicy:
         if not account_id:
             return
         risk = (result or {}).get("account_risk")
-        if risk == "video_auth":
+        if risk in {"video_auth", "unusual_activity"}:
             # Auth/bearer — cool down at once (requests won't pass until fixed).
             if self._pool.mark_cooldown(account_id):
                 self._log.warning(

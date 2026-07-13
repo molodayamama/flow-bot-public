@@ -108,7 +108,14 @@ API_PROXY_URL=off
 ```dotenv
 FLOW_ACCOUNTS=main=./google_profile;acc2=./google_profile_acc2
 FLOW_ACCOUNTS_STATE_FILE=flow_accounts_state.json
+KEEP_WARM_IMAGE_ACCOUNTS=1
+KEEP_WARM_VIDEO_ACCOUNTS=1
+KEEP_WARM_AFTER_REQUEST_SEC=1800
 ```
+
+`KEEP_WARM_*_ACCOUNTS` limits request-driven warm browser sessions per role;
+`KEEP_WARM_AFTER_REQUEST_SEC` controls how long a session used by a real
+request is protected from idle parking. Set a role limit to `0` to disable it.
 
 Если `FLOW_ACCOUNTS` не задан, бот работает в одиночном режиме на
 `USER_DATA_DIR`.
@@ -191,6 +198,20 @@ Fail URL:    https://pay.photozhab.ru/robokassa/fail    GET
 
 VPS nginx must proxy `/robokassa/` on `pay.photozhab.ru` to the bot callback
 server, usually `http://127.0.0.1:8081`.
+
+## NL-only hosting
+
+`photozhab.ru` and `pay.photozhab.ru` are currently served from NL
+(`192.0.2.10`) only. The repository no longer ships FI/NL DNS failover
+tooling or systemd units; do not create `/etc/geminifree/failover.env` for
+normal operation.
+
+Operational checks:
+
+```bash
+systemctl is-active geminifree-bot geminifree-seller-bot
+nginx -t
+```
 
 ## Runtime paths
 

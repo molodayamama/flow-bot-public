@@ -84,6 +84,14 @@ def _deps(*, source, account="a", pending=None, calls=None):
     async def _show_ingredients(*a, **k):
         calls["ingredients"] = True
 
+    async def _offer_album(*a, **k):
+        calls["album_offer"] = True
+
+    pending_map = pending if pending is not None else {}
+
+    def _store_refs(user_id, refs):
+        pending_map[user_id] = "tok"
+
     return PhotoIntakeDeps(
         bot_download=_download,
         log=_Log(),
@@ -93,7 +101,8 @@ def _deps(*, source, account="a", pending=None, calls=None):
         keeper_for_acc=lambda acc: _Keeper(source),
         workspace=lambda uid: {},
         image_registry=_Registry(),
-        pending_edits=pending if pending is not None else {},
+        pending_edits=pending_map,
+        store_pending_edit_refs=_store_refs,
         fmt_to_aspect=lambda f: "square",
         show_edit_confirm=_show_edit_confirm,
         edit_settings_kb=lambda *a, **k: None,
@@ -102,6 +111,7 @@ def _deps(*, source, account="a", pending=None, calls=None):
         show_new_video_wizard=_show_new_video_wizard,
         show_video_frames=_show_frames,
         show_video_ingredients=_show_ingredients,
+        offer_photo_album_route_choice=_offer_album,
         nwiz_model=lambda st: "omni-flash-4s",
         default_fmt="land",
         default_image_model="gem-pix-2",

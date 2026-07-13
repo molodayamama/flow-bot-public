@@ -75,6 +75,12 @@ def create_router(deps: MarketplaceDeps) -> Router:
         deps.metrics.upsert_user(user_id, username=getattr(callback.from_user, "username", None),
                             first_name=getattr(callback.from_user, "first_name", None))
         data = callback.data or ""
+        deps.metrics.log_event(
+            "menu_clicked",
+            user_id=user_id,
+            username=getattr(callback.from_user, "username", None),
+            source=data,
+        )
         msg = callback.message
         if deps.mp_is_stale_callback(user_id, callback):
             await deps.mp_reject_stale_callback(callback)

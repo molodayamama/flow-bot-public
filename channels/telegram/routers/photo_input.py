@@ -20,6 +20,7 @@ class PhotoInputDeps:
     album_tasks: Callable[[], MutableMapping[str, Any]]
     create_task: Callable[[Awaitable[Any]], Any]
     flush_album: Callable[..., Awaitable[Any]]
+    should_buffer_album: Callable[[MutableMapping[str, Any], str], bool]
     prepare_photo_edit_from_file_id: Callable[..., Awaitable[Any]]
     upload_photo_source_from_message: Callable[..., Awaitable[Any]]
     show_video_ingredients: Callable[..., Awaitable[Any]]
@@ -67,7 +68,9 @@ def create_router(deps: PhotoInputDeps) -> Router:
         caption = (message.caption or "").strip()
 
         mgid = message.media_group_id
-        if mgid and vawait in ("ving_photo", "vfrm_start", "vfrm_end"):
+        if mgid and (
+            mgid in deps.album_buffer() or deps.should_buffer_album(st, caption)
+        ):
             deps.album_buffer().setdefault(mgid, []).append(message)
             task = deps.album_tasks().get(mgid)
             if task:

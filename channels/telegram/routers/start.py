@@ -59,31 +59,40 @@ def create_handler(deps: StartDeps) -> Callable[[types.Message], Awaitable[Any]]
         show_main_menu = deps.show_main_menu
 
         user_id = message.from_user.id
+        parts = (message.text or "").split(maxsplit=1)
+        payload = parts[1].strip() if len(parts) > 1 else ""
+        channel = parse_channel_seed(payload)
+        is_new = not metrics.user_exists(user_id)
         metrics.upsert_user(
             user_id,
             username=_username(message),
             first_name=getattr(message.from_user, "first_name", None),
+            channel=channel if is_new else None,
         )
         _reset_image_flow(user_id)
         _vid_clear(user_id)
-        is_new = not metrics.user_exists(user_id)
         credit_store.balance(user_id)
         metrics.log_event(
             "user_started",
             user_id=user_id,
             username=_username(message),
             source="command",
-            payload={"is_new": is_new},
+            payload={"is_new": is_new, "seed_channel": channel},
         )
         if is_new:
+            metrics.log_event(
+                "new_user",
+                user_id=user_id,
+                username=_username(message),
+                source=channel or "organic",
+                payload={"seed_channel": channel},
+            )
             uname = _username(message)
             uname_str = f"@{uname}" if uname else f"id {user_id}"
             asyncio.create_task(_send_owner_alert(
                 f"\U0001f464 <b>\u041d\u043e\u0432\u044b\u0439 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c</b>\n{uname_str}"
             ))
 
-        parts = (message.text or "").split(maxsplit=1)
-        payload = parts[1].strip() if len(parts) > 1 else ""
         _referral_welcome_bonus: int = 0
         if payload.startswith(REFERRAL_PARAM_PREFIX) and not getattr(message.from_user, "is_bot", False):
             raw = payload[len(REFERRAL_PARAM_PREFIX):]
@@ -109,13 +118,35 @@ def create_handler(deps: StartDeps) -> Callable[[types.Message], Awaitable[Any]]
                     )
                     _referral_welcome_bonus = credit_store.balance(user_id)
 
-        channel = parse_channel_seed(payload)
         if channel and not getattr(message.from_user, "is_bot", False):
-            if metrics.record_acquisition(user_id=user_id, channel=channel):
+            metrics.log_event(
+                "channel_seed_clicked",
+                user_id=user_id,
+                username=_username(message),
+                source=channel,
+                payload={"channel": channel, "is_new": is_new},
+            )
+            if is_new and metrics.record_acquisition(user_id=user_id, channel=channel):
                 metrics.log_event(
                     "acquired_from_channel",
                     user_id=user_id,
                     username=_username(message),
+                    source=channel,
+                    payload={"channel": channel},
+                )
+                metrics.log_event(
+                    "channel_seed_new",
+                    user_id=user_id,
+                    username=_username(message),
+                    source=channel,
+                    payload={"channel": channel},
+                )
+            elif not is_new:
+                metrics.log_event(
+                    "channel_seed_returning",
+                    user_id=user_id,
+                    username=_username(message),
+                    source=channel,
                     payload={"channel": channel},
                 )
 

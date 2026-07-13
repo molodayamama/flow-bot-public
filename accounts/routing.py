@@ -63,6 +63,8 @@ class VideoAccountRouter:
             return "missing_account"
         if not self._pool.is_reference_usable(account_id):
             return "account_unavailable"
+        if not getattr(self._pool, "is_video_capable", lambda _account_id: True)(account_id):
+            return "account_unavailable"
         score = (self.scores_for_model(model_id, min_credits).get(account_id) or {})
         if score.get("proxy_failed"):
             return "proxy_check_failed"
@@ -71,11 +73,14 @@ class VideoAccountRouter:
         return None
 
     def account_for_video(
-        self, user_id: int, *, model_id: str = "omni-flash-4s", min_credits: int = 0
+        self, user_id: int, *, model_id: str = "omni-flash-4s", min_credits: int = 0,
+        exclude: set[str] | None = None,
     ) -> str | None:
         """Аккаунт для видео-джобы — только среди video_capable, None — нет доступных."""
-        return self._pool.pick_for_video(
-            user_id,
-            model_family=self.family_for_model(model_id),
-            health_scores=self.scores_for_model(model_id, min_credits),
-        )
+        kwargs = {
+            "model_family": self.family_for_model(model_id),
+            "health_scores": self.scores_for_model(model_id, min_credits),
+        }
+        if exclude:
+            kwargs["exclude"] = exclude
+        return self._pool.pick_for_video(user_id, **kwargs)

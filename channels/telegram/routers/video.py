@@ -162,6 +162,7 @@ def create_router(deps: VideoDeps) -> Router:
             # Убрать фотографию
             if data == "v:nremove_photo":
                 st.pop("vphoto", None)
+                st.pop("vphotos", None)
                 st["vmode"] = "text"
                 st["vmodel"] = deps.nwiz_model(st)
                 await callback.answer("Фото удалено")
@@ -177,7 +178,7 @@ def create_router(deps: VideoDeps) -> Router:
             if data == "v:nchange":
                 await callback.answer()
                 st["vawait"] = "vnchange"
-                has_photo = bool(st.get("vphoto"))
+                has_photo = bool(st.get("vphotos") or st.get("vphoto"))
                 text = (
                     "🎬 <b>Оживить фото</b>\n\n"
                     "📎 Фото сохранено. Опишите заново, что должно происходить в видео."
@@ -203,11 +204,14 @@ def create_router(deps: VideoDeps) -> Router:
                 style_suffix = _VID_STYLES.get(style_key, ("", ""))[1]
                 full_prompt = prompt + style_suffix
                 # Если прикреплено фото — передаём как референс-изображение
-                if st.get("vphoto"):
-                    st["ving_photos"] = [st["vphoto"]]
+                photo_sources = st.get("vphotos") or (
+                    [st["vphoto"]] if st.get("vphoto") else []
+                )
+                if photo_sources:
+                    st["ving_photos"] = photo_sources[:4]
                 # Финальная синхронизация модели/режима
                 st["vmodel"] = deps.nwiz_model(st)
-                st["vmode"] = "ingredients" if st.get("vphoto") else "text"
+                st["vmode"] = "ingredients" if photo_sources else "text"
                 st["vcount"] = 1
                 # Проверка баланса
                 price = deps.nwiz_price(st)

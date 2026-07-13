@@ -21,6 +21,7 @@ class AccountRoutingDeps:
     clients: dict
     default_keeper: Any
     default_client: Any
+    keep_warm: Any = None
 
 
 class AccountRouting:
@@ -29,21 +30,34 @@ class AccountRouting:
 
     def account_for(self, user_id: int) -> str | None:
         """Аккаунт пула для джобы юзера (sticky), None — весь пул недоступен."""
-        return self._d.account_pool.pick_for(user_id)
+        account_id = self._d.account_pool.pick_for(user_id)
+        self._note_keep_warm("image", account_id)
+        return account_id
+
+    def _note_keep_warm(self, role: str, account_id: str | None) -> None:
+        if self._d.keep_warm is not None:
+            self._d.keep_warm.note(role, account_id)
 
     def account_for_image(
         self, user_id: int, *, prefer_image_only: bool = False,
         exclude: set[str] | None = None,
     ) -> str | None:
-        return self._d.account_pool.pick_for_image(
+        account_id = self._d.account_pool.pick_for_image(
             user_id, prefer_image_only=prefer_image_only, exclude=exclude,
         )
+        self._note_keep_warm("image", account_id)
+        return account_id
 
     def account_for_video(
         self, user_id: int, *, model_id: str = "omni-flash-4s", min_credits: int = 0,
+        exclude: set[str] | None = None,
     ) -> str | None:
         """Аккаунт для видео-джобы — только среди video_capable, None — нет доступных."""
-        return self._d.video_router.account_for_video(user_id, model_id=model_id, min_credits=min_credits)
+        account_id = self._d.video_router.account_for_video(
+            user_id, model_id=model_id, min_credits=min_credits, exclude=exclude,
+        )
+        self._note_keep_warm("video", account_id)
+        return account_id
 
     def cached_gcredits_hints(self) -> dict:
         return self._d.video_router.cached_gcredits_hints()

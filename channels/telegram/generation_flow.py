@@ -40,6 +40,18 @@ from textutil import _short_prompt
 _GEN_ATTEMPT_TIMEOUT = 70  # seconds per attempt
 
 
+def build_image_inputs_for_refs(
+    refs: list[ImageRef], capture: dict | None, *, limit: int = 4,
+) -> list[dict]:
+    """Build one-account image inputs for a single photo or an album."""
+    clean = [ref for ref in refs[:limit] if isinstance(ref, ImageRef)]
+    if not clean:
+        return []
+    if len(clean) == 1:
+        return build_image_inputs(clean[0].source, capture)
+    return build_ingredients_inputs([ref.source for ref in clean], capture)
+
+
 @dataclass(frozen=True)
 class GenerationFlowDeps:
     workspace: Callable[[int], dict]
@@ -72,6 +84,7 @@ class GenerationFlowDeps:
     flow_account_id: str
     mix_baskets: dict
     account_for: Callable[[int], str | None]
+    reupload_refs_for_edit_failover: Callable[..., Awaitable[list[ImageRef] | None]] | None = None
 
 
 class GenerationFlow:
@@ -99,6 +112,7 @@ class GenerationFlow:
                 aspect_ratio=last.get("aspect"),
                 image_model=last.get("imodel", DEFAULT_IMAGE_MODEL),
                 price_action=last.get("price_action", "edit"),
+                refs=last.get("refs"),
             )
             return
         await self.generate_and_send(
@@ -197,6 +211,7 @@ class GenerationFlow:
         aspect_ratio: str | None = None,
         image_model: str = DEFAULT_IMAGE_MODEL,
         price_action: str = "edit",
+        refs: list[ImageRef] | None = None,
     ) -> bool:
         """Apply ``instruction`` to a specific generated image ref."""
         d = self._d
@@ -206,8 +221,15 @@ class GenerationFlow:
             await message.answer("❌ Опишите правку (минимум 3 символа)")
             return False
 
+        ref_group = [
+            item for item in (refs or [ref])[:4]
+            if isinstance(item, ImageRef) and item.user_id == user_id
+        ]
+        if not ref_group:
+            ref_group = [ref]
+        ref = ref_group[0]
         capture = load_edit_capture(d.edit_capture_file)
-        image_inputs = build_image_inputs(ref.source, capture)
+        image_inputs = build_image_inputs_for_refs(ref_group, capture)
         if not image_inputs:
             await message.answer(
                 "⚠️ Не удалось определить идентификатор исходной картинки. "
@@ -230,7 +252,7 @@ class GenerationFlow:
                 ) as charge:
                     ok = await self.do_edit_and_send(
                         message, ref, instruction, image_inputs, user_id,
-                        aspect_ratio=aspect, image_model=image_model,
+                        aspect_ratio=aspect, image_model=image_model, refs=ref_group,
                     )
                     charge.ok = ok
         except d.rate_limited_error:
@@ -259,6 +281,7 @@ class GenerationFlow:
                 "aspect": aspect,
                 "imodel": image_model,
                 "price_action": price_action,
+                "refs": ref_group,
             }
             await d.post_generation_referral_hooks(message, user_id)
         return ok
@@ -273,6 +296,7 @@ class GenerationFlow:
         *,
         aspect_ratio: str | None = None,
         image_model: str = DEFAULT_IMAGE_MODEL,
+        refs: list[ImageRef] | None = None,
     ) -> bool:
         d = self._d
         status_msg = await message.answer(
@@ -313,12 +337,20 @@ class GenerationFlow:
                     "image_edit failover: аккаунт %s ушёл в кулдаун, пробую другой",
                     ref.account_id,
                 )
-                failover_ref = await d.reupload_ref_for_edit_failover(
-                    ref, user_id, current_account_id=ref.account_id,
-                )
+                if d.reupload_refs_for_edit_failover is not None:
+                    failover_refs = await d.reupload_refs_for_edit_failover(
+                        refs or [ref], user_id, current_account_id=ref.account_id,
+                    )
+                else:
+                    moved = await d.reupload_ref_for_edit_failover(
+                        ref, user_id, current_account_id=ref.account_id,
+                    )
+                    failover_refs = [moved] if moved is not None else None
+                failover_ref = failover_refs[0] if failover_refs else None
                 failover_inputs = (
-                    build_image_inputs(failover_ref.source, load_edit_capture(d.edit_capture_file))
-                    if failover_ref else []
+                    build_image_inputs_for_refs(
+                        failover_refs or [], load_edit_capture(d.edit_capture_file)
+                    )
                 )
                 if failover_ref and failover_inputs:
                     try:
@@ -797,7 +829,7 @@ class GenerationFlow:
                         return False
 
                     if "error" in result:
-                        if result.get("error_type") == "prompt_rejected":
+                        if result.get("error_type") in {"prompt_rejected", "unsafe_generation"}:
                             # 400 — проблема запроса, не аккаунта: не трогаем health, не фейловеримся
                             await status_msg.edit_text(
                                 f"❌ {html.escape(str(result['error'])[:300])}",

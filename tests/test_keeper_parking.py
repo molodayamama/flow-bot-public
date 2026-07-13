@@ -124,6 +124,12 @@ class ParkDecisionTests(unittest.IsolatedAsyncioTestCase):
         k._last_use = time.time() - (flow_bot.IDLE_PARK_SEC + 5)
         self.assertFalse(k._should_park())
 
+    async def test_should_not_park_when_keep_warm_active(self):
+        k = _keeper(parked=False)
+        k._last_use = time.time() - (flow_bot.IDLE_PARK_SEC + 5)
+        k.keep_warm_for(flow_bot.IDLE_PARK_SEC + 10, "image")
+        self.assertFalse(k._should_park())
+
     async def test_park_locked_navigates_to_blank(self):
         k = _keeper(parked=False)
         await k._park_locked()

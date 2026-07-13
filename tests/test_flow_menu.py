@@ -710,7 +710,7 @@ class BotMenuWiringTests(unittest.TestCase):
         self.assertIn("tg_start_router.create_router(", self.source)
         self.assertIn("cmd_start = tg_start_router.create_handler", self.source)
         start = self.start_router_source.index("async def cmd_start")
-        block = self.start_router_source[start:start + 1200]
+        block = self.start_router_source[start:start + 2400]
         self.assertIn("_reset_image_flow(user_id)", block)
         self.assertIn("_vid_clear(user_id)", block)
 
@@ -1283,7 +1283,7 @@ class BotMenuWiringTests(unittest.TestCase):
         ss = (PROJECT_ROOT / "storage" / "session_state.py").read_text(encoding="utf-8")
         self.assertIn("def reset_image_flow", ss)
         reset_start = ss.index("def reset_image_flow")
-        self.assertIn("pending_edits.pop(user_id, None)", ss[reset_start:reset_start + 600])
+        self.assertIn("clear_pending_edit(user_id)", ss[reset_start:reset_start + 700])
         # The dangerous unconditional "old path" edit fallback is gone.
         self.assertNotIn("Старый путь (на случай pending_edits", self.source)
         self.assertIn("_reset_image_flow(user_id)", self.source + "\n" + self.start_router_source)
@@ -1453,8 +1453,9 @@ class BotMenuWiringTests(unittest.TestCase):
         start = self.photo_input_router_source.index("async def handle_photo")
         block = self.photo_input_router_source[start:start + 13000]
         self.assertIn("await deps.offer_photo_route_choice(message, user_id=user_id, caption=caption)", block)
-        self.assertIn("await deps.prepare_photo_edit_from_file_id(", self.photo_route_source)
-        self.assertIn("_prepare_photo_video_from_file_id(", self.source)
+        self.assertIn("await deps.prepare_photo_edit_from_file_ids(", self.photo_route_source)
+        self.assertIn("_prepare_photo_video_from_file_ids(", self.source)
+        self.assertIn('snap.get("file_ids")', self.photo_route_source)
         # The old fallback edited immediately when a caption was attached.
         self.assertNotIn("await _edit_and_send(message, ref, caption", block)
 
@@ -1786,14 +1787,14 @@ class BotMenuWiringTests(unittest.TestCase):
         end = self.source.index("if gen_status != 200:", start)
         block = self.source[start:end]
         self.assertIn('"account_risk": "video_auth"', block)
-        self.assertIn('"account_risk": "video_recaptcha_403"', block)
+        self.assertIn('"unusual_activity" if unusual_403 else "video_recaptcha_403"', block)
 
         # Failure/cooldown policy moved to accounts.health (Phase 11).
         health_source = (PROJECT_ROOT / "accounts" / "health.py").read_text(encoding="utf-8")
         helper = health_source[health_source.index("def mark_video_failure"):]
         # video_auth — кулдаун сразу; video_recaptcha_403 (стохастичный) —
         # через счётчик fail (кулдаун только после серии).
-        self.assertIn('risk == "video_auth"', helper)
+        self.assertIn('risk in {"video_auth", "unusual_activity"}', helper)
         self.assertIn("self._pool.mark_cooldown(account_id)", helper)
         self.assertIn("self._pool.mark_failure(account_id)", helper)
         self.assertIn('risk == "video_recaptcha_403"', helper)

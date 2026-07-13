@@ -537,6 +537,15 @@ class FlowHttpClient:
 
             if status == 400:
                 log.warning("⚠️ Prompt rejected (400)")
+                if (
+                    "PUBLIC_ERROR_UNSAFE_GENERATION" in text
+                    or "unsafe_generation" in text.lower()
+                ):
+                    return {
+                        "error": flow_copy.msg("prompt_rejected"),
+                        "error_type": "unsafe_generation",
+                        "failure": "unsafe_generation",
+                    }
                 return {"error": flow_copy.msg("prompt_rejected"), "error_type": "prompt_rejected"}
 
             log.error("❌ Неизвестный статус %s", status)
@@ -1063,12 +1072,26 @@ class FlowHttpClient:
         if gen_status == 403:
             return _submit_meta({
                 "error": "Сервис отклонил запрос видео (403): низкий score/антифрод reCAPTCHA.",
-                "account_risk": "video_recaptcha_403",
+                "account_risk": "unusual_activity" if unusual_403 else "video_recaptcha_403",
                 "had_403": True,
                 "unusual_403": unusual_403,
             })
         if gen_status != 200:
             log.warning("🎬 video %s non-200 status=%s", endpoint_name, gen_status)
+            not_found = (
+                gen_status == 404
+                and (
+                    "Requested entity was not found" in gen_text
+                    or '"status": "NOT_FOUND"' in gen_text
+                    or '"status":"NOT_FOUND"' in gen_text
+                )
+            )
+            if (is_reference or is_frames) and not_found:
+                return _submit_meta({
+                    "error": flow_copy.msg("vid_gen_failed"),
+                    "failure": "reference_media_not_found",
+                    "error_type": "reference_media_not_found",
+                })
             return _submit_meta({"error": flow_copy.msg("service_error", status=gen_status)})
 
         try:

@@ -18,9 +18,11 @@ from aiogram import F, Router, types
 class PhotoRouteDeps:
     """Injected state and media preparation callbacks."""
 
-    pending_photo_routes: MutableMapping[int, dict[str, str]]
+    pending_photo_routes: MutableMapping[int, dict]
     prepare_photo_edit_from_file_id: Callable[..., Awaitable[Any]]
     prepare_photo_video_from_file_id: Callable[..., Awaitable[Any]]
+    prepare_photo_edit_from_file_ids: Callable[..., Awaitable[Any]] | None = None
+    prepare_photo_video_from_file_ids: Callable[..., Awaitable[Any]] | None = None
 
 
 def create_router(deps: PhotoRouteDeps) -> Router:
@@ -46,23 +48,24 @@ def create_router(deps: PhotoRouteDeps) -> Router:
             await callback.answer("Запрос устарел — пришлите фото ещё раз.", show_alert=True)
             return
         file_id = snap["file_id"]
+        file_ids = [item for item in (snap.get("file_ids") or [file_id])[:4] if item]
         caption = snap["caption"]
         deps.pending_photo_routes.pop(user_id, None)
         await callback.answer()
         if data == "pr:img":
-            await deps.prepare_photo_edit_from_file_id(
+            await deps.prepare_photo_edit_from_file_ids(
                 callback.message,
                 user_id=user_id,
-                file_id=file_id,
+                file_ids=file_ids,
                 caption=caption,
                 as_generation=True,  # «Создать изображение» по фото = тариф генерации
             )
             return
         if data == "pr:vid":
-            await deps.prepare_photo_video_from_file_id(
+            await deps.prepare_photo_video_from_file_ids(
                 callback.message,
                 user_id=user_id,
-                file_id=file_id,
+                file_ids=file_ids,
                 caption=caption,
             )
             return

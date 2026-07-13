@@ -89,6 +89,7 @@ class AnimatePhotoScenario:
 
         st = ctx.state
         st["vphoto"] = video_source
+        st["vphotos"] = [video_source]
         st["vstep"] = "vprompt_input"
         st["vawait"] = None
         st["vmode"] = "ingredients"
@@ -127,6 +128,7 @@ class AnimatePhotoScenario:
             return True
 
         st["vphoto"] = dict(source)
+        st["vphotos"] = [dict(source)]
         st["vmode"] = "ingredients"
         self._seed_defaults(st)
         st["vmodel"] = ctx.current_video_model()
@@ -159,4 +161,3 @@ class AnimatePhotoScenario:
         st.setdefault("vdur", self.config.default_duration)
         st.setdefault("vquality", self.config.default_quality)
         st.setdefault("vstyle", self.config.default_style)
-

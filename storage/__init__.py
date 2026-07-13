@@ -10,6 +10,7 @@ from storage.media_registry import image_registry, video_registry
 from storage.session_state import (
     mix_baskets,
     pending_edits,
+    pending_edit_groups,
     pending_photo_routes,
     user_busy,
     user_last_request,
@@ -20,6 +21,7 @@ __all__ = [
     "user_last_request",
     "user_busy",
     "pending_edits",
+    "pending_edit_groups",
     "pending_photo_routes",
     "mix_baskets",
     "wizard_state",

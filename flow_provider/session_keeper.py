@@ -110,6 +110,8 @@ class SessionKeeper:
         self._parked = False
         self._last_use = 0.0
         self._park_task = None
+        self._keep_warm_until = 0.0
+        self._keep_warm_role = ""
         # Кэш баланса G-кредитов (см. get_g_credits) — не дёргаем Google на
         # каждый /admin_accounts, обновляем не чаще GCREDITS_CACHE_SEC.
         self._gcredits_cache: dict | None = None
@@ -249,6 +251,19 @@ class SessionKeeper:
     def _mark_use(self) -> None:
         self._last_use = time.time()
 
+    def keep_warm_for(self, seconds: float, role: str = "") -> None:
+        """Prevent idle parking for at least ``seconds`` after a real request."""
+        if seconds <= 0:
+            return
+        self._keep_warm_until = max(
+            self._keep_warm_until, time.time() + float(seconds)
+        )
+        self._keep_warm_role = role or self._keep_warm_role
+        self._mark_use()
+
+    def _keep_warm_active(self) -> bool:
+        return self._keep_warm_until > time.time()
+
     def _on_flow_page(self) -> bool:
         try:
             return "labs.google" in (self._page.url or "")
@@ -293,6 +308,8 @@ class SessionKeeper:
     def _should_park(self) -> bool:
         """True if the tab is on Flow, idle past IDLE_PARK_SEC, and can be parked."""
         if IDLE_PARK_SEC <= 0 or self._parked or not self._browser_alive():
+            return False
+        if self._keep_warm_active():
             return False
         return (time.time() - self._last_use) >= IDLE_PARK_SEC
 

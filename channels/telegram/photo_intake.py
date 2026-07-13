@@ -37,6 +37,7 @@ class PhotoIntakeDeps:
     workspace: Callable[[int], dict]
     image_registry: Any
     pending_edits: dict
+    store_pending_edit_refs: Callable[[int, list], None]
     fmt_to_aspect: Callable[[str], str]
     show_edit_confirm: Callable[..., Awaitable[Any]]
     edit_settings_kb: Callable[..., Any]
@@ -45,10 +46,12 @@ class PhotoIntakeDeps:
     show_new_video_wizard: Callable[..., Awaitable[Any]]
     show_video_frames: Callable[..., Awaitable[Any]]
     show_video_ingredients: Callable[..., Awaitable[Any]]
+    offer_photo_album_route_choice: Callable[..., Awaitable[Any]]
     nwiz_model: Callable[[dict], str]
     default_fmt: str
     default_image_model: str
     vid_default_fmt: str
+    max_photos: int = 4
 
 
 class PhotoIntake:
@@ -77,7 +80,8 @@ class PhotoIntake:
         )
 
     async def upload_photo_source_from_file_id(
-        self, message: types.Message, *, user_id: int, status_msg: types.Message, file_id: str
+        self, message: types.Message, *, user_id: int, status_msg: types.Message, file_id: str,
+        account_id: str | None = None, project_id: str | None = None,
     ) -> dict | None:
         d = self._d
         try:
@@ -87,11 +91,11 @@ class PhotoIntake:
             await status_msg.edit_text("❌ Не удалось получить ваше фото.")
             return None
 
-        acc_id = d.account_for_video(user_id)
+        acc_id = account_id or d.account_for_video(user_id)
         if acc_id is None:
             await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
             return None
-        project_id = await d.ensure_user_project(user_id, account_id=acc_id)
+        project_id = project_id or await d.ensure_user_project(user_id, account_id=acc_id)
         try:
             source = await d.keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png", project_id=project_id)
         except Exception:
@@ -111,10 +115,70 @@ class PhotoIntake:
         source.setdefault("_tg_file_id", file_id)  # для бесшовного ре-аплоада
         return source
 
+    async def upload_photo_sources_from_file_ids(
+        self, message: types.Message, *, user_id: int, status_msg: types.Message,
+        file_ids: list[str],
+    ) -> list[dict]:
+        d = self._d
+        acc_id = d.account_for_video(user_id)
+        if acc_id is None:
+            await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
+            return []
+        project_id = await d.ensure_user_project(user_id, account_id=acc_id)
+        sources = []
+        for file_id in file_ids[:d.max_photos]:
+            source = await self.upload_photo_source_from_file_id(
+                message, user_id=user_id, status_msg=status_msg, file_id=file_id,
+                account_id=acc_id, project_id=project_id,
+            )
+            if source:
+                sources.append(source)
+        return sources
+
     # ── album buffering (frames / ingredients video) ────────────────────
 
     def vid_caption(self, message: types.Message) -> str:
         return (message.caption or "").strip()
+
+    @staticmethod
+    def album_caption(messages: list) -> str:
+        for message in messages:
+            caption = (getattr(message, "caption", None) or "").strip()
+            if caption:
+                return caption
+        return ""
+
+    def album_file_ids(self, messages: list) -> list[str]:
+        file_ids = []
+        for message in messages[:self._d.max_photos]:
+            photos = getattr(message, "photo", None) or []
+            if photos:
+                file_ids.append(photos[-1].file_id)
+        return file_ids
+
+    @staticmethod
+    def image_photo_prompt_context(st: dict, caption: str) -> bool:
+        return bool(caption) and (
+            st.get("step") in ("prompt_picker", "wizard")
+            or st.get("await") == "prompt"
+            or bool(st.get("pending_prompt"))
+        )
+
+    def should_buffer_album(self, st: dict, caption: str) -> bool:
+        awaiting = st.get("await")
+        if st.get("support_await") or awaiting in {
+            "photo", "mp_photo", "mp_series_photo", "mp_video_photo", "mp_brandkit",
+        }:
+            return False
+        if st.get("tp_tpl") or "gp_step" in st or st.get("ideas_mode") in {
+            "root", "templates", "guided",
+        }:
+            return False
+        if st.get("vawait") in {"ving_photo", "vfrm_start", "vfrm_end"}:
+            return True
+        if st.get("vstep") in {"vprompt_input", "vnewwiz"}:
+            return True
+        return self.image_photo_prompt_context(st, caption) or bool(caption)
 
     async def flush_album(self, media_group_id: str, user_id: int) -> None:
         try:
@@ -129,22 +193,44 @@ class PhotoIntake:
     async def handle_album_photos(self, messages: list, *, user_id: int) -> None:
         """Обработать альбом для frames/ingredients: загрузить фото пачкой."""
         d = self._d
+        messages = sorted(messages, key=lambda item: getattr(item, "message_id", 0))
         st = d.workspace(user_id)
         vmode = st.get("vmode")
         first = messages[0]
+        caption = self.album_caption(messages)
+        file_ids = self.album_file_ids(messages)
+        if not file_ids:
+            return
+        if self.image_photo_prompt_context(st, caption):
+            await self.prepare_photo_edit_from_file_ids(
+                first, user_id=user_id, file_ids=file_ids, caption=caption,
+                aspect_fmt=st.get("fmt", d.default_fmt),
+                image_model=st.get("imodel", d.default_image_model),
+                as_generation=True,
+            )
+            return
+        if st.get("vstep") in {"vprompt_input", "vnewwiz"}:
+            await self.prepare_photo_video_from_file_ids(
+                first, user_id=user_id, file_ids=file_ids, caption=caption,
+                vfmt=st.get("vfmt") or d.vid_default_fmt,
+                vstyle=st.get("vstyle", ""),
+            )
+            return
+        if caption and st.get("vawait") not in {"ving_photo", "vfrm_start", "vfrm_end"}:
+            await d.offer_photo_album_route_choice(
+                first, user_id=user_id, file_ids=file_ids, caption=caption,
+            )
+            return
         status_msg = await first.answer(flow_copy.msg("uploading_photo"))
-        sources = []
-        for m in messages:
-            src = await self.upload_photo_source_from_message(m, user_id=user_id, status_msg=status_msg)
-            if src:
-                sources.append(src)
+        sources = await self.upload_photo_sources_from_file_ids(
+            first, user_id=user_id, status_msg=status_msg, file_ids=file_ids,
+        )
         try:
             await status_msg.delete()
         except Exception:
             pass
         if not sources:
             return
-        caption = self.vid_caption(first)
         if caption:
             st["vcaption_prompt"] = caption
         if vmode == "frames":
@@ -176,6 +262,7 @@ class PhotoIntake:
     async def upload_image_ref_from_file_id(
         self, message: types.Message, *, user_id: int, status_msg: types.Message,
         file_id: str, prompt: str, aspect_ratio: str,
+        account_id: str | None = None, project_id: str | None = None,
     ) -> ImageRef | None:
         d = self._d
         try:
@@ -185,11 +272,11 @@ class PhotoIntake:
             await status_msg.edit_text("❌ Не удалось получить ваше фото.")
             return None
 
-        acc_id = d.account_for_image(user_id, prefer_image_only=True)
+        acc_id = account_id or d.account_for_image(user_id, prefer_image_only=True)
         if acc_id is None:
             await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
             return None
-        project_id = await d.ensure_user_project(user_id, account_id=acc_id)
+        project_id = project_id or await d.ensure_user_project(user_id, account_id=acc_id)
         try:
             source = await d.keeper_for_acc(acc_id).upload_image(data, filename=f"tg_{user_id}.png", project_id=project_id)
         except Exception:
@@ -210,6 +297,27 @@ class PhotoIntake:
             aspect_ratio=aspect_ratio,
             account_id=acc_id,
         )
+
+    async def upload_image_refs_from_file_ids(
+        self, message: types.Message, *, user_id: int, status_msg: types.Message,
+        file_ids: list[str], prompt: str, aspect_ratio: str,
+    ) -> list[ImageRef]:
+        d = self._d
+        acc_id = d.account_for_image(user_id, prefer_image_only=True)
+        if acc_id is None:
+            await status_msg.edit_text(flow_copy.msg("accounts_unavailable"))
+            return []
+        project_id = await d.ensure_user_project(user_id, account_id=acc_id)
+        refs = []
+        for file_id in file_ids[:d.max_photos]:
+            ref = await self.upload_image_ref_from_file_id(
+                message, user_id=user_id, status_msg=status_msg, file_id=file_id,
+                prompt=prompt, aspect_ratio=aspect_ratio,
+                account_id=acc_id, project_id=project_id,
+            )
+            if ref:
+                refs.append(ref)
+        return refs
 
     # ── prepare-and-route entrypoints (called from routers) ──────────────
 
@@ -232,11 +340,48 @@ class PhotoIntake:
         if not ref:
             return False
 
-        token = d.image_registry.add(ref)
-        d.pending_edits[user_id] = token
+        d.store_pending_edit_refs(user_id, [ref])
         st = d.workspace(user_id)
         # Фото-референс из «Создать картинку» тарифицируется как генерация (10/15),
         # а не как правка (15/20). Флаг читают edit_confirm_kb/show_edit_confirm/es:apply.
+        st["edit_as_gen"] = bool(as_generation)
+        st["await"] = "edit_confirm" if caption else "edit"
+        st["step"] = None
+        st.pop("pending_prompt", None)
+        st["edit_fmt"] = aspect_fmt
+        st["edit_imodel"] = image_model or st.get("edit_imodel", d.default_image_model)
+        st.pop("ag_variants", None)
+        st.pop("edit_instruction", None)
+        if caption:
+            st["edit_instruction"] = caption
+            await d.show_edit_confirm(message, user_id=user_id, edit=False)
+        else:
+            await message.answer(
+                flow_copy.msg("photo_uploaded_ask_prompt"),
+                reply_markup=d.edit_settings_kb(st["edit_fmt"], st["edit_imodel"]),
+            )
+        return True
+
+    async def prepare_photo_edit_from_file_ids(
+        self, message: types.Message, *, user_id: int, file_ids: list[str], caption: str,
+        aspect_fmt: str | None = None, image_model: str | None = None,
+        as_generation: bool = False,
+    ) -> bool:
+        d = self._d
+        aspect_fmt = aspect_fmt if aspect_fmt is not None else d.default_fmt
+        status_msg = await message.answer(flow_copy.msg("uploading_photo"))
+        refs = await self.upload_image_refs_from_file_ids(
+            message, user_id=user_id, status_msg=status_msg, file_ids=file_ids,
+            prompt=caption or "uploaded image", aspect_ratio=d.fmt_to_aspect(aspect_fmt),
+        )
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        if not refs:
+            return False
+        d.store_pending_edit_refs(user_id, refs)
+        st = d.workspace(user_id)
         st["edit_as_gen"] = bool(as_generation)
         st["await"] = "edit_confirm" if caption else "edit"
         st["step"] = None
@@ -274,6 +419,37 @@ class PhotoIntake:
         if not source:
             return False
         st["vphoto"] = source
+        st["vprompt"] = caption
+        st["vstep"] = "vnewwiz"
+        st["vmode"] = "ingredients"
+        st["vfmt"] = vfmt or st.get("vfmt") or d.vid_default_fmt
+        st.setdefault("vdur", 4)
+        st.setdefault("vquality", "lite")
+        st["vstyle"] = vstyle if vstyle is not None else st.get("vstyle", "")
+        st["vmodel"] = d.nwiz_model(st)
+        await d.show_new_video_wizard(message, user_id=user_id, edit=False)
+        return True
+
+    async def prepare_photo_video_from_file_ids(
+        self, message: types.Message, *, user_id: int, file_ids: list[str], caption: str,
+        vfmt: str | None = None, vstyle: str | None = None,
+    ) -> bool:
+        d = self._d
+        d.vid_clear(user_id)
+        st = d.workspace(user_id)
+        d.clear_image_flow_keys(st)
+        status_msg = await message.answer(flow_copy.msg("uploading_photo"))
+        sources = await self.upload_photo_sources_from_file_ids(
+            message, user_id=user_id, status_msg=status_msg, file_ids=file_ids,
+        )
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        if not sources:
+            return False
+        st["vphoto"] = sources[0]
+        st["vphotos"] = sources[:d.max_photos]
         st["vprompt"] = caption
         st["vstep"] = "vnewwiz"
         st["vmode"] = "ingredients"

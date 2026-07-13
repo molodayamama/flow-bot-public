@@ -105,6 +105,47 @@ class ReferenceRouting:
             account_id=acc_id,
         )
 
+    async def reupload_refs_for_edit_failover(
+        self, refs: list[ImageRef], user_id: int, *, current_account_id: str | None,
+    ) -> list[ImageRef] | None:
+        """Move an image-reference group to one alternate account atomically."""
+        d = self._d
+        clean = [ref for ref in refs if isinstance(ref, ImageRef) and ref.user_id == user_id]
+        if not clean or not current_account_id:
+            return None
+        acc_id = d.account_for_image(
+            user_id, prefer_image_only=True, exclude={current_account_id},
+        )
+        if not acc_id or acc_id == current_account_id:
+            return None
+        project_id = await d.ensure_user_project(user_id, account_id=acc_id)
+        moved: list[ImageRef] = []
+        for index, ref in enumerate(clean):
+            data = await self.download_ref_image_bytes(ref)
+            if not data:
+                return None
+            try:
+                source = await d.keeper_for_acc(acc_id).upload_image(
+                    data, filename=f"failover_{user_id}_{index}.png", project_id=project_id,
+                )
+            except Exception:
+                d.log.exception("group failover upload_image failed")
+                return None
+            if not source or not source.get("mediaId"):
+                return None
+            source.setdefault("_project_id", project_id)
+            if isinstance(ref.source, dict) and ref.source.get("_tg_file_id"):
+                source.setdefault("_tg_file_id", ref.source["_tg_file_id"])
+            moved.append(ImageRef(
+                user_id=user_id,
+                project_id=source.pop("_project_id", None) or project_id,
+                source=source,
+                prompt=ref.prompt,
+                aspect_ratio=ref.aspect_ratio,
+                account_id=acc_id,
+            ))
+        return moved
+
     async def reupload_reference_source(
         self, src: dict, *, user_id: int, acc_id: str, project_id: str | None
     ) -> dict | None:
@@ -130,28 +171,37 @@ class ReferenceRouting:
         return new_src
 
     async def ensure_reference_on_healthy_account(
-        self, st: dict, vmode: str, *, user_id: int, model_id: str, min_credits: int
+        self, st: dict, vmode: str, *, user_id: int, model_id: str, min_credits: int,
+        exclude: set[str] | None = None, force_reupload: bool = False,
     ) -> str | None:
         """Pick a healthy account that holds the reference photo(s), re-uploading
         them transparently if the bound account isn't ready. Seamless: the user is
         never told that an account was unavailable. Returns None only if the whole
         pool is unusable for video."""
         d = self._d
+        excluded = set(exclude or set())
         sources = self._video_reference_sources(st, vmode)
         if not sources:
-            return d.account_for_video(user_id, model_id=model_id, min_credits=min_credits)
+            return d.account_for_video(
+                user_id, model_id=model_id, min_credits=min_credits, exclude=excluded,
+            )
 
         bound = self._video_reference_account_id(
             st, vmode, is_reference_usable=d.account_pool.is_reference_usable
         )
-        if bound and not d.video_account_health_reason(bound, model_id, min_credits):
+        if (
+            bound and not force_reupload and bound not in excluded
+            and not d.video_account_health_reason(bound, model_id, min_credits)
+        ):
             return bound  # bound account is healthy — use the existing upload
 
-        target = d.account_for_video(user_id, model_id=model_id, min_credits=min_credits)
+        target = d.account_for_video(
+            user_id, model_id=model_id, min_credits=min_credits, exclude=excluded,
+        )
         if target is None:
             # Whole pool unusable. Fall back to the bound account if it at least
             # has usable media there (better to try than to refuse).
-            return bound
+            return None if force_reupload else bound
         if target == bound:
             return target
 
@@ -164,7 +214,7 @@ class ReferenceRouting:
             if not new_src:
                 # Can't move this photo (no file id / upload failed). Keep the bound
                 # account if any — generation may still work there.
-                return bound or target
+                return None if force_reupload else (bound or target)
             reuploaded.append(new_src)
 
         if vmode == "ingredients":

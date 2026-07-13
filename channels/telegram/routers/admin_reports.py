@@ -193,6 +193,13 @@ def create_router(deps: AdminReportsDeps) -> Router:
                 return
             username = deps.bot_username() or "&lt;bot&gt;"
             link = f"https://t.me/{username}?start={CHANNEL_PARAM_PREFIX}{slug}"
+            if hasattr(deps.metrics, "log_event"):
+                deps.metrics.log_event(
+                    "channel_seed_created",
+                    user_id=message.from_user.id,
+                    username=getattr(message.from_user, "username", None),
+                    source=slug,
+                )
             await message.answer(
                 f"🔗 Ссылка для канала <b>{html.escape(slug)}</b>:\n<code>{html.escape(link)}</code>",
                 parse_mode="HTML",

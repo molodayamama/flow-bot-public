@@ -82,7 +82,17 @@ def nwiz_model(st: dict) -> str:
     return _VID_OMNI_DUR_MODEL.get(st.get("vdur", 4), "omni-flash-4s")
 
 
+def nwiz_photo_sources(st: dict) -> list[dict]:
+    sources = st.get("vphotos")
+    if isinstance(sources, list):
+        clean = [source for source in sources if isinstance(source, dict)]
+        if clean:
+            return clean[:4]
+    source = st.get("vphoto")
+    return [source] if isinstance(source, dict) else []
+
+
 def nwiz_price(st: dict) -> int:
     mid = nwiz_model(st)
-    vmode = "ingredients" if st.get("vphoto") else "text"
+    vmode = "ingredients" if nwiz_photo_sources(st) else "text"
     return video_price(mid, 1, vmode)

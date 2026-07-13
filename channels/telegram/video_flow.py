@@ -359,17 +359,42 @@ class VideoFlow:
                         aspect,
                         result.get("account_risk") or result.get("failure") or "provider_error",
                     )
-                    d.mark_video_account_failure(acc_id, result)
+                    if _content_fail != "reference_media_not_found":
+                        d.mark_video_account_failure(acc_id, result)
                     # Прозрачный фейловер на другой аккаунт для text-to-video (403/auth риски).
                     # Ingredients/frames используют account-bound media — фейловер там невозможен.
                     _failover_risk = (result or {}).get("account_risk")
+                    _failover_reasons = {
+                        "video_auth", "video_recaptcha_403", "unusual_activity",
+                    }
+                    _reference_failover = has_reference and (
+                        _content_fail == "reference_media_not_found"
+                        or _failover_risk in _failover_reasons
+                    )
+                    _text_failover = vmode == "text" and _failover_risk in _failover_reasons
                     if (
-                        _failover_risk in {"video_auth", "video_recaptcha_403"}
-                        and vmode == "text"
-                        and video_operation == "generate"
+                        video_operation == "generate"
                         and not source_video
+                        and (_text_failover or _reference_failover)
                     ):
-                        failover_acc = d.account_for_video(user_id, model_id=model_id, min_credits=single_price)
+                        failed_acc = acc_id
+                        if _reference_failover:
+                            failover_acc = await d.ensure_reference_on_healthy_account(
+                                st,
+                                vmode,
+                                user_id=user_id,
+                                model_id=model_id,
+                                min_credits=single_price,
+                                exclude={failed_acc},
+                                force_reupload=True,
+                            )
+                        else:
+                            failover_acc = d.account_for_video(
+                                user_id,
+                                model_id=model_id,
+                                min_credits=single_price,
+                                exclude={failed_acc},
+                            )
                         if failover_acc and failover_acc != acc_id:
                             d.log.info("🔄 video failover: %s → %s", acc_id, failover_acc)
                             acc_id = failover_acc
@@ -384,9 +409,15 @@ class VideoFlow:
                                     model_key=model_key,
                                     aspect=aspect,
                                     project_id=video_project_id,
-                                    reference_sources=None,
-                                    start_source=None,
-                                    end_source=None,
+                                    reference_sources=(
+                                        st.get("ving_photos") if vmode == "ingredients" else None
+                                    ),
+                                    start_source=(
+                                        st.get("vfrm_start") if vmode == "frames" else None
+                                    ),
+                                    end_source=(
+                                        st.get("vfrm_end") if vmode == "frames" else None
+                                    ),
                                     operation=video_operation,
                                     source_media_id=None,
                                     source_workflow_id=None,
@@ -406,9 +437,16 @@ class VideoFlow:
                                     or result.get("failure")
                                     or "provider_error",
                                 )
-                                d.mark_video_account_failure(acc_id, result)
+                                if (result or {}).get("failure") != "reference_media_not_found":
+                                    d.mark_video_account_failure(acc_id, result)
                     if "error" in result:
-                        await _fail_retry(i)
+                        final_type = (
+                            (result or {}).get("error_type")
+                            or (result or {}).get("failure")
+                            or (result or {}).get("account_risk")
+                            or "video_gen_failed"
+                        )
+                        await _fail_retry(i, error_type=final_type)
                         return
 
                 media_id = result["media_id"]

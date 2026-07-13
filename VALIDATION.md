@@ -64,6 +64,9 @@ Use for documentation, packaging, and pure refactors.
 Notes:
 
 - `python -m py_compile` is an assumption because Python version is not pinned.
+- In a clean worktree without local `.env`, the full offline unit suite may need
+  an explicitly fake Telegram token, for example:
+  `$env:TELEGRAM_TOKEN = '123456789:REDACTED'; python -m unittest discover -s tests -p "test_*.py"`.
 - Secret scans must not print secret values in command output or final reports.
   Use file-only output such as `rg -l` / `--files-with-matches`, or a dedicated
   redaction tool. Do not use `rg -n`, `-o`, `-C`, `-A`, or `-B` for secret
@@ -163,6 +166,40 @@ Secret hygiene:
 - Check templates contain placeholders only.
 - Run safe file-only secret scan against files intended for commit.
 - Do not delete or rotate real secrets unless explicitly requested.
+
+Server migration/cutover:
+
+- Requires explicit operator approval before starting live bot services.
+- Pull a local backup before changing the destination host; do not print env,
+  cookie, bearer, HAR, proxy credential, or browser-profile contents.
+- Verify copied archives with `sha256sum -c` before extraction.
+- Verify SQLite state with `sqlite3 metrics.db 'PRAGMA integrity_check;'`.
+- Verify nginx with `nginx -t` and public HTTPS/admin responses.
+- If nginx uses `auth_basic_user_file`, verify the referenced htpasswd file
+  exists on the destination and is readable by nginx; do not print its contents.
+- Verify local proxy/listener exposure with `ss -ltnp`; VNC ports must not be
+  exposed publicly unless the operator explicitly asks for interactive VNC.
+- Verify the intended deploy-managed service only:
+  `systemctl is-active geminifree-bot`. Seller is outside the current deploy
+  helper and should be checked separately when seller work resumes.
+- Verify startup journal reaches Telegram polling and has no fresh
+  `Traceback`, `ERROR`, `CRITICAL`, `exception`, or restart loop.
+- Do not run media generation, paid/captcha diagnostics, Google re-login, or
+  `login.py` unless explicitly approved.
+
+NL-only deployment:
+
+- The project no longer ships FI/NL DNS failover tooling. `photozhab.ru` and
+  `pay.photozhab.ru` are expected to run on NL (`192.0.2.10`) only.
+- Verify the intended NL deploy-managed service:
+  `systemctl is-active geminifree-bot`. Seller is outside the current deploy
+  helper and should be checked separately when seller work resumes.
+- Verify no old failover timer is installed or active:
+  `systemctl is-enabled geminifree-failover.timer` should be absent/disabled,
+  and `systemctl is-active geminifree-failover.timer` should be inactive/failed.
+- Verify DNS points at NL before relying on public traffic:
+  `Resolve-DnsName photozhab.ru -Type A` and
+  `Resolve-DnsName pay.photozhab.ru -Type A`.
 
 Dependency manifests:
 
@@ -800,3 +837,35 @@ For the documentation bootstrap task:
 - No business logic files should be modified.
 - No network/stateful tests are required.
 - Secrets must be described by category/name only, not copied as values.
+
+## Keep-Warm Request Pinning
+
+- Account keep-warm must not rotate accounts on a background timer. It should
+  pin only accounts that were actually used by image/video upload or generation
+  paths, for `KEEP_WARM_AFTER_REQUEST_SEC` seconds (default 1800).
+- Safe offline validation:
+  - `python -m py_compile flow_bot.py`
+  - `$env:TELEGRAM_TOKEN='123456789:REDACTED'; python -m unittest discover -s tests -p test_keeper_parking.py`
+  - `$env:TELEGRAM_TOKEN='123456789:REDACTED'; python -m unittest discover -s tests -p test_flow_accounts.py`
+  - `git diff --check`
+- Live validation after deploy: journal should show `keep-warm pinned after
+  request: <role>:<account> for 1800 sec` only after real bot/backend requests,
+  and should not show periodic `keep-warm active: video:..., image:...` wake
+  cycles when there are no requests.
+
+## Hermetic pytest and merged account/media routing
+
+- Default pytest discovery is intentionally constrained by `pytest.ini` to the
+  tracked `tests/` directory. This prevents ignored/local operator scripts whose
+  names end in `_test.py` from being imported by a normal `pytest` run.
+- Canonical full offline gate: `python -m pytest -q`. It must not read server
+  env files or contact Telegram, MAX, Google Flow, captcha, payment or VPS hosts.
+- Video failover validation must cover failed-account exclusion, immediate
+  cooldown for unusual-activity risk, reference-media-not-found classification,
+  and re-upload of account-bound ingredients/frames before retry.
+- Telegram albums are one logical request: sort by message id, take the first
+  non-empty caption, cap at four photos, and upload every photo to the same
+  account/project. Image route choice retains all file ids and multi-reference
+  edit failover moves the complete group.
+- Seed attribution must compute `is_new` before user UPSERT, persist first-touch
+  channel only for a new user, and log click/new/returning events separately.
