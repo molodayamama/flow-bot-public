@@ -23,6 +23,20 @@ must never be copied into source, templates, test fixtures, logs, or HANDOFF.
 The task-supervisor test locks ownership and deterministic shutdown for every
 composition-level long-running loop; aiohttp continues to own webhook workers.
 
+## MAX transport smoke
+
+The harness is offline by default and documents each external side effect:
+
+```bash
+python -m unittest discover -s tests -p "test_max_smoke.py"
+python tools/max_smoke.py --mode plan --env-file .env
+```
+
+After explicit operator approval, run `subscription`, then `message`, then
+`media` as documented in `docs/MAX_SMOKE.md`. The last two modes send visible
+content to the configured operator-owned MAX target; none of the modes print
+configuration values or response bodies.
+
 When an approved live/stateful check fails, record a sanitized entry in
 `docs/LIVE_TEST_FAILURES.md`. Include Telegram input/output, Flow account label,
 Google HTTP status/body snippet, user-facing text, reproduction steps, severity,

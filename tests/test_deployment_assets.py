@@ -21,6 +21,12 @@ class DeploymentAssetTests(unittest.TestCase):
         cls.nginx = (
             ROOT / "deploy/nginx/geminifree-locations.conf.example"
         ).read_text(encoding="utf-8")
+        cls.consumer_runner = (
+            ROOT / "deploy/bin/geminifree-bot-run"
+        ).read_text(encoding="utf-8")
+        cls.seller_runner = (
+            ROOT / "deploy/bin/geminifree-seller-bot-run"
+        ).read_text(encoding="utf-8")
 
     def test_deploy_uses_immutable_remote_target_and_no_pull(self) -> None:
         self.assertIn('git fetch --prune origin "$DEPLOY_BRANCH"', self.deploy)
@@ -48,6 +54,18 @@ class DeploymentAssetTests(unittest.TestCase):
             self.assertIn("StartLimitIntervalSec=300", unit)
             self.assertIn("StartLimitBurst=5", unit)
             self.assertIn("UMask=0077", unit)
+
+    def test_every_service_restart_runs_preflight_before_python(self) -> None:
+        for runner, env_name in (
+            (self.consumer_runner, ".env"),
+            (self.seller_runner, ".env.seller"),
+        ):
+            preflight = runner.index("tools/production_preflight.py")
+            process = runner.index("flow_bot.py")
+            self.assertLess(preflight, process)
+            self.assertIn('--env-file "$ENV_FILE"', runner)
+            self.assertIn(env_name, runner)
+            self.assertIn("set -euo pipefail", runner)
 
     def test_nginx_routes_public_ingress_but_limits_health_details(self) -> None:
         self.assertIn("location /robokassa/", self.nginx)

@@ -148,6 +148,10 @@ curl --fail --silent --show-error http://127.0.0.1:8081/max/health
 2Captcha и принудительное обновление browser profile — только после явного
 согласования стоимости и риска.
 
+For an approved MAX transport check, use the values-free sequence in
+`docs/MAX_SMOKE.md`; `message` and `media` visibly mutate only the configured
+operator-owned smoke chat.
+
 ## 6. Rollback и restore
 
 При deploy-ошибке code rollback выполняется автоматически. Для ручного rollback:

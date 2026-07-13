@@ -2,4 +2,7 @@
 set -euo pipefail
 cd /opt/geminifree
 export ENV_FILE="${ENV_FILE:-/opt/geminifree/.env.seller}"
-exec /usr/bin/xvfb-run -a -s "-screen 0 1920x1080x24" /opt/geminifree/.venv/bin/python /opt/geminifree/flow_bot.py
+PYTHON=/opt/geminifree/.venv/bin/python
+"$PYTHON" /opt/geminifree/tools/production_preflight.py \
+  --root /opt/geminifree --env-file "$ENV_FILE"
+exec /usr/bin/xvfb-run -a -s "-screen 0 1920x1080x24" "$PYTHON" /opt/geminifree/flow_bot.py
