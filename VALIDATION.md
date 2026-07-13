@@ -901,3 +901,6 @@ For the documentation bootstrap task:
   not raise into the durable webhook inbox (which would regenerate on retry).
 - Safe focused gate: `python -m pytest -q tests/test_generation_facade.py
   tests/test_max_mvp.py tests/test_max_client.py`.
+- Callback acknowledgement happens after the callback's business action and is
+  therefore best-effort. A stale/rejected acknowledgement must not escape into
+  the durable inbox, which would replay the already completed action.

@@ -36,19 +36,27 @@ class FakePlatform:
 
     name = "max"
 
-    def __init__(self, *, photo_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        photo_error: Exception | None = None,
+        answer_error: Exception | None = None,
+    ) -> None:
         self.messages: list[dict] = []
         self.answers: list[dict] = []
         self.photos: list[dict] = []
         self.videos: list[dict] = []
         self.documents: list[dict] = []
         self.photo_error = photo_error
+        self.answer_error = answer_error
 
     async def send_message(self, chat_id, text, keyboard=None):
         self.messages.append({"chat_id": chat_id, "text": text, "keyboard": keyboard})
         return {"ok": True}
 
     async def answer_callback(self, callback_id, text=None):
+        if self.answer_error is not None:
+            raise self.answer_error
         self.answers.append({"callback_id": callback_id, "text": text})
         return {"ok": True}
 
@@ -188,6 +196,20 @@ class MaxMvpTests(unittest.TestCase):
         run(bot.handle(_cb(CB_BALANCE)))
 
         self.assertEqual(self.platform.answers[-1]["callback_id"], "cbid-1")
+
+    def test_callback_ack_failure_does_not_replay_completed_action(self) -> None:
+        platform = FakePlatform(answer_error=RuntimeError("expired callback"))
+        bot = MaxMvpBot(
+            platform=platform,
+            service=self.service,
+            config=self.config,
+            wallet=self.wallet,
+        )
+
+        run(bot.handle(_cb(CB_CREATE_IMAGE)))
+
+        self.assertEqual(len(platform.messages), 1)
+        self.assertEqual(platform.answers, [])
 
     # -- create image -----------------------------------------------------
 

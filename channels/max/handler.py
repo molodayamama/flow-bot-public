@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 from dataclasses import dataclass, field
 from collections.abc import Callable, Sequence
 from typing import Any, Mapping, MutableMapping, Protocol, runtime_checkable
@@ -51,6 +52,7 @@ from flow_core import (
 MAX_PLATFORM = "max"
 _MAX_VIDEO_BYTES = 250 * 1024 * 1024
 _MAX_VIDEO_B64_CHARS = 4 * ((_MAX_VIDEO_BYTES + 2) // 3)
+log = logging.getLogger(__name__)
 
 
 class _UndeliverableMediaError(ValueError):
@@ -332,7 +334,16 @@ class MaxMvpBot:
 
         callback_id = self._callback_id(cb)
         if callback_id:
-            await self.platform.answer_callback(callback_id)
+            try:
+                await self.platform.answer_callback(callback_id)
+            except Exception as exc:
+                # The action above has already completed. A stale/rejected MAX
+                # acknowledgement must not make the durable inbox replay that
+                # business action (and potentially duplicate generation).
+                log.warning(
+                    "MAX callback acknowledgement failed: %s",
+                    exc.__class__.__name__,
+                )
 
     async def handle_message(self, msg: IncomingMessage) -> None:
         uid = msg.user.platform_user_id
