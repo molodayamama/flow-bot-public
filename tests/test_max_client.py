@@ -259,6 +259,14 @@ class SendTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "upload_url_invalid")
         self.assertEqual(sess.calls, [])
 
+    def test_send_video_rejects_oversized_bytes_before_upload(self):
+        c, sess = _client()
+        with patch("channels.max.client._MAX_OUTGOING_VIDEO_BYTES", 4):
+            with self.assertRaises(MaxApiError) as raised:
+                run(c.send_video("7", PlatformMedia(kind="video", bytes_data=b"12345")))
+        self.assertEqual(raised.exception.code, "media_too_large")
+        self.assertEqual(sess.calls, [])
+
     def test_get_file_bytes_without_url_raises(self):
         c, _ = _client()
         with self.assertRaises(ValueError):

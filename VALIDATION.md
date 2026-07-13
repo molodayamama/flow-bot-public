@@ -888,3 +888,14 @@ For the documentation bootstrap task:
   edit failover moves the complete group.
 - Seed attribution must compute `is_new` before user UPSERT, persist first-touch
   channel only for a new user, and log click/new/returning events separately.
+
+## MAX generated-video delivery
+
+- Backend video results may contain `videos[].video_b64` rather than a public
+  URL. The MAX adapter must decode it only after an encoded-length bound, enforce
+  the decoded 250 MiB cap, upload it as `video/mp4`, and send the upload token.
+- Invalid or oversized generated video is a terminal result error: refund the
+  reserved credits, clear the pending action, show the safe failure copy, and do
+  not raise into the durable webhook inbox (which would regenerate on retry).
+- Safe focused gate: `python -m pytest -q tests/test_generation_facade.py
+  tests/test_max_mvp.py tests/test_max_client.py`.

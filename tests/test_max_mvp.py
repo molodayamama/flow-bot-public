@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import inspect
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import metrics
 from channels.max import handler, webhook
@@ -307,6 +309,68 @@ class MaxMvpTests(unittest.TestCase):
         self.assertEqual(video["media"].kind, "video")
         self.assertEqual(video["media"].url, "https://img/clip.mp4")
         self.assertEqual(self.platform.photos, [])
+
+    def test_animate_photo_delivers_backend_video_b64_as_mp4(self) -> None:
+        payload = b"synthetic-mp4-bytes"
+        self.service.result = {
+            "videos": [{"video_b64": base64.b64encode(payload).decode("ascii")}]
+        }
+        bot = self._bot()
+        metrics.credits_add_for_identity("max", "u1", 100, self.config.starter_credits)
+
+        run(bot.handle(_cb(CB_ANIMATE)))
+        run(bot.handle(_msg("оживи", photos=("photo-1",))))
+
+        self.assertEqual(len(self.platform.videos), 1)
+        media = self.platform.videos[0]["media"]
+        self.assertEqual(media.kind, "video")
+        self.assertEqual(media.bytes_data, payload)
+        self.assertEqual(media.file.file_id, "generated-video.mp4")
+        self.assertEqual(media.file.mime_type, "video/mp4")
+        self.assertEqual(self._balance(), 30)
+
+    def test_invalid_backend_video_b64_refunds_without_inbox_retry(self) -> None:
+        self.service.result = {"videos": [{"video_b64": "not-base64"}]}
+        state = {}
+        bot = MaxMvpBot(
+            platform=self.platform,
+            service=self.service,
+            config=self.config,
+            wallet=self.wallet,
+            state=state,
+        )
+        metrics.credits_add_for_identity("max", "u1", 100, self.config.starter_credits)
+
+        run(bot.handle(_cb(CB_ANIMATE)))
+        run(bot.handle(_msg("оживи", photos=("photo-1",))))
+
+        self.assertEqual(self.platform.videos, [])
+        self.assertEqual(self._balance(), 130)
+        self.assertIn("возвращены", self.platform.last_text)
+        self.assertEqual(state, {})
+
+    def test_oversized_backend_video_b64_is_not_decoded(self) -> None:
+        self.service.result = {"videos": [{"video_b64": "A" * 9}]}
+        state = {}
+        bot = MaxMvpBot(
+            platform=self.platform,
+            service=self.service,
+            config=self.config,
+            wallet=self.wallet,
+            state=state,
+        )
+        metrics.credits_add_for_identity("max", "u1", 100, self.config.starter_credits)
+
+        run(bot.handle(_cb(CB_ANIMATE)))
+        with patch("channels.max.handler._MAX_VIDEO_B64_CHARS", 8), patch(
+            "channels.max.handler.base64.b64decode"
+        ) as decode:
+            run(bot.handle(_msg("оживи", photos=("photo-1",))))
+
+        decode.assert_not_called()
+        self.assertEqual(self.platform.videos, [])
+        self.assertEqual(self._balance(), 130)
+        self.assertEqual(state, {})
 
     def test_edit_photo_without_photo_asks_for_photo(self) -> None:
         bot = self._bot()

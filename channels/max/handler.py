@@ -25,6 +25,8 @@ whole flow is exercised by fakes in the offline test suite.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass, field
 from collections.abc import Callable, Sequence
 from typing import Any, Mapping, MutableMapping, Protocol, runtime_checkable
@@ -34,6 +36,7 @@ from channels.base import (
     IncomingCallback,
     IncomingMessage,
     Keyboard,
+    PlatformFile,
     PlatformMedia,
 )
 from billing.credit_gate import NotEnoughCredits, open_credit_gate
@@ -46,6 +49,12 @@ from flow_core import (
 
 
 MAX_PLATFORM = "max"
+_MAX_VIDEO_BYTES = 250 * 1024 * 1024
+_MAX_VIDEO_B64_CHARS = 4 * ((_MAX_VIDEO_BYTES + 2) // 3)
+
+
+class _UndeliverableMediaError(ValueError):
+    """A successful generation result that can never be sent as MAX media."""
 
 # Callback-data namespace. Kept short and stable; mirrors the Telegram ``m:*``
 # menu ids so copy/analytics stay recognisable across platforms.
@@ -430,7 +439,15 @@ class MaxMvpBot:
                     await self._fail(chat)
                     self._clear(uid)
                     return  # refunded on gate exit
-                await self._deliver(chat, result)
+                try:
+                    await self._deliver(chat, result)
+                except _UndeliverableMediaError:
+                    # Invalid provider output is deterministic. Swallow it after
+                    # refunding so the durable webhook inbox does not regenerate
+                    # the same paid media on every retry.
+                    self._clear(uid)
+                    await self._fail(chat)
+                    return
                 self._clear(uid)
                 charge.ok = True
         except NotEnoughCredits:
@@ -459,26 +476,51 @@ class MaxMvpBot:
                 )
             return
 
-        video_urls = [
-            str(vid.get("url"))
-            for vid in (result.get("videos") or [])
-            if isinstance(vid, Mapping) and vid.get("url")
-        ]
-        if video_urls:
+        video_media: list[PlatformMedia] = []
+        for vid in (result.get("videos") or []):
+            if not isinstance(vid, Mapping):
+                continue
+            caption = self.copy.delivered_video if not video_media else None
+            if vid.get("url"):
+                video_media.append(
+                    PlatformMedia(kind="video", url=str(vid["url"]), caption=caption)
+                )
+                continue
+            encoded = vid.get("video_b64")
+            if not isinstance(encoded, str) or not encoded:
+                continue
+            if len(encoded) > _MAX_VIDEO_B64_CHARS:
+                continue
+            try:
+                video_bytes = base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError):
+                continue
+            if not video_bytes or len(video_bytes) > _MAX_VIDEO_BYTES:
+                continue
+            video_media.append(
+                PlatformMedia(
+                    kind="video",
+                    file=PlatformFile(
+                        file_id="generated-video.mp4",
+                        size=len(video_bytes),
+                        mime_type="video/mp4",
+                    ),
+                    bytes_data=video_bytes,
+                    caption=caption,
+                )
+            )
+        if video_media:
             keyboard = self._menu_keyboard()
-            for index, url in enumerate(video_urls):
-                caption = self.copy.delivered_video if index == 0 else None
-                media = PlatformMedia(kind="video", url=url, caption=caption)
+            for index, media in enumerate(video_media):
                 await self.platform.send_video(
-                    chat, media, keyboard if index == len(video_urls) - 1 else None
+                    chat, media, keyboard if index == len(video_media) - 1 else None
                 )
             return
 
         if result.get("videos"):
-            await self.platform.send_message(
-                chat, self.copy.delivered_video, self._menu_keyboard()
+            raise _UndeliverableMediaError(
+                "generation returned no deliverable MAX video"
             )
-            return
         await self.platform.send_message(
             chat, self.copy.delivered_image, self._menu_keyboard()
         )

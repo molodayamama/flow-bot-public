@@ -289,6 +289,16 @@ class MaxBotClient:
                 else self.max_download_bytes
             )
             media_bytes = await self._raw_get_bytes(media.url, max_bytes=limit)
+        if media_bytes is not None:
+            limit = (
+                _MAX_OUTGOING_VIDEO_BYTES
+                if max_type == "video"
+                else self.max_download_bytes
+            )
+            if len(media_bytes) > limit:
+                raise MaxApiError(
+                    status=None, code="media_too_large", retryable=False
+                )
         if media_bytes is None:
             if media.file is not None and media.file.file_id:
                 return media.file.file_id

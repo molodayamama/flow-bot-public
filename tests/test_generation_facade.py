@@ -45,7 +45,17 @@ DEPS = object()
 def _facade(*, image_raw=None, video_raw=None, fetch_result=b"IMG"):
     img_backend = RecordingBackend(image_raw or {"images": [{"url": "u1"}], "account_id": "a1"})
     edit_backend = RecordingBackend(image_raw or {"images": [{"url": "e1"}]})
-    vid_backend = RecordingBackend(video_raw or {"videos": [{"video_b64": "AAA", "media_id": "m"}]})
+    vid_backend = RecordingBackend(
+        video_raw
+        or {
+            "videos": [
+                {
+                    "video_b64": base64.b64encode(b"VIDEO").decode("ascii"),
+                    "media_id": "m",
+                }
+            ]
+        }
+    )
     fetched: list[str] = []
 
     async def fetch_bytes(file_id):
@@ -192,6 +202,7 @@ class MaxOnSharedEngineTests(unittest.TestCase):
         run(self.bot.handle(_msg("go", photos=("photo-9",))))
         self.assertEqual(self.fetched, ["photo-9"])
         self.assertEqual(len(self.vid.calls), 1)
+        self.assertEqual(self.platform.videos[-1]["media"].bytes_data, b"VIDEO")
         self.assertEqual(self._balance(), 100)  # 200 - 100
 
     def test_generation_failure_refunds_via_shared_engine(self) -> None:
