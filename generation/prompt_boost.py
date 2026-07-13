@@ -50,5 +50,5 @@ async def boost_prompt_with_gemini(
                     data["candidates"][0]["content"]["parts"][0]["text"].strip()
                 ) or None
     except Exception as exc:
-        log.warning("Gemini prompt boost failed: %s", exc)
+        log.warning("Gemini prompt boost failed: %s", exc.__class__.__name__)
         return None

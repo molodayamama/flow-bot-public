@@ -2657,8 +2657,12 @@ class RobokassaWebhookTests(unittest.TestCase):
         self.assertEqual(state.credits_added, [])
         unmatched = [e for e in state.events if e[0] == "robokassa_unmatched_payment"]
         self.assertEqual(len(unmatched), 1)
-        self.assertEqual(unmatched[0][3]["inv_id"], "9003")
-        self.assertEqual(unmatched[0][3]["reason"], "bad_order")
+        payload = unmatched[0][3]
+        self.assertEqual(payload["reason"], "bad_order")
+        self.assertEqual(len(payload["inv_ref"]), 20)
+        self.assertEqual(len(payload["user_ref"]), 20)
+        self.assertNotIn("inv_id", payload)
+        self.assertNotIn("user", payload)
 
 
 class BotImportSmokeTests(unittest.TestCase):

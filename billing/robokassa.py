@@ -5,6 +5,8 @@ Extracted so the app entry point only owns runtime wiring.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import html
 import json
 import random
@@ -18,6 +20,12 @@ from urllib.parse import quote, urlencode
 
 import aiohttp
 from aiohttp import web
+
+
+def _private_reference(secret: str, namespace: str, value: str) -> str:
+    """Stable, non-reversible event correlation id keyed by payment config."""
+    payload = f"{namespace}:{value}".encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()[:20]
 
 
 @dataclass(frozen=True)
@@ -216,7 +224,7 @@ async def handle_result(request: web.Request, deps: RobokassaWebDeps) -> web.Res
         algorithm=config.hash_algo,
     )
     if not signature or signature.lower() != expected.lower():
-        deps.log.warning("robokassa bad signature inv_id=%s", inv_id[:32])
+        deps.log.warning("robokassa bad signature")
         return web.Response(status=400, text="bad signature")
 
     scope = target_scope(shp, clean_scope=deps.clean_scope)
@@ -228,29 +236,23 @@ async def handle_result(request: web.Request, deps: RobokassaWebDeps) -> web.Res
     user_id = internal_user_id(user_raw)
     p = deps.credit_pack(pack_id)
     if not p or user_id is None or not inv_id:
-        deps.log.warning(
-            "robokassa unmatched payment inv_id=%s pack=%r user=%r amount=%r",
-            inv_id[:32],
-            pack_id[:64],
-            user_raw[:32],
-            out_sum[:32],
-        )
+        deps.log.warning("robokassa unmatched payment")
         deps.metrics.log_event(
             "robokassa_unmatched_payment",
             user_id=user_id or 0,
             source="robokassa",
             payload={
-                "inv_id": inv_id[:64],
-                "pack": pack_id[:64],
-                "user": user_raw[:64],
-                "amount_rub": out_sum[:32],
+                "inv_ref": _private_reference(config.password2, "invoice", inv_id),
+                "user_ref": _private_reference(config.password2, "user", user_raw),
+                "pack_known": p is not None,
+                "invoice_present": bool(inv_id),
                 "reason": "bad_order",
             },
         )
         return web.Response(status=400, text="bad order")
     expected_amount = deps.robokassa_pack_amount(pack_id)
     if not amount_matches(out_sum, expected_amount):
-        deps.log.warning("robokassa amount mismatch inv_id=%s", inv_id[:32])
+        deps.log.warning("robokassa amount mismatch")
         return web.Response(status=400, text="bad amount")
 
     pay_id = provider_payment_id(inv_id, scope, legacy=("Shp_bot" not in shp))

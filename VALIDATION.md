@@ -4,6 +4,22 @@ Validation must be chosen by risk level. Prefer offline checks first. Network,
 paid, account-mutating, or browser-profile-mutating checks require explicit
 task approval.
 
+## Security and log-boundary checks
+
+Run before every production-oriented commit:
+
+```bash
+python tools/check_tracked_secrets.py
+python -m unittest discover -s tests -p "test_tracked_secret_audit.py"
+python -m unittest discover -s tests -p "test_logging_redaction.py"
+python -m unittest discover -s tests -p "test_production_preflight.py"
+```
+
+The log test covers formatted arguments, exception tracebacks, handlers created
+after startup, and source guards against provider bodies/identifiers. Consumer
+production preflight requires `FLOW_BROWSER_API_KEY` from the runtime env; it
+must never be copied into source, templates, test fixtures, logs, or HANDOFF.
+
 When an approved live/stateful check fails, record a sanitized entry in
 `docs/LIVE_TEST_FAILURES.md`. Include Telegram input/output, Flow account label,
 Google HTTP status/body snippet, user-facing text, reproduction steps, severity,

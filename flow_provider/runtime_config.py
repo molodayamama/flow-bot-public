@@ -40,6 +40,7 @@ try:
 except ValueError:
     CAPMONSTER_SOLVE_TIMEOUT = 120
 FLOW_URL = "https://labs.google/fx/tools/flow"
+FLOW_BROWSER_API_KEY = os.getenv("FLOW_BROWSER_API_KEY", "").strip()
 try:
     IDLE_PARK_SEC = float(os.getenv("IDLE_PARK_SEC", "90"))
 except (TypeError, ValueError):

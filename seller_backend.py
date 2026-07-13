@@ -139,5 +139,5 @@ class BackendClient:
                         return {"error": str(data.get("error", f"http {resp.status}"))}
                     return data if isinstance(data, dict) else {"error": "bad response"}
         except Exception as exc:  # noqa: BLE001
-            log.warning("backend generate request failed: %s", exc)
+            log.warning("backend generate request failed: %s", exc.__class__.__name__)
             return {"error": "backend unavailable"}

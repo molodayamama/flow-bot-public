@@ -344,7 +344,11 @@ def create_router(deps: PlainTextDeps) -> Router:
                     )
                     metrics.set_ticket_admin_msg(ticket_id, fwd.message_id)
                 except Exception as exc:
-                    log.warning(f"Не удалось переслать тикет #{ticket_id} админу: {exc}")
+                    log.warning(
+                        "Не удалось переслать тикет #%s админу: %s",
+                        ticket_id,
+                        exc.__class__.__name__,
+                    )
             back_kb = types.InlineKeyboardMarkup(inline_keyboard=[[_menu_button("menu", "m:menu")]])
             await message.answer(flow_copy.msg("support_submitted", ticket_id=ticket_id), reply_markup=back_kb)
             return

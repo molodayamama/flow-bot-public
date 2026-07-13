@@ -4,6 +4,7 @@ These tests require no network, no browser, no secrets.
 Run with: python -m unittest discover -s tests -p "test_flow_video.py"
 """
 import unittest
+from pathlib import Path
 from flow_core import (
     VIDEO_MODEL_KEYS,
     VIDEO_ASPECT_MAP,
@@ -46,7 +47,6 @@ from flow_core import (
     video_edit_end_frame,
     video_duration_from_poll_item,
     CREDITS_ENDPOINT,
-    FLOW_BROWSER_API_KEY,
     parse_credits_response,
 )
 
@@ -704,9 +704,15 @@ class TestCreditsResponse(unittest.TestCase):
         "subscriptionCredits": 50,
     }
 
-    def test_endpoint_and_key_present(self):
+    def test_endpoint_and_key_are_runtime_configured(self):
         self.assertEqual(CREDITS_ENDPOINT, "https://aisandbox-pa.googleapis.com/v1/credits")
-        self.assertTrue(FLOW_BROWSER_API_KEY.startswith("AIzaSy"))
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "flow_provider"
+            / "runtime_config.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('FLOW_BROWSER_API_KEY = os.getenv("FLOW_BROWSER_API_KEY", "").strip()', source)
+        self.assertNotIn('FLOW_BROWSER_API_KEY = "AIza', source)
 
     def test_parses_real_freemium_capture(self):
         parsed = parse_credits_response(self.REAL_RESPONSE)

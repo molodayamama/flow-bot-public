@@ -75,7 +75,11 @@ class Monitors:
                             d.metrics.log_event("digest_sent", user_id=uid)
                             await asyncio.sleep(d.digest_delay_s)
                         except Exception as exc:
-                            d.log.debug("Дайджест не доставлен uid=%s: %s", uid, exc)
+                            d.log.debug(
+                                "Дайджест не доставлен uid=%s: %s",
+                                uid,
+                                exc.__class__.__name__,
+                            )
             except Exception:
                 d.log.warning("_daily_digest_loop iteration failed", exc_info=True)
             # Спим 6 часов до следующей проверки

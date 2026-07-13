@@ -79,7 +79,7 @@ class ImageDelivery:
                 )
             return
         except Exception as e:
-            d.log.error(f"Ошибка отправки фото {index}/{total}: {e}")
+            d.log.error("Ошибка отправки фото %s/%s: %s", index, total, e.__class__.__name__)
 
         # Если прямая ссылка не работает — скачиваем и отправляем байтами.
         try:
@@ -99,7 +99,12 @@ class ImageDelivery:
                                 prompt=prompt[:400] if prompt else None,
                             )
         except Exception as e2:
-            d.log.error(f"Повторная ошибка отправки фото {index}/{total}: {e2}")
+            d.log.error(
+                "Повторная ошибка отправки фото %s/%s: %s",
+                index,
+                total,
+                e2.__class__.__name__,
+            )
 
     async def after_result(self, message, user_id: int, *, streak_note: str | None = None) -> None:
         """Короткое меню после результата: создать ещё · видео · друг · меню."""

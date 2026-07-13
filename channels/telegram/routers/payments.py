@@ -38,7 +38,7 @@ def create_router(deps: PaymentDeps) -> Router:
         parts = payload.split(":")
         ok = len(parts) >= 2 and parts[0] == "credits" and deps.credit_pack(parts[1]) is not None
         if not ok:
-            deps.log.warning("pre_checkout отклонён: payload=%r", payload[:64])
+            deps.log.warning("pre_checkout отклонён: неизвестный пакет")
         await query.answer(
             ok=ok,
             error_message=None if ok else "Пакет не найден — обновите меню и попробуйте снова.",
@@ -53,7 +53,7 @@ def create_router(deps: PaymentDeps) -> Router:
         pack_id = payload.split(":")[1] if payload.startswith("credits:") else ""
         p = deps.credit_pack(pack_id)
         if not p:
-            deps.log.warning("Unknown payment payload: %s", payload)
+            deps.log.warning("Unknown payment payload")
             await message.answer("Платёж получен, но пакет не распознан. Напишите в поддержку.")
             return
 
@@ -71,12 +71,11 @@ def create_router(deps: PaymentDeps) -> Router:
             status="paid",
         )
         if tx_status == "duplicate":
-            deps.log.warning("💳 Дубль доставки платежа проигнорирован: %s", provider_payment_id)
+            deps.log.warning("💳 Дубль доставки платежа проигнорирован")
             return
         if tx_status == "error":
             deps.log.error(
-                "💳 metrics недоступны, зачисляю без дедуп-гарантии: %s",
-                provider_payment_id,
+                "💳 metrics недоступны, зачисляю без дедуп-гарантии",
             )
 
         new_balance = deps.credit_store.add(user_id, p["credits"])
@@ -101,9 +100,8 @@ def create_router(deps: PaymentDeps) -> Router:
             provider_payment_id=provider_payment_id,
         )
         deps.log.info(
-            "💳 Оплата: +%s кр пользователю %s (баланс %s)",
+            "💳 Оплата: +%s кр (баланс %s)",
             p["credits"],
-            user_id,
             new_balance,
         )
         await message.answer(flow_copy.msg("topup_done", credits=p["credits"], balance=new_balance))

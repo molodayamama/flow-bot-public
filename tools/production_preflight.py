@@ -107,6 +107,7 @@ def validate_environment(
         errors.append("OWNER_ID or ADMIN_IDS must contain a positive numeric id")
 
     if bot_mode != "seller":
+        _require(source, ("FLOW_BROWSER_API_KEY",), errors)
         for label, raw_path in _profile_paths(source):
             if not raw_path:
                 errors.append(f"{label} has no profile path")

@@ -931,10 +931,6 @@ def video_media_redirect_url(media_id: str) -> str:
 #    "sku": "G1_FREEMIUM", "serviceTier": "SERVICE_TIER_ENTRY",
 #    "subscriptionCredits": 50}
 CREDITS_ENDPOINT = "https://aisandbox-pa.googleapis.com/v1/credits"
-# Public web-client key embedded in Flow's frontend JS bundle — restricted by
-# HTTP referrer (labs.google), the same pattern as a Firebase web config key,
-# not a per-user secret. Re-verify if Google rotates their frontend build.
-FLOW_BROWSER_API_KEY = "REDACTED_CREDENTIAL"
 
 
 def parse_credits_response(data: dict | None) -> dict | None:

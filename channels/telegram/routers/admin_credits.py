@@ -172,11 +172,18 @@ def create_router(deps: AdminCreditsDeps) -> Router:
         take = min(rec["credits"], deps.credit_store.balance(rec["user_id"]))
         if take > 0:
             deps.credit_store.charge(rec["user_id"], take)
-        deps.metrics.log_event("credits_refunded", user_id=rec["user_id"], source="admin_refund",
-                          payload={"amount": take, "charge_id": rec["charge_id"]})
+        deps.metrics.log_event(
+            "credits_refunded",
+            user_id=rec["user_id"],
+            source="admin_refund",
+            payload={"amount": take},
+        )
         # Откатываем реферальные награды, привязанные к этому платежу.
         deps.clawback_referral_rewards(rec["user_id"], rec["charge_id"])
-        deps.log.info(f"↩️ Рефанд {rec['stars']} Stars пользователю {rec['user_id']} (charge {rec['charge_id']})")
+        deps.log.info(
+            "↩️ Рефанд %s Stars завершён",
+            rec["stars"],
+        )
         await message.answer(
             f"↩️ Возвращено {rec['stars']} Stars пользователю {rec['user_id']}. "
             f"Списано {take} кр (начислялось {rec['credits']})."

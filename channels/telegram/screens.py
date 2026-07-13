@@ -783,7 +783,7 @@ async def show_gallery(message: types.Message, *, user_id: int, deps: ProfileScr
         try:
             await message.answer_media_group(media=media_group)
         except Exception as exc:
-            deps.log.warning(f"Gallery send error: {exc}")
+            deps.log.warning("Gallery send error: %s", exc.__class__.__name__)
 
     bottom_rows: list[list[types.InlineKeyboardButton]] = []
     latest_token = rows[0].get("token") if rows else None

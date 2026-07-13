@@ -87,6 +87,21 @@ class RefreshBearerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(k._page.goto_calls, [])
 
 
+class CreditsConfigurationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_browser_api_key_fails_without_http_request(self):
+        import unittest.mock as mock
+
+        k = _keeper()
+        with (
+            mock.patch("flow_provider.session_keeper.FLOW_BROWSER_API_KEY", ""),
+            mock.patch("flow_provider.session_keeper.aiohttp.ClientSession") as client,
+        ):
+            result = await k.get_g_credits(force=True)
+
+        self.assertEqual(result, {"error": "api_key_missing"})
+        client.assert_not_called()
+
+
 class ParkDecisionTests(unittest.IsolatedAsyncioTestCase):
     async def test_should_park_true_after_idle(self):
         k = _keeper(parked=False)

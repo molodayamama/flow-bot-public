@@ -27,6 +27,21 @@ class TrackedSecretAuditTests(unittest.TestCase):
             path.write_text('TOKEN = os.getenv("TOKEN", "")', encoding="utf-8")
             self.assertEqual(audit([path]), [])
 
+    def test_named_hardcoded_secret_reports_only_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "leak.py"
+            value = "private-example-value"
+            path.write_text(f'MAX_BOT_TOKEN = "{value}"', encoding="utf-8")
+            failures = audit([path])
+        self.assertEqual(len(failures), 1)
+        self.assertNotIn(value, failures[0])
+
+    def test_private_key_header_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "leak.txt"
+            path.write_text("-----BEGIN PRIVATE KEY-----\n", encoding="utf-8")
+            self.assertEqual(len(audit([path])), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,7 +16,6 @@ from playwright.async_api import BrowserContext, async_playwright
 
 from flow_core import (
     CREDITS_ENDPOINT,
-    FLOW_BROWSER_API_KEY,
     IMAGE_UPLOAD_ENDPOINT,
     VIDEO_UPLOAD_PUT_URL,
     VIDEO_UPLOAD_START_URL,
@@ -50,6 +49,7 @@ from flow_provider.runtime_config import (
     CAPMONSTER_KEY,
     EDIT_CAPTURE_FILE,
     EDIT_CAPTURE_RAW_FILE,
+    FLOW_BROWSER_API_KEY,
     FLOW_URL,
     GCREDITS_CACHE_SEC,
     GCREDITS_SESSION_SNAPSHOT_TIMEOUT_SEC,
@@ -189,7 +189,7 @@ class SessionKeeper:
 
         except Exception as e:
             self._ready.clear()
-            log.error(f"💥 Ошибка запуска браузера: {e}")
+            log.error("💥 Ошибка запуска браузера: %s", e.__class__.__name__)
             raise
 
     async def _close_browser_locked(self):
@@ -278,7 +278,7 @@ class SessionKeeper:
             self._parked = False
             log.info("▶️ %s: вкладка разбужена", self.account_id or "acc")
         except Exception as e:
-            log.warning("⚠️ wake failed for %s: %s", self.account_id or "acc", e)
+            log.warning("⚠️ wake failed for %s: %s", self.account_id or "acc", e.__class__.__name__)
 
     def _start_park_loop(self) -> None:
         if IDLE_PARK_SEC <= 0:
@@ -317,7 +317,7 @@ class SessionKeeper:
                         continue
                     await self._park_locked()
             except Exception as e:
-                log.warning("⚠️ park failed for %s: %s", self.account_id or "acc", e)
+                log.warning("⚠️ park failed for %s: %s", self.account_id or "acc", e.__class__.__name__)
 
     async def _open_project(self):
         """Открывает существующий проект или создаёт новый."""
@@ -340,10 +340,10 @@ class SessionKeeper:
                 pid = page_url.split("/project/")[-1].split("?")[0].split("/")[0]
                 if pid:
                     self._project_id = pid
-                    log.info(f"📋 Project ID из URL: {pid}")
+                    log.info("📋 Project ID получен из URL")
 
         except Exception as e:
-            log.warning(f"⚠️ Не удалось войти в проект: {e}")
+            log.warning("⚠️ Не удалось войти в проект: %s", e.__class__.__name__)
 
     @staticmethod
     def _project_id_from_url(url: str) -> str | None:
@@ -416,20 +416,20 @@ class SessionKeeper:
                             log.info("create_new_project: clicked project cta %s", label)
                             pid = await _wait_for_new_project(12)
                             if pid:
-                                log.info("create_new_project: created %s", pid)
+                                log.info("create_new_project: created")
                                 return pid
                             if "accounts.google." in tab.url:
                                 log.warning(
                                     "create_new_project: Google redirected during project creation "
-                                    "(account %s, url=%s)",
-                                    self.account_id, tab.url,
+                                    "(account %s)",
+                                    self.account_id,
                                 )
                                 return None
                             if "labs.google" not in tab.url:
                                 log.warning(
                                     "create_new_project: unexpected redirect during project creation "
-                                    "(account %s, url=%s)",
-                                    self.account_id, tab.url,
+                                    "(account %s)",
+                                    self.account_id,
                                 )
                                 return None
                     except Exception:
@@ -437,8 +437,8 @@ class SessionKeeper:
 
                 if not clicked:
                     log.warning(
-                        "⚠️ Кнопка 'New project' не найдена (аккаунт %s, url=%s) — новый проект не создан",
-                        self.account_id, tab.url,
+                        "⚠️ Кнопка 'New project' не найдена (аккаунт %s) — новый проект не создан",
+                        self.account_id,
                     )
                     # Скрин для пост-мортема — следующий сбой сам себя задокументирует,
                     # без необходимости лезть в живую сессию вручную через VNC.
@@ -455,7 +455,7 @@ class SessionKeeper:
 
                 pid = await _wait_for_new_project(8)
                 if pid:
-                    log.info(f"🆕 Новый проект создан: {pid}")
+                    log.info("🆕 Новый проект создан")
                     return pid
 
                 log.warning("⚠️ Новый project_id не появился после клика 'New project'")
@@ -465,7 +465,7 @@ class SessionKeeper:
                     log.warning("Browser closed while creating project, restarting...")
                     await self._start_locked()
                 else:
-                    log.warning(f"⚠️ create_new_project: {e}")
+                    log.warning("⚠️ create_new_project: %s", e.__class__.__name__)
                 return None
             finally:
                 if tab is not None:
@@ -502,12 +502,12 @@ class SessionKeeper:
                 }
             """)
             if sitekey:
-                log.info(f"🔑 reCAPTCHA sitekey из DOM: {sitekey[:20]}...")
+                log.info("🔑 reCAPTCHA sitekey получен из DOM")
                 return sitekey
         except Exception as e:
-            log.warning(f"⚠️ _extract_sitekey: {e}")
+            log.warning("⚠️ _extract_sitekey: %s", e.__class__.__name__)
 
-        log.info(f"🔑 Использую известный sitekey: {self.RECAPTCHA_SITEKEY[:20]}...")
+        log.info("🔑 Использую встроенный reCAPTCHA sitekey")
         return self.RECAPTCHA_SITEKEY
 
     async def solve_captcha(self, action: str = "IMAGE_GENERATION") -> str:
@@ -547,7 +547,7 @@ class SessionKeeper:
                     return
                 await asyncio.sleep(0.5)
         except Exception as exc:
-            log.warning("⚠️ _ensure_flow_page_loaded: %s", exc)
+            log.warning("⚠️ _ensure_flow_page_loaded: %s", exc.__class__.__name__)
 
     async def _solve_via_browser_js(self, action: str) -> str:
         """Вызывает grecaptcha.enterprise.execute() прямо в живом Chrome."""
@@ -575,7 +575,7 @@ class SessionKeeper:
             else:
                 log.warning("⚠️ grecaptcha.enterprise не доступен в браузере")
         except Exception as e:
-            log.warning(f"⚠️ _solve_via_browser_js: {e}")
+            log.warning("⚠️ _solve_via_browser_js: %s", e.__class__.__name__)
         return ""
 
     async def scan_recaptcha_actions(self) -> dict:
@@ -875,7 +875,7 @@ class SessionKeeper:
                 raw_cookies = await self._context.cookies("https://labs.google")
             except Exception as e:
                 if not self._is_target_closed_error(e):
-                    log.warning("get_g_credits cookie snapshot failed for %s: %s", self.account_id, e)
+                    log.warning("get_g_credits cookie snapshot failed for %s: %s", self.account_id, e.__class__.__name__)
                 return None
             cookies = {c["name"]: c["value"] for c in raw_cookies}
             return {
@@ -896,6 +896,9 @@ class SessionKeeper:
         /admin_accounts. Любая ошибка (нет bearer, сеть, неожиданный формат)
         → None, чтобы админ-команда не падала из-за недоступности баланса.
         """
+        if not FLOW_BROWSER_API_KEY:
+            return self._gcredits_cache or {"error": "api_key_missing"}
+
         now = time.time()
         if not force and self._gcredits_cache is not None and (now - self._gcredits_cache_ts) < GCREDITS_CACHE_SEC:
             return self._gcredits_cache
@@ -933,10 +936,9 @@ class SessionKeeper:
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     if resp.status != 200:
-                        body = (await resp.text())[:200]
                         log.warning(
-                            "get_g_credits non-200 for %s: status=%s body=%s",
-                            self.account_id, resp.status, body,
+                            "get_g_credits non-200 for %s: status=%s",
+                            self.account_id, resp.status,
                         )
                         # NB: с idle-парковкой вкладок Bearer штатно протухает
                         # между задачами, поэтому 401 здесь НЕ значит «мёртвый
@@ -949,7 +951,7 @@ class SessionKeeper:
                         }
                     data = await resp.json(content_type=None)
         except Exception as e:
-            log.warning("get_g_credits failed for %s: %s", self.account_id, e)
+            log.warning("get_g_credits failed for %s: %s", self.account_id, e.__class__.__name__)
             return self._gcredits_cache
         finally:
             self._gcredits_lock.release()
@@ -961,8 +963,8 @@ class SessionKeeper:
             self._flag_needs_relogin(False)
         else:
             log.warning(
-                "get_g_credits unparseable response for %s: %s",
-                self.account_id, str(data)[:200],
+                "get_g_credits unparseable response for %s",
+                self.account_id,
             )
         return parsed or self._gcredits_cache or {"error": "unparseable"}
 
@@ -1039,7 +1041,7 @@ class SessionKeeper:
                 pid = parts[1].split("/")[0].split("?")[0]
                 if pid and pid != self._project_id:
                     self._project_id = pid
-                    log.info(f"📋 Project ID: {pid}")
+                    log.info("📋 Project ID обновлён")
 
         # Учимся формату редактирования и апскейла из реальных запросов браузера.
         self._maybe_capture_edit(request, url)
@@ -1203,7 +1205,7 @@ class SessionKeeper:
                 f"🔑 Bearer после обновления: {'OK' if self._bearer else 'не получен'}"
             )
         except Exception as e:
-            log.warning(f"⚠️ Ошибка при обновлении Bearer: {e}")
+            log.warning("⚠️ Ошибка при обновлении Bearer: %s", e.__class__.__name__)
 
     # ── публичный метод ────────────────────
 
@@ -1288,13 +1290,13 @@ class SessionKeeper:
 
                 if resp.status != 200:
                     text = await resp.text()
-                    log.warning("📡 Браузерная генерация не-200: %s тело=%s", resp.status, text[:300])
+                    log.warning("📡 Браузерная генерация не-200: %s", resp.status)
                     return {"error": flow_copy.msg("service_error", status=resp.status)}
 
                 return await resp.json()
 
             except Exception as e:
-                log.error(f"❌ generate_via_browser: {e}")
+                log.error("❌ generate_via_browser: %s", e.__class__.__name__)
                 return {"error": flow_copy.msg("gen_failed")}
 
     async def _upload_image_api_locked(
@@ -1361,7 +1363,7 @@ class SessionKeeper:
                         status = resp.status
                         text = await resp.text()
             except Exception as e:
-                log.warning("⚠️ upload_image API request failed: %s", e)
+                log.warning("⚠️ upload_image API request failed: %s", e.__class__.__name__)
                 return None
 
             if status == 401 and attempt == 0:
@@ -1377,17 +1379,16 @@ class SessionKeeper:
         if status != 200:
             body = loads_xssi(text)
             log.warning(
-                "⚠️ upload_image API status=%s schema=%s body=%s",
+                "⚠️ upload_image API status=%s schema=%s",
                 status,
                 describe_schema(body) if body is not None else "non-json",
-                (text or "")[:300],
             )
             return None
         body = loads_xssi(text)
         source = parse_upload_image_response(body) if body is not None else None
         if source and source.get("mediaId"):
             source.setdefault("_project_id", project_id)
-            log.info("⬆️ Фото загружено через Flow API: mediaId=%s…", source["mediaId"][:8])
+            log.info("⬆️ Фото загружено через Flow API")
             return source
         log.warning(
             "⚠️ upload_image API 200 but mediaId not parsed (schema=%s)",
@@ -1469,7 +1470,7 @@ class SessionKeeper:
                     await asyncio.sleep(0.5)
 
                 if captured.get("mediaId"):
-                    log.info(f"⬆️ Фото загружено в Flow: mediaId={captured['mediaId'][:8]}…")
+                    log.info("⬆️ Фото загружено в Flow")
                     captured.setdefault("_project_id", self._project_id)
                     return dict(captured)
 
@@ -1477,7 +1478,7 @@ class SessionKeeper:
                 after_ids = await self._page_media_ids()
                 fresh = [i for i in after_ids if i not in baseline_ids]
                 if fresh:
-                    log.info(f"⬆️ Фото загружено (id из DOM): {fresh[0][:8]}…")
+                    log.info("⬆️ Фото загружено (id получен из DOM)")
                     return {"mediaId": fresh[0], "_project_id": self._project_id}
 
                 # Совсем не нашли — сохраняем схемы ответов для ручной доводки.
@@ -1497,7 +1498,7 @@ class SessionKeeper:
             except Exception as e:
                 if self._is_target_closed_error(e):
                     await self._start_locked()
-                log.error(f"❌ upload_image: {e}")
+                log.error("❌ upload_image: %s", e.__class__.__name__)
                 return None
             finally:
                 try:
@@ -1606,7 +1607,7 @@ class SessionKeeper:
             except Exception as e:
                 if self._is_target_closed_error(e):
                     await self._start_locked()
-                log.error(f"❌ upload_video (page fetch): {e}")
+                log.error("❌ upload_video (page fetch): %s", e.__class__.__name__)
                 return None
 
             if not isinstance(result, dict):
@@ -1623,8 +1624,7 @@ class SessionKeeper:
             if ids and ids.get("mediaId"):
                 ids.setdefault("_project_id", pid)
                 log.info(
-                    "⬆️ Видео загружено в Flow: mediaId=%s… workflowId=%s",
-                    str(ids["mediaId"])[:8],
+                    "⬆️ Видео загружено в Flow: workflowId=%s",
                     "есть" if ids.get("workflowId") else "нет",
                 )
                 return ids

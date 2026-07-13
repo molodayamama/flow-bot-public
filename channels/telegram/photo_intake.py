@@ -102,12 +102,9 @@ class PhotoIntake:
             await status_msg.edit_text(flow_copy.msg("upload_failed"))
             return None
 
-        # TEMP (capture-driven): same diagnostic family as the "🎬 r2v req" log —
-        # lets us confirm the upload account/project matches the one later used
-        # for the reference-to-video generate call.
         d.log.info(
-            "📤 video ref photo uploaded account=%s project=%s media_id=%s",
-            acc_id, project_id, source.get("mediaId"),
+            "📤 video ref photo uploaded account=%s",
+            acc_id,
         )
         source.setdefault("_project_id", project_id)
         source.setdefault("_account_id", acc_id)

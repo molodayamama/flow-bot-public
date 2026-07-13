@@ -169,6 +169,13 @@ test ! -r .env.seller || sudo systemctl start geminifree-seller-bot
 
 ## 7. Инцидент и ротация секретов
 
+Application logging is fail-closed: the composition root installs a
+process-wide redaction boundary after `logging.basicConfig`. Do not weaken it or
+log raw response bodies, signed media URLs, payment/provider identifiers,
+browser URLs, cookies, tokens, e-mail addresses, or arbitrary exception text.
+`FLOW_BROWSER_API_KEY` belongs only in the protected runtime `.env`; consumer
+production preflight rejects a missing value without printing it.
+
 При подозрении на утечку: остановить затронутый ingress, ротировать Telegram/MAX
 tokens, Robokassa passwords, webhook secret, captcha key, proxy credentials и
 browser session; удалить старую MAX subscription; проверить git history и

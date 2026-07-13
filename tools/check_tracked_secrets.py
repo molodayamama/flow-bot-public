@@ -19,10 +19,19 @@ FORBIDDEN_PATHS = (
 )
 SECRET_PATTERNS = (
     re.compile(r"\bya29\.[A-Za-z0-9_-]{20,}"),
+    re.compile(r"\bAIza[A-Za-z0-9_-]{30,}"),
     re.compile(r"\b\d{8,12}:[A-Za-z0-9_-]{30,}\b"),
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
 )
 SOURCE_ONLY_SECRET_PATTERNS = (
     re.compile(r"(?i)\b(?:https?|socks5h?)://[^\s/:]+:[^\s/@]+@"),
+    re.compile(
+        r"(?ix)\b(?:TELEGRAM_TOKEN|MAX_BOT_TOKEN|TWOCAPTCHA(?:_API)?_KEY|"
+        r"CAPMONSTER_KEY|ROBOKASSA_(?:TEST_)?PASSWORD[12]|INTERNAL_API_TOKEN|"
+        r"TELEMETR_API_TOKEN|TGSTAT_API_TOKEN|MAX_WEBHOOK_SECRET|"
+        r"COOKIE_(?:SID|HSID|SSID|SECURE_[13]PSID(?:TS)?))"
+        r"\s*=\s*[\"'][^\"'\r\n]{8,}[\"']"
+    ),
 )
 TEXT_SUFFIXES = {".py", ".js", ".json", ".md", ".yml", ".yaml", ".toml", ".txt"}
 

@@ -340,7 +340,7 @@ class GenerationFlow:
 
         pairs = result_pairs(result)
         if not pairs:
-            d.log.warning("Пустой ответ редактирования: %s", str(result)[:500])
+            d.log.warning("Пустой ответ редактирования")
             await status_msg.edit_text(flow_copy.msg("nothing_returned"))
             return False
 
@@ -809,7 +809,11 @@ class GenerationFlow:
                         # Ошибка аккаунта — помечаем и пробуем другой (один раз)
                         d.mark_image_account_failure(acc_id, result)
                         if attempt == 0:
-                            reason = str(result.get("error", ""))[:80]
+                            reason = str(
+                                result.get("account_risk")
+                                or result.get("error_type")
+                                or "provider_error"
+                            )[:80]
                             d.log.info("Тихий фейловер после ошибки аккаунта %s: %s", acc_id, reason)
                             _log_failover(acc_id, reason)
                             continue  # releases image_slot, then picks next account
@@ -828,7 +832,7 @@ class GenerationFlow:
             pairs = result_pairs(result)
 
             if not pairs:
-                d.log.warning(f"Пустой ответ: {str(result)[:500]}")
+                d.log.warning("Пустой ответ генерации")
                 await status_msg.edit_text(
                     flow_copy.msg("nothing_returned"),
                     reply_markup=d.img_retry_kb(),

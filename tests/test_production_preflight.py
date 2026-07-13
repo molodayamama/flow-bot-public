@@ -17,6 +17,7 @@ class ProductionPreflightTests(unittest.TestCase):
             "TELEGRAM_TOKEN": "123456789:TESTTOKEN",
             "OWNER_ID": "123456789",
             "USER_DATA_DIR": "google_profile",
+            "FLOW_BROWSER_API_KEY": "configured-at-runtime",
             "METRICS_DB": "state/metrics.db",
             "USER_PROJECTS_FILE": "state/projects.json",
             "USER_CREDITS_FILE": "state/credits.json",
@@ -32,6 +33,14 @@ class ProductionPreflightTests(unittest.TestCase):
         report = validate_environment(self.env, root=self.root)
         self.assertTrue(report.ok, report.errors)
         self.assertEqual(report.warnings, ())
+
+    def test_consumer_requires_runtime_browser_api_key(self) -> None:
+        env = dict(self.env)
+        env.pop("FLOW_BROWSER_API_KEY")
+
+        report = validate_environment(env, root=self.root)
+
+        self.assertIn("FLOW_BROWSER_API_KEY is required", report.errors)
 
     def test_missing_identity_and_profile_fail_without_values(self) -> None:
         env = dict(self.env, TELEGRAM_TOKEN="private", OWNER_ID="", ADMIN_IDS="")

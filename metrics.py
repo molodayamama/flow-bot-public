@@ -578,7 +578,7 @@ def record_transaction_status(
             conn.commit()
             return "new" if cur.rowcount > 0 else "duplicate"
     except Exception:  # noqa: BLE001
-        log.warning("record_transaction failed for %r", provider_payment_id, exc_info=True)
+        log.warning("record_transaction failed for provider=%s", provider, exc_info=True)
         return "error"
 
 
@@ -683,8 +683,8 @@ def record_transaction_and_credit_status(
                 raise
     except Exception:  # noqa: BLE001
         log.warning(
-            "atomic payment settlement failed for %r",
-            provider_payment_id,
+            "atomic payment settlement failed for provider=%s",
+            provider,
             exc_info=True,
         )
         return "error", None
@@ -735,7 +735,7 @@ def record_acquisition(*, user_id: int, channel: str) -> bool:
             conn.commit()
             return cur.rowcount > 0
     except Exception:  # noqa: BLE001
-        log.warning("record_acquisition failed for %r", user_id, exc_info=True)
+        log.warning("record_acquisition failed", exc_info=True)
         return False
 
 
@@ -1274,7 +1274,7 @@ def credits_migrate_from_json(path) -> int:
                 count += cur.rowcount
             conn.commit()
     except Exception:  # noqa: BLE001
-        log.warning("credits_migrate_from_json failed for path=%r", str(path), exc_info=True)
+        log.warning("credits_migrate_from_json failed", exc_info=True)
         return 0
     return count
 

@@ -205,7 +205,7 @@ class FlowHttpClient:
                     info = parse_video_gen_response(_json.loads(text)) or {}
                     parsed = {
                         "accepted": bool(info),
-                        "media_id_prefix": str(info.get("media_id") or "")[:8],
+                        "media_id_present": bool(info.get("media_id")),
                         "project_id_present": bool(info.get("project_id")),
                     }
                 except Exception:
@@ -503,8 +503,8 @@ class FlowHttpClient:
                         text = await resp.text()
                         log.info(f"📡 HTTP ответ: {status} (action={action})")
 
-            except Exception as e:
-                log.error(f"❌ HTTP ошибка: {e}")
+            except Exception as exc:
+                log.error("❌ HTTP ошибка: %s", exc.__class__.__name__)
                 # Текст исключения может содержать хосты бэкенда — юзеру нейтрально.
                 return {"error": flow_copy.msg("gen_failed")}
 
@@ -529,17 +529,17 @@ class FlowHttpClient:
                 saw_403 = True
                 if "PUBLIC_ERROR_UNUSUAL_ACTIVITY" in text or "unusual activity" in text.lower():
                     saw_unusual_activity = True
-                log.warning(f"⚠️ HTTP 403 action={action} ({idx+1}/{len(actions)}). Тело: {text[:300]}")
+                log.warning("⚠️ HTTP 403 action=%s (%s/%s)", action, idx + 1, len(actions))
                 continue
 
             if status == 429:
                 return {"error": flow_copy.msg("rate_limited")}
 
             if status == 400:
-                log.warning(f"⚠️ Prompt rejected (400): {text[:300]}")
+                log.warning("⚠️ Prompt rejected (400)")
                 return {"error": flow_copy.msg("prompt_rejected"), "error_type": "prompt_rejected"}
 
-            log.error(f"❌ Неизвестный статус {status}: {text[:300]}")
+            log.error("❌ Неизвестный статус %s", status)
             return {"error": flow_copy.msg("service_error", status=status)}
 
         # Все actions провалились
@@ -605,8 +605,8 @@ class FlowHttpClient:
                         status = resp.status
                         text = await resp.text()
                         log.info(f"📡 UPSCALE ответ: {status} (action={action})")
-            except Exception as e:
-                log.error(f"❌ UPSCALE сеть: {e}")
+            except Exception as exc:
+                log.error("❌ UPSCALE сеть: %s", exc.__class__.__name__)
                 return {"error": flow_copy.msg("gen_failed")}
 
             if status == 200:
@@ -617,11 +617,11 @@ class FlowHttpClient:
                 session = await self.keeper.get_session()
                 continue
             if status == 403:
-                log.warning(f"⚠️ UPSCALE 403 ({idx+1}). Тело: {text[:200]}")
+                log.warning("⚠️ UPSCALE 403 (%s)", idx + 1)
                 continue
             if status == 429:
                 return {"error": flow_copy.msg("rate_limited")}
-            log.error(f"❌ UPSCALE статус {status}: {text[:200]}")
+            log.error("❌ UPSCALE статус %s", status)
             return {"error": flow_copy.msg("service_error", status=status)}
 
         return {"error": flow_copy.msg("upscale_unavailable")}
@@ -667,8 +667,8 @@ class FlowHttpClient:
                         status = resp.status
                         text = await resp.text()
                         log.info(f"📡 UPSAMPLE ответ: {status} (action={action})")
-            except Exception as e:
-                log.error(f"❌ UPSAMPLE сеть: {e}")
+            except Exception as exc:
+                log.error("❌ UPSAMPLE сеть: %s", exc.__class__.__name__)
                 return {"error": flow_copy.msg("gen_failed")}
 
             if status == 200:
@@ -690,11 +690,11 @@ class FlowHttpClient:
                 session = await self.keeper.get_session()
                 continue
             if status == 403:
-                log.warning(f"⚠️ UPSAMPLE 403 ({idx+1}). Тело: {text[:200]}")
+                log.warning("⚠️ UPSAMPLE 403 (%s)", idx + 1)
                 continue
             if status == 429:
                 return {"error": flow_copy.msg("rate_limited")}
-            log.error(f"❌ UPSAMPLE статус {status}: {text[:200]}")
+            log.error("❌ UPSAMPLE статус %s", status)
             return {"error": flow_copy.msg("service_error", status=status)}
 
         return {"error": flow_copy.msg("upscale_unavailable")}
@@ -726,8 +726,7 @@ class FlowHttpClient:
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     if resp.status != 200:
-                        text = await resp.text()
-                        log.warning(f"video scene create -> {resp.status}: {text[:200]}")
+                        log.warning("video scene create -> %s", resp.status)
                         return None
                     create_data = await resp.json(content_type=None)
 
@@ -748,7 +747,7 @@ class FlowHttpClient:
                         log.warning(f"video scene workflows -> {resp.status}")
                 return scene_id
         except Exception as exc:
-            log.warning(f"video scene prep failed: {exc}")
+            log.warning("video scene prep failed: %s", exc.__class__.__name__)
             return None
 
     async def fetch_full_extended_video(
@@ -827,7 +826,7 @@ class FlowHttpClient:
                 log.warning("concat polling timed out")
                 return None
         except Exception as exc:
-            log.warning(f"fetch_full_extended_video failed: {exc}")
+            log.warning("fetch_full_extended_video failed: %s", exc.__class__.__name__)
             return None
 
     async def generate_video(
@@ -923,14 +922,13 @@ class FlowHttpClient:
             })
             return data
 
-        # TEMP (capture-driven): trace r2v/frames request shape to diagnose the
-        # "ingredients video never generates" bug. No secrets — endpoint/model/aspect only.
+        # Values-free request-shape trace for reference/frames diagnostics.
         if is_reference or is_frames:
             log.info(
-                "🎬 r2v req account=%s project=%s endpoint=%s effective_model_key=%s "
-                "aspect=%s ref_media_ids=%s frames=%s",
-                self.keeper.account_id, project_id, endpoint_name, effective_model_key,
-                aspect, [r.get("mediaId") for r in reference_images],
+                "🎬 r2v req account=%s endpoint=%s effective_model_key=%s "
+                "aspect=%s reference_count=%s frames=%s",
+                self.keeper.account_id, endpoint_name, effective_model_key,
+                aspect, len(reference_images),
                 bool(start_image or end_image),
             )
 
@@ -1013,7 +1011,7 @@ class FlowHttpClient:
                             gen_status = resp.status
                             gen_text   = await resp.text()
                 except Exception as exc:
-                    log.error("🎬 video network error: %s", exc)
+                    log.error("🎬 video network error: %s", exc.__class__.__name__)
                     return {"error": flow_copy.msg("vid_gen_failed")}
 
                 if gen_status == 401 and not refreshed_after_401:
@@ -1070,9 +1068,7 @@ class FlowHttpClient:
                 "unusual_403": unusual_403,
             })
         if gen_status != 200:
-            # TEMP (capture-driven): log the real API error body (no auth headers).
-            log.warning("🎬 video %s non-200 status=%s body=%s",
-                        endpoint_name, gen_status, gen_text[:300])
+            log.warning("🎬 video %s non-200 status=%s", endpoint_name, gen_status)
             return _submit_meta({"error": flow_copy.msg("service_error", status=gen_status)})
 
         try:
@@ -1083,16 +1079,14 @@ class FlowHttpClient:
 
         media_info = parse_video_gen_response(gen_data)
         if not media_info:
-            # TEMP (capture-driven): 200 OK but no media id — log a snippet of the body.
-            log.warning("🎬 video %s 200 but no media_id; body=%s",
-                        endpoint_name, gen_text[:300])
+            log.warning("🎬 video %s 200 but no media_id", endpoint_name)
             return _submit_meta({"error": "media_id не найден в ответе"})
 
         media_id   = media_info["media_id"]
         project_id = media_info["project_id"]
         workflow_id = media_info.get("workflow_id")
         scene_id = media_info.get("scene_id") or (source_scene_id if is_extend else None)
-        log.info(f"🎬 media_id={media_id}, ожидаю готовности…")
+        log.info("🎬 видео принято, ожидаю готовности…")
 
         # ── Шаг 2: polling ─────────────────────────────────────────────
         poll_payload = build_video_poll_payload(media_id, project_id)
@@ -1121,7 +1115,7 @@ class FlowHttpClient:
                             continue
                         poll_data = await resp.json(content_type=None)
             except Exception as exc:
-                log.warning(f"⚠️ poll {poll_num} ошибка: {exc}")
+                log.warning("⚠️ poll %s ошибка: %s", poll_num, exc.__class__.__name__)
                 continue
 
             status, poll_item = check_video_poll_status(poll_data)
@@ -1146,11 +1140,7 @@ class FlowHttpClient:
                 # Причина из тела FAILED-итема: звук не сгенерился / модерация —
                 # это контент-фейлы (не вина аккаунта), их показываем юзеру.
                 reason = _video_failure_reason(poll_item)
-                try:
-                    log.warning("🎬 FAILED item (reason=%s): %s",
-                                reason or "?", _json.dumps(poll_item, ensure_ascii=False)[:600])
-                except Exception:
-                    pass
+                log.warning("🎬 FAILED item (reason=%s)", reason or "unknown")
                 if reason == "audio_filtered":
                     return _submit_meta({"error": "audio filter", "failure": "audio_filtered"})
                 if reason == "danger_filter":
@@ -1214,9 +1204,9 @@ class FlowHttpClient:
                             if status == VIDEO_STATUS_FAILED:
                                 return None
             except Exception as exc:
-                log.warning(f"⚠️ upload-ready poll {poll_num} ошибка: {exc}")
+                log.warning("⚠️ upload-ready poll %s ошибка: %s", poll_num, exc.__class__.__name__)
             await asyncio.sleep(interval)
-        log.warning("⚠️ upload-ready: таймаут %sс (media_id=%s…)", timeout, str(media_id)[:8])
+        log.warning("⚠️ upload-ready: таймаут %sс", timeout)
         return None
 
     async def fetch_video_bytes(self, media_id: str) -> bytes | None:
@@ -1255,11 +1245,11 @@ class FlowHttpClient:
                     timeout=aiohttp.ClientTimeout(total=120),
                 ) as resp:
                     if resp.status != 200:
-                        log.warning(f"⚠️ fetch_video_bytes → {resp.status} ({url})")
+                        log.warning("⚠️ fetch_video_bytes → %s", resp.status)
                         return None
                     data = await resp.read()
-                    log.info(f"🎬 видео скачано: {len(data)} байт (media_id={media_id})")
+                    log.info("🎬 видео скачано: %s байт", len(data))
                     return data
         except Exception as exc:
-            log.error(f"❌ fetch_video_bytes: {exc}")
+            log.error("❌ fetch_video_bytes: %s", exc.__class__.__name__)
             return None

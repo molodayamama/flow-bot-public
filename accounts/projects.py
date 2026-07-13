@@ -81,7 +81,7 @@ class ProjectManager:
         if pid:
             self._failures = 0
             self._store.set(key, pid)
-            self._log.info(f"📋 Пользователю {user_id} выдан проект {pid} (аккаунт {acc_id})")
+            self._log.info("📋 Пользователю выдан проект (аккаунт %s)", acc_id)
             return pid
 
         self._failures += 1

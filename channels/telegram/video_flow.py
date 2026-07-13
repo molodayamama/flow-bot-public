@@ -352,10 +352,12 @@ class VideoFlow:
                     if _content_fail == "danger_filter":
                         await _fail_retry(i, "video_danger_filter", "danger_filter")
                         return
-                    # TEMP (capture-driven): surface why r2v/ingredients gen fails.
                     d.log.warning(
-                        "🎬 gen failed: mode=%s model=%s aspect=%s err=%s",
-                        vmode, model_id, aspect, str(result.get("error"))[:300],
+                        "🎬 gen failed: mode=%s model=%s aspect=%s error_type=%s",
+                        vmode,
+                        model_id,
+                        aspect,
+                        result.get("account_risk") or result.get("failure") or "provider_error",
                     )
                     d.mark_video_account_failure(acc_id, result)
                     # Прозрачный фейловер на другой аккаунт для text-to-video (403/auth риски).
@@ -398,7 +400,12 @@ class VideoFlow:
                                 # Не возвращаемся — упадём ниже в success-ветку.
                                 pass
                             else:
-                                d.log.warning("🎬 video failover also failed: %s", result.get("error"))
+                                d.log.warning(
+                                    "🎬 video failover also failed: %s",
+                                    result.get("account_risk")
+                                    or result.get("failure")
+                                    or "provider_error",
+                                )
                                 d.mark_video_account_failure(acc_id, result)
                     if "error" in result:
                         await _fail_retry(i)

@@ -49,6 +49,8 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from dotenv import load_dotenv
 from playwright.async_api import BrowserContext, async_playwright
 
+from security.logging_redaction import install_logging_redaction
+
 from flow_core import (
     ImageRef,
     ImageRegistry,
@@ -166,7 +168,6 @@ from flow_core import (
     video_frames_model_key,
     video_reference_model_key,
     CREDITS_ENDPOINT,
-    FLOW_BROWSER_API_KEY,
     parse_credits_response,
 )
 from flow_core import (
@@ -484,7 +485,7 @@ from flow_provider import FlowHttpClient, SessionKeeper
 ENV_FILE = os.getenv("ENV_FILE", ".env") or ".env"
 load_dotenv(ENV_FILE)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "PASTE_YOUR_TOKEN_HERE")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 # Метрики: ярлык Flow-аккаунта (для flow_jobs) и курс Stars→₽ для выручки.
 FLOW_ACCOUNT_ID = os.getenv("FLOW_ACCOUNT_ID", "default")
 # Пул Flow-аккаунтов: записи "id=путь_к_chrome_профилю" через ';' (или ',').
@@ -567,6 +568,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
+install_logging_redaction()
 
 
 # ───────────────────────────────────────────
@@ -2425,7 +2427,7 @@ async def _main_impl():
     log.info("🚀 Запуск Flow Bot...")
     _install_shutdown_exception_filter()
 
-    if TELEGRAM_TOKEN == "PASTE_YOUR_TOKEN_HERE":
+    if not TELEGRAM_TOKEN:
         log.error("❌ Укажите TELEGRAM_TOKEN в .env или прямо в коде!")
         return
 

@@ -14,6 +14,7 @@ runtime-файлам. Для старта не нужно заполнять к�
 TELEGRAM_TOKEN=123456789:replace_me
 OWNER_ID=123456789
 USER_DATA_DIR=./google_profile
+FLOW_BROWSER_API_KEY=replace_with_runtime_browser_key
 CAPTCHA_PROVIDER=browser
 BOT_USERNAME=your_bot_username
 ```
@@ -23,6 +24,8 @@ BOT_USERNAME=your_bot_username
 - `TELEGRAM_TOKEN` - токен от BotFather.
 - `OWNER_ID` - твой Telegram user id. Владелец автоматически считается админом.
 - `USER_DATA_DIR` - папка Chrome-профиля, где Google-аккаунт уже залогинен.
+- `FLOW_BROWSER_API_KEY` - публичный browser-client key для запроса Google
+  credits. Значение хранится только в локальном `.env`, не в коде и не в git.
 - `CAPTCHA_PROVIDER=browser` - бесплатный основной путь через живую
   браузерную сессию.
 - `BOT_USERNAME` - нужен для красивых referral/channel deep links. Если пусто,
@@ -40,6 +43,7 @@ ADMIN_IDS=123456789
 USER_DATA_DIR=./google_profile
 FLOW_ACCOUNT_ID=main
 PER_USER_PROJECTS=1
+FLOW_BROWSER_API_KEY=replace_with_runtime_browser_key
 
 PROXY_URL=
 BROWSER_PROXY_URL=

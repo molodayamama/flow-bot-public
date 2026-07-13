@@ -74,14 +74,14 @@ async def test_captcha(action, min_score, enterprise):
             "success": True,
         }
 
-    except Exception as e:
-        print(f"   ❌ Ошибка: {e}")
+    except Exception as exc:
+        print(f"   ❌ Ошибка: {exc.__class__.__name__}")
         return {
             "action": action,
             "min_score": min_score,
             "enterprise": enterprise,
             "success": False,
-            "error": str(e),
+            "error_type": exc.__class__.__name__,
         }
 
 
@@ -134,7 +134,7 @@ async def main():
             print(
                 f"   • Action: {r['action']}, Score: {r['min_score']}, Enterprise: {r['enterprise']}"
             )
-            print(f"     Token: {r['token'][:50]}...")
+            print(f"     Token: получен, длина {len(r['token'])} (значение скрыто)")
 
     if failed:
         print("\n❌ Провальные комбинации:")
@@ -142,7 +142,7 @@ async def main():
             print(
                 f"   • Action: {r['action']}, Score: {r['min_score']}, Enterprise: {r['enterprise']}"
             )
-            print(f"     Error: {r.get('error', 'Unknown')}")
+            print(f"     Error type: {r.get('error_type', 'Unknown')}")
 
     print("\n" + "=" * 60)
     print("💡 Следующие шаги:")

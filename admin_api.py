@@ -1089,13 +1089,13 @@ def _wipe_profile_dir(profile_dir: str) -> None:
             return
         base = os.path.basename(os.path.normpath(p))
         if "google_profile" not in base:
-            log.warning("refusing to wipe non-profile dir: %s", p)
+            log.warning("refusing to wipe non-profile directory")
             return
         if os.path.isdir(p):
             shutil.rmtree(p, ignore_errors=True)
-            log.info("wiped profile dir for replace: %s", p)
+            log.info("wiped profile directory for replace")
     except Exception:
-        log.warning("_wipe_profile_dir failed for %s", profile_dir, exc_info=True)
+        log.warning("_wipe_profile_dir failed", exc_info=True)
 
 
 async def _drop_onboard_session(session_id: str) -> None:
@@ -1342,9 +1342,13 @@ async def handle_account_onboard_complete_post(request: web.Request) -> web.Resp
             session.proxy_url,
         ))
     log.info(
-        "account.onboard_complete %s mode=%s status=%s env_updated=%s runtime_added=%s reason=%s",
-        session.account_id, mode, result.get("status"), result.get("env_updated"),
-        result.get("runtime_added"), result.get("runtime_reason"),
+        "account.onboard_complete account_id=%s mode=%s status=%s "
+        "env_updated=%s runtime_added=%s",
+        session.account_id,
+        mode,
+        result.get("status"),
+        result.get("env_updated"),
+        result.get("runtime_added"),
     )
     try:
         metrics.log_event(
@@ -2431,16 +2435,20 @@ async def handle_telemetr_channel_get(request: web.Request) -> web.Response:
     try:
         data = await _fetch_telemetr_channel(channel_id, token)
     except (ClientError, asyncio.TimeoutError) as exc:
-        log.warning("telemetr channel lookup failed for %s: %s", channel_id, exc)
+        log.warning("telemetr channel lookup failed for %s: %s", channel_id, exc.__class__.__name__)
         return _json({"error": "telemetr_unavailable"}, 502)
     except Exception as exc:
         reason = str(exc)
         # Превышение тарифных лимитов (requests/channels) — не сбой; отдаём
         # отдельный код, чтобы UI показал понятное объяснение.
         if "limit" in reason.lower() or "quota" in reason.lower():
-            log.warning("telemetr channel lookup limit-reached for %s: %s", channel_id, reason)
-            return _json({"error": "telemetr_quota", "detail": reason}, 502)
-        log.warning("telemetr channel lookup rejected for %s: %s", channel_id, reason)
+            log.warning("telemetr channel lookup limit-reached channel_id=%s", channel_id)
+            return _json({"error": "telemetr_quota"}, 502)
+        log.warning(
+            "telemetr channel lookup rejected channel_id=%s: %s",
+            channel_id,
+            exc.__class__.__name__,
+        )
         return _json({"error": "telemetr_error"}, 502)
 
     _telemetr_cache[channel_id] = (now, data)

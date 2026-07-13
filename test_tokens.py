@@ -41,7 +41,7 @@ def check_config():
         issues.append("❌ BEARER_TOKEN не настроен")
         print("❌ Bearer Token: НЕ НАСТРОЕН")
     else:
-        print(f"✅ Bearer Token: {BEARER_TOKEN[:30]}...{BEARER_TOKEN[-20:]}")
+        print("✅ Bearer Token: НАСТРОЕН (значение скрыто)")
         print(f"   Длина: {len(BEARER_TOKEN)} символов")
 
     # Проверка Cookies
@@ -52,7 +52,7 @@ def check_config():
             missing_cookies.append(name)
             print(f"   ❌ {name:25} НЕ НАСТРОЕН")
         else:
-            print(f"   ✅ {name:25} {value[:20]}...")
+            print(f"   ✅ {name:25} НАСТРОЕН (значение скрыто)")
 
     if missing_cookies:
         issues.append(f"❌ Не настроены cookies: {', '.join(missing_cookies)}")
@@ -114,14 +114,13 @@ async def test_api():
                         print("✅ УСПЕХ! API работает корректно")
                         print(f"\n📷 Сгенерировано изображений: {len(data['images'])}")
 
-                        for i, img in enumerate(data["images"], 1):
-                            if "url" in img:
-                                print(f"   {i}. {img['url'][:60]}...")
+                        urls = sum(1 for image in data["images"] if "url" in image)
+                        print(f"   URL в ответе: {urls} (значения скрыты)")
 
                         return True
                     else:
                         print("⚠️  Ответ получен, но изображения отсутствуют")
-                        print(f"   Ответ: {str(data)[:200]}")
+                        print("   Ответ не содержит ожидаемый список images (тело скрыто)")
                         return False
 
                 elif status == 401:
@@ -156,10 +155,9 @@ async def test_api():
                     return False
 
                 else:
-                    text = await response.text()
+                    await response.read()
                     print(f"❌ ОШИБКА {status}")
-                    print(f"\n📄 Ответ сервера:")
-                    print(f"   {text[:300]}")
+                    print("\n📄 Ответ сервера скрыт, чтобы не раскрывать токены и cookies")
                     return False
 
     except asyncio.TimeoutError:
@@ -167,16 +165,13 @@ async def test_api():
         print("\n💡 Попробуйте ещё раз")
         return False
 
-    except aiohttp.ClientError as e:
-        print(f"❌ СЕТЕВАЯ ОШИБКА: {e}")
+    except aiohttp.ClientError as exc:
+        print(f"❌ СЕТЕВАЯ ОШИБКА: {exc.__class__.__name__}")
         print("\n💡 Проверьте подключение к интернету")
         return False
 
-    except Exception as e:
-        print(f"❌ НЕОЖИДАННАЯ ОШИБКА: {e}")
-        import traceback
-
-        traceback.print_exc()
+    except Exception as exc:
+        print(f"❌ НЕОЖИДАННАЯ ОШИБКА: {exc.__class__.__name__}")
         return False
 
 
@@ -218,8 +213,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n\n⚠️  Тест прерван пользователем")
-    except Exception as e:
-        print(f"\n❌ Критическая ошибка: {e}")
-        import traceback
-
-        traceback.print_exc()
+    except Exception as exc:
+        print(f"\n❌ Критическая ошибка: {exc.__class__.__name__}")

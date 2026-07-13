@@ -2937,6 +2937,25 @@ class AdminStatusRouterTests(unittest.TestCase):
         self.assertIn(("get_session", (), {}), self.rec.calls)
         self.assertIn(("pool.status", (), {}), self.rec.calls)
         self.assertIn(("report_video_health", ((1, 24),), {}), self.rec.calls)
+        self.assertNotIn("proj1", text)
+
+    def test_admin_status_escapes_dynamic_html(self) -> None:
+        self.rec.account_pool.status = lambda: [{
+            "id": "<account>",
+            "disabled": False,
+            "cooldown_left": 0,
+            "video_allowed": False,
+            "active_image_jobs": 0,
+            "image_capacity": 1,
+            "active_video_jobs": 0,
+            "video_capacity": 1,
+            "users": 0,
+        }]
+        message = FakeMessage("/status")
+        run(self.handler(message))
+        text = message.answers[-1][0][0]
+        self.assertIn("&lt;account&gt;", text)
+        self.assertNotIn("<account>", text)
 
     def test_video_health_failure_falls_back_without_failing_status(self) -> None:
         deps, _ = _admin_status_deps(raise_video_health=True)
