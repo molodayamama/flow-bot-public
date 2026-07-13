@@ -180,7 +180,6 @@ import flow_copy
 from generation import backend_service
 from generation.prompt_boost import boost_prompt_with_gemini as _gemini_boost_prompt
 import metrics
-from mediautil import image_ext_from_bytes
 from textutil import _days_word, _short_prompt, parse_ids as _parse_ids
 import prompts_lib
 from prompts_lib import QUICK_IDEAS as _QUICK_IDEAS
@@ -683,14 +682,6 @@ def _account_for_image(user_id: int, *, prefer_image_only: bool = False, exclude
     return _account_routing.account_for_image(user_id, prefer_image_only=prefer_image_only, exclude=exclude)
 
 
-def _cached_gcredits_hints() -> dict:
-    return _account_routing.cached_gcredits_hints()
-
-
-def _video_family_for_model(model_id: str) -> str:
-    return _account_routing.video_family_for_model(model_id)
-
-
 def _video_scores_for_model(model_id: str, min_credits: int = 0) -> dict:
     return _account_routing.video_scores_for_model(model_id, min_credits)
 
@@ -946,10 +937,6 @@ def _mp_platform_aspect(platform: str) -> str:
 _marketplace_stale = MarketplaceStale(MarketplaceStaleDeps(workspace=_ws))
 
 
-def _mp_message_id(message) -> int:
-    return _marketplace_stale.message_id(message)
-
-
 def _mp_stamp_message(user_id: int, message) -> None:
     _marketplace_stale.stamp_message(user_id, message)
 
@@ -985,12 +972,6 @@ def _marketplace_screens_deps() -> tg_screens.MarketplaceScreensDeps:
 def _mp_confirm_screen(user_id: int):
     return tg_screens.mp_confirm_screen(
         user_id, deps=_marketplace_screens_deps()
-    )
-
-
-def _mp_sku_projects(user_id: int, limit: int = 12) -> list[dict]:
-    return tg_screens.mp_sku_projects(
-        user_id, limit=limit, deps=_marketplace_screens_deps()
     )
 
 
@@ -1094,10 +1075,6 @@ async def show_wizard(message: types.Message, *, user_id: int, edit: bool):
 
 async def _boost_prompt_with_gemini(prompt: str) -> str | None:
     return await _gemini_boost_prompt(prompt, api_key=GEMINI_API_KEY, log=log)
-
-
-def _prompt_picker_text(ideas: list[str]) -> str:
-    return tg_screens.prompt_picker_text(ideas)
 
 
 async def show_prompt_picker(message: types.Message, *, user_id: int, edit: bool):
@@ -1251,12 +1228,6 @@ def _video_settings_screens_deps() -> tg_screens.VideoSettingsScreensDeps:
         vid_default_fmt=VID_DEFAULT_FMT,
         vid_default_count=VID_DEFAULT_COUNT,
         vid_fmt_names=_VID_FMT_NAMES,
-    )
-
-
-def _vid_settings_text(user_id: int) -> str:
-    return tg_screens.video_settings_text(
-        user_id, deps=_video_settings_screens_deps()
     )
 
 
@@ -1575,10 +1546,6 @@ _max_bootstrap = MaxBootstrap(MaxBootstrapDeps(
 ))
 
 
-def _build_max_runtime():
-    return _max_bootstrap.build_runtime()
-
-
 def _maybe_start_max_bot() -> None:
     _max_bootstrap.maybe_start_polling()
 
@@ -1619,16 +1586,6 @@ _seller_flow = SellerFlow(SellerFlowDeps(
 ))
 
 
-async def _seller_backend_call_and_send(
-    message: types.Message, prompt: str, *, num_images: int, aspect_ratio: str,
-    user_id: int, image_model: str, kind: str = "image", image_b64: str | None = None,
-) -> tuple[bool, str | None]:
-    return await _seller_flow.backend_call_and_send(
-        message, prompt, num_images=num_images, aspect_ratio=aspect_ratio,
-        user_id=user_id, image_model=image_model, kind=kind, image_b64=image_b64,
-    )
-
-
 async def _seller_generate_and_send(
     message: types.Message, prompt: str, *, num_images: int, aspect_ratio: str,
     user_id: int, action: str = "gen", image_model: str = DEFAULT_IMAGE_MODEL,
@@ -1647,36 +1604,6 @@ async def _seller_i2i_from_file_id(
     return await _seller_flow.i2i_from_file_id(
         message, file_id, instruction, num_images=num_images,
         aspect_ratio=aspect_ratio, user_id=user_id, action=action,
-    )
-
-
-async def _seller_i2i_from_photo(
-    message: types.Message, instruction: str, *, num_images: int, aspect_ratio: str,
-    user_id: int, action: str,
-) -> bool:
-    return await _seller_flow.i2i_from_photo(
-        message, instruction, num_images=num_images, aspect_ratio=aspect_ratio,
-        user_id=user_id, action=action,
-    )
-
-
-async def _seller_video_backend_call_and_send(
-    message: types.Message, prompt: str, *, image_b64: str, aspect_ratio: str,
-    user_id: int, video_model: str = VID_REF_DEFAULT_MODEL,
-) -> bool:
-    return await _seller_flow.video_backend_call_and_send(
-        message, prompt, image_b64=image_b64, aspect_ratio=aspect_ratio,
-        user_id=user_id, video_model=video_model,
-    )
-
-
-async def _seller_video_generate_and_send(
-    message: types.Message, prompt: str, *, image_b64: str, aspect_ratio: str,
-    user_id: int, video_model: str = VID_REF_DEFAULT_MODEL,
-) -> bool:
-    return await _seller_flow.video_generate_and_send(
-        message, prompt, image_b64=image_b64, aspect_ratio=aspect_ratio,
-        user_id=user_id, video_model=video_model,
     )
 
 
@@ -1812,10 +1739,6 @@ _generation_flow = GenerationFlow(GenerationFlowDeps(
 ))
 
 
-async def _download_ref_image_bytes(ref: ImageRef) -> bytes | None:
-    return await _reference_routing.download_ref_image_bytes(ref)
-
-
 async def _reupload_ref_for_edit_failover(
     ref: ImageRef,
     user_id: int,
@@ -1897,10 +1820,6 @@ async def _regen_and_send(message: types.Message, ref: ImageRef):
     )
 
 
-def _image_ext_from_bytes(data: bytes, fallback: str = "png") -> str:
-    return image_ext_from_bytes(data, fallback)
-
-
 async def _send_original_file(message: types.Message, ref: ImageRef, *, marketplace_export: bool = False):
     await _generation_flow.send_original_file(message, ref, marketplace_export=marketplace_export)
 
@@ -1954,10 +1873,6 @@ _photo_route_offer = PhotoRouteOffer(PhotoRouteOfferDeps(
     pending_photo_routes=pending_photo_routes,
     photo_route_kb=_photo_route_kb,
 ))
-
-
-def _store_pending_photo_route(user_id: int, *, file_id: str, caption: str) -> None:
-    _photo_route_offer.store(user_id, file_id=file_id, caption=caption)
 
 
 async def _offer_photo_route_choice(message: types.Message, *, user_id: int, caption: str) -> None:
@@ -2067,16 +1982,6 @@ _agent_flow = AgentFlow(AgentFlowDeps(
 ))
 
 
-async def _agent_improve_call(user_id: int, prompt: str, *, instruction_fn=None) -> dict:
-    return await _agent_flow.improve_call(user_id, prompt, instruction_fn=instruction_fn)
-
-
-def _agent_variants_view(variants: list[dict], *, pick_prefix: str, keep_data: str):
-    return _agent_flow.variants_view(
-        variants, pick_prefix=pick_prefix, keep_data=keep_data
-    )
-
-
 async def _agent_improve_flow(
     callback: types.CallbackQuery, *, user_id: int, prompt_key: str,
     source: str, pick_prefix: str, keep_data: str, rerender, edit_fn,
@@ -2150,14 +2055,6 @@ _reference_routing = ReferenceRouting(ReferenceRoutingDeps(
 def _video_reference_account_id(st: dict, vmode: str) -> str | None:
     return video_reference.video_reference_account_id(
         st, vmode, is_reference_usable=account_pool.is_reference_usable
-    )
-
-
-async def _reupload_reference_source(
-    src: dict, *, user_id: int, acc_id: str, project_id: str | None
-) -> dict | None:
-    return await _reference_routing.reupload_reference_source(
-        src, user_id=user_id, acc_id=acc_id, project_id=project_id
     )
 
 
@@ -2363,34 +2260,6 @@ dp.include_router(
 )
 
 
-async def _robokassa_request_data(request: web.Request) -> dict[str, str]:
-    return await robokassa_billing.request_data(request)
-
-
-def _robokassa_param(data: dict[str, str], *names: str) -> str:
-    return robokassa_billing.param(data, *names)
-
-
-def _robokassa_shp_params(data: dict[str, str]) -> dict[str, str]:
-    return robokassa_billing.shp_params(data)
-
-
-def _robokassa_amount_matches(actual: str, expected: str) -> bool:
-    return robokassa_billing.amount_matches(actual, expected)
-
-
-def _robokassa_target_scope(shp: dict[str, str]) -> str:
-    return robokassa_billing.target_scope(shp, clean_scope=_robokassa_clean_scope)
-
-
-def _robokassa_result_url_for_scope(scope: str) -> str:
-    return robokassa_billing.result_url_for_scope(scope, _robokassa_runtime_config())
-
-
-def _robokassa_provider_payment_id(inv_id: str, scope: str, *, legacy: bool = False) -> str:
-    return robokassa_billing.provider_payment_id(inv_id, scope, legacy=legacy)
-
-
 async def _robokassa_forward_result(target_scope: str, data: dict[str, str]) -> web.Response:
     return await robokassa_billing.forward_result(
         target_scope,
@@ -2400,20 +2269,12 @@ async def _robokassa_forward_result(target_scope: str, data: dict[str, str]) -> 
     )
 
 
-def _robokassa_bot_username_for_scope(scope: str) -> str:
-    return robokassa_billing.bot_username_for_scope(scope, _robokassa_runtime_config())
-
-
 async def _notify_robokassa_success(user_id: int, credits: int, balance: int) -> None:
     await _robokassa_topup.notify_success(user_id, credits, balance)
 
 
 async def robokassa_result(request: web.Request) -> web.Response:
     return await robokassa_billing.handle_result(request, _robokassa_web_deps())
-
-
-async def _robokassa_status_page(request: web.Request, *, ok: bool) -> web.Response:
-    return await robokassa_billing.status_page(request, _robokassa_web_deps(), ok=ok)
 
 
 async def robokassa_success(request: web.Request) -> web.Response:
@@ -2474,10 +2335,6 @@ async def _upload_photo_source_from_file_id(message, *, user_id, status_msg, fil
 
 _album_buf = _photo_intake._album_buf
 _album_tasks = _photo_intake._album_tasks
-
-
-def _vid_caption(message: types.Message) -> str:
-    return _photo_intake.vid_caption(message)
 
 
 async def _flush_album(media_group_id: str, user_id: int):
