@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from unittest.mock import patch
 
 from channels.base import BotPlatform, Button, Keyboard, PlatformFile, PlatformMedia
 from channels.max.client import MaxBotClient
+from channels.max.transport import MaxApiError
 
 
 def run(coro):
@@ -23,10 +25,22 @@ def run(coro):
 
 
 class _FakeResp:
-    def __init__(self, *, json_body=None, raw=b"", content_type="application/json"):
+    def __init__(
+        self,
+        *,
+        json_body=None,
+        raw=b"",
+        content_type="application/json",
+        status=200,
+        headers=None,
+        text_body="",
+    ):
         self._json = json_body if json_body is not None else {}
         self._raw = raw
         self.content_type = content_type
+        self.status = status
+        self.headers = dict(headers or {})
+        self._text = text_body
 
     async def __aenter__(self):
         return self
@@ -38,10 +52,12 @@ class _FakeResp:
         pass
 
     async def json(self):
+        if isinstance(self._json, BaseException):
+            raise self._json
         return self._json
 
     async def text(self):
-        return ""
+        return self._text
 
     async def read(self):
         return self._raw
@@ -53,9 +69,16 @@ class _FakeSession:
     def __init__(self, responses=None):
         self.calls = []
         self._responses = list(responses or [])
+        self.closed = False
 
     def _next(self):
-        return self._responses.pop(0) if self._responses else _FakeResp()
+        value = self._responses.pop(0) if self._responses else _FakeResp()
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    async def close(self):
+        self.closed = True
 
     def request(self, method, url, **kwargs):
         self.calls.append(("request", method, url, kwargs))
@@ -98,6 +121,16 @@ class ProtocolTests(unittest.TestCase):
         c, sess = _client([_FakeResp(json_body={"ok": True})])
         run(c.send_message("7", "hi"))
         self.assertIn("ssl", sess.calls[0][3])
+
+    def test_owned_session_is_reused_and_closed(self):
+        sess = _FakeSession([_FakeResp(), _FakeResp()])
+        client = MaxBotClient(token="x")
+        with patch("channels.max.client.aiohttp.ClientSession", return_value=sess) as factory:
+            run(client.get_subscriptions())
+            run(client.get_subscriptions())
+            run(client.close())
+        factory.assert_called_once_with()
+        self.assertTrue(sess.closed)
 
 
 class MediaPayloadTests(unittest.TestCase):
@@ -228,6 +261,72 @@ class SendTests(unittest.TestCase):
         self.assertEqual(sess.calls[0][1:3], ("GET", f"{c.base_url}/subscriptions"))
         self.assertEqual(sess.calls[1][3]["json"]["secret"], "secret-1")
         self.assertEqual(sess.calls[2][3]["params"], {"url": "https://bot.example/max/webhook"})
+
+    def test_safe_get_retries_429_and_respects_retry_after(self):
+        delays = []
+
+        async def no_sleep(delay):
+            delays.append(delay)
+
+        sess = _FakeSession([
+            _FakeResp(
+                status=429,
+                headers={"Retry-After": "2"},
+                json_body={"code": "rate_limit", "message": "private"},
+            ),
+            _FakeResp(json_body={"updates": []}),
+        ])
+        client = MaxBotClient(token="x", session=sess, sleep=no_sleep)
+        result = run(client.get_updates(timeout=0))
+        self.assertEqual(result, {"updates": []})
+        self.assertEqual(len(sess.calls), 2)
+        self.assertEqual(delays, [2.0])
+
+    def test_safe_get_retries_invalid_5xx_json_without_body_leak(self):
+        delays = []
+
+        async def no_sleep(delay):
+            delays.append(delay)
+
+        sess = _FakeSession([
+            _FakeResp(status=502, json_body=ValueError("private response body")),
+            _FakeResp(json_body=[]),
+        ])
+        client = MaxBotClient(token="x", session=sess, sleep=no_sleep)
+        self.assertEqual(run(client.get_subscriptions()), [])
+        self.assertEqual(delays, [0.5])
+
+    def test_send_message_is_not_retried_and_error_is_redacted(self):
+        private = "private body with TOKEN-123 and https://secret.example"
+        response = _FakeResp(
+            status=503,
+            json_body={"code": private, "message": private},
+        )
+        client, sess = _client([response, _FakeResp()])
+        with self.assertRaises(MaxApiError) as raised:
+            run(client.send_message("7", "hello"))
+        self.assertEqual(len(sess.calls), 1)
+        self.assertNotIn("TOKEN-123", str(raised.exception))
+        self.assertNotIn("secret.example", str(raised.exception))
+        self.assertEqual(raised.exception.code, "provider_error")
+
+    def test_media_send_retries_attachment_not_ready_only(self):
+        delays = []
+
+        async def no_sleep(delay):
+            delays.append(delay)
+
+        sess = _FakeSession([
+            _FakeResp(status=400, json_body={"code": "attachment.not.ready"}),
+            _FakeResp(json_body={"ok": True}),
+        ])
+        client = MaxBotClient(token="x", session=sess, sleep=no_sleep)
+        result = run(client.send_photo(
+            "7", PlatformMedia(kind="photo", url="https://cdn/image.png")
+        ))
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(len(sess.calls), 2)
+        self.assertEqual(delays, [0.5])
 
 
 if __name__ == "__main__":

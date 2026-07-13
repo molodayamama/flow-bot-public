@@ -154,6 +154,12 @@ MAX webhook/runtime change:
 - Inbox tests must use temporary SQLite files and confirm duplicate suppression,
   cross-worker lease exclusion, FIFO within one chat, retry/dead-letter state,
   retention, and redaction of exception text.
+- Transport tests must prove that `POST /messages` is not retried on ambiguous
+  failures, rate limiting stays below 30 rps, `Retry-After` is bounded, unknown
+  provider bodies/codes are redacted, and owned sessions close on shutdown.
+- `/max/health` is a local readiness check only: test subscription state,
+  worker-task state, inbox counts, and dead-letter degradation with fakes. It
+  must not call the MAX API.
 - Do not register a live subscription, send a MAX message, or call the MAX API
   without explicit approval; those actions mutate external state.
 

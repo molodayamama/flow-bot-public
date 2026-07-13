@@ -9,6 +9,7 @@ is a thin aiohttp adapter that mounts it on an existing web app.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 from typing import Any, Awaitable, Callable, Mapping
@@ -20,6 +21,32 @@ MAX_WEBHOOK_BODY_BYTES = 1024 * 1024
 
 Dispatch = Callable[[Any], Awaitable[None]]
 Parser = Callable[[Mapping[str, Any]], Any]
+
+
+def max_health_snapshot(app: Mapping[str, Any], inbox: Any) -> tuple[int, dict[str, Any]]:
+    """Return local readiness without contacting MAX or exposing configuration."""
+    try:
+        stats = inbox.stats()
+    except Exception:
+        return 503, {"status": "not_ready", "ready": False}
+    tasks = tuple(app.get("max_inbox_tasks") or ())
+    workers_running = bool(tasks) and all(not task.done() for task in tasks)
+    ready = bool(app.get("max_webhook_ready")) and workers_running
+    if not ready:
+        status = "not_ready"
+    elif int(stats.get("dead", 0)) > 0:
+        status = "degraded"
+    else:
+        status = "ok"
+    return (200 if ready else 503), {
+        "status": status,
+        "ready": ready,
+        "inbox": {
+            "pending": int(stats.get("pending", 0)),
+            "processed": int(stats.get("processed", 0)),
+            "dead": int(stats.get("dead", 0)),
+        },
+    }
 
 
 async def process_webhook(
@@ -93,6 +120,17 @@ def register_max_webhook(
     app.router.add_post(path, handler)
 
 
+def register_max_health(app: Any, *, inbox: Any, path: str = "/max/health") -> None:
+    """Mount a provider-free liveness/readiness endpoint for MAX operations."""
+    from aiohttp import web
+
+    async def handler(_request: "web.Request") -> "web.Response":
+        status, payload = max_health_snapshot(app, inbox)
+        return web.json_response(payload, status=status)
+
+    app.router.add_get(path, handler)
+
+
 def register_max_subscription_lifecycle(
     app: Any,
     *,
@@ -111,14 +149,25 @@ def register_max_subscription_lifecycle(
     """Subscribe on aiohttp startup and expose fail-closed readiness state."""
     app["max_webhook_ready"] = False
 
+    async def close_client() -> None:
+        close = getattr(client, "close", None)
+        if callable(close):
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+
     async def subscribe(_app: Any) -> None:
-        result = await client.subscribe_webhook(
-            url=webhook_url,
-            secret=secret,
-            update_types=update_types,
-        )
-        if not isinstance(result, Mapping) or result.get("success") is not True:
-            raise RuntimeError("MAX webhook subscription was not accepted")
+        try:
+            result = await client.subscribe_webhook(
+                url=webhook_url,
+                secret=secret,
+                update_types=update_types,
+            )
+            if not isinstance(result, Mapping) or result.get("success") is not True:
+                raise RuntimeError("MAX webhook subscription was not accepted")
+        except Exception:
+            await close_client()
+            raise
         _app["max_webhook_ready"] = True
         if inbox is not None and dispatch is not None:
             from channels.max.inbox import run_inbox_maintenance, run_inbox_worker
@@ -139,6 +188,7 @@ def register_max_subscription_lifecycle(
             _app["max_inbox_tasks"] = (*workers, maintenance)
 
     async def cleanup(_app: Any) -> None:
+        _app["max_webhook_ready"] = False
         stop = _app.get("max_inbox_stop")
         tasks = _app.get("max_inbox_tasks") or ()
         if stop is not None:
@@ -150,6 +200,7 @@ def register_max_subscription_lifecycle(
                 for task in tasks:
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
+        await close_client()
 
     app.on_startup.append(subscribe)
     app.on_cleanup.append(cleanup)

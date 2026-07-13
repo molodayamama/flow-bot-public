@@ -37,6 +37,15 @@ class _FakeClient:
         return {"updates": [], "marker": marker}
 
 
+class _ClosingClient(_FakeClient):
+    def __init__(self):
+        super().__init__()
+        self.closed = False
+
+    async def close(self):
+        self.closed = True
+
+
 async def _nosleep(_):
     return None
 
@@ -86,6 +95,14 @@ class RunTests(unittest.TestCase):
         ))
         self.assertGreaterEqual(fake.calls, 2)
 
+    def test_run_max_closes_client_on_stop(self):
+        fake = _ClosingClient()
+        run(runtime.run_max(
+            _FakeService(), env=ENABLED_ENV, client=fake,
+            should_stop=lambda: fake.calls >= 1, sleep=_nosleep,
+        ))
+        self.assertTrue(fake.closed)
+
 
 class FlowBotWiringTests(unittest.TestCase):
     """flow_bot composition root must wire MAX startup (source-level, no import)."""
@@ -122,6 +139,7 @@ class FlowBotWiringTests(unittest.TestCase):
         self.assertIn("_maybe_register_max_webhook(app)", self.src)
         self.assertIn("register_max_webhook,", self.max_src)
         self.assertIn("register_max_subscription_lifecycle,", self.max_src)
+        self.assertIn("register_max_health,", self.max_src)
         self.assertIn("webhook_url=config.webhook_url", self.max_src)
         self.assertIn("MaxWebhookInbox(config.inbox_db)", self.max_src)
         self.assertIn("inbox=inbox", self.max_src)

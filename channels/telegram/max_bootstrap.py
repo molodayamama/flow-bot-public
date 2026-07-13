@@ -113,6 +113,7 @@ class MaxBootstrap:
             from channels.max.handler import MaxMvpBot
             from channels.max.inbox import MaxWebhookInbox
             from channels.max.webhook_route import (
+                register_max_health,
                 register_max_subscription_lifecycle,
                 register_max_webhook,
             )
@@ -127,6 +128,7 @@ class MaxBootstrap:
                 path=path,
                 inbox=inbox,
             )
+            register_max_health(app, inbox=inbox)
             register_max_subscription_lifecycle(
                 app,
                 client=client,

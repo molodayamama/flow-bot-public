@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Awaitable, Callable, Mapping
 from urllib.parse import urlparse
 
 import aiohttp
 
 from channels.base import Keyboard, PlatformFile, PlatformMedia
 from channels.max.renderer import render_keyboard
+from channels.max.transport import (
+    MaxApiError,
+    SlidingWindowRateLimiter,
+    error_from_response,
+    retry_delay,
+)
 
 
 # PlatformMedia.kind -> MAX attachment type (docs: image/video/audio/file).
@@ -125,6 +132,30 @@ class MaxBotClient:
     session: aiohttp.ClientSession | None = None
     name: str = "max"
     ca_bundle: str = ""
+    request_timeout: float = 30.0
+    max_retries: int = 2
+    requests_per_second: int = 28
+    sleep: Callable[[float], Awaitable[None]] = field(default=asyncio.sleep, repr=False)
+    _owns_session: bool = field(default=False, init=False, repr=False)
+    _limiter: SlidingWindowRateLimiter = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._limiter = SlidingWindowRateLimiter(
+            self.requests_per_second,
+            sleep=self.sleep,
+        )
+
+    async def _get_session(self) -> Any:
+        if self.session is None or getattr(self.session, "closed", False):
+            self.session = aiohttp.ClientSession()
+            self._owns_session = True
+        return self.session
+
+    async def close(self) -> None:
+        if self._owns_session and self.session is not None:
+            await self.session.close()
+            self.session = None
+            self._owns_session = False
 
     def _ssl_arg(self) -> Any:
         """SSL argument for aiohttp: a context trusting ``ca_bundle`` when set.
@@ -227,14 +258,16 @@ class MaxBotClient:
         """Obtain an upload token for byte media; None lets url/token pass through.
 
         Uploads the raw bytes when present (POST /uploads to get an upload URL,
-        then PUT the bytes; the upload response yields the attachment token).
+        then multipart POST; the upload response yields the attachment token).
         URL-only or already-tokenised media needs no upload.
         """
         if media.bytes_data is None:
             if media.file is not None and media.file.file_id:
                 return media.file.file_id
             return None
-        start = await self._request("POST", "/uploads", params={"type": max_type})
+        start = await self._request(
+            "POST", "/uploads", params={"type": max_type}, retryable=True
+        )
         if not isinstance(start, Mapping):
             return None
         upload_url = start.get("url")
@@ -263,7 +296,11 @@ class MaxBotClient:
             chat_id=chat_id, media=media, token=token, keyboard=keyboard
         )
         return await self._request(
-            "POST", "/messages", params={"chat_id": chat_id}, json=payload
+            "POST",
+            "/messages",
+            params={"chat_id": chat_id},
+            json=payload,
+            retry_error_codes=frozenset({"attachment.not.ready"}),
         )
 
     async def send_photo(
@@ -303,7 +340,12 @@ class MaxBotClient:
             params["marker"] = int(marker)
         if types:
             params["types"] = ",".join(str(item) for item in types)
-        return await self._request("GET", "/updates", params=params)
+        return await self._request(
+            "GET",
+            "/updates",
+            params=params,
+            request_timeout=float(params["timeout"]) + 10.0,
+        )
 
     async def get_subscriptions(self) -> Any:
         return await self._request("GET", "/subscriptions")
@@ -318,33 +360,42 @@ class MaxBotClient:
         payload: dict[str, Any] = {"url": url, "secret": secret}
         if update_types:
             payload["update_types"] = [str(item) for item in update_types]
-        return await self._request("POST", "/subscriptions", json=payload)
+        return await self._request(
+            "POST", "/subscriptions", json=payload, retryable=True
+        )
 
     async def unsubscribe_webhook(self, *, url: str) -> Any:
         return await self._request("DELETE", "/subscriptions", params={"url": url})
 
     async def _raw_get_bytes(self, url: str) -> bytes:
         """GET raw bytes from an absolute URL (file download, no JSON parse)."""
-        session = self.session
-        owns_session = session is None
-        if session is None:
-            session = aiohttp.ClientSession()
+        session = await self._get_session()
         try:
-            async with session.get(url, ssl=self._ssl_arg()) as response:
-                response.raise_for_status()
+            async with session.get(
+                url,
+                ssl=self._ssl_arg(),
+                timeout=aiohttp.ClientTimeout(total=120.0),
+            ) as response:
+                status = int(getattr(response, "status", 200))
+                if status >= 400:
+                    raise MaxApiError(
+                        status=status,
+                        code="media_download_failed",
+                        retryable=False,
+                    )
                 return await response.read()
-        finally:
-            if owns_session:
-                await session.close()
+        except MaxApiError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            raise MaxApiError(
+                status=None, code="media_download_failed", retryable=True
+            ) from None
 
     async def _raw_post_multipart(
         self, url: str, data: bytes, *, filename: str = "upload.bin"
     ) -> Any:
         """POST one multipart ``data`` file to a MAX-provided upload URL."""
-        session = self.session
-        owns_session = session is None
-        if session is None:
-            session = aiohttp.ClientSession()
+        session = await self._get_session()
         try:
             form = aiohttp.FormData()
             form.add_field(
@@ -358,32 +409,83 @@ class MaxBotClient:
                 data=form,
                 headers={"Authorization": self.token},
                 ssl=self._ssl_arg(),
+                timeout=aiohttp.ClientTimeout(total=120.0),
             ) as response:
-                response.raise_for_status()
-                if response.content_type == "application/json":
-                    return await response.json()
-                return await response.text()
-        finally:
-            if owns_session:
-                await session.close()
+                payload = await self._decode_response(response)
+                status = int(getattr(response, "status", 200))
+                if status >= 400:
+                    raise error_from_response(
+                        status, payload, getattr(response, "headers", {})
+                    )
+                return payload
+        except MaxApiError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            raise MaxApiError(
+                status=None, code="media_upload_failed", retryable=True
+            ) from None
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        session = self.session
-        owns_session = session is None
-        if session is None:
-            session = aiohttp.ClientSession()
-        try:
-            async with session.request(
-                method,
-                f"{self.base_url.rstrip('/')}{path}",
-                headers=self._headers(),
-                ssl=self._ssl_arg(),
-                **kwargs,
-            ) as response:
-                response.raise_for_status()
-                if response.content_type == "application/json":
-                    return await response.json()
-                return await response.text()
-        finally:
-            if owns_session:
-                await session.close()
+    @staticmethod
+    async def _decode_response(response: Any) -> Any:
+        if response.content_type == "application/json":
+            try:
+                return await response.json()
+            except (TypeError, ValueError):
+                status = int(getattr(response, "status", 200))
+                raise MaxApiError(
+                    status=status,
+                    code="invalid_response",
+                    retryable=status >= 500,
+                ) from None
+        return await response.text()
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        retryable: bool | None = None,
+        retry_error_codes: frozenset[str] = frozenset(),
+        request_timeout: float | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        session = await self._get_session()
+        may_retry = (
+            method.upper() in {"GET", "PUT", "DELETE"}
+            if retryable is None
+            else bool(retryable)
+        )
+        timeout = aiohttp.ClientTimeout(total=request_timeout or self.request_timeout)
+        for attempt in range(max(0, int(self.max_retries)) + 1):
+            await self._limiter.acquire()
+            try:
+                async with session.request(
+                    method,
+                    f"{self.base_url.rstrip('/')}{path}",
+                    headers=self._headers(),
+                    ssl=self._ssl_arg(),
+                    timeout=timeout,
+                    **kwargs,
+                ) as response:
+                    payload = await self._decode_response(response)
+                    status = int(getattr(response, "status", 200))
+                    if status >= 400:
+                        raise error_from_response(
+                            status, payload, getattr(response, "headers", {})
+                        )
+                    return payload
+            except MaxApiError as exc:
+                error = exc
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                error = MaxApiError(
+                    status=None,
+                    code="transport_error",
+                    retryable=True,
+                )
+            retry_this_error = (
+                (may_retry and error.retryable) or error.code in retry_error_codes
+            )
+            if not retry_this_error or attempt >= self.max_retries:
+                raise error from None
+            await self.sleep(retry_delay(error, attempt))
+        raise AssertionError("unreachable")

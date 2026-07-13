@@ -11,6 +11,7 @@ calling this in the offline test suite is a safe no-op by default.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Awaitable, Callable, Mapping
 
@@ -63,4 +64,11 @@ async def run_max(
     kwargs: dict[str, Any] = {"should_stop": should_stop, "idle_delay": idle_delay}
     if sleep is not None:
         kwargs["sleep"] = sleep
-    return await run_polling(max_client, bot, **kwargs)
+    try:
+        return await run_polling(max_client, bot, **kwargs)
+    finally:
+        close = getattr(max_client, "close", None)
+        if callable(close):
+            result = close()
+            if inspect.isawaitable(result):
+                await result
