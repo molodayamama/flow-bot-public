@@ -32,13 +32,22 @@ def event_id_for(payload: Mapping[str, Any]) -> str:
 
 
 def partition_key_for(payload: Mapping[str, Any]) -> str:
-    """Return a stable ordering key, preferring chat and then sender identity."""
-    if payload.get("chat_id") is not None:
-        return f"chat:{payload['chat_id']}"
+    """Return a stable ordering key, preferring the state-owning user."""
+    top_user = payload.get("user")
+    if isinstance(top_user, Mapping):
+        user_id = top_user.get("user_id") or top_user.get("id")
+        if user_id is not None:
+            return f"user:{user_id}"
     for container_name in ("message", "callback"):
         value = payload.get(container_name)
         if not isinstance(value, Mapping):
             continue
+        for user_name in ("sender", "user"):
+            user = value.get(user_name)
+            if isinstance(user, Mapping):
+                user_id = user.get("user_id") or user.get("id")
+                if user_id is not None:
+                    return f"user:{user_id}"
         chat_id = value.get("chat_id")
         chat = value.get("chat")
         recipient = value.get("recipient")
@@ -48,12 +57,8 @@ def partition_key_for(payload: Mapping[str, Any]) -> str:
             chat_id = chat.get("chat_id") or chat.get("id")
         if chat_id is not None:
             return f"chat:{chat_id}"
-        for user_name in ("sender", "user"):
-            user = value.get(user_name)
-            if isinstance(user, Mapping):
-                user_id = user.get("user_id") or user.get("id")
-                if user_id is not None:
-                    return f"user:{user_id}"
+    if payload.get("chat_id") is not None:
+        return f"chat:{payload['chat_id']}"
     return event_id_for(payload)
 
 

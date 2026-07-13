@@ -18,6 +18,7 @@ from channels.max.handler import (
     MaxMvpConfig,
     MetricsWallet,
 )
+from channels.max.state import MaxUserStateStore
 
 
 def run(coro):
@@ -33,12 +34,13 @@ class FakePlatform:
 
     name = "max"
 
-    def __init__(self) -> None:
+    def __init__(self, *, photo_error: Exception | None = None) -> None:
         self.messages: list[dict] = []
         self.answers: list[dict] = []
         self.photos: list[dict] = []
         self.videos: list[dict] = []
         self.documents: list[dict] = []
+        self.photo_error = photo_error
 
     async def send_message(self, chat_id, text, keyboard=None):
         self.messages.append({"chat_id": chat_id, "text": text, "keyboard": keyboard})
@@ -49,6 +51,8 @@ class FakePlatform:
         return {"ok": True}
 
     async def send_photo(self, chat_id, media, keyboard=None):
+        if self.photo_error is not None:
+            raise self.photo_error
         self.photos.append({"chat_id": chat_id, "media": media, "keyboard": keyboard})
         return {"ok": True}
 
@@ -186,7 +190,14 @@ class MaxMvpTests(unittest.TestCase):
     # -- create image -----------------------------------------------------
 
     def test_create_image_happy_path_charges_and_delivers(self) -> None:
-        bot = self._bot()
+        state = {}
+        bot = MaxMvpBot(
+            platform=self.platform,
+            service=self.service,
+            config=self.config,
+            wallet=self.wallet,
+            state=state,
+        )
         run(bot.handle(_cb(CB_CREATE_IMAGE)))
         run(bot.handle(_msg("рыжий кот в шляпе")))
 
@@ -199,6 +210,48 @@ class MaxMvpTests(unittest.TestCase):
         self.assertEqual(photo["media"].url, "https://img/1.png")
         self.assertIsNotNone(photo["keyboard"])
         self.assertNotIn("https://img/1.png", self.platform.last_text)
+        self.assertEqual(state, {})
+
+    def test_pending_action_survives_bot_recreation(self) -> None:
+        state_store = MaxUserStateStore(Path(self._tmp.name) / "max-state.db")
+        first = MaxMvpBot(
+            platform=self.platform,
+            service=self.service,
+            config=self.config,
+            wallet=self.wallet,
+            state_store=state_store,
+        )
+        run(first.handle(_cb(CB_CREATE_IMAGE)))
+
+        recreated = MaxMvpBot(
+            platform=self.platform,
+            service=self.service,
+            config=self.config,
+            wallet=self.wallet,
+            state_store=MaxUserStateStore(Path(self._tmp.name) / "max-state.db"),
+        )
+        run(recreated.handle(_msg("durable prompt")))
+
+        self.assertEqual(self.service.calls[-1]["prompt"], "durable prompt")
+        self.assertEqual(self._balance(), 20)
+
+    def test_delivery_exception_refunds_and_keeps_pending_action(self) -> None:
+        platform = FakePlatform(photo_error=RuntimeError("delivery failed"))
+        state = {}
+        bot = MaxMvpBot(
+            platform=platform,
+            service=self.service,
+            config=self.config,
+            wallet=self.wallet,
+            state=state,
+        )
+        run(bot.handle(_cb(CB_CREATE_IMAGE)))
+
+        with self.assertRaises(RuntimeError):
+            run(bot.handle(_msg("deliver this prompt")))
+
+        self.assertEqual(self._balance(), 30)
+        self.assertEqual(state, {"u1": {"await": "create_image"}})
 
     def test_create_image_failure_refunds(self) -> None:
         self.service.error = "generation failed"

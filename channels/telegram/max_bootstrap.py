@@ -112,13 +112,15 @@ class MaxBootstrap:
                 return
             from channels.max.handler import MaxMvpBot
             from channels.max.inbox import MaxWebhookInbox
+            from channels.max.state import MaxUserStateStore
             from channels.max.webhook_route import (
                 register_max_health,
                 register_max_subscription_lifecycle,
                 register_max_webhook,
             )
 
-            bot = MaxMvpBot(platform=client, service=service)
+            state_store = MaxUserStateStore(config.inbox_db)
+            bot = MaxMvpBot(platform=client, service=service, state_store=state_store)
             inbox = MaxWebhookInbox(config.inbox_db)
             path = urlparse(config.webhook_url).path or "/max/webhook"
             register_max_webhook(

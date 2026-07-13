@@ -152,8 +152,12 @@ MAX webhook/runtime change:
 - Run the full offline suite before merge because MAX shares generation,
   billing, and aiohttp composition surfaces with Telegram.
 - Inbox tests must use temporary SQLite files and confirm duplicate suppression,
-  cross-worker lease exclusion, FIFO within one chat, retry/dead-letter state,
-  retention, and redaction of exception text.
+  cross-worker lease exclusion, FIFO for one state-owning user, parallel claims
+  for different users, retry/dead-letter state, retention, and redaction of
+  exception text.
+- Wizard-state tests must use temporary SQLite files and confirm persistence
+  across store/bot recreation, TTL cleanup, explicit clear, successful-delivery
+  cleanup, and refund plus state retention when media delivery raises.
 - Transport tests must prove that `POST /messages` is not retried on ambiguous
   failures, rate limiting stays below 30 rps, `Retry-After` is bounded, unknown
   provider bodies/codes are redacted, and owned sessions close on shutdown.

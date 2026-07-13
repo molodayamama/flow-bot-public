@@ -17,11 +17,15 @@ from channels.max.inbox import (
 )
 
 
-def _payload(text: str = "hello", chat_id: str = "c1") -> dict:
+def _payload(
+    text: str = "hello",
+    chat_id: str = "c1",
+    user_id: str = "u1",
+) -> dict:
     return {
         "update_type": "message_created",
         "message": {
-            "sender": {"user_id": "u1"},
+            "sender": {"user_id": user_id},
             "recipient": {"chat_id": chat_id},
             "body": {"mid": f"m1-{text}", "text": text},
         },
@@ -46,18 +50,18 @@ class MaxWebhookInboxTests(unittest.TestCase):
         self.assertFalse(second)
         self.assertEqual(inbox.stats(), {"pending": 1, "processed": 0, "dead": 0})
 
-    def test_partition_key_prefers_chat_and_worker_keeps_chat_order(self) -> None:
+    def test_partition_key_prefers_user_and_worker_keeps_user_order(self) -> None:
         inbox = MaxWebhookInbox(self.path)
-        inbox.enqueue(_payload("first", "same"))
-        inbox.enqueue(_payload("second", "same"))
-        inbox.enqueue(_payload("parallel", "other"))
+        inbox.enqueue(_payload("first", "chat-one", "same-user"))
+        inbox.enqueue(_payload("second", "chat-two", "same-user"))
+        inbox.enqueue(_payload("parallel", "chat-one", "other-user"))
         first = inbox.claim_ready()
         parallel = inbox.claim_ready()
         self.assertIsNotNone(first)
         self.assertIsNotNone(parallel)
         assert first is not None and parallel is not None
-        self.assertEqual(partition_key_for(first.payload), "chat:same")
-        self.assertEqual(partition_key_for(parallel.payload), "chat:other")
+        self.assertEqual(partition_key_for(first.payload), "user:same-user")
+        self.assertEqual(partition_key_for(parallel.payload), "user:other-user")
         inbox.mark_done(first.event_id, first.claim_id)
         second = inbox.claim_ready()
         self.assertIsNotNone(second)

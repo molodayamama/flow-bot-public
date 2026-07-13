@@ -142,6 +142,8 @@ class FlowBotWiringTests(unittest.TestCase):
         self.assertIn("register_max_health,", self.max_src)
         self.assertIn("webhook_url=config.webhook_url", self.max_src)
         self.assertIn("MaxWebhookInbox(config.inbox_db)", self.max_src)
+        self.assertIn("MaxUserStateStore(config.inbox_db)", self.max_src)
+        self.assertIn("state_store=state_store", self.max_src)
         self.assertIn("inbox=inbox", self.max_src)
         self.assertIn("dispatch=bot.handle", self.max_src)
         self.assertIn("worker_count=config.inbox_workers", self.max_src)

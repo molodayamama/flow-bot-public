@@ -174,6 +174,32 @@ class Wallet(Protocol):
         ...
 
 
+@runtime_checkable
+class PendingStateStore(Protocol):
+    def get(self, user_id: str) -> dict | None:
+        ...
+
+    def set(self, user_id: str, action: str) -> None:
+        ...
+
+    def clear(self, user_id: str) -> None:
+        ...
+
+
+class _MappingStateStore:
+    def __init__(self, state: MutableMapping[str, dict]) -> None:
+        self._state = state
+
+    def get(self, user_id: str) -> dict | None:
+        return self._state.get(user_id)
+
+    def set(self, user_id: str, action: str) -> None:
+        self._state[user_id] = {"await": action}
+
+    def clear(self, user_id: str) -> None:
+        self._state.pop(user_id, None)
+
+
 @dataclass
 class MetricsWallet:
     """Default wallet backed by the identity-aware ``metrics`` credit store.
@@ -245,13 +271,16 @@ class MaxMvpBot:
         wallet: Wallet | None = None,
         copy: MaxCopy | None = None,
         state: MutableMapping[str, dict] | None = None,
+        state_store: PendingStateStore | None = None,
     ) -> None:
         self.platform = platform
         self.service = service
         self.config = config or MaxMvpConfig()
         self.wallet = wallet or MetricsWallet(self.config.starter_credits)
         self.copy = copy or MaxCopy()
-        self._state: MutableMapping[str, dict] = state if state is not None else {}
+        self._state_store = state_store or _MappingStateStore(
+            state if state is not None else {}
+        )
 
     # -- dispatch ---------------------------------------------------------
 
@@ -312,7 +341,7 @@ class MaxMvpBot:
             await self._show_balance(chat, uid)
             return
 
-        pending = self._state.get(uid)
+        pending = self._state_store.get(uid)
         if not pending:
             await self._show_menu(chat)
             return
@@ -388,17 +417,19 @@ class MaxMvpBot:
             async with open_credit_gate(
                 store, uid, price, on_insufficient=_on_insufficient
             ) as charge:
-                self._clear(uid)
                 try:
                     result = await call(internal_id)
                 except Exception:
                     await self._fail(chat)
+                    self._clear(uid)
                     return  # charge.ok stays False -> refunded on gate exit
                 if not result or result.get("error"):
                     await self._fail(chat)
+                    self._clear(uid)
                     return  # refunded on gate exit
-                charge.ok = True
                 await self._deliver(chat, result)
+                self._clear(uid)
+                charge.ok = True
         except NotEnoughCredits:
             self._clear(uid)
 
@@ -507,10 +538,10 @@ class MaxMvpBot:
     # -- helpers ----------------------------------------------------------
 
     def _set_await(self, uid: str, action: str) -> None:
-        self._state[uid] = {"await": action}
+        self._state_store.set(uid, action)
 
     def _clear(self, uid: str) -> None:
-        self._state.pop(uid, None)
+        self._state_store.clear(uid)
 
     @staticmethod
     def _callback_id(cb: IncomingCallback) -> str:
