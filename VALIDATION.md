@@ -724,6 +724,17 @@ Result:
 Residual risk:
 ```
 
+## GitHub offline merge gate
+
+- Reproduce the runner without relying on ignored local `.env` values:
+  `TELEGRAM_TOKEN=123456789:TEST ROBOKASSA_ENABLED=0 python -m unittest
+  discover -s tests -p "test_*.py"` (POSIX syntax; set the same variables with
+  `$env:` in PowerShell).
+- The placeholder is import-only. Tests must not contact Telegram, Robokassa,
+  MAX, Google Flow, captcha, or any other paid/stateful endpoint.
+- After every workflow repair, push the focused commit and watch the resulting
+  `offline-validation` GitHub Actions run until its final conclusion is success.
+
 ## Current Bootstrap Validation
 
 For the documentation bootstrap task:

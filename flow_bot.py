@@ -325,7 +325,6 @@ from channels.telegram.keyboards import (
     L,
     _menu_button,
     zero_balance_kb as _zero_balance_kb,
-    _robokassa_configured,
     _balance_reply_label as _telegram_balance_reply_label,
     _is_balance_reply_text as _telegram_is_balance_reply_text,
     _guided_step_kb,
@@ -378,6 +377,16 @@ from channels.telegram.keyboards import (
     _video_can_extend,
     _slides_word,
 )
+
+
+def _robokassa_configured() -> bool:
+    """Read this process's mutable runtime config (also injectable in tests)."""
+    return bool(
+        ROBOKASSA_ENABLED
+        and ROBOKASSA_MERCHANT_LOGIN
+        and ROBOKASSA_PASSWORD1
+        and ROBOKASSA_PASSWORD2
+    )
 from channels.telegram.texts import (
     _MP_JOB_OUTCOMES,
     _MP_SERIES_COUNTS,
