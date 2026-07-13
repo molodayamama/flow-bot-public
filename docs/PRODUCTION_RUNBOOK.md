@@ -124,6 +124,12 @@ Runtime-state автоматически не откатывается: стар
 
 ## 5. Проверка после deploy
 
+On SIGTERM/application shutdown, the composition root cancels and awaits the
+Telegram digest, video-pool monitor, MAX polling (development mode), and local
+proxy supervisor. MAX webhook workers are stopped by aiohttp cleanup. A
+`background task failed` log entry is an incident signal even if the Telegram
+polling process remains alive.
+
 ```bash
 sudo systemctl is-active geminifree-bot
 sudo systemctl is-enabled geminifree-bot

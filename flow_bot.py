@@ -50,6 +50,7 @@ from dotenv import load_dotenv
 from playwright.async_api import BrowserContext, async_playwright
 
 from security.logging_redaction import install_logging_redaction
+from core.task_supervisor import BackgroundTaskSupervisor
 
 from flow_core import (
     ImageRef,
@@ -569,6 +570,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 install_logging_redaction()
+_background_tasks = BackgroundTaskSupervisor(log)
 
 
 # ───────────────────────────────────────────
@@ -1581,6 +1583,7 @@ _max_bootstrap = MaxBootstrap(MaxBootstrapDeps(
     topup_options=_max_topup_options,
     identity_for_internal_id=metrics.get_identity_by_internal_id,
     log=log,
+    start_background=_background_tasks.start,
 ))
 
 
@@ -2371,6 +2374,7 @@ _web_server = WebServer(WebServerDeps(
     web_host=ROBOKASSA_WEB_HOST,
     web_port=ROBOKASSA_WEB_PORT,
     log=log,
+    start_background=_background_tasks.start,
 ))
 
 
@@ -2481,9 +2485,11 @@ async def _main_impl():
             return
 
         log.info("🤖 Бот запущен!")
-        asyncio.create_task(_daily_digest_loop())
+        _background_tasks.start(_daily_digest_loop(), name="telegram-digest")
         if not _cfg.IS_SELLER:
-            asyncio.create_task(_video_pool_health_loop())
+            _background_tasks.start(
+                _video_pool_health_loop(), name="video-pool-health"
+            )
             _maybe_start_max_bot()
         startup_state["polling"] = True
         _startup_set_phase("polling")
@@ -2492,6 +2498,7 @@ async def _main_impl():
         startup_state["polling"] = False
         _startup_set_phase("stopping")
         log.info("Shutting down bot resources...")
+        await _background_tasks.close()
         for task in warmup_tasks:
             if not task.done():
                 task.cancel()

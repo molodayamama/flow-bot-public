@@ -34,6 +34,7 @@ class MaxBootstrapDeps:
     topup_options: Callable[[str], Sequence[tuple[str, str]]]
     identity_for_internal_id: Callable[[int], dict | None]
     log: Any
+    start_background: Callable[..., Any] | None = None
 
 
 class MaxBootstrap:
@@ -96,14 +97,16 @@ class MaxBootstrap:
             from channels.max.state import MaxUserStateStore
 
             self._active_client = client
-            asyncio.create_task(
-                run_max(
-                    service,
-                    client=client,
-                    state_store=MaxUserStateStore(config.inbox_db),
-                    topup_options=self._d.topup_options,
-                )
+            run = run_max(
+                service,
+                client=client,
+                state_store=MaxUserStateStore(config.inbox_db),
+                topup_options=self._d.topup_options,
             )
+            if self._d.start_background is None:
+                asyncio.create_task(run, name="max-polling")
+            else:
+                self._d.start_background(run, name="max-polling")
         except Exception:
             self._d.log.exception("MAX bot startup failed")
 

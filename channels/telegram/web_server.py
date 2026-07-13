@@ -34,6 +34,7 @@ class WebServerDeps:
     web_host: str
     web_port: int
     log: Any
+    start_background: Callable[..., Any] | None = None
 
 
 class WebServer:
@@ -61,7 +62,11 @@ class WebServer:
             try:
                 await d.proxy_supervisor.ensure_all_running()
                 import asyncio
-                asyncio.create_task(d.proxy_supervisor.supervise_loop())
+                supervise = d.proxy_supervisor.supervise_loop()
+                if d.start_background is None:
+                    asyncio.create_task(supervise, name="proxy-supervisor")
+                else:
+                    d.start_background(supervise, name="proxy-supervisor")
             except Exception:
                 d.log.warning("local proxy supervisor startup failed", exc_info=True)
         if not d.is_seller():

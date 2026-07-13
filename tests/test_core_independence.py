@@ -40,6 +40,7 @@ CORE_MODULES = [
     "billing.pricing",
     "referrals.service",
     "core.user_identity",
+    "core.task_supervisor",
     "channels.base",
 ]
 

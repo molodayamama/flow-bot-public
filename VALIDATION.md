@@ -13,12 +13,15 @@ python tools/check_tracked_secrets.py
 python -m unittest discover -s tests -p "test_tracked_secret_audit.py"
 python -m unittest discover -s tests -p "test_logging_redaction.py"
 python -m unittest discover -s tests -p "test_production_preflight.py"
+python -m unittest discover -s tests -p "test_task_supervisor.py"
 ```
 
 The log test covers formatted arguments, exception tracebacks, handlers created
 after startup, and source guards against provider bodies/identifiers. Consumer
 production preflight requires `FLOW_BROWSER_API_KEY` from the runtime env; it
 must never be copied into source, templates, test fixtures, logs, or HANDOFF.
+The task-supervisor test locks ownership and deterministic shutdown for every
+composition-level long-running loop; aiohttp continues to own webhook workers.
 
 When an approved live/stateful check fails, record a sanitized entry in
 `docs/LIVE_TEST_FAILURES.md`. Include Telegram input/output, Flow account label,
