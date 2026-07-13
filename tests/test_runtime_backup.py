@@ -171,6 +171,41 @@ class RuntimeBackupTests(unittest.TestCase):
         self.assertIn("first.json", paths)
         self.assertIn("second.json", paths)
 
+    def test_cli_deduplicates_absolute_and_relative_paths(self) -> None:
+        inbox = self.root / "max_webhook_inbox.db"
+        with closing(sqlite3.connect(inbox)) as conn:
+            conn.execute("CREATE TABLE events(id INTEGER PRIMARY KEY)")
+            conn.commit()
+        first_env = self.root / "consumer.env"
+        second_env = self.root / "seller.env"
+        first_env.write_text(f"MAX_INBOX_DB={inbox}\n", encoding="utf-8")
+        second_env.write_text(
+            "MAX_INBOX_DB=max_webhook_inbox.db\n", encoding="utf-8"
+        )
+
+        result = main(
+            [
+                "backup",
+                "--root",
+                str(self.root),
+                "--output",
+                str(self.backup),
+                "--env-file",
+                str(first_env),
+                "--env-file",
+                str(second_env),
+            ]
+        )
+
+        self.assertEqual(result, 0)
+        manifest = verify_backup(self.backup)
+        matching = [
+            record
+            for record in manifest["files"]
+            if record["path"] == "max_webhook_inbox.db"
+        ]
+        self.assertEqual(len(matching), 1)
+
     def test_restore_rolls_back_all_targets_after_replace_failure(self) -> None:
         second = self.root / "second.json"
         second.write_text('{"version": "backup"}', encoding="utf-8")

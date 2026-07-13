@@ -121,9 +121,18 @@ def create_backup(
         raise FileExistsError("backup output already exists")
     output_path.mkdir(parents=True, mode=0o700)
     records = []
+    seen_sources: set[str] = set()
     try:
         for raw in includes:
             source, relative = _relative_source(root_path, raw)
+            # Multiple env files can name the same runtime file differently
+            # (for example, one absolute path and one root-relative path).
+            # Deduplicate only after canonical resolution so a target is never
+            # overwritten and recorded twice with conflicting checksums.
+            source_key = os.path.normcase(str(source))
+            if source_key in seen_sources:
+                continue
+            seen_sources.add(source_key)
             if not source.exists():
                 continue
             if not source.is_file():

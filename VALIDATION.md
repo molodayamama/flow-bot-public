@@ -835,7 +835,9 @@ Residual risk:
 - Create a consistent state backup using every configured consumer/seller path:
   `python tools/runtime_backup.py backup --root . --env-file .env
   --env-file .env.seller --output <outside-repo-directory>`, omitting the second
-  env file when seller is absent.
+  env file when seller is absent. Paths are deduplicated after canonical
+  resolution, so absolute and root-relative references to the same state file
+  produce exactly one manifest record.
 - Verify before relying on a backup: `python tools/runtime_backup.py verify
   <backup-directory>`. This checks hashes and SQLite integrity without restoring.
 - Restore is destructive and must only run with services stopped and explicit
