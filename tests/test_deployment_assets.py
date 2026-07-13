@@ -38,14 +38,22 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertNotIn("git reset --hard", self.deploy)
 
     def test_backup_precedes_checkout_and_preflight_precedes_restart(self) -> None:
-        backup = self.deploy.index("tools/runtime_backup.py backup")
+        backup = self.deploy.index('"$PYTHON" "$backup_tool" backup')
         checkout = self.deploy.index('git checkout --detach "$target_sha"')
         preflight = self.deploy.index("tools/production_preflight.py")
         restart = self.deploy.index("restart_if_installed geminifree-bot\n")
         self.assertLess(backup, checkout)
         self.assertLess(checkout, preflight)
         self.assertLess(preflight, restart)
-        self.assertIn("tools/runtime_backup.py verify", self.deploy)
+        self.assertIn('"$PYTHON" "$backup_tool" verify', self.deploy)
+        self.assertIn(
+            'git show "${target_sha}:tools/runtime_backup.py" > "$backup_tool"',
+            self.deploy,
+        )
+        self.assertLess(
+            self.deploy.index('git show "${target_sha}:tools/runtime_backup.py"'),
+            backup,
+        )
         self.assertIn("rollback_code", self.deploy)
         self.assertIn('runuser -u "$SERVICE_USER"', self.deploy)
 

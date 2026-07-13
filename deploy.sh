@@ -41,6 +41,8 @@ fi
 
 previous_sha="$(git rev-parse HEAD)"
 checked_out_target=0
+backup_tool=""
+backup_tool_dir=""
 declare -a restarted_units=()
 
 unit_is_installed() {
@@ -83,6 +85,12 @@ rollback_code() {
     local status=$?
     trap - ERR
     set +e
+    if [ -n "$backup_tool" ]; then
+        rm -f -- "$backup_tool"
+    fi
+    if [ -n "$backup_tool_dir" ]; then
+        rmdir -- "$backup_tool_dir" 2>/dev/null || true
+    fi
     if [ "$checked_out_target" -eq 1 ]; then
         echo "Deploy failed; rolling code back to $previous_sha" >&2
         git checkout --detach "$previous_sha"
@@ -104,17 +112,29 @@ if ! git merge-base --is-ancestor "$target_sha" "origin/${DEPLOY_BRANCH}"; then
     exit 1
 fi
 
+# The currently deployed revision may predate the backup tool. Bootstrap the
+# reviewed implementation from the immutable target SHA so the first migration
+# to this deployment contract still backs up before checkout.
+backup_tool_dir="$(mktemp -d)"
+backup_tool="${backup_tool_dir}/runtime_backup.py"
+git show "${target_sha}:tools/runtime_backup.py" > "$backup_tool"
+chmod 0700 "$backup_tool"
+
 install -d -m 0700 "$BACKUP_ROOT"
 backup_dir="${BACKUP_ROOT}/runtime-$(date -u +%Y%m%dT%H%M%SZ)-${previous_sha:0:12}"
 backup_env_args=(--env-file "$ENV_FILE")
 if [ -r "$SELLER_ENV_FILE" ]; then
     backup_env_args+=(--env-file "$SELLER_ENV_FILE")
 fi
-"$PYTHON" tools/runtime_backup.py backup \
+"$PYTHON" "$backup_tool" backup \
     --root "$APP_ROOT" \
     "${backup_env_args[@]}" \
     --output "$backup_dir"
-"$PYTHON" tools/runtime_backup.py verify "$backup_dir"
+"$PYTHON" "$backup_tool" verify "$backup_dir"
+rm -f -- "$backup_tool"
+rmdir -- "$backup_tool_dir"
+backup_tool=""
+backup_tool_dir=""
 
 git checkout --detach "$target_sha"
 checked_out_target=1
