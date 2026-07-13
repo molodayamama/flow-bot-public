@@ -71,6 +71,7 @@ class RobokassaExternalIdentityTests(unittest.TestCase):
         metrics = _Metrics(status)
         added = []
         notified = []
+        settled = []
 
         def add_credits(user_id, credits):
             added.append((user_id, credits))
@@ -82,6 +83,10 @@ class RobokassaExternalIdentityTests(unittest.TestCase):
         async def forward(scope, data):
             raise AssertionError("unexpected forward")
 
+        def settle_external_payment(**payment):
+            settled.append(payment)
+            return status, (75 if status != "error" else None)
+
         deps = RobokassaWebDeps(
             config=self.config,
             is_configured=lambda: True,
@@ -91,36 +96,50 @@ class RobokassaExternalIdentityTests(unittest.TestCase):
             result_signature=robokassa_result_signature,
             clean_scope=lambda scope: scope,
             add_credits=add_credits,
+            settle_external_payment=settle_external_payment,
             metrics=metrics,
             log=logging.getLogger(__name__),
             maybe_apply_referral_rewards=lambda *args, **kwargs: None,
             notify_success=notify,
             forward_result=forward,
         )
-        return deps, metrics, added, notified
+        return deps, metrics, added, notified, settled
 
     def test_signed_negative_identity_is_credited_and_notified(self):
-        deps, metrics, added, notified = self._deps()
+        deps, metrics, added, notified, settled = self._deps()
 
         response = asyncio.run(handle_result(self._request(self._params()), deps))
 
         self.assertEqual(response.status, 200)
         self.assertEqual(response.text, "OK9001")
-        self.assertEqual(added, [(-7, 45)])
+        self.assertEqual(added, [])
         self.assertEqual(notified, [(-7, 45, 75)])
-        self.assertEqual(metrics.transactions[0]["user_id"], -7)
+        self.assertEqual(settled[0]["user_id"], -7)
+        self.assertEqual(metrics.transactions, [])
 
     def test_duplicate_negative_identity_is_not_credited_twice(self):
-        deps, _, added, notified = self._deps(status="duplicate")
+        deps, _, added, notified, settled = self._deps(status="duplicate")
 
         response = asyncio.run(handle_result(self._request(self._params()), deps))
 
         self.assertEqual(response.status, 200)
         self.assertEqual(added, [])
         self.assertEqual(notified, [])
+        self.assertEqual(len(settled), 1)
+
+    def test_atomic_settlement_error_requests_provider_retry(self):
+        deps, _, added, notified, settled = self._deps(status="error")
+
+        response = asyncio.run(handle_result(self._request(self._params()), deps))
+
+        self.assertEqual(response.status, 500)
+        self.assertEqual(response.text, "temporary error")
+        self.assertEqual(added, [])
+        self.assertEqual(notified, [])
+        self.assertEqual(len(settled), 1)
 
     def test_bad_signature_cannot_reach_signed_identity_parser(self):
-        deps, metrics, added, _ = self._deps()
+        deps, metrics, added, _, settled = self._deps()
         params = self._params()
         params["SignatureValue"] = "bad"
 
@@ -129,6 +148,7 @@ class RobokassaExternalIdentityTests(unittest.TestCase):
         self.assertEqual(response.status, 400)
         self.assertEqual(metrics.transactions, [])
         self.assertEqual(added, [])
+        self.assertEqual(settled, [])
 
     def test_internal_user_id_accepts_signed_sqlite_range_only(self):
         self.assertEqual(internal_user_id("-7"), -7)
@@ -139,7 +159,7 @@ class RobokassaExternalIdentityTests(unittest.TestCase):
         self.assertIsNone(internal_user_id(str(2**63)))
 
     def test_max_success_page_does_not_redirect_to_telegram(self):
-        deps, _, _, _ = self._deps()
+        deps, _, _, _, _ = self._deps()
 
         response = asyncio.run(success(self._request(self._params()), deps))
 

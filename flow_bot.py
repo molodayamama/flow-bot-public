@@ -2221,6 +2221,7 @@ def _robokassa_web_deps() -> robokassa_billing.RobokassaWebDeps:
         result_signature=robokassa_result_signature,
         clean_scope=_robokassa_clean_scope,
         add_credits=_robokassa_add_credits,
+        settle_external_payment=_robokassa_settle_external_payment,
         metrics=metrics,
         log=log,
         maybe_apply_referral_rewards=_maybe_apply_referral_rewards,
@@ -2256,6 +2257,13 @@ def _robokassa_add_credits(user_id: int, credits: int) -> int:
     if identity and identity.get("platform") != "telegram":
         return metrics.credits_add(user_id, credits, STARTER_CREDITS)
     return credit_store.add(user_id, credits)
+
+
+def _robokassa_settle_external_payment(**payment) -> tuple[str, int | None]:
+    return metrics.record_transaction_and_credit_status(
+        **payment,
+        starter_credits=STARTER_CREDITS,
+    )
 
 
 _robokassa_topup = RobokassaTopup(RobokassaTopupDeps(

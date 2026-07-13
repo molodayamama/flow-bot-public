@@ -46,6 +46,7 @@ class RobokassaWebDeps:
     result_signature: Callable[..., str]
     clean_scope: Callable[[str], str]
     add_credits: Callable[[int, int], int]
+    settle_external_payment: Callable[..., tuple[str, int | None]]
     metrics: Any
     log: Any
     maybe_apply_referral_rewards: Callable[..., Any]
@@ -253,22 +254,36 @@ async def handle_result(request: web.Request, deps: RobokassaWebDeps) -> web.Res
         return web.Response(status=400, text="bad amount")
 
     pay_id = provider_payment_id(inv_id, scope, legacy=("Shp_bot" not in shp))
-    tx_status = deps.metrics.record_transaction_status(
-        provider="robokassa",
-        provider_payment_id=pay_id,
-        user_id=user_id,
-        package_id=pack_id,
-        amount_rub=float(Decimal(out_sum)),
-        stars_amount=0,
-        credits_issued=p["credits"],
-        status="paid",
-    )
+    new_balance: int | None = None
+    if user_id < 0:
+        tx_status, new_balance = deps.settle_external_payment(
+            provider="robokassa",
+            provider_payment_id=pay_id,
+            user_id=user_id,
+            package_id=pack_id,
+            amount_rub=float(Decimal(out_sum)),
+            stars_amount=0,
+            credits_issued=p["credits"],
+            status="paid",
+        )
+    else:
+        tx_status = deps.metrics.record_transaction_status(
+            provider="robokassa",
+            provider_payment_id=pay_id,
+            user_id=user_id,
+            package_id=pack_id,
+            amount_rub=float(Decimal(out_sum)),
+            stars_amount=0,
+            credits_issued=p["credits"],
+            status="paid",
+        )
     if tx_status == "duplicate":
         return web.Response(text=f"OK{inv_id}")
     if tx_status == "error":
         return web.Response(status=500, text="temporary error")
 
-    new_balance = deps.add_credits(user_id, p["credits"])
+    if new_balance is None:
+        new_balance = deps.add_credits(user_id, p["credits"])
     deps.metrics.log_event(
         "payment_success",
         user_id=user_id,

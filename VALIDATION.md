@@ -164,6 +164,10 @@ MAX webhook/runtime change:
   duplicate callbacks do not re-credit, credits land in the metrics SQLite
   namespace, and MAX identities never fall through to Telegram notification or
   a Telegram success-page link.
+- Atomic external-payment tests must prove transaction-row and credit-row
+  idempotency in one temporary metrics SQLite database. Inject a credit-write
+  failure and verify the transaction row is rolled back, the callback reports a
+  retryable error, and the identical payment succeeds after the fault is removed.
 - Transport tests must prove that `POST /messages` is not retried on ambiguous
   failures, rate limiting stays below 30 rps, `Retry-After` is bounded, unknown
   provider bodies/codes are redacted, and owned sessions close on shutdown.

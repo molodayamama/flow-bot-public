@@ -219,6 +219,83 @@ class TransactionTests(MetricsTestBase):
         self.assertEqual(broken, "error")
         metrics.close()  # reset for tearDown
 
+    def test_atomic_payment_settlement_is_idempotent(self) -> None:
+        first = metrics.record_transaction_and_credit_status(
+            provider="robokassa",
+            provider_payment_id="robo:max:1",
+            user_id=-7,
+            package_id="trial",
+            amount_rub=45.0,
+            credits_issued=45,
+            starter_credits=30,
+        )
+        duplicate = metrics.record_transaction_and_credit_status(
+            provider="robokassa",
+            provider_payment_id="robo:max:1",
+            user_id=-7,
+            package_id="trial",
+            amount_rub=45.0,
+            credits_issued=45,
+            starter_credits=30,
+        )
+
+        self.assertEqual(first, ("new", 75))
+        self.assertEqual(duplicate, ("duplicate", 75))
+        self.assertEqual(self._count("transactions"), 1)
+        self.assertEqual(
+            tuple(self._one("SELECT balance,granted FROM credits WHERE user_id=-7")),
+            (75, 1),
+        )
+
+    def test_atomic_payment_applies_ungranted_starter_once(self) -> None:
+        metrics._conn().execute(
+            "INSERT INTO credits(user_id,balance,granted) VALUES(-8,5,0)"
+        )
+        metrics._conn().commit()
+
+        result = metrics.record_transaction_and_credit_status(
+            provider="robokassa",
+            provider_payment_id="robo:max:2",
+            user_id=-8,
+            credits_issued=45,
+            starter_credits=30,
+        )
+
+        self.assertEqual(result, ("new", 80))
+        self.assertEqual(
+            tuple(self._one("SELECT balance,granted FROM credits WHERE user_id=-8")),
+            (80, 1),
+        )
+
+    def test_atomic_payment_rolls_back_transaction_when_credit_fails(self) -> None:
+        conn = metrics._conn()
+        conn.execute(
+            "CREATE TRIGGER fail_credit BEFORE INSERT ON credits "
+            "BEGIN SELECT RAISE(ABORT, 'credit failed'); END"
+        )
+        conn.commit()
+
+        failed = metrics.record_transaction_and_credit_status(
+            provider="robokassa",
+            provider_payment_id="robo:max:3",
+            user_id=-9,
+            credits_issued=45,
+            starter_credits=30,
+        )
+
+        self.assertEqual(failed, ("error", None))
+        self.assertEqual(self._count("transactions"), 0)
+        conn.execute("DROP TRIGGER fail_credit")
+        conn.commit()
+        retried = metrics.record_transaction_and_credit_status(
+            provider="robokassa",
+            provider_payment_id="robo:max:3",
+            user_id=-9,
+            credits_issued=45,
+            starter_credits=30,
+        )
+        self.assertEqual(retried, ("new", 75))
+
 
 class ReferralTests(MetricsTestBase):
     def test_referral_join_idempotent_on_referred_user(self) -> None:

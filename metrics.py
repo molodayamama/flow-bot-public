@@ -608,6 +608,88 @@ def record_transaction(
     ) == "new"
 
 
+def record_transaction_and_credit_status(
+    *,
+    provider: str,
+    provider_payment_id: str,
+    user_id: int,
+    starter_credits: int,
+    package_id: str | None = None,
+    amount_rub: float | None = None,
+    stars_amount: int | None = None,
+    credits_issued: int = 0,
+    status: str = "paid",
+) -> tuple[str, int | None]:
+    """Atomically record a payment and credit a metrics-backed balance.
+
+    Returns ``(new|duplicate|error, balance)``. A failed credit rolls back the
+    transaction row, so a provider retry can safely attempt settlement again.
+    """
+    uid = int(user_id)
+    starter = int(starter_credits)
+    issued = int(credits_issued)
+    try:
+        with _LOCK:
+            conn = _conn()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO transactions ("
+                    "provider, provider_payment_id, user_id, package_id, "
+                    "amount_rub, stars_amount, credits_issued, status, paid_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, "
+                    "CASE WHEN ?='paid' THEN datetime('now') ELSE NULL END)",
+                    (
+                        provider,
+                        provider_payment_id,
+                        uid,
+                        package_id,
+                        amount_rub,
+                        stars_amount,
+                        issued,
+                        status,
+                        status,
+                    ),
+                )
+                if cur.rowcount == 0:
+                    row = conn.execute(
+                        "SELECT balance FROM credits WHERE user_id=?", (uid,)
+                    ).fetchone()
+                    conn.commit()
+                    return "duplicate", int(row[0]) if row else None
+                credit_insert = conn.execute(
+                    "INSERT OR IGNORE INTO credits "
+                    "(user_id, balance, granted, updated_at) "
+                    "VALUES (?, ?, 1, datetime('now'))",
+                    (uid, starter + issued),
+                )
+                if credit_insert.rowcount == 0:
+                    conn.execute(
+                        "UPDATE credits SET "
+                        "balance=balance+?+CASE WHEN granted=0 THEN ? ELSE 0 END, "
+                        "granted=1, updated_at=datetime('now') WHERE user_id=?",
+                        (issued, starter, uid),
+                    )
+                row = conn.execute(
+                    "SELECT balance FROM credits WHERE user_id=?", (uid,)
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError("credit row missing after settlement")
+                balance = int(row[0])
+                conn.commit()
+                return "new", balance
+            except BaseException:
+                conn.rollback()
+                raise
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "atomic payment settlement failed for %r",
+            provider_payment_id,
+            exc_info=True,
+        )
+        return "error", None
+
+
 def record_referral_join(*, referrer_user_id: int, referred_user_id: int) -> bool:
     """Record that ``referred_user_id`` joined via ``referrer_user_id``.
 

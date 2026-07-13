@@ -2469,6 +2469,15 @@ class RobokassaWebhookTests(unittest.TestCase):
             tx_calls.append(kwargs)
             return "duplicate" if len(tx_calls) > 1 else "new"
 
+        def record_transaction_and_credit_status(**kwargs):
+            tx_calls.append(kwargs)
+            metric_credits_added.append((
+                int(kwargs["user_id"]),
+                int(kwargs["credits_issued"]),
+                int(kwargs["starter_credits"]),
+            ))
+            return "new", int(kwargs["starter_credits"]) + int(kwargs["credits_issued"])
+
         def log_event(event_type, user_id=None, source="", payload=None, username=None):
             events.append((event_type, int(user_id or 0), source, payload))
 
@@ -2490,6 +2499,7 @@ class RobokassaWebhookTests(unittest.TestCase):
         fb.credit_store = FakeCreditStore()
         fb.metrics = SimpleNamespace(
             record_transaction_status=record_transaction_status,
+            record_transaction_and_credit_status=record_transaction_and_credit_status,
             log_event=log_event,
             mark_user_blocked=lambda user_id: None,
             get_identity_by_internal_id=lambda user_id: (
