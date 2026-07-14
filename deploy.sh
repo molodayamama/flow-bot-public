@@ -67,9 +67,14 @@ copy_static() {
         deploy/photozhab/*.txt \
         deploy/photozhab/*.xml \
         /var/www/photozhab/
-    if compgen -G "deploy/photozhab/assets/*" >/dev/null; then
-        install -m 0644 deploy/photozhab/assets/* /var/www/photozhab/assets/
-    fi
+    while IFS= read -r -d '' source_dir; do
+        relative_dir="${source_dir#deploy/photozhab/}"
+        install -d -m 0755 "/var/www/photozhab/${relative_dir}"
+    done < <(find deploy/photozhab/assets -type d -print0)
+    while IFS= read -r -d '' source_file; do
+        relative_file="${source_file#deploy/photozhab/}"
+        install -m 0644 "$source_file" "/var/www/photozhab/${relative_file}"
+    done < <(find deploy/photozhab/assets -type f -print0)
 }
 
 restart_if_installed() {

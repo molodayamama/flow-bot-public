@@ -78,6 +78,12 @@ host endpoints, status, match flags and latency; never print or commit proxy
 usernames, passwords or full URLs. Obsolete proxy services must be stopped and
 disabled rather than left restarting against known-dead upstreams.
 
+When a public asset directory gains nested paths, verify `copy_static()` with
+`tests/test_deployment_assets.py` and `bash -n deploy.sh`. Deployment must create
+every source directory with mode 0755 and install every nested file with mode
+0644 using null-delimited `find` output; a one-level `assets/*` glob is not safe
+because `install -m 0644` fails when the glob expands to a directory.
+
 After an immutable-SHA deploy, request the public home, each sitemap URL,
 `/robots.txt` and `/sitemap.xml`; all public crawl targets must return HTTP 200.
 Search-engine indexing, snippet selection and ranking are external outcomes and

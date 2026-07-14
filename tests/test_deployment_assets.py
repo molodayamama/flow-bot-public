@@ -72,6 +72,15 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn("deploy/photozhab/*.xml", self.deploy)
         self.assertIn("deploy/photozhab/*.js", self.deploy)
 
+    def test_deploy_recursively_publishes_nested_static_assets(self) -> None:
+        self.assertIn("find deploy/photozhab/assets -type d -print0", self.deploy)
+        self.assertIn("find deploy/photozhab/assets -type f -print0", self.deploy)
+        self.assertIn('relative_dir="${source_dir#deploy/photozhab/}"', self.deploy)
+        self.assertIn('relative_file="${source_file#deploy/photozhab/}"', self.deploy)
+        self.assertIn('install -d -m 0755 "/var/www/photozhab/${relative_dir}"', self.deploy)
+        self.assertIn('install -m 0644 "$source_file" "/var/www/photozhab/${relative_file}"', self.deploy)
+        self.assertNotIn("install -m 0644 deploy/photozhab/assets/*", self.deploy)
+
     def test_main_site_proxies_only_bounded_public_web_api(self) -> None:
         self.assertIn("location /web/api/", self.web_nginx)
         self.assertIn("if ($host != photozhab.ru) { return 404; }", self.web_nginx)
