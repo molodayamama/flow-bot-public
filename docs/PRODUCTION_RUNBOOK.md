@@ -111,6 +111,10 @@ sudo DEPLOY_BRANCH=main DEPLOY_SHA=<green-commit-sha> ./deploy.sh
 
 - отказывается работать с tracked-изменениями;
 - проверяет, что SHA принадлежит удалённой ветке;
+- если `deploy.sh` в целевом SHA отличается от уже развёрнутого, до любых
+  backup/checkout/state-операций один раз переисполняет проверенную версию
+  скрипта прямо из целевого SHA; это позволяет безопасно обновлять сам deploy
+  contract без ручного bootstrap и защищено от рекурсии;
 - до checkout создаёт и проверяет backup из consumer и seller env;
 - checkout делает в detached mode по неизменяемому SHA;
 - запускает secret audit, compileall и production preflight;

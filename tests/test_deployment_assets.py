@@ -40,6 +40,16 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertNotIn("git pull", self.deploy)
         self.assertNotIn("git reset --hard", self.deploy)
 
+    def test_deploy_reexecs_target_contract_before_state_mutation(self) -> None:
+        compare = self.deploy.index('current_deploy_hash="$(git hash-object deploy.sh)"')
+        backup = self.deploy.index('"$PYTHON" "$backup_tool" backup')
+        self.assertLess(compare, backup)
+        self.assertIn('target_deploy_hash="$(git rev-parse "${target_sha}:deploy.sh")"', self.deploy)
+        self.assertIn('git show "${target_sha}:deploy.sh" > "$target_deploy"', self.deploy)
+        self.assertIn("DEPLOY_BOOTSTRAPPED=1", self.deploy)
+        self.assertIn('exit "$bootstrap_status"', self.deploy)
+        self.assertNotIn("eval ", self.deploy)
+
     def test_backup_precedes_checkout_and_preflight_precedes_restart(self) -> None:
         backup = self.deploy.index('"$PYTHON" "$backup_tool" backup')
         checkout = self.deploy.index('git checkout --detach "$target_sha"')

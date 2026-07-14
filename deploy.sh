@@ -127,6 +127,36 @@ if ! git merge-base --is-ancestor "$target_sha" "origin/${DEPLOY_BRANCH}"; then
     exit 1
 fi
 
+# The checked-out deploy script may be older than the reviewed target. Re-exec
+# the target's own script before any backup/checkout/state mutation so changes to
+# this deployment contract take effect on their first deploy. The guard prevents
+# recursion because the worktree intentionally still points at the old commit.
+if [ "${DEPLOY_BOOTSTRAPPED:-0}" != "1" ]; then
+    current_deploy_hash="$(git hash-object deploy.sh)"
+    target_deploy_hash="$(git rev-parse "${target_sha}:deploy.sh")"
+    if [ "$current_deploy_hash" != "$target_deploy_hash" ]; then
+        target_deploy="$(mktemp /tmp/geminifree-deploy.XXXXXX)"
+        git show "${target_sha}:deploy.sh" > "$target_deploy"
+        chmod 0700 "$target_deploy"
+        echo "Re-executing deploy contract from target SHA"
+        set +e
+        APP_ROOT="$APP_ROOT" \
+        DEPLOY_BRANCH="$DEPLOY_BRANCH" \
+        DEPLOY_SHA="$target_sha" \
+        BACKUP_ROOT="$BACKUP_ROOT" \
+        PYTHON="$PYTHON" \
+        ENV_FILE="$ENV_FILE" \
+        SELLER_ENV_FILE="$SELLER_ENV_FILE" \
+        SERVICE_USER="$SERVICE_USER" \
+        DEPLOY_BOOTSTRAPPED=1 \
+            "$target_deploy"
+        bootstrap_status=$?
+        set -e
+        rm -f -- "$target_deploy"
+        exit "$bootstrap_status"
+    fi
+fi
+
 # The currently deployed revision may predate the backup tool. Bootstrap the
 # reviewed implementation from the immutable target SHA so the first migration
 # to this deployment contract still backs up before checkout.
