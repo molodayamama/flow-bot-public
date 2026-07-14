@@ -8,6 +8,7 @@ const state = {
   busy: false,
   maxAuthAttempted: false,
   initialized: false,
+  history: [],
 };
 
 const launchHash = new URLSearchParams(window.location.hash.slice(1));
@@ -33,6 +34,7 @@ const elements = {
   authNote: $("#auth-note"), accountCard: $("#account-card"),
   accountName: $("#account-name"), logout: $("#logout-button"),
   mobileAccount: $("#mobile-account"),
+  historyList: $("#chat-history-list"), historyEmpty: $("#chat-history-empty"),
 };
 
 const modeCopy = {
@@ -134,6 +136,29 @@ function toast(message) {
 
 function providerLabel(provider) {
   return {telegram: "Telegram", max: "MAX", yandex: "Яндекс"}[provider] || "аккаунт";
+}
+
+function rememberRequest(prompt) {
+  state.history = [prompt, ...state.history.filter((item) => item !== prompt)].slice(0, 6);
+  elements.historyList.replaceChildren();
+  state.history.forEach((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "chat-history-item";
+    button.title = item;
+    const mark = document.createElement("span");
+    mark.textContent = "✦";
+    mark.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.textContent = item;
+    button.append(mark, label);
+    button.addEventListener("click", () => {
+      elements.prompt.value = item;
+      resizePrompt();
+      elements.prompt.focus();
+    });
+    elements.historyList.append(button);
+  });
 }
 
 function setProviderAvailability() {
@@ -347,6 +372,7 @@ async function generate() {
   if (prompt.length < 3) { toast("Опишите идею хотя бы тремя символами"); elements.prompt.focus(); return; }
   if ((state.mode === "edit" || state.mode === "animate") && !state.imageData) { toast("Сначала добавьте фотографию"); elements.uploadInput.click(); return; }
   state.busy = true; elements.send.disabled = true;
+  rememberRequest(prompt);
   message("user", prompt, state.imageData);
   const pending = loadingMessage();
   elements.prompt.value = ""; resizePrompt();

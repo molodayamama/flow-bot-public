@@ -26,7 +26,7 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertIn('id="prompt"', self.html)
 
     def test_app_uses_existing_design_tokens_and_is_responsive(self) -> None:
-        self.assertIn('href="/styles.css"', self.html)
+        self.assertIn('href="/styles.css', self.html)
         self.assertIn("var(--pz-paper)", self.css)
         self.assertIn("@media (max-width: 820px)", self.css)
         self.assertIn("@media (max-width: 560px)", self.css)

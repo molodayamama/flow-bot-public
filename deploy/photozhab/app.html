@@ -6,11 +6,11 @@
   <title>Создать изображение или видео | Photozhab</title>
   <meta name="description" content="Чат-интерфейс Photozhab для генерации изображений, видео, редактирования и оживления фото.">
   <meta name="robots" content="noindex, follow">
-  <meta name="theme-color" content="#111312">
+  <meta name="theme-color" content="#0b0d0c">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self' https://auth.robokassa.ru">
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="/app.css">
-  <script src="/app.js" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=20260714-b2">
+  <link rel="stylesheet" href="/app.css?v=20260714-b4">
+  <script src="/app.js?v=20260714-b2" defer></script>
 </head>
 <body class="web-app-body">
   <div class="web-app-shell">
@@ -26,6 +26,12 @@
         <button class="mode-nav-button" type="button" data-mode="video"><span>▶</span><span><strong>Видео</strong><small>по описанию</small></span></button>
         <button class="mode-nav-button" type="button" data-mode="animate"><span>◉</span><span><strong>Оживить фото</strong><small>фото в видео</small></span></button>
       </nav>
+      <section class="chat-history" aria-labelledby="chat-history-title">
+        <h2 id="chat-history-title">История</h2>
+        <div class="chat-history-list" id="chat-history-list">
+          <p class="chat-history-empty" id="chat-history-empty">Запросы текущей вкладки появятся здесь</p>
+        </div>
+      </section>
       <div class="sidebar-bottom">
         <button class="balance-card" id="open-payment" type="button">
           <span><small>Баланс</small><strong><span id="sidebar-balance">—</span> кр</strong></span>
@@ -50,7 +56,6 @@
 
       <section class="conversation" id="conversation" aria-live="polite">
         <div class="welcome-card" id="welcome-card">
-          <span class="welcome-mark" aria-hidden="true">P</span>
           <p class="eyebrow">Photozhab AI</p>
           <h1>Что создадим?</h1>
           <p>Опиши идею обычными словами. Выбери модель и формат — стоимость видна до запуска.</p>
@@ -97,9 +102,9 @@
       <h2 id="auth-title">Войдите, чтобы создавать</h2>
       <p class="auth-copy">Генерация, баланс и оплата доступны только после подтверждения аккаунта. Пароли Photozhab не получает.</p>
       <div class="auth-providers">
-        <button class="auth-provider auth-provider--telegram" id="login-telegram" type="button"><span>✈</span><strong>Войти через Telegram</strong></button>
-        <a class="auth-provider auth-provider--max" id="login-max" href="https://max.ru/se13461237_bot?startapp=web" target="_blank" rel="noopener"><span>MAX</span><strong>Открыть в MAX</strong></a>
-        <a class="auth-provider auth-provider--yandex" id="login-yandex" href="#" aria-disabled="true"><span>Я</span><strong>Проверяем Яндекс ID</strong></a>
+        <button class="auth-provider auth-provider--telegram" id="login-telegram" type="button"><span class="provider-icon">✈</span><span class="provider-copy"><strong>Продолжить с Telegram</strong><small>бот пришлёт код за секунду</small></span><span class="provider-arrow" aria-hidden="true">→</span></button>
+        <a class="auth-provider auth-provider--max" id="login-max" href="https://max.ru/se13461237_bot?startapp=web" target="_blank" rel="noopener"><span class="provider-icon">MAX</span><span class="provider-copy"><strong>Продолжить с MAX</strong><small>через мини-приложение Photozhab</small></span><span class="provider-arrow" aria-hidden="true">→</span></a>
+        <a class="auth-provider auth-provider--yandex" id="login-yandex" href="#" aria-disabled="true"><span class="provider-icon">Я</span><span class="provider-copy"><strong>Проверяем Яндекс ID</strong><small>без пароля для Photozhab</small></span><span class="provider-arrow" aria-hidden="true">→</span></a>
       </div>
       <form class="telegram-code" id="telegram-code-form" hidden>
         <p>Бот пришлёт одноразовый шестизначный код. Введите его здесь:</p>
@@ -111,8 +116,8 @@
   </dialog>
 
   <dialog class="payment-dialog" id="payment-dialog" aria-labelledby="payment-title">
-    <div class="dialog-head"><div><p class="eyebrow">Пополнение</p><h2 id="payment-title">Добавить кредиты</h2></div><button id="close-payment" type="button" aria-label="Закрыть">×</button></div>
-    <p class="dialog-copy">Оплата картой или через СБП. Баланс обновится автоматически после подтверждения.</p>
+    <div class="dialog-head"><div><p class="eyebrow">Пополнение</p><h2 id="payment-title">Пополнить баланс</h2></div><button id="close-payment" type="button" aria-label="Закрыть">×</button></div>
+    <p class="dialog-copy">Кредиты не сгорают. Оплата картой или через СБП, баланс обновится автоматически после подтверждения.</p>
     <div class="pack-grid" id="pack-grid"></div>
     <p class="payment-legal">Продолжая, вы принимаете <a href="/oferta.html">оферту</a>. Не закрывайте этот браузер до возврата на сайт.</p>
   </dialog>

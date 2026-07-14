@@ -38,6 +38,17 @@ parseable JSON-LD; descriptive internal links; real sitemap targets; restrictive
 robots directives for admin/API surfaces; and `noindex` on the admin page.
 Also serve `deploy/photozhab/` locally and inspect both a desktop viewport and a
 390px-class mobile viewport for horizontal overflow and usable primary actions.
+For the Claude Design B v2 adaptation, additionally inspect all three supplied
+surfaces: the home hero plus a lower landing section, the anonymous generation
+app and auth dialog, and the admin overview. The exported `.dc.html` files are
+design references only: production assets must not contain `x-dc`, `x-import`,
+`sc-if`, `sc-for`, `support.js`, template event handlers or mock live values.
+Run `tests/test_photozhab_design_static.py` and confirm Space Grotesk, the
+`#0b0d0c`/`#d3f36b` B v2 tokens, all landing sections, the four generation
+modes, session-only (non-`localStorage`) history, all twelve admin tabs and
+760px/820px responsive contracts. When changing versioned CSS/JS query strings,
+reload the page and confirm the browser actually loaded the new URL before
+judging the render.
 After an immutable-SHA deploy, request the public home, each sitemap URL,
 `/robots.txt` and `/sitemap.xml`; all public crawl targets must return HTTP 200.
 Search-engine indexing, snippet selection and ranking are external outcomes and
