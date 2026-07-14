@@ -142,6 +142,29 @@ class PaymentNotificationTests(unittest.TestCase):
         bootstrap = self._bootstrap({"platform": "telegram", "platform_user_id": "7"})
         self.assertFalse(run(bootstrap.notify_payment(7, 45, 75)))
 
+    def test_support_reply_is_sent_to_max_identity(self):
+        bootstrap = self._bootstrap({"platform": "max", "platform_user_id": "u7"})
+        client = _NotifyClient()
+        bootstrap._active_client = client
+
+        handled = run(bootstrap.notify_support_reply(-7, ticket_id=12, reply="Готово"))
+
+        self.assertTrue(handled)
+        self.assertEqual(client.messages[0][0], "u7")
+        self.assertIn("12", client.messages[0][1])
+        self.assertIn("Готово", client.messages[0][1])
+
+    def test_referral_reward_is_sent_to_max_identity(self):
+        bootstrap = self._bootstrap({"platform": "max", "platform_user_id": "u7"})
+        client = _NotifyClient()
+        bootstrap._active_client = client
+
+        handled = run(bootstrap.notify_referral_reward(-7, 25))
+
+        self.assertTrue(handled)
+        self.assertEqual(client.messages[0][0], "u7")
+        self.assertIn("25", client.messages[0][1])
+
 
 class FlowBotWiringTests(unittest.TestCase):
     """flow_bot composition root must wire MAX startup (source-level, no import)."""

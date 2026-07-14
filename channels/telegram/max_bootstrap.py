@@ -35,6 +35,7 @@ class MaxBootstrapDeps:
     identity_for_internal_id: Callable[[int], dict | None]
     log: Any
     start_background: Callable[..., Any] | None = None
+    support_notify: Callable[..., Any] | None = None
 
 
 class MaxBootstrap:
@@ -104,6 +105,7 @@ class MaxBootstrap:
                 client=client,
                 state_store=MaxUserStateStore(config.inbox_db),
                 topup_options=self._d.topup_options,
+                support_notify=self._d.support_notify,
             )
             if self._d.start_background is None:
                 asyncio.create_task(run, name="max-polling")
@@ -144,6 +146,7 @@ class MaxBootstrap:
                 service=service,
                 state_store=state_store,
                 topup_options=self._d.topup_options,
+                support_notify=self._d.support_notify,
             )
             inbox = MaxWebhookInbox(config.inbox_db)
             path = urlparse(config.webhook_url).path or "/max/webhook"
@@ -171,24 +174,48 @@ class MaxBootstrap:
 
     async def notify_payment(self, internal_user_id: int, credits: int, balance: int) -> bool:
         """Notify a MAX identity; return whether this payment belongs to MAX."""
+        return await self._notify_identity(
+            internal_user_id,
+            f"Баланс пополнен: +{int(credits)} кр. Сейчас: {int(balance)} кр.",
+            event="payment",
+        )
+
+    async def notify_support_reply(
+        self, internal_user_id: int, *, ticket_id: int, reply: str
+    ) -> bool:
+        return await self._notify_identity(
+            internal_user_id,
+            f"🛟 Ответ поддержки по обращению #{int(ticket_id)}:\n\n{str(reply)[:2000]}",
+            event="support_reply",
+        )
+
+    async def notify_referral_reward(self, internal_user_id: int, bonus: int) -> bool:
+        return await self._notify_identity(
+            internal_user_id,
+            f"🎁 За приглашённого друга начислено +{int(bonus)} кр.",
+            event="referral_reward",
+        )
+
+    async def _notify_identity(
+        self, internal_user_id: int, text: str, *, event: str
+    ) -> bool:
         identity = self._d.identity_for_internal_id(internal_user_id)
         if not identity or identity.get("platform") != "max":
             return False
         client = self._active_client
         if client is None:
             self._d.log.warning(
-                "MAX payment notification skipped: runtime is not active internal_user_id=%s",
-                internal_user_id,
+                "MAX %s notification skipped: runtime is not active internal_user_id=%s",
+                event, internal_user_id,
             )
             return True
         try:
             await client.send_message_to_user(
-                str(identity["platform_user_id"]),
-                f"Баланс пополнен: +{int(credits)} кр. Сейчас: {int(balance)} кр.",
+                str(identity["platform_user_id"]), str(text),
             )
         except Exception:
             self._d.log.exception(
-                "MAX payment notification failed internal_user_id=%s",
-                internal_user_id,
+                "MAX %s notification failed internal_user_id=%s",
+                event, internal_user_id,
             )
         return True

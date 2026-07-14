@@ -31,6 +31,7 @@ def build_max_bot(
     client: MaxBotClient | None = None,
     state_store: PendingStateStore | None = None,
     topup_options: Callable[[str], Sequence[tuple[str, str]]] | None = None,
+    support_notify: Callable[..., Any] | None = None,
 ) -> tuple[MaxBotClient, MaxMvpBot] | None:
     """Build (client, MaxMvpBot) from env, or None when MAX is disabled.
 
@@ -50,6 +51,7 @@ def build_max_bot(
         wallet=wallet,
         state_store=state_store,
         topup_options=topup_options,
+        support_notify=support_notify,
     )
     return client, bot
 
@@ -62,6 +64,7 @@ async def run_max(
     client: MaxBotClient | None = None,
     state_store: PendingStateStore | None = None,
     topup_options: Callable[[str], Sequence[tuple[str, str]]] | None = None,
+    support_notify: Callable[..., Any] | None = None,
     should_stop: Callable[[], bool] | None = None,
     idle_delay: float = 1.0,
     sleep: Callable[[float], Awaitable[None]] | None = None,
@@ -74,6 +77,7 @@ async def run_max(
         client=client,
         state_store=state_store,
         topup_options=topup_options,
+        support_notify=support_notify,
     )
     if built is None:
         return None

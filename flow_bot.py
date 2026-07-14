@@ -907,6 +907,15 @@ def _clawback_referral_rewards(referred_user_id: int, charge_id: str) -> None:
 
 def _notify_referrer(referrer_id: int, bonus: int, *, message_key: str = "referral_reward_got") -> None:
     """Best-effort уведомление реферера о начислении (не блокирует оплату)."""
+    identity = metrics.get_identity_by_internal_id(referrer_id)
+    if identity and identity.get("platform") == "max":
+        notification = _max_bootstrap.notify_referral_reward(referrer_id, bonus)
+        try:
+            asyncio.create_task(notification)
+        except Exception:
+            notification.close()
+            log.warning("MAX referral notification scheduling failed", exc_info=True)
+        return
     _referral_flow().notify_referrer(referrer_id, bonus, message_key=message_key)
 
 
@@ -1629,13 +1638,61 @@ def _max_topup_options(platform_user_id: str) -> list[tuple[str, str]]:
     return options
 
 
+async def _notify_max_support_admin(
+    *, ticket_id: int, internal_user_id: int, username: str | None, text: str
+) -> None:
+    """Mirror a MAX support ticket into the existing Telegram admin workflow."""
+    if not ADMIN_IDS:
+        return
+    label = f"@{username}" if username else "пользователя MAX"
+    reply_btn = types.InlineKeyboardMarkup(inline_keyboard=[[
+        types.InlineKeyboardButton(
+            text=f"📝 Ответить #{int(ticket_id)}",
+            callback_data=f"m:sreply:{int(ticket_id)}",
+        )
+    ]])
+    sent = await bot.send_message(
+        ADMIN_IDS[0],
+        f"🎫 MAX-тикет #{int(ticket_id)} от {label}:\n\n{str(text)[:2000]}",
+        reply_markup=reply_btn,
+    )
+    metrics.set_ticket_admin_msg(int(ticket_id), sent.message_id)
+
+
 _max_bootstrap = MaxBootstrap(MaxBootstrapDeps(
     backend_generation_deps=_backend_generation_deps,
     topup_options=_max_topup_options,
     identity_for_internal_id=metrics.get_identity_by_internal_id,
     log=log,
     start_background=_background_tasks.start,
+    support_notify=_notify_max_support_admin,
 ))
+
+
+async def _deliver_support_reply(
+    internal_user_id: int, *, ticket_id: int, reply: str
+) -> bool:
+    """Route an admin support reply to the identity's actual chat platform."""
+    identity = metrics.get_identity_by_internal_id(internal_user_id)
+    if identity and identity.get("platform") == "max":
+        return await _max_bootstrap.notify_support_reply(
+            internal_user_id, ticket_id=ticket_id, reply=reply
+        )
+    if identity and identity.get("platform") != "telegram":
+        return False
+    telegram_user_id = internal_user_id
+    if identity:
+        try:
+            telegram_user_id = int(identity.get("platform_user_id") or internal_user_id)
+        except (TypeError, ValueError):
+            return False
+    if telegram_user_id <= 0:
+        return False
+    await bot.send_message(
+        telegram_user_id,
+        flow_copy.msg("support_reply", ticket_id=ticket_id, reply=reply),
+    )
+    return True
 
 
 def _maybe_start_max_bot() -> None:
@@ -3038,6 +3095,7 @@ dp.include_router(
             admin_ids=ADMIN_IDS,
             credit_store=credit_store,
             send_owner_alert=_send_owner_alert,
+            deliver_support_reply=_deliver_support_reply,
             pending_sku_payload=_pending_sku_payload,
             save_pending_sku_item=_save_pending_sku_item,
             log=log,

@@ -5,11 +5,14 @@ from channels.base import Button, Keyboard
 
 def render_button(button: Button) -> dict:
     if button.callback_data is not None:
-        return {
+        payload = {
             "type": "callback",
             "text": button.text,
             "payload": button.callback_data,
         }
+        if button.intent is not None:
+            payload["intent"] = button.intent
+        return payload
     return {
         "type": "link",
         "text": button.text,
@@ -29,4 +32,3 @@ def render_keyboard(keyboard: Keyboard | None) -> dict | None:
             ]
         },
     }
-

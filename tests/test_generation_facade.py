@@ -11,6 +11,7 @@ from channels.base import IncomingCallback, IncomingMessage, PlatformUser
 from channels.max.handler import (
     CB_ANIMATE,
     CB_CREATE_IMAGE,
+    CB_RUN_READY,
     MaxMvpBot,
     MaxMvpConfig,
     MetricsWallet,
@@ -185,6 +186,7 @@ class MaxOnSharedEngineTests(unittest.TestCase):
     def test_create_image_flows_through_generation_core(self) -> None:
         run(self.bot.handle(_cb(CB_CREATE_IMAGE)))
         run(self.bot.handle(_msg("a red cat")))
+        run(self.bot.handle(_cb(CB_RUN_READY)))
 
         # Reached the shared image backend with the MAX internal (negative) id.
         self.assertEqual(len(self.img.calls), 1)
@@ -200,6 +202,7 @@ class MaxOnSharedEngineTests(unittest.TestCase):
     def test_animate_flows_through_video_core_with_photo_bytes(self) -> None:
         run(self.bot.handle(_cb(CB_ANIMATE)))
         run(self.bot.handle(_msg("go!", photos=("photo-9",))))
+        run(self.bot.handle(_cb(CB_RUN_READY)))
         self.assertEqual(self.fetched, ["photo-9"])
         self.assertEqual(len(self.vid.calls), 1)
         self.assertEqual(self.platform.videos[-1]["media"].bytes_data, b"VIDEO")
@@ -210,6 +213,7 @@ class MaxOnSharedEngineTests(unittest.TestCase):
         bot = MaxMvpBot(platform=self.platform, service=facade, config=self.config, wallet=self.wallet)
         run(bot.handle(_cb(CB_CREATE_IMAGE)))
         run(bot.handle(_msg("a red cat")))
+        run(bot.handle(_cb(CB_RUN_READY)))
         self.assertEqual(self._balance(), 200)  # charged then refunded
 
 

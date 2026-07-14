@@ -24,6 +24,15 @@ class ChannelBaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Button("Broken", callback_data="x", url="https://photozhab.ru")
 
+    def test_button_intent_is_callback_only_and_allowlisted(self) -> None:
+        self.assertEqual(
+            Button.callback("OK", "x", intent="positive").intent, "positive"
+        )
+        with self.assertRaises(ValueError):
+            Button.callback("Bad", "x", intent="blue")
+        with self.assertRaises(ValueError):
+            Button(text="Bad", url="https://photozhab.ru", intent="negative")
+
     def test_keyboard_normalizes_rows_to_immutable_tuples(self) -> None:
         keyboard = Keyboard.from_rows([
             [Button.callback("Create", "m:gen"), Button.callback("Video", "m:vid")],
@@ -150,4 +159,3 @@ class TelegramRendererTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

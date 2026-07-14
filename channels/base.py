@@ -23,15 +23,22 @@ class Button:
     text: str
     callback_data: str | None = None
     url: str | None = None
+    intent: str | None = None
 
     def __post_init__(self) -> None:
         actions = [self.callback_data is not None, self.url is not None]
         if sum(actions) != 1:
             raise ValueError("Button must have exactly one action")
+        if self.intent not in {None, "positive", "negative"}:
+            raise ValueError("Button intent must be positive, negative or None")
+        if self.url is not None and self.intent is not None:
+            raise ValueError("Button intent is supported for callbacks only")
 
     @classmethod
-    def callback(cls, text: str, callback_data: str) -> "Button":
-        return cls(text=text, callback_data=callback_data)
+    def callback(
+        cls, text: str, callback_data: str, *, intent: str | None = None
+    ) -> "Button":
+        return cls(text=text, callback_data=callback_data, intent=intent)
 
     @classmethod
     def link(cls, text: str, url: str) -> "Button":
@@ -173,4 +180,3 @@ class BotPlatform(Protocol):
 
     async def get_file_bytes(self, file: PlatformFile) -> bytes:
         ...
-

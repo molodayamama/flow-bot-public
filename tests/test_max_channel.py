@@ -89,6 +89,19 @@ class MaxChannelTests(unittest.TestCase):
         self.assertEqual(buttons[1][0]["type"], "link")
         self.assertEqual(buttons[1][0]["url"], "https://photozhab.ru")
 
+    def test_renderer_preserves_max_callback_intent(self) -> None:
+        button = Button.callback("Selected", "s:model:one", intent="positive")
+
+        self.assertEqual(
+            renderer.render_button(button),
+            {
+                "type": "callback",
+                "text": "Selected",
+                "payload": "s:model:one",
+                "intent": "positive",
+            },
+        )
+
     def test_client_builds_message_payload_without_network(self) -> None:
         bot = client.MaxBotClient(token="test-token")
         keyboard = Keyboard.single(Button.callback("Menu", "m:menu"))
@@ -163,10 +176,12 @@ class MaxChannelTests(unittest.TestCase):
             "update_type": "bot_started",
             "chat_id": 123,
             "user": {"user_id": 7, "first_name": "Tema"},
+            "payload": "ref_42",
         })
         self.assertEqual(event.chat_id, "123")
         self.assertEqual(event.user.platform_user_id, "7")
         self.assertEqual(event.text, "/start")
+        self.assertEqual(event.raw["payload"], "ref_42")
 
     def test_parse_rejects_missing_identity_or_chat(self) -> None:
         self.assertIsNone(webhook.parse_update({

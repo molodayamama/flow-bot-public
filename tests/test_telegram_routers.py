@@ -652,6 +652,7 @@ class RecordingPlainTextDeps:
             admin_ids=[],
             credit_store=self.credit_store,
             send_owner_alert=self._async("send_owner_alert"),
+            deliver_support_reply=self._async("deliver_support_reply", True),
             pending_sku_payload=self._sync("pending_sku_payload", None),
             save_pending_sku_item=self._async("save_pending_sku_item", True),
             log=self.log,

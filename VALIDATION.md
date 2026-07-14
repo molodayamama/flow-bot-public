@@ -234,21 +234,33 @@ After explicit operator approval, run `subscription`, then `message`, then
 content to the configured operator-owned MAX target; none of the modes print
 configuration values or response bodies.
 
-## MAX generation parity
+## MAX consumer and generation parity
 
-Run the channel, durable-state, shared-facade and backend contracts together:
+Run the declarative Telegram/MAX menu contract, consumer flows, durable state,
+shared facade and backend contracts together:
 
 ```bash
-python -m pytest -q tests/test_max_state.py tests/test_max_generation_adapter.py tests/test_max_mvp.py tests/test_max_runtime.py tests/test_generation_facade.py tests/test_generation_services.py
+python -m pytest -q tests/test_channel_parity.py tests/test_max_mvp.py tests/test_max_channel.py tests/test_channels_base.py tests/test_max_state.py tests/test_max_runtime.py tests/test_max_generation_adapter.py tests/test_max_webhook_route.py tests/test_max_inbox.py tests/test_telegram_routers.py tests/test_generation_facade.py tests/test_generation_services.py
 ```
 
-Required assertions include migration from the legacy action-only SQLite
+Required consumer assertions include the exact seven-row Telegram/MAX root
+menu, legacy callback acceptance, edit-with-send-fallback navigation, arbitrary
+photo routing, quick ideas/templates/guided construction, explicit priced
+confirmation before every paid action, profile/gallery/history/support,
+validated referral deep links, identity-routed notifications and real result
+actions including an exact paid repeat. Gallery/history fixtures may contain
+only results belonging to the current MAX identity.
+
+Generation assertions include migration from the legacy action-only SQLite
 schema, corrupt-state recovery, allowlisted image/video model and aspect
 callbacks, image count capped at four, server-side prices, text-to-video,
 Ingredients capped at four photos, Frames requiring exactly two photos,
 insufficient-balance rejection, refund on provider/delivery failure and
 callback acknowledgement failure not replaying a completed business action.
-All adapter/backend tests use fake downloads and provider calls.
+All channel/adapter/backend tests use temporary databases, fake downloads and
+fake provider calls; they must not contact MAX, Google, Robokassa or 2Captcha.
+The maintained feature boundary and intentional platform-only exclusions are
+documented in `docs/CHANNEL_PARITY.md`.
 
 After an immutable-SHA production deploy, an unpaid menu smoke may open each
 flow and change every setting, then restart the service and confirm one pending

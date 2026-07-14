@@ -61,6 +61,7 @@ class PlainTextDeps:
     admin_ids: Any
     credit_store: Any
     send_owner_alert: Callable[..., Awaitable[Any]]
+    deliver_support_reply: Callable[..., Awaitable[bool]]
     pending_sku_payload: Callable[[int], Any]
     save_pending_sku_item: Callable[..., Awaitable[Any]]
     log: Any
@@ -101,6 +102,7 @@ def create_router(deps: PlainTextDeps) -> Router:
     _run_i2i = deps.run_i2i
     _save_pending_sku_item = deps.save_pending_sku_item
     _send_owner_alert = deps.send_owner_alert
+    _deliver_support_reply = deps.deliver_support_reply
     _show_help_screen = deps.show_help_screen
     _show_ideas_root = deps.show_ideas_root
     _show_referral_screen = deps.show_referral_screen
@@ -359,13 +361,19 @@ def create_router(deps: PlainTextDeps) -> Router:
             ticket_row = metrics.reply_ticket(ticket_id, reply_text=text)
             if ticket_row:
                 try:
-                    await message.bot.send_message(
-                        ticket_row["user_id"],
-                        flow_copy.msg("support_reply", ticket_id=ticket_id, reply=text),
+                    delivered = await _deliver_support_reply(
+                        int(ticket_row["user_id"]),
+                        ticket_id=ticket_id,
+                        reply=text,
                     )
-                    await message.answer(f"✅ Ответ на тикет #{ticket_id} отправлен пользователю.")
+                    if delivered:
+                        await message.answer(f"✅ Ответ на тикет #{ticket_id} отправлен пользователю.")
+                    else:
+                        await message.answer(f"⚠️ Ответ записан, но канал пользователя не найден.")
                 except Exception as exc:
-                    await message.answer(f"⚠️ Ответ записан, но не доставлен: {exc}")
+                    await message.answer(
+                        f"⚠️ Ответ записан, но не доставлен: {exc.__class__.__name__}"
+                    )
             else:
                 await message.answer(f"⚠️ Тикет #{ticket_id} не найден.")
             return

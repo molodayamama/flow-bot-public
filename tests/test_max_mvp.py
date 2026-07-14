@@ -9,13 +9,25 @@ from pathlib import Path
 from unittest.mock import patch
 
 import metrics
+import prompts_lib
 from channels.max import handler, webhook
 from channels.max.handler import (
     CB_ANIMATE,
     CB_BALANCE,
     CB_CREATE_IMAGE,
     CB_CREATE_VIDEO,
+    CB_GALLERY,
+    CB_HISTORY,
+    CB_IDEAS,
+    CB_INVITE,
+    CB_MY_PHOTO,
+    CB_PROFILE,
+    CB_RUN_READY,
+    CB_SUPPORT,
+    CB_SUPPORT_NEW,
+    CB_SUPPORT_MY,
     CB_TOPUP,
+    CB_VIDEO_TEXT,
     CB_VIDEO_FRAMES,
     CB_VIDEO_INGREDIENTS,
     MaxCopy,
@@ -50,11 +62,24 @@ class FakePlatform:
         self.photos: list[dict] = []
         self.videos: list[dict] = []
         self.documents: list[dict] = []
+        self.edits: list[dict] = []
         self.photo_error = photo_error
         self.answer_error = answer_error
 
     async def send_message(self, chat_id, text, keyboard=None):
         self.messages.append({"chat_id": chat_id, "text": text, "keyboard": keyboard})
+        return {"ok": True}
+
+    async def edit_message(self, chat_id, message_id, text, keyboard=None):
+        item = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "keyboard": keyboard,
+            "edited": True,
+        }
+        self.edits.append(item)
+        self.messages.append(item)
         return {"ok": True}
 
     async def answer_callback(self, callback_id, text=None):
@@ -217,10 +242,13 @@ class MaxMvpTests(unittest.TestCase):
         self.assertIn(CB_CREATE_IMAGE, payloads)
         self.assertIn(CB_CREATE_VIDEO, payloads)
         self.assertIn(CB_ANIMATE, payloads)
-        self.assertIn(CB_VIDEO_INGREDIENTS, payloads)
-        self.assertIn(CB_VIDEO_FRAMES, payloads)
         self.assertIn(CB_BALANCE, payloads)
-        self.assertIn(CB_TOPUP, payloads)
+        self.assertIn(CB_MY_PHOTO, payloads)
+        self.assertIn(CB_IDEAS, payloads)
+        self.assertIn(CB_PROFILE, payloads)
+        self.assertIn(CB_INVITE, payloads)
+        self.assertNotIn(CB_VIDEO_INGREDIENTS, payloads)
+        self.assertNotIn(CB_VIDEO_FRAMES, payloads)
 
     def test_callback_is_answered(self) -> None:
         bot = self._bot()
@@ -242,6 +270,100 @@ class MaxMvpTests(unittest.TestCase):
         self.assertEqual(len(platform.messages), 1)
         self.assertEqual(platform.answers, [])
 
+    def test_callback_navigation_edits_the_existing_screen(self) -> None:
+        bot = self._bot()
+
+        run(bot.handle(_cb(CB_BALANCE)))
+
+        self.assertEqual(len(self.platform.edits), 1)
+        self.assertEqual(self.platform.edits[0]["message_id"], "m1")
+        self.assertIn("30", self.platform.edits[0]["text"])
+
+    def test_video_modes_are_grouped_below_the_consumer_menu(self) -> None:
+        bot = self._bot()
+
+        run(bot.handle(_cb(CB_CREATE_VIDEO)))
+
+        payloads = {
+            button.callback_data
+            for row in self.platform.last_keyboard.rows
+            for button in row
+        }
+        self.assertIn(CB_VIDEO_TEXT, payloads)
+        self.assertIn(CB_VIDEO_INGREDIENTS, payloads)
+        self.assertIn(CB_VIDEO_FRAMES, payloads)
+
+    def test_photo_without_active_flow_offers_real_image_video_route(self) -> None:
+        state = {}
+        bot = MaxMvpBot(
+            platform=self.platform, service=self.service, config=self.config,
+            wallet=self.wallet, state=state,
+        )
+
+        run(bot.handle(_msg("сделай ярче", photos=("https://cdn/photo.png",))))
+        route_payloads = {
+            button.callback_data
+            for row in self.platform.last_keyboard.rows
+            for button in row
+        }
+        self.assertEqual(state["u1"]["await"], "photo_route")
+        self.assertIn("pr:img", route_payloads)
+        self.assertIn("pr:vid", route_payloads)
+
+        run(bot.handle(_cb("pr:img")))
+        self.assertEqual(state["u1"]["await"], "ready_image")
+        self.assertEqual(self.service.calls, [])
+        run(bot.handle(_cb(CB_RUN_READY)))
+
+        self.assertEqual(self.service.calls[-1]["kind"], "edit_photo")
+        self.assertEqual(
+            self.service.calls[-1]["photo_file_id"], "https://cdn/photo.png"
+        )
+
+    def test_quick_idea_opens_confirmation_before_paid_generation(self) -> None:
+        state = {}
+        bot = MaxMvpBot(
+            platform=self.platform, service=self.service, config=self.config,
+            wallet=self.wallet, state=state,
+        )
+
+        run(bot.handle(_cb(CB_IDEAS)))
+        run(bot.handle(_cb("idea:0")))
+
+        self.assertEqual(state["u1"]["await"], "ready_image")
+        self.assertEqual(self.service.calls, [])
+        self.assertEqual(self._balance(), 30)
+        run(bot.handle(_cb(CB_RUN_READY)))
+        self.assertEqual(self.service.calls[-1]["kind"], "create_image")
+        self.assertEqual(self._balance(), 20)
+
+    def test_template_and_guided_idea_buttons_reach_ready_wizard(self) -> None:
+        state = {}
+        bot = MaxMvpBot(
+            platform=self.platform, service=self.service, config=self.config,
+            wallet=self.wallet, state=state,
+        )
+
+        run(bot.handle(_cb(CB_IDEAS)))
+        run(bot.handle(_cb("ih:templates")))
+        run(bot.handle(_cb("tp:pick:0")))
+        run(bot.handle(_msg("рыжий кот")))
+        run(bot.handle(_cb("tp:ans:0")))
+        run(bot.handle(_cb("tp:ans:0")))
+        run(bot.handle(_cb("tp:skip")))
+
+        self.assertEqual(state["u1"]["await"], "ready_video")
+        self.assertEqual(state["u1"]["ready_action"], "create_video")
+        self.assertGreater(len(state["u1"]["prompt"]), 10)
+        self.assertEqual(self.service.calls, [])
+
+        run(bot.handle(_cb(CB_IDEAS)))
+        run(bot.handle(_cb("ih:guided")))
+        for _ in range(len(prompts_lib.guided_steps())):
+            run(bot.handle(_cb("gp:opt:0")))
+        self.assertIn(state["u1"]["await"], {"ready_image", "ready_video"})
+        self.assertGreater(len(state["u1"]["prompt"]), 10)
+
     # -- create image -----------------------------------------------------
 
     def test_create_image_happy_path_charges_and_delivers(self) -> None:
@@ -255,6 +377,7 @@ class MaxMvpTests(unittest.TestCase):
         )
         run(bot.handle(_cb(CB_CREATE_IMAGE)))
         run(bot.handle(_msg("рыжий кот в шляпе")))
+        run(bot.handle(_cb(CB_RUN_READY)))
 
         self.assertEqual(self._balance(), 20)  # 30 starter - 10
         self.assertEqual(self.service.calls[-1]["kind"], "create_image")
@@ -265,7 +388,9 @@ class MaxMvpTests(unittest.TestCase):
         self.assertEqual(photo["media"].url, "https://img/1.png")
         self.assertIsNotNone(photo["keyboard"])
         self.assertNotIn("https://img/1.png", self.platform.last_text)
-        self.assertEqual(state, {})
+        self.assertEqual(state["u1"]["await"], "idle")
+        self.assertEqual(state["u1"]["last_images"], ["https://img/1.png"])
+        self.assertEqual(state["u1"]["last_job"]["prompt"], "рыжий кот в шляпе")
 
     def test_pending_action_survives_bot_recreation(self) -> None:
         state_store = MaxUserStateStore(Path(self._tmp.name) / "max-state.db")
@@ -286,6 +411,7 @@ class MaxMvpTests(unittest.TestCase):
             state_store=MaxUserStateStore(Path(self._tmp.name) / "max-state.db"),
         )
         run(recreated.handle(_msg("durable prompt")))
+        run(recreated.handle(_cb(CB_RUN_READY)))
 
         self.assertEqual(self.service.calls[-1]["prompt"], "durable prompt")
         self.assertEqual(self._balance(), 20)
@@ -302,11 +428,12 @@ class MaxMvpTests(unittest.TestCase):
         )
         run(bot.handle(_cb(CB_CREATE_IMAGE)))
 
+        run(bot.handle(_msg("deliver this prompt")))
         with self.assertRaises(RuntimeError):
-            run(bot.handle(_msg("deliver this prompt")))
+            run(bot.handle(_cb(CB_RUN_READY)))
 
         self.assertEqual(self._balance(), 30)
-        self.assertEqual(state["u1"]["await"], "create_image")
+        self.assertEqual(state["u1"]["await"], "ready_image")
         self.assertEqual(state["u1"]["image_model"], "nb2")
 
     def test_create_image_failure_refunds(self) -> None:
@@ -314,6 +441,7 @@ class MaxMvpTests(unittest.TestCase):
         bot = self._bot()
         run(bot.handle(_cb(CB_CREATE_IMAGE)))
         run(bot.handle(_msg("рыжий кот в шляпе")))
+        run(bot.handle(_cb(CB_RUN_READY)))
 
         self.assertEqual(self._balance(), 30)  # charged then refunded
         self.assertIn("возвращены", self.platform.last_text)
@@ -323,8 +451,21 @@ class MaxMvpTests(unittest.TestCase):
         bot = self._bot()
         run(bot.handle(_cb(CB_CREATE_IMAGE)))
         run(bot.handle(_msg("рыжий кот в шляпе")))
+        run(bot.handle(_cb(CB_RUN_READY)))
 
         self.assertEqual(self._balance(), 30)
+
+    def test_empty_generation_result_refunds_instead_of_claiming_success(self) -> None:
+        self.service.result = {"images": []}
+        bot = self._bot()
+
+        run(bot.handle(_cb(CB_CREATE_IMAGE)))
+        run(bot.handle(_msg("пустой результат")))
+        run(bot.handle(_cb(CB_RUN_READY)))
+
+        self.assertEqual(self.platform.photos, [])
+        self.assertEqual(self._balance(), 30)
+        self.assertIn("возвращены", self.platform.last_text)
 
     def test_short_prompt_does_not_charge(self) -> None:
         bot = self._bot()
@@ -340,6 +481,7 @@ class MaxMvpTests(unittest.TestCase):
         bot = self._bot()
         run(bot.handle(_cb(CB_CREATE_IMAGE)))
         run(bot.handle(_msg("рыжий кот в шляпе")))
+        run(bot.handle(_cb(CB_RUN_READY)))
 
         self.assertEqual(self.service.calls, [])
         self.assertIn("Недостаточно", self.platform.last_text)
@@ -365,6 +507,7 @@ class MaxMvpTests(unittest.TestCase):
         self.assertEqual(restored["aspect_ratio"], "landscape_43")
         self.assertEqual(restored["count"], 3)
         run(bot.handle(_msg("три рыжих кота")))
+        run(bot.handle(_cb(CB_RUN_READY)))
 
         call = self.service.calls[-1]
         self.assertEqual(call["image_model"], "nbpro")
@@ -389,9 +532,11 @@ class MaxMvpTests(unittest.TestCase):
         bot = self._bot()
 
         run(bot.handle(_cb(CB_CREATE_VIDEO)))
+        run(bot.handle(_cb(CB_VIDEO_TEXT)))
         run(bot.handle(_cb("s:vm:veo-quality")))
         run(bot.handle(_cb("s:va:landscape")))
         run(bot.handle(_msg("камера летит над горами")))
+        run(bot.handle(_cb(CB_RUN_READY)))
 
         call = self.service.calls[-1]
         self.assertEqual(call["kind"], "create_video")
@@ -409,6 +554,7 @@ class MaxMvpTests(unittest.TestCase):
             "персонажи идут навстречу",
             photos=("p1", "p2", "p3", "p4", "p5"),
         )))
+        run(bot.handle(_cb(CB_RUN_READY)))
 
         call = self.service.calls[-1]
         self.assertEqual(call["kind"], "video_ingredients")
@@ -425,6 +571,7 @@ class MaxMvpTests(unittest.TestCase):
 
         self.service.result = {"videos": [{"url": "https://img/frames.mp4"}]}
         run(bot.handle(_msg("плавный переход", photos=("start", "end"))))
+        run(bot.handle(_cb(CB_RUN_READY)))
         call = self.service.calls[-1]
         self.assertEqual(call["kind"], "video_frames")
         self.assertEqual(call["photo_file_ids"], ("start", "end"))
@@ -439,6 +586,7 @@ class MaxMvpTests(unittest.TestCase):
         metrics.credits_add_for_identity("max", "u1", 100, self.config.starter_credits)
         run(bot.handle(_cb(CB_ANIMATE)))
         run(bot.handle(_msg("оживи", photos=("photo-1",))))
+        run(bot.handle(_cb(CB_RUN_READY)))
 
         self.assertEqual(self.service.calls[-1]["kind"], "animate_photo")
         self.assertEqual(self.service.calls[-1]["photo_file_id"], "photo-1")
@@ -460,6 +608,7 @@ class MaxMvpTests(unittest.TestCase):
 
         run(bot.handle(_cb(CB_ANIMATE)))
         run(bot.handle(_msg("оживи", photos=("photo-1",))))
+        run(bot.handle(_cb(CB_RUN_READY)))
 
         self.assertEqual(len(self.platform.videos), 1)
         media = self.platform.videos[0]["media"]
@@ -483,11 +632,12 @@ class MaxMvpTests(unittest.TestCase):
 
         run(bot.handle(_cb(CB_ANIMATE)))
         run(bot.handle(_msg("оживи", photos=("photo-1",))))
+        run(bot.handle(_cb(CB_RUN_READY)))
 
         self.assertEqual(self.platform.videos, [])
         self.assertEqual(self._balance(), 130)
         self.assertIn("возвращены", self.platform.last_text)
-        self.assertEqual(state, {})
+        self.assertEqual(state["u1"], {"await": "idle"})
 
     def test_oversized_backend_video_b64_is_not_decoded(self) -> None:
         self.service.result = {"videos": [{"video_b64": "A" * 9}]}
@@ -506,11 +656,12 @@ class MaxMvpTests(unittest.TestCase):
             "channels.max.handler.base64.b64decode"
         ) as decode:
             run(bot.handle(_msg("оживи", photos=("photo-1",))))
+            run(bot.handle(_cb(CB_RUN_READY)))
 
         decode.assert_not_called()
         self.assertEqual(self.platform.videos, [])
         self.assertEqual(self._balance(), 130)
-        self.assertEqual(state, {})
+        self.assertEqual(state["u1"], {"await": "idle"})
 
     def test_edit_photo_without_photo_asks_for_photo(self) -> None:
         bot = self._bot()
@@ -551,12 +702,121 @@ class MaxMvpTests(unittest.TestCase):
         self.assertFalse([b.url for row in kb.rows for b in row if b.url])
         self.assertEqual(self.platform.last_text, bot.copy.topup_unavailable)
 
+    def test_topup_rejects_non_https_links(self) -> None:
+        bot = MaxMvpBot(
+            platform=self.platform,
+            service=self.service,
+            config=self.config,
+            wallet=self.wallet,
+            topup_options=lambda uid: (("Unsafe", "http://pay.example/invoice"),),
+        )
+
+        run(bot.handle(_cb(CB_TOPUP)))
+
+        self.assertFalse([
+            button.url
+            for row in self.platform.last_keyboard.rows
+            for button in row
+            if button.url
+        ])
+        self.assertEqual(self.platform.last_text, bot.copy.topup_unavailable)
+
+    # -- profile / library / support / referral --------------------------
+
+    def test_successful_result_populates_gallery_history_and_result_actions(self) -> None:
+        bot = self._bot()
+        prompt = "рыжий кот в шляпе"
+        run(bot.handle(_cb(CB_CREATE_IMAGE)))
+        run(bot.handle(_msg(prompt)))
+        run(bot.handle(_cb(CB_RUN_READY)))
+
+        result_keyboard = self.platform.photos[-1]["keyboard"]
+        payloads = {
+            button.callback_data
+            for row in result_keyboard.rows
+            for button in row
+            if button.callback_data
+        }
+        self.assertTrue({"r:edit:0", "r:up:0", "r:animate:0", "r:repeat"} <= payloads)
+        self.assertEqual(
+            [button.url for row in result_keyboard.rows for button in row if button.url],
+            ["https://img/1.png"],
+        )
+
+        run(bot.handle(_cb(CB_GALLERY)))
+        self.assertGreaterEqual(len(self.platform.photos), 2)
+        gallery_payloads = {
+            button.callback_data
+            for row in self.platform.photos[-1]["keyboard"].rows
+            for button in row
+            if button.callback_data
+        }
+        self.assertNotIn("r:repeat", gallery_payloads)
+        run(bot.handle(_cb(CB_HISTORY)))
+        self.assertIn(prompt, self.platform.last_text)
+
+    def test_repeat_result_reuses_exact_saved_job_and_charges_again(self) -> None:
+        bot = self._bot()
+        run(bot.handle(_cb(CB_CREATE_IMAGE)))
+        run(bot.handle(_msg("repeatable prompt")))
+        run(bot.handle(_cb(CB_RUN_READY)))
+        first = dict(self.service.calls[-1])
+
+        run(bot.handle(_cb("r:repeat")))
+
+        second = dict(self.service.calls[-1])
+        self.assertEqual(first, second)
+        self.assertEqual(self._balance(), 10)
+
+    def test_support_ticket_is_persisted_notified_and_listed(self) -> None:
+        notifications = []
+
+        async def notify(**kwargs):
+            notifications.append(kwargs)
+
+        bot = MaxMvpBot(
+            platform=self.platform, service=self.service, config=self.config,
+            wallet=self.wallet, support_notify=notify,
+        )
+        run(bot.handle(_cb(CB_SUPPORT)))
+        run(bot.handle(_cb(CB_SUPPORT_NEW)))
+        run(bot.handle(_msg("Не получается открыть результат")))
+
+        self.assertEqual(len(notifications), 1)
+        self.assertLess(notifications[0]["internal_user_id"], 0)
+        self.assertIn("создано", self.platform.last_text)
+        run(bot.handle(_cb(CB_SUPPORT_MY)))
+        self.assertIn("Не получается", self.platform.last_text)
+
+    def test_referral_share_deeplink_binds_only_existing_max_identity(self) -> None:
+        bot = self._bot()
+        referrer = metrics.ensure_user_identity("max", "u1")
+        run(bot.handle(_cb(CB_INVITE)))
+        links = [
+            button.url
+            for row in self.platform.last_keyboard.rows
+            for button in row
+            if button.url
+        ]
+        self.assertIn(f"ref_{abs(referrer)}", links[0])
+
+        started = webhook.parse_update({
+            "update_type": "bot_started",
+            "chat_id": "c2",
+            "user": {"user_id": "u2"},
+            "payload": f"ref_{abs(referrer)}",
+        })
+        run(bot.handle(started))
+        referred = metrics.ensure_user_identity("max", "u2")
+        self.assertEqual(metrics.get_referrer_of(referred), referrer)
+
     # -- identity separation ----------------------------------------------
 
     def test_max_balance_does_not_leak_into_telegram(self) -> None:
         bot = self._bot()
         run(bot.handle(_cb(CB_CREATE_IMAGE)))
         run(bot.handle(_msg("рыжий кот в шляпе", user_id="42")))
+        run(bot.handle(_cb(CB_RUN_READY, user_id="42")))
 
         # MAX user "42" charged, but Telegram legacy id 42 is untouched.
         max_internal = metrics.ensure_user_identity("max", "42")
