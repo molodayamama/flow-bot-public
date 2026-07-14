@@ -24,6 +24,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preload" href="/assets/hero-ai-flow.png" as="image">
   <link rel="stylesheet" href="/styles.css?v=20260714-b2">
+  <link rel="stylesheet" href="/landing.css?v=20260714-c1">
+  <script src="/landing.js?v=20260714-c1" defer></script>
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -56,72 +58,73 @@
   }
   </script>
 </head>
-<body class="landing-page">
-  <header class="landing-topbar" aria-label="Основная навигация">
-    <a class="brand landing-brand" href="/" aria-label="Photozhab — главная">
-      <span class="brand-mark" aria-hidden="true">P</span>
+<body class="pz-landing">
+  <a class="pz-skip-link" href="#main-content">К основному содержанию</a>
+  <header class="pz-landing__topbar" aria-label="Основная навигация">
+    <a class="pz-landing__brand" href="/" aria-label="Photozhab — главная">
+      <span class="pz-landing__brand-mark" aria-hidden="true">P</span>
       <span>Photozhab</span>
     </a>
-    <nav class="landing-nav" aria-label="Разделы сайта">
+    <nav class="pz-landing__nav" aria-label="Разделы сайта">
       <a href="#features">Возможности</a>
       <a href="#prices">Цены</a>
       <a href="/max-bot.html">MAX</a>
       <a href="/oferta.html">Оферта</a>
-      <a class="nav-create" href="/app.html">Создать</a>
+      <a class="pz-landing__nav-cta" href="/app.html">Создать</a>
     </nav>
   </header>
 
-  <main>
-    <section class="landing-hero" aria-labelledby="hero-title">
-      <img class="landing-hero-image" src="/assets/hero-ai-flow.png" alt="AI-генерация изображений и видео в Photozhab" decoding="async">
-      <div class="landing-hero-shade" aria-hidden="true"></div>
-      <div class="landing-container landing-hero-content">
-        <p class="design-kicker">Nano Banana · Veo · Оживление фото</p>
+  <main id="main-content">
+    <section class="pz-hero" aria-labelledby="hero-title">
+      <img class="pz-hero__image" src="/assets/hero-ai-flow.png" width="1586" height="992" alt="AI-генерация изображений и видео в Photozhab" fetchpriority="high">
+      <div class="pz-hero__shade" aria-hidden="true"></div>
+      <div class="pz-landing__container pz-hero__content">
+        <p class="pz-kicker">Nano Banana · Veo · Оживление фото</p>
         <h1 id="hero-title">Генерация картинок и видео с AI</h1>
-        <p class="landing-hero-copy">Создавай изображения, видео и обрабатывай фото прямо на сайте, в Telegram или MAX — без VPN и обязательных подписок. Стоимость каждого действия видна до запуска.</p>
-        <div class="landing-actions">
-          <a class="pill-action pill-action--primary" href="/app.html">Создать на сайте</a>
-          <a class="pill-action pill-action--secondary" href="https://t.me/photozhab_bot">Telegram</a>
-          <a class="pill-action pill-action--secondary" href="https://max.ru/se13461237_bot">MAX</a>
+        <p class="pz-hero__copy">Создавай изображения, видео и обрабатывай фото прямо на сайте, в Telegram или MAX — без VPN и обязательных подписок. Стоимость каждого действия видна до запуска.</p>
+        <div class="pz-actions">
+          <a class="pz-button pz-button--primary" href="/app.html">Создать на сайте</a>
+          <a class="pz-button" href="https://t.me/photozhab_bot">Telegram</a>
+          <a class="pz-button" href="https://max.ru/se13461237_bot">MAX</a>
         </div>
-        <p class="landing-microcopy">30 кредитов на старте в ботах — 3 картинки бесплатно</p>
+        <p class="pz-hero__microcopy">30 кредитов на старте в ботах — 3 картинки бесплатно</p>
       </div>
     </section>
 
-    <section class="trust-strip" aria-label="Преимущества Photozhab">
-      <div class="landing-container trust-grid">
-        <div><strong>30 кр</strong><span>бесплатно на старте в Telegram и MAX</span></div>
-        <div><strong>0 скрытых</strong><span>цены видны до нажатия — без скрытых списаний</span></div>
-        <div><strong>Без VPN</strong><span>без подписок на каналы — Veo работает</span></div>
+    <section class="pz-trust" aria-label="Преимущества Photozhab">
+      <div class="pz-landing__container pz-trust__grid">
+        <div class="pz-trust__item"><strong>30 кр</strong><span>бесплатно на старте в Telegram и MAX</span></div>
+        <div class="pz-trust__item"><strong>0 скрытых</strong><span>цены видны до нажатия — без скрытых списаний</span></div>
+        <div class="pz-trust__item"><strong>Без VPN</strong><span>без подписок на каналы — Veo работает</span></div>
       </div>
     </section>
 
-    <section class="design-section landing-container" id="features" aria-labelledby="features-title">
-      <div class="section-intro section-intro--split">
+    <section class="pz-section pz-landing__container" id="features" aria-labelledby="features-title">
+      <div class="pz-section__intro pz-section__intro--split">
         <h2 id="features-title">Одна подписка не нужна.<br>Нужна идея.</h2>
         <p>Картинки, видео и обработка фото — каждая услуга оплачивается кредитами по факту.</p>
       </div>
-      <div class="feature-grid">
-        <article class="design-card">
-          <span class="card-index">01 · Nano Banana</span>
+      <div class="pz-features">
+        <article class="pz-feature-card">
+          <span class="pz-feature-card__index">01 · Nano Banana</span>
           <h3>Генерация картинок</h3>
           <p>По тексту или референсу. Nano Banana 2 для быстрых задач, Pro — для сложных сцен.</p>
           <a href="/generaciya-kartinok.html">Как создать картинку →</a>
         </article>
-        <article class="design-card">
-          <span class="card-index card-index--coral">02 · Veo · Omni</span>
+        <article class="pz-feature-card">
+          <span class="pz-feature-card__index pz-feature-card__index--coral">02 · Veo · Omni</span>
           <h3>Генерация видео</h3>
           <p>Видео по описанию, оживление фото, ролики из референсов и Start to Finish.</p>
           <a href="/generaciya-video.html">Возможности видео →</a>
         </article>
-        <article class="design-card">
-          <span class="card-index card-index--cyan">03 · Редактирование</span>
+        <article class="pz-feature-card">
+          <span class="pz-feature-card__index pz-feature-card__index--cyan">03 · Редактирование</span>
           <h3>Обработка и оживление фото</h3>
           <p>Измени загруженное фото по описанию или преврати его в короткое видео.</p>
           <a href="/app.html">Оживить фото →</a>
         </article>
-        <article class="design-card design-card--accent">
-          <span class="card-index">04 · Теперь в MAX</span>
+        <article class="pz-feature-card pz-feature-card--accent">
+          <span class="pz-feature-card__index">04 · Теперь в MAX</span>
           <h3>AI-бот в MAX</h3>
           <p>Генерация, редактирование, баланс и пополнение — в российском мессенджере MAX.</p>
           <a href="/max-bot.html">О версии для MAX →</a>
@@ -129,86 +132,98 @@
       </div>
     </section>
 
-    <section class="design-section design-section--alt" aria-labelledby="showcase-title">
-      <div class="landing-container">
-        <div class="section-intro section-intro--split">
-          <h2 id="showcase-title">Возможности Photozhab</h2>
-          <p>Один интерфейс для разных творческих задач — от первого кадра до короткого ролика.</p>
+    <section class="pz-section pz-section--alt" aria-labelledby="showcase-title">
+      <div class="pz-landing__container">
+        <div class="pz-section__intro pz-section__intro--split">
+          <h2 id="showcase-title">Сделано в Photozhab</h2>
+          <p>Реальные примеры из текущего генерационного backend — без ручной ретуши.</p>
         </div>
-        <div class="showcase-grid">
-          <figure class="showcase-item">
-            <div class="showcase-art showcase-art--one" role="img" aria-label="Портрет в неоновом городе"></div>
+        <div class="pz-showcase">
+          <figure class="pz-showcase__item">
+            <div class="pz-showcase__frame">
+              <img class="pz-showcase__media" src="/assets/showcase/neon.webp" width="896" height="1200" loading="lazy" decoding="async" alt="Кинематографичный портрет в дождливом неоновом городе">
+            </div>
             <figcaption>«кинематографичный портрет, неон, дождь» · Nano Banana 2</figcaption>
           </figure>
-          <figure class="showcase-item showcase-item--offset">
-            <div class="showcase-art showcase-art--two" role="img" aria-label="Предметная AI-фотография"></div>
-            <figcaption>«предметная фотография, студийный свет» · Nano Banana Pro</figcaption>
+          <figure class="pz-showcase__item pz-showcase__item--offset">
+            <div class="pz-showcase__frame">
+              <img class="pz-showcase__media" src="/assets/showcase/product.webp" width="896" height="1200" loading="lazy" decoding="async" alt="Флакон на чёрном вулканическом камне в студийном свете">
+            </div>
+            <figcaption>«флакон на чёрном камне, студийный свет» · Nano Banana 2</figcaption>
           </figure>
-          <figure class="showcase-item">
-            <div class="showcase-art showcase-art--three" role="img" aria-label="Кадр AI-видео"></div>
-            <figcaption>«динамичная сцена, движение камеры» · Veo Fast</figcaption>
+          <figure class="pz-showcase__item">
+            <div class="pz-showcase__frame">
+              <video class="pz-showcase__media" data-showcase-video muted autoplay loop playsinline preload="metadata" poster="/assets/showcase/forest-video-poster.webp" aria-label="Короткий AI-ролик: полёт над зимним лесом">
+                <source src="/assets/showcase/forest-video.mp4" type="video/mp4">
+                <img src="/assets/showcase/forest.webp" width="896" height="1200" alt="Зимний лес с высоты на рассвете">
+              </video>
+              <button class="pz-showcase__video-toggle" type="button" data-video-toggle data-state="playing" aria-label="Приостановить пример видео" aria-pressed="true"></button>
+            </div>
+            <figcaption>«полёт над зимним лесом на рассвете» · Omni Flash 4s</figcaption>
           </figure>
-          <figure class="showcase-item showcase-item--offset">
-            <div class="showcase-art showcase-art--four" role="img" aria-label="Оживление фотографии"></div>
-            <figcaption>«естественное движение и мягкий свет» · Оживление фото</figcaption>
+          <figure class="pz-showcase__item pz-showcase__item--offset">
+            <div class="pz-showcase__frame">
+              <img class="pz-showcase__media" src="/assets/showcase/motion.webp" width="896" height="1200" loading="lazy" decoding="async" alt="Естественный портрет на ветреном морском берегу">
+            </div>
+            <figcaption>«лёгкая улыбка, ветер в волосах» · Nano Banana 2</figcaption>
           </figure>
         </div>
       </div>
     </section>
 
-    <section class="design-section" aria-labelledby="steps-title">
-      <div class="landing-container">
-        <div class="section-intro"><h2 id="steps-title">Три шага до результата</h2></div>
-        <div class="steps-grid">
-          <article class="step-card"><span>01</span><h3>Открой и опиши</h3><p>На сайте, в Telegram или MAX. Напиши идею обычными словами — промт-инженерия не нужна.</p></article>
-          <article class="step-card"><span>02</span><h3>Выбери модель</h3><p>Nano Banana для картинок, Veo или Omni для видео. Цена в кредитах видна до запуска.</p></article>
-          <article class="step-card"><span>03</span><h3>Получи результат</h3><p>Картинки обычно готовы быстрее видео. При технической ошибке кредиты возвращаются автоматически.</p></article>
+    <section class="pz-section" aria-labelledby="steps-title">
+      <div class="pz-landing__container">
+        <div class="pz-section__intro"><h2 id="steps-title">Три шага до результата</h2></div>
+        <div class="pz-steps">
+          <article class="pz-step"><span class="pz-step__index">01</span><h3>Открой и опиши</h3><p>На сайте, в Telegram или MAX. Напиши идею обычными словами — промт-инженерия не нужна.</p></article>
+          <article class="pz-step"><span class="pz-step__index">02</span><h3>Выбери модель</h3><p>Nano Banana для картинок, Veo или Omni для видео. Цена в кредитах видна до запуска.</p></article>
+          <article class="pz-step"><span class="pz-step__index">03</span><h3>Получи результат</h3><p>Картинки обычно готовы быстрее видео. При технической ошибке кредиты возвращаются автоматически.</p></article>
         </div>
       </div>
     </section>
 
-    <section class="design-section design-section--alt price-section" id="prices" aria-labelledby="prices-title">
-      <div class="price-container">
-        <p class="design-kicker">Стоимость</p>
+    <section class="pz-section pz-section--alt" id="prices" aria-labelledby="prices-title">
+      <div class="pz-prices">
+        <p class="pz-kicker">Стоимость</p>
         <h2 id="prices-title">Кредиты вместо подписки</h2>
-        <div class="price-list">
-          <div class="price-row"><strong>45 кр</strong><span>только картинки: примерно 4 изображения</span><b>45 ₽</b></div>
-          <div class="price-row"><strong>100 кр</strong><span>примерно 10 картинок или 2 коротких видео</span><b>90 ₽</b></div>
-          <div class="price-row price-row--best"><strong>290 кр</strong><span>примерно 29 картинок или 5 коротких видео</span><em>ВЫГОДНО</em><b>235 ₽</b></div>
-          <div class="price-row"><strong>700 кр</strong><span>примерно 70 картинок или 14 коротких видео</span><b>530 ₽</b></div>
-          <div class="price-row"><strong>1500 кр</strong><span>примерно 150 картинок или 30 коротких видео</span><b>1050 ₽</b></div>
+        <div class="pz-prices__list">
+          <div class="pz-prices__row"><strong class="pz-prices__credits">45 кр</strong><span class="pz-prices__description">только картинки: примерно 4 изображения</span><b class="pz-prices__amount">45 ₽</b></div>
+          <div class="pz-prices__row"><strong class="pz-prices__credits">100 кр</strong><span class="pz-prices__description">примерно 10 картинок или 2 коротких видео</span><b class="pz-prices__amount">90 ₽</b></div>
+          <div class="pz-prices__row pz-prices__row--best"><strong class="pz-prices__credits">290 кр</strong><span class="pz-prices__description">примерно 29 картинок или 5 коротких видео</span><span class="pz-prices__badge">ВЫГОДНО</span><b class="pz-prices__amount">235 ₽</b></div>
+          <div class="pz-prices__row"><strong class="pz-prices__credits">700 кр</strong><span class="pz-prices__description">примерно 70 картинок или 14 коротких видео</span><b class="pz-prices__amount">530 ₽</b></div>
+          <div class="pz-prices__row"><strong class="pz-prices__credits">1500 кр</strong><span class="pz-prices__description">примерно 150 картинок или 30 коротких видео</span><b class="pz-prices__amount">1050 ₽</b></div>
         </div>
-        <p class="price-note">Картинка — от 10 кр · видео — от 50 кр · оживление фото — от 50 кр. Оплата через СБП, карты или Telegram Stars.</p>
+        <p class="pz-prices__note">Картинка — от 10 кр · видео — от 50 кр · оживление фото — от 50 кр. Оплата через СБП, карты или Telegram Stars.</p>
       </div>
     </section>
 
-    <section class="design-section faq-section" id="faq" aria-labelledby="faq-title">
-      <div class="faq-container">
+    <section class="pz-section" id="faq" aria-labelledby="faq-title">
+      <div class="pz-faq">
         <h2 id="faq-title">Частые вопросы</h2>
-        <div class="faq-list">
-          <details><summary>Это бесплатно?<span aria-hidden="true">+</span></summary><p>В Telegram и MAX новый пользователь получает 30 кредитов — это 3 обычные картинки без оплаты. Дальше кредиты покупаются пакетами от 45 ₽.</p></details>
-          <details><summary>Нужен ли VPN?<span aria-hidden="true">+</span></summary><p>Нет. Поддерживаемые модели запускаются через Photozhab на сайте, в Telegram и MAX без отдельного VPN со стороны пользователя.</p></details>
-          <details><summary>Как оплатить?<span aria-hidden="true">+</span></summary><p>На сайте доступны СБП и банковская карта через Robokassa. В Telegram дополнительно доступны Telegram Stars. Баланс определяется аккаунтом, через который выполнен вход.</p></details>
-          <details><summary>Что будет, если генерация не удалась?<span aria-hidden="true">+</span></summary><p>При подтверждённой технической ошибке кредиты не списываются или возвращаются автоматически. Если нужна помощь, напишите в поддержку бота.</p></details>
-          <details><summary>Можно ли использовать результат в работе?<span aria-hidden="true">+</span></summary><p>Результаты подходят для личных и коммерческих задач с учётом закона, прав третьих лиц и условий выбранной AI-модели.</p></details>
+        <div>
+          <details class="pz-faq__item"><summary>Это бесплатно?<span aria-hidden="true">+</span></summary><p>В Telegram и MAX новый пользователь получает 30 кредитов — это 3 обычные картинки без оплаты. Дальше кредиты покупаются пакетами от 45 ₽.</p></details>
+          <details class="pz-faq__item"><summary>Нужен ли VPN?<span aria-hidden="true">+</span></summary><p>Нет. Поддерживаемые модели запускаются через Photozhab на сайте, в Telegram и MAX без отдельного VPN со стороны пользователя.</p></details>
+          <details class="pz-faq__item"><summary>Как оплатить?<span aria-hidden="true">+</span></summary><p>На сайте доступны СБП и банковская карта через Robokassa. В Telegram дополнительно доступны Telegram Stars. Баланс определяется аккаунтом, через который выполнен вход.</p></details>
+          <details class="pz-faq__item"><summary>Что будет, если генерация не удалась?<span aria-hidden="true">+</span></summary><p>При подтверждённой технической ошибке кредиты не списываются или возвращаются автоматически. Если нужна помощь, напишите в поддержку бота.</p></details>
+          <details class="pz-faq__item"><summary>Можно ли использовать результат в работе?<span aria-hidden="true">+</span></summary><p>Результаты подходят для личных и коммерческих задач с учётом закона, прав третьих лиц и условий выбранной AI-модели.</p></details>
         </div>
       </div>
     </section>
 
-    <section class="landing-cta" aria-labelledby="cta-title">
-      <div class="landing-container">
+    <section class="pz-cta" aria-labelledby="cta-title">
+      <div class="pz-landing__container">
         <h2 id="cta-title">Что создадим сегодня?</h2>
         <p>30 бесплатных кредитов ждут в Telegram и MAX. На сайте — оплата СБП и картой.</p>
-        <div class="landing-actions">
-          <a class="pill-action pill-action--primary" href="/app.html">Создать на сайте</a>
-          <a class="pill-action pill-action--secondary" href="https://t.me/photozhab_bot">Открыть в Telegram</a>
+        <div class="pz-actions">
+          <a class="pz-button pz-button--primary" href="/app.html">Создать на сайте</a>
+          <a class="pz-button" href="https://t.me/photozhab_bot">Открыть в Telegram</a>
         </div>
       </div>
     </section>
   </main>
 
-  <footer class="design-footer">
-    <div class="landing-container">
+  <footer class="pz-footer">
+    <div class="pz-landing__container pz-footer__inner">
       <span>© Photozhab · самозанятый Якупов А. И., ИНН 000000000000 · Екатеринбург</span>
       <nav aria-label="Правовая информация">
         <a href="/oferta.html">Оферта</a>

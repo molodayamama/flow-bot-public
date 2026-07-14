@@ -14,6 +14,8 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.home = (SITE / "index.html").read_text(encoding="utf-8")
         cls.styles = (SITE / "styles.css").read_text(encoding="utf-8")
+        cls.landing_css = (SITE / "landing.css").read_text(encoding="utf-8")
+        cls.landing_js = (SITE / "landing.js").read_text(encoding="utf-8")
         cls.app = (SITE / "app.html").read_text(encoding="utf-8")
         cls.app_css = (SITE / "app.css").read_text(encoding="utf-8")
         cls.app_js = (SITE / "app.js").read_text(encoding="utf-8")
@@ -28,21 +30,58 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
 
     def test_public_landing_contains_every_b_v2_section(self) -> None:
         for marker in (
-            'class="landing-hero"',
-            'class="trust-strip"',
+            'class="pz-hero"',
+            'class="pz-trust"',
             'id="features"',
             'id="showcase-title"',
             'id="steps-title"',
             'id="prices"',
             'id="faq"',
-            'class="landing-cta"',
-            'class="design-footer"',
+            'class="pz-cta"',
+            'class="pz-footer"',
         ):
             self.assertIn(marker, self.home)
         self.assertIn("Space+Grotesk", self.styles)
         self.assertIn("--pz-paper:        #0b0d0c", self.styles)
         self.assertIn("--pz-lime:         #d3f36b", self.styles)
-        self.assertIn("@media (max-width: 480px)", self.styles)
+        self.assertIn("@media (max-width: 480px)", self.landing_css)
+
+    def test_landing_skin_is_isolated_from_legacy_public_components(self) -> None:
+        self.assertIn('href="/landing.css?v=20260714-c1"', self.home)
+        self.assertIn('src="/landing.js?v=20260714-c1"', self.home)
+        self.assertNotIn("Claude Design B v2: public landing", self.styles)
+        self.assertNotIn('class="price-row', self.home)
+        self.assertNotIn('class="showcase-', self.home)
+        self.assertIn(".pz-prices__row--best", self.landing_css)
+        self.assertIn("grid-template-columns: 130px minmax(0, 1fr) auto 110px", self.landing_css)
+        self.assertIn("white-space: nowrap", self.landing_css)
+
+    def test_landing_uses_real_generated_images_and_video(self) -> None:
+        asset_dir = SITE / "assets" / "showcase"
+        expected = {
+            "neon.webp": 50_000,
+            "product.webp": 30_000,
+            "motion.webp": 50_000,
+            "forest.webp": 100_000,
+            "forest-video-poster.webp": 50_000,
+            "forest-video.mp4": 500_000,
+        }
+        for name, minimum in expected.items():
+            path = asset_dir / name
+            self.assertTrue(path.is_file(), name)
+            self.assertGreater(path.stat().st_size, minimum, name)
+            self.assertIn(f'/assets/showcase/{name}', self.home)
+        for name in expected:
+            data = (asset_dir / name).read_bytes()[:16]
+            if name.endswith(".webp"):
+                self.assertEqual(data[:4], b"RIFF", name)
+                self.assertEqual(data[8:12], b"WEBP", name)
+            else:
+                self.assertIn(b"ftyp", data, name)
+        self.assertIn("data-showcase-video muted autoplay loop playsinline", self.home)
+        self.assertIn("prefers-reduced-motion: reduce", self.landing_css)
+        self.assertIn("reducedMotion.matches", self.landing_js)
+        self.assertIn("IntersectionObserver", self.landing_js)
 
     def test_generation_app_keeps_real_contracts_under_new_skin(self) -> None:
         for marker in (

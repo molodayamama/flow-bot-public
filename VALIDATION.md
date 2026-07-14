@@ -49,6 +49,35 @@ modes, session-only (non-`localStorage`) history, all twelve admin tabs and
 760px/820px responsive contracts. When changing versioned CSS/JS query strings,
 reload the page and confirm the browser actually loaded the new URL before
 judging the render.
+
+For generated landing media, run the additional offline gate:
+
+```bash
+python -m pytest -q tests/test_photozhab_design_static.py tests/test_generate_landing_media.py
+node --check deploy/photozhab/landing.js
+python -m py_compile tools/generate_landing_media.py
+ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height,pix_fmt deploy/photozhab/assets/showcase/forest-video.mp4
+```
+
+The tracked media contract verifies WebP/MP4 signatures, meaningful minimum
+sizes, exact public references, a muted inline video, reduced-motion handling
+and isolation from legacy `.price-row`/showcase selectors. A live content batch
+is paid/stateful and must only be run after explicit operator approval with
+`tools/generate_landing_media.py --approve-external-action`; the helper must use
+the localhost internal endpoint, a dedicated non-customer identity, bounded
+responses and a Google-media hostname allowlist. Do not commit its generated
+manifest or provider URLs/identifiers. Inspect every image and a decoded video
+frame before publishing, and strip audio plus add MP4 fast-start for autoplay.
+
+When changing per-account gost upstreams, take and hash-verify a protected
+backup of the affected unit and credential files first. Test supplied upstreams
+before mutation, keep credentials in root-only `EnvironmentFile` files (0600),
+preserve the local port/account mapping, then verify each local proxy's egress
+against the expected host. Sanitized output may contain only account labels,
+host endpoints, status, match flags and latency; never print or commit proxy
+usernames, passwords or full URLs. Obsolete proxy services must be stopped and
+disabled rather than left restarting against known-dead upstreams.
+
 After an immutable-SHA deploy, request the public home, each sitemap URL,
 `/robots.txt` and `/sitemap.xml`; all public crawl targets must return HTTP 200.
 Search-engine indexing, snippet selection and ranking are external outcomes and
