@@ -223,6 +223,36 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("SameSite=Lax", cookie)
         self.assertNotIn("test-secret", cookie)
 
+    async def test_landing_experiment_accepts_only_bounded_same_origin_events(self):
+        self.client.session.cookie_jar.clear()
+        before = len(self.metrics.events)
+        response = await self.post(
+            "/web/api/experiment",
+            {"name": "landing_hero", "variant": "c", "event": "exposure"},
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(await response.json(), {"ok": True})
+        args, kwargs = self.metrics.events[-1]
+        self.assertEqual(args, ("landing_hero_exposure",))
+        self.assertIsNone(kwargs["user_id"])
+        self.assertEqual(kwargs["source"], "web")
+        self.assertEqual(kwargs["payload"], {"variant": "c"})
+
+        for payload, origin in (
+            ({"name": "landing_hero", "variant": "z", "event": "exposure"}, ORIGIN),
+            ({"name": "other", "variant": "a", "event": "cta"}, ORIGIN),
+            ({"name": "landing_hero", "variant": "a", "event": "arbitrary"}, ORIGIN),
+            ({"name": "landing_hero", "variant": "a", "event": "cta"}, "https://evil.test"),
+        ):
+            rejected = await self.post("/web/api/experiment", payload, origin=origin)
+            self.assertIn(rejected.status, {400, 403})
+        oversized = await self.post(
+            "/web/api/experiment",
+            {"name": "landing_hero", "variant": "a", "event": "x" * 600},
+        )
+        self.assertEqual(oversized.status, 413)
+        self.assertEqual(len(self.metrics.events), before + 1)
+
     async def test_anonymous_session_cannot_generate_or_pay(self):
         self.client.session.cookie_jar.clear()
         response = await self.client.get("/web/api/session")

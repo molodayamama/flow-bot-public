@@ -21,8 +21,10 @@ const $ = (selector) => document.querySelector(selector);
 const elements = {
   conversation: $("#conversation"), messages: $("#message-list"), welcome: $("#welcome-card"),
   prompt: $("#prompt"), send: $("#send-button"), model: $("#model-select"),
+  modelOptions: $("#model-options"),
   mode: $("#mode-select"),
   aspect: $("#aspect-select"), count: $("#count-select"), countWrap: $(".count-select"),
+  aspectOptions: $("#aspect-options"), countRange: $("#count-range"), countOutput: $("#count-output"),
   uploadButton: $("#upload-button"), uploadInput: $("#image-upload"), uploadPreview: $("#upload-preview"),
   uploadImage: $("#upload-preview-image"), uploadName: $("#upload-file-name"),
   price: $("#request-price"), title: $("#chat-mode-title"), subtitle: $("#chat-mode-subtitle"),
@@ -32,7 +34,7 @@ const elements = {
   maxLogin: $("#login-max"), yandexLogin: $("#login-yandex"),
   telegramForm: $("#telegram-code-form"), telegramCode: $("#telegram-code"),
   authNote: $("#auth-note"), accountCard: $("#account-card"),
-  accountName: $("#account-name"), logout: $("#logout-button"),
+  accountName: $("#account-name"), accountAvatar: $("#account-avatar"), logout: $("#logout-button"),
   mobileAccount: $("#mobile-account"),
   historyList: $("#chat-history-list"), historyEmpty: $("#chat-history-empty"),
 };
@@ -93,11 +95,48 @@ function requestPrice() {
 
 function updatePrice() { elements.price.textContent = `${requestPrice()} кр`; }
 
+function syncModelButtons() {
+  elements.modelOptions.querySelectorAll(".model-option").forEach((button) => {
+    const active = button.dataset.value === elements.model.value;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+}
+
+function syncAspectButtons() {
+  elements.aspectOptions.querySelectorAll(".aspect-option").forEach((button) => {
+    const active = button.dataset.value === elements.aspect.value;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+}
+
 function renderModels() {
   if (!state.session) return;
   const models = state.mode === "image" || state.mode === "edit"
     ? state.session.image_models : state.session.video_models;
+  const previous = elements.model.value;
   elements.model.replaceChildren(...models.map((model) => option(model.id, `${model.label} · ${state.mode === "animate" ? (model.animate_price ?? model.price) : model.price} кр`)));
+  if (models.some((model) => model.id === previous)) elements.model.value = previous;
+  elements.modelOptions.replaceChildren(...models.map((model) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "choice-pill model-option";
+    button.dataset.value = model.id;
+    button.setAttribute("aria-pressed", "false");
+    const label = document.createElement("strong");
+    label.textContent = model.label;
+    const price = document.createElement("small");
+    price.textContent = `${state.mode === "animate" ? (model.animate_price ?? model.price) : model.price} кр`;
+    button.append(label, price);
+    button.addEventListener("click", () => {
+      elements.model.value = model.id;
+      syncModelButtons();
+      updatePrice();
+    });
+    return button;
+  }));
+  syncModelButtons();
   updatePrice();
 }
 
@@ -119,10 +158,14 @@ function setMode(mode) {
   elements.subtitle.textContent = subtitle;
   elements.prompt.placeholder = placeholder;
   const needsImage = mode === "edit" || mode === "animate";
-  elements.uploadButton.hidden = !needsImage;
+  elements.uploadButton.hidden = mode === "video";
   elements.countWrap.hidden = mode !== "image";
   [...elements.aspect.options].forEach((item) => { item.disabled = (mode === "video" || mode === "animate") && !["portrait", "landscape"].includes(item.value); });
   if ((mode === "video" || mode === "animate") && !["portrait", "landscape"].includes(elements.aspect.value)) elements.aspect.value = "portrait";
+  elements.aspectOptions.querySelectorAll(".aspect-option").forEach((button) => {
+    button.disabled = (mode === "video" || mode === "animate") && !["portrait", "landscape"].includes(button.dataset.value);
+  });
+  syncAspectButtons();
   if (!needsImage) clearUpload();
   renderModels();
 }
@@ -186,6 +229,9 @@ function applyAuthState() {
   elements.accountName.textContent = authenticated
     ? `${state.session.identity?.display_name || "Пользователь"} · ${providerLabel(state.session.identity?.provider)}`
     : "—";
+  elements.accountAvatar.textContent = authenticated
+    ? (state.session.identity?.display_name || "P").trim().charAt(0).toLocaleUpperCase("ru-RU") || "P"
+    : "P";
   elements.mobileAccount.textContent = authenticated ? "Аккаунт" : "Войти";
   elements.prompt.disabled = !authenticated;
   elements.send.disabled = !authenticated || state.busy;
@@ -469,15 +515,31 @@ async function initializeApp() {
 elements.prompt.addEventListener("input", resizePrompt);
 elements.prompt.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); generate(); } });
 elements.send.addEventListener("click", generate);
-elements.model.addEventListener("change", updatePrice);
+elements.model.addEventListener("change", () => { syncModelButtons(); updatePrice(); });
 elements.mode.addEventListener("change", () => setMode(elements.mode.value));
-elements.count.addEventListener("change", updatePrice);
+elements.aspect.addEventListener("change", syncAspectButtons);
+elements.aspectOptions.querySelectorAll(".aspect-option").forEach((button) => button.addEventListener("click", () => {
+  if (button.disabled) return;
+  elements.aspect.value = button.dataset.value;
+  syncAspectButtons();
+}));
+const syncCount = (value) => {
+  const count = Math.max(1, Math.min(4, Number(value) || 1));
+  elements.count.value = String(count);
+  elements.countRange.value = String(count);
+  elements.countOutput.value = String(count);
+  elements.countOutput.textContent = String(count);
+  updatePrice();
+};
+elements.count.addEventListener("change", () => syncCount(elements.count.value));
+elements.countRange.addEventListener("input", () => syncCount(elements.countRange.value));
 document.querySelectorAll(".mode-nav-button").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
 document.querySelectorAll("#prompt-suggestions button").forEach((button) => button.addEventListener("click", () => { elements.prompt.value = button.textContent; resizePrompt(); elements.prompt.focus(); }));
 elements.uploadInput.addEventListener("change", () => {
   const file = elements.uploadInput.files[0];
   if (!file) return;
   if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > (state.session?.limits.image_bytes || 10485760)) { clearUpload(); toast("PNG, JPEG или WebP — не больше 10 МБ"); return; }
+  if (state.mode === "image") setMode("edit");
   const reader = new FileReader();
   reader.onload = () => { state.imageData = String(reader.result); state.imageName = file.name; elements.uploadImage.src = state.imageData; elements.uploadName.textContent = file.name; elements.uploadPreview.hidden = false; };
   reader.onerror = () => { clearUpload(); toast("Не удалось прочитать изображение"); };

@@ -9,8 +9,8 @@
   <meta name="theme-color" content="#0b0d0c">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self' https://auth.robokassa.ru">
   <link rel="stylesheet" href="/styles.css?v=20260714-b2">
-  <link rel="stylesheet" href="/app.css?v=20260714-b4">
-  <script src="/app.js?v=20260714-b2" defer></script>
+  <link rel="stylesheet" href="/app.css?v=20260714-c1">
+  <script src="/app.js?v=20260714-c1" defer></script>
 </head>
 <body class="web-app-body">
   <div class="web-app-shell">
@@ -35,10 +35,10 @@
       <div class="sidebar-bottom">
         <button class="balance-card" id="open-payment" type="button">
           <span><small>Баланс</small><strong><span id="sidebar-balance">—</span> кр</strong></span>
-          <span class="balance-plus" aria-hidden="true">＋</span>
+          <span class="balance-plus">Пополнить</span>
         </button>
         <div class="account-card" id="account-card" hidden>
-          <span><small>Аккаунт</small><strong id="account-name">—</strong></span>
+          <span class="account-identity"><span class="account-avatar" id="account-avatar" aria-hidden="true">P</span><strong id="account-name">—</strong></span>
           <button id="logout-button" type="button">Выйти</button>
         </div>
         <p class="session-note">Баланс привязан к подтверждённому аккаунту Telegram, MAX или Яндекс.</p>
@@ -58,11 +58,11 @@
         <div class="welcome-card" id="welcome-card">
           <p class="eyebrow">Photozhab AI</p>
           <h1>Что создадим?</h1>
-          <p>Опиши идею обычными словами. Выбери модель и формат — стоимость видна до запуска.</p>
+          <p>Опиши идею обычными словами — модель, формат и стоимость выбираются в панели ниже.</p>
           <div class="prompt-suggestions" id="prompt-suggestions">
-            <button type="button">Кинематографичный портрет в неоновом городе</button>
-            <button type="button">Предметная фотография аромата на чёрном камне</button>
-            <button type="button">Уютный дом в лесу после летнего дождя</button>
+            <button type="button">Предметное фото аромата</button>
+            <button type="button">Дом в лесу после дождя</button>
+            <button type="button">Киберпанк-рынок ночью</button>
           </div>
         </div>
         <div class="message-list" id="message-list"></div>
@@ -76,21 +76,45 @@
         </div>
         <div class="composer" id="composer">
           <textarea id="prompt" rows="1" maxlength="2000" placeholder="Опиши изображение, которое хочешь создать…" aria-label="Описание результата"></textarea>
-          <div class="composer-toolbar">
-            <div class="composer-controls">
-              <label class="compact-select mobile-mode-select"><span class="sr-only">Режим</span><select id="mode-select" aria-label="Режим"><option value="image">Картинка</option><option value="edit">Редактировать</option><option value="video">Видео</option><option value="animate">Оживить фото</option></select></label>
-              <label class="compact-select"><span class="sr-only">Модель</span><select id="model-select" aria-label="Модель"></select></label>
-              <label class="compact-select"><span class="sr-only">Формат</span><select id="aspect-select" aria-label="Формат"><option value="portrait">9:16</option><option value="landscape">16:9</option><option value="square">1:1</option><option value="portrait_34">3:4</option><option value="landscape_43">4:3</option></select></label>
-              <label class="compact-select count-select"><span class="sr-only">Количество</span><select id="count-select" aria-label="Количество"><option value="1">1 шт.</option><option value="2">2 шт.</option><option value="3">3 шт.</option><option value="4">4 шт.</option></select></label>
-              <label class="upload-button" id="upload-button" hidden><input id="image-upload" type="file" accept="image/png,image/jpeg,image/webp"><span aria-hidden="true">＋</span> Фото</label>
+          <div class="composer-toolbar" aria-label="Параметры генерации">
+            <label class="mobile-mode-select"><span class="sr-only">Режим</span><select id="mode-select" aria-label="Режим"><option value="image">Картинка</option><option value="edit">Редактировать</option><option value="video">Видео</option><option value="animate">Оживить фото</option></select></label>
+            <label class="upload-button" id="upload-button">
+              <input id="image-upload" type="file" accept="image/png,image/jpeg,image/webp">
+              <span class="upload-glyph" aria-hidden="true"><svg viewBox="0 0 20 20" width="17" height="17" fill="none"><path d="M7.2 10.9 12.7 5.4a3 3 0 0 1 4.2 4.2l-7.1 7.1a5 5 0 0 1-7.1-7.1l7.1-7.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="sr-only">Добавить фото</span>
+            </label>
+            <div class="composer-field composer-field--models">
+              <span class="composer-field-label">Модель</span>
+              <div class="choice-row model-options" id="model-options" role="group" aria-label="Модель"></div>
+              <select class="control-native" id="model-select" aria-hidden="true" tabindex="-1"></select>
             </div>
-            <div class="send-group">
-              <span class="request-price" id="request-price">10 кр</span>
-              <button class="send-button" id="send-button" type="button" aria-label="Отправить запрос"><span aria-hidden="true">↑</span></button>
+            <div class="composer-divider" aria-hidden="true"></div>
+            <div class="composer-field composer-field--aspects">
+              <span class="composer-field-label">Формат</span>
+              <div class="choice-row aspect-options" id="aspect-options" role="group" aria-label="Формат">
+                <button class="choice-pill aspect-option is-active" type="button" data-value="portrait" aria-pressed="true"><span class="ratio-icon ratio-icon--portrait" aria-hidden="true"></span>9:16</button>
+                <button class="choice-pill aspect-option" type="button" data-value="landscape" aria-pressed="false"><span class="ratio-icon ratio-icon--landscape" aria-hidden="true"></span>16:9</button>
+                <button class="choice-pill aspect-option" type="button" data-value="square" aria-pressed="false"><span class="ratio-icon ratio-icon--square" aria-hidden="true"></span>1:1</button>
+                <button class="choice-pill aspect-option" type="button" data-value="portrait_34" aria-pressed="false"><span class="ratio-icon ratio-icon--portrait-34" aria-hidden="true"></span>3:4</button>
+                <button class="choice-pill aspect-option" type="button" data-value="landscape_43" aria-pressed="false"><span class="ratio-icon ratio-icon--landscape-43" aria-hidden="true"></span>4:3</button>
+              </div>
+              <select class="control-native" id="aspect-select" aria-hidden="true" tabindex="-1"><option value="portrait">9:16</option><option value="landscape">16:9</option><option value="square">1:1</option><option value="portrait_34">3:4</option><option value="landscape_43">4:3</option></select>
             </div>
           </div>
+          <div class="composer-footer">
+            <div class="count-select">
+              <label class="composer-field-label" for="count-range">Кол-во</label>
+              <input id="count-range" type="range" min="1" max="4" step="1" value="1">
+              <output id="count-output" for="count-range">1</output>
+              <select class="control-native" id="count-select" aria-hidden="true" tabindex="-1"><option value="1">1 шт.</option><option value="2">2 шт.</option><option value="3">3 шт.</option><option value="4">4 шт.</option></select>
+            </div>
+            <button class="send-button" id="send-button" type="button" aria-label="Создать">
+              <span class="send-button-label">Создать</span>
+              <span class="request-price" id="request-price">10 кр</span>
+              <span class="send-button-arrow" aria-hidden="true">↑</span>
+            </button>
+          </div>
         </div>
-        <p class="composer-note" id="composer-note">Нажимая «отправить», вы принимаете <a href="/oferta.html">условия сервиса</a>. AI может ошибаться.</p>
+        <p class="composer-note" id="composer-note">Нажимая «Создать», вы принимаете <a href="/oferta.html">условия сервиса</a>. AI может ошибаться.</p>
       </section>
     </main>
   </div>

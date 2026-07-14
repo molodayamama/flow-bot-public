@@ -116,10 +116,14 @@
 
 .pz-hero__image {
   z-index: -2;
-  object-fit: cover;
-  object-position: center;
+  background: center / cover no-repeat url("/assets/heroes/hero-a-creator.webp");
   filter: saturate(0.92) contrast(1.03);
 }
+
+html[data-hero-variant="b"] .pz-hero__image { background-image: url("/assets/heroes/hero-b-frog.webp"); }
+html[data-hero-variant="c"] .pz-hero__image { background-image: url("/assets/heroes/hero-c-botanical.webp"); }
+html[data-hero-variant="d"] .pz-hero__image { background-image: url("/assets/heroes/hero-d-product.webp"); }
+html[data-hero-variant="e"] .pz-hero__image { background-image: url("/assets/heroes/hero-e-cinematic.webp"); }
 
 .pz-hero__shade {
   z-index: -1;

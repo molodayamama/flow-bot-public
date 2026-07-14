@@ -24,6 +24,9 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertIn('id="image-upload"', self.html)
         self.assertIn('id="payment-dialog"', self.html)
         self.assertIn('id="prompt"', self.html)
+        self.assertIn('id="model-options"', self.html)
+        self.assertIn('id="aspect-options"', self.html)
+        self.assertIn('id="count-range"', self.html)
 
     def test_app_uses_existing_design_tokens_and_is_responsive(self) -> None:
         self.assertIn('href="/styles.css', self.html)
@@ -39,6 +42,7 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertNotIn("INTERNAL_API_TOKEN", self.html + self.js)
         self.assertNotIn("/internal/generate", self.html + self.js)
         self.assertNotIn("innerHTML", self.js)
+        self.assertIn('api("/web/api/generate"', self.js)
 
     def test_generation_is_gated_by_three_account_providers(self) -> None:
         for marker in ('id="login-telegram"', 'id="login-max"', 'id="login-yandex"'):

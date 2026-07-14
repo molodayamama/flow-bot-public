@@ -1,6 +1,34 @@
 (() => {
   "use strict";
 
+  const experiment = globalThis.PhotozhabHeroExperiment;
+  const trackExperiment = (event) => {
+    if (!experiment || !["exposure", "cta"].includes(event)) return;
+    fetch("/web/api/experiment", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      keepalive: true,
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({name: experiment.name, variant: experiment.variant, event}),
+    }).catch(() => {});
+  };
+
+  if (experiment) {
+    const exposureKey = `photozhab:${experiment.name}:exposure`;
+    try {
+      if (sessionStorage.getItem(exposureKey) !== experiment.variant) {
+        sessionStorage.setItem(exposureKey, experiment.variant);
+        trackExperiment("exposure");
+      }
+    } catch (_) {
+      trackExperiment("exposure");
+    }
+    document.querySelectorAll(".pz-actions a, .pz-landing__nav-cta").forEach((link) => {
+      link.addEventListener("click", () => trackExperiment("cta"));
+    });
+  }
+
   const video = document.querySelector("[data-showcase-video]");
   const toggle = document.querySelector("[data-video-toggle]");
   if (!(video instanceof HTMLVideoElement) || !(toggle instanceof HTMLButtonElement)) return;

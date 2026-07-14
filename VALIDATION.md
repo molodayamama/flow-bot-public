@@ -69,6 +69,28 @@ responses and a Google-media hostname allowlist. Do not commit its generated
 manifest or provider URLs/identifiers. Inspect every image and a decoded video
 frame before publishing, and strip audio plus add MP4 fast-start for autoplay.
 
+For the five-way landing hero experiment, verify every tracked file under
+`deploy/photozhab/assets/heroes/` is a 1536x960 WebP, remains reasonably small,
+and has the intended dark copy-safe area. `hero-experiment.js` must choose only
+`a` through `e`, persist only the non-identifying `pz_hero_variant` cookie, and
+preload only the assigned asset. `landing.js` may submit only `exposure` and
+`cta` to the same-origin `/web/api/experiment` endpoint. The endpoint must
+strictly allowlist the experiment/variant/event tuple, reject bodies over 512
+bytes and cross-origin requests, rate-limit by opaque session, and store no
+user id or arbitrary client payload. Run:
+
+```bash
+node --check deploy/photozhab/hero-experiment.js
+node --check deploy/photozhab/landing.js
+python -m pytest -q tests/test_photozhab_design_static.py tests/test_web_app.py
+ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,pix_fmt deploy/photozhab/assets/heroes/*.webp
+```
+
+Browser QA must confirm that the 90-day cookie keeps one variant stable across
+reloads, a different allowlisted cookie selects the corresponding asset, and
+the network loads only that hero. Aggregate conversion is measured from
+`landing_hero_exposure` and `landing_hero_cta` grouped by payload variant.
+
 When changing per-account gost upstreams, take and hash-verify a protected
 backup of the affected unit and credential files first. Test supplied upstreams
 before mutation, keep credentials in root-only `EnvironmentFile` files (0600),
@@ -109,6 +131,12 @@ media must return 401/404 for an anonymous cookie. Authentication checks must
 cover Telegram's cookie-bound one-time challenge + six-digit confirmation,
 MAX Mini App HMAC/duplicate-key/auth-date/replay rejection, Yandex OAuth
 state-cookie binding + PKCE S256, session rotation and logout invalidation.
+The Claude-reference composer additionally keeps the existing native model,
+aspect and count values as the backend source of truth while exposing expanded
+button/range controls. Verify model/format/count synchronization, request-price
+updates, image-upload transition into edit mode, the 820px desktop composer and
+the horizontal-scroll mobile control rail without substituting screenshot mock
+balance, account or history values.
 
 For browser QA, serve `deploy/photozhab/` locally and inspect desktop plus a
 390x844 viewport. Confirm the non-dismissible account gate, Telegram code form,

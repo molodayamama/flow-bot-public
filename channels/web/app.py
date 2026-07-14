@@ -458,6 +458,7 @@ class _WebAdapter:
             deps.config.rate_limit_count, deps.config.rate_limit_window_seconds
         )
         self._payment_gate = _GenerationGate(10, 60)
+        self._experiment_gate = _GenerationGate(20, 60)
         self._media = _MediaStore(deps.config)
 
     def register(self, app: web.Application) -> None:
@@ -468,6 +469,7 @@ class _WebAdapter:
         app.router.add_get("/web/api/auth/yandex/start", self.yandex_start)
         app.router.add_get("/web/api/auth/yandex/callback", self.yandex_callback)
         app.router.add_post("/web/api/auth/logout", self.logout)
+        app.router.add_post("/web/api/experiment", self.experiment)
         app.router.add_post("/web/api/generate", self.generate)
         app.router.add_post("/web/api/payment", self.payment)
         app.router.add_get("/web/api/media/{token}", self.media)
@@ -612,6 +614,37 @@ class _WebAdapter:
             "limits": {"prompt": 2000, "image_bytes": self._d.config.max_image_bytes},
         }
         return self._response(payload, session=session)
+
+    async def experiment(self, request: web.Request) -> web.Response:
+        """Record a bounded, non-identifying public landing experiment event."""
+        if not self._same_origin(request):
+            return self._response({"error": "origin_rejected"}, status=403)
+        session = self._session(request)
+        if session is None:
+            return self._response({"error": "session_unavailable"}, status=503)
+        if request.content_length is not None and request.content_length > 512:
+            return self._response({"error": "invalid_experiment"}, status=413, session=session)
+        body = await self._json_body(request)
+        name = str((body or {}).get("name") or "")
+        variant = str((body or {}).get("variant") or "")
+        event = str((body or {}).get("event") or "")
+        if (
+            name != "landing_hero"
+            or variant not in {"a", "b", "c", "d", "e"}
+            or event not in {"exposure", "cta"}
+        ):
+            return self._response({"error": "invalid_experiment"}, status=400, session=session)
+        try:
+            async with self._experiment_gate.enter(session.sid):
+                self._d.metrics.log_event(
+                    f"landing_hero_{event}",
+                    user_id=None,
+                    source="web",
+                    payload={"variant": variant},
+                )
+        except (_Busy, _RateLimited):
+            return self._response({"error": "rate_limited"}, status=429, session=session)
+        return self._response({"ok": True}, session=session)
 
     async def telegram_start(self, request: web.Request) -> web.Response:
         if not self._same_origin(request):

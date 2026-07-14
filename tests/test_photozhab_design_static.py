@@ -16,6 +16,7 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         cls.styles = (SITE / "styles.css").read_text(encoding="utf-8")
         cls.landing_css = (SITE / "landing.css").read_text(encoding="utf-8")
         cls.landing_js = (SITE / "landing.js").read_text(encoding="utf-8")
+        cls.hero_js = (SITE / "hero-experiment.js").read_text(encoding="utf-8")
         cls.app = (SITE / "app.html").read_text(encoding="utf-8")
         cls.app_css = (SITE / "app.css").read_text(encoding="utf-8")
         cls.app_js = (SITE / "app.js").read_text(encoding="utf-8")
@@ -47,8 +48,8 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertIn("@media (max-width: 480px)", self.landing_css)
 
     def test_landing_skin_is_isolated_from_legacy_public_components(self) -> None:
-        self.assertIn('href="/landing.css?v=20260714-c1"', self.home)
-        self.assertIn('src="/landing.js?v=20260714-c1"', self.home)
+        self.assertIn('href="/landing.css?v=20260714-d1"', self.home)
+        self.assertIn('src="/landing.js?v=20260714-d1"', self.home)
         self.assertNotIn("Claude Design B v2: public landing", self.styles)
         self.assertNotIn('class="price-row', self.home)
         self.assertNotIn('class="showcase-', self.home)
@@ -83,6 +84,26 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertIn("reducedMotion.matches", self.landing_js)
         self.assertIn("IntersectionObserver", self.landing_js)
 
+    def test_landing_runs_a_stable_five_way_hero_experiment(self) -> None:
+        asset_dir = SITE / "assets" / "heroes"
+        expected = {
+            "hero-a-creator.webp", "hero-b-frog.webp", "hero-c-botanical.webp",
+            "hero-d-product.webp", "hero-e-cinematic.webp",
+        }
+        self.assertIn('src="/hero-experiment.js?v=20260714-a1"', self.home)
+        self.assertIn('class="pz-hero__image" role="img"', self.home)
+        self.assertNotIn('class="pz-hero__image" src=', self.home)
+        for name in expected:
+            path = asset_dir / name
+            self.assertTrue(path.is_file(), name)
+            self.assertGreater(path.stat().st_size, 80_000, name)
+            self.assertEqual(path.read_bytes()[:4], b"RIFF", name)
+            self.assertIn(f'/assets/heroes/{name}', self.hero_js + self.landing_css)
+        self.assertIn('const variants = Object.freeze(["a", "b", "c", "d", "e"])', self.hero_js)
+        self.assertIn("Max-Age=7776000", self.hero_js)
+        self.assertIn('fetch("/web/api/experiment"', self.landing_js)
+        self.assertNotIn("localStorage", self.hero_js + self.landing_js)
+
     def test_generation_app_keeps_real_contracts_under_new_skin(self) -> None:
         for marker in (
             'id="new-chat"',
@@ -98,6 +119,12 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertIn("Claude Design B v2: generation app", self.app_css)
         self.assertIn("grid-template-columns: 264px", self.app_css)
         self.assertIn("@media (max-width: 820px)", self.app_css)
+        for marker in ('id="model-options"', 'id="aspect-options"', 'id="count-range"', 'class="send-button-label"'):
+            self.assertIn(marker, self.app)
+        self.assertIn("syncModelButtons", self.app_js)
+        self.assertIn("syncAspectButtons", self.app_js)
+        self.assertIn('if (state.mode === "image") setMode("edit")', self.app_js)
+        self.assertIn("width: min(820px", self.app_css)
 
     def test_admin_uses_b_v2_tokens_without_mocking_live_values(self) -> None:
         for tab in (
