@@ -9,6 +9,10 @@ const state = {
   maxAuthAttempted: false,
   initialized: false,
   history: [],
+  gallery: [],
+  galleryFilter: "all",
+  galleryOpen: false,
+  selectedPack: null,
 };
 
 const launchHash = new URLSearchParams(window.location.hash.slice(1));
@@ -37,13 +41,18 @@ const elements = {
   accountName: $("#account-name"), accountAvatar: $("#account-avatar"), logout: $("#logout-button"),
   mobileAccount: $("#mobile-account"),
   historyList: $("#chat-history-list"), historyEmpty: $("#chat-history-empty"),
+  welcomeTitle: $("#welcome-title"), welcomeCopy: $("#welcome-copy"),
+  galleryView: $("#gallery-view"), galleryGrid: $("#gallery-grid"), galleryEmpty: $("#gallery-empty"),
+  composerWrap: $(".composer-wrap"), galleryButton: $("#open-gallery"),
+  paymentBalance: $("#payment-current-balance"), paymentSubmit: $("#payment-submit"),
+  telegramSlots: $("#telegram-code-slots"),
 };
 
 const modeCopy = {
-  image: ["Генерация картинки", "Nano Banana создаст изображение по описанию", "Опиши изображение, которое хочешь создать…"],
-  edit: ["Редактирование фото", "Загрузи фото и опиши нужные изменения", "Что нужно изменить на фотографии?"],
-  video: ["Генерация видео", "Veo или Omni создаст ролик по описанию", "Опиши сцену, движение камеры и атмосферу…"],
-  animate: ["Оживление фото", "Загрузи фото и опиши желаемое движение", "Как должно ожить это фото?"],
+  image: ["Генерация картинки", "Nano Banana создаст изображение по описанию", "Опиши изображение, которое хочешь создать…", "Что создадим?", "Опиши идею обычными словами — модель, формат и стоимость выбираются в панели ниже."],
+  edit: ["Редактирование фото", "Загрузи фото и опиши нужные изменения", "Что нужно изменить на фотографии?", "Что изменим?", "Добавь фотографию и опиши нужный результат — модель сохранит важные детали кадра."],
+  video: ["Генерация видео", "Veo или Omni создаст ролик по описанию", "Опиши сцену, движение камеры и атмосферу…", "Какое видео снимем?", "Опиши сцену, движение камеры и атмосферу — стоимость видна до запуска."],
+  animate: ["Оживление фото", "Загрузи фото и опиши желаемое движение", "Как должно ожить это фото?", "Как оживим фото?", "Добавь фотографию и расскажи, какое движение должно появиться в кадре."],
 };
 
 async function api(path, options = {}) {
@@ -68,6 +77,7 @@ function setBalance(value) {
   const balance = Number.isFinite(Number(value)) ? Number(value) : 0;
   elements.sidebarBalance.textContent = String(balance);
   elements.mobileBalance.textContent = String(balance);
+  if (elements.paymentBalance) elements.paymentBalance.textContent = `${balance} кр`;
   if (state.session) state.session.balance = balance;
 }
 
@@ -150,13 +160,16 @@ function clearUpload() {
 
 function setMode(mode) {
   if (!modeCopy[mode] || state.busy) return;
+  closeGallery();
   state.mode = mode;
   elements.mode.value = mode;
   document.querySelectorAll(".mode-nav-button").forEach((button) => button.classList.toggle("is-active", button.dataset.mode === mode));
-  const [title, subtitle, placeholder] = modeCopy[mode];
+  const [title, subtitle, placeholder, welcomeTitle, welcomeCopy] = modeCopy[mode];
   elements.title.textContent = title;
   elements.subtitle.textContent = subtitle;
   elements.prompt.placeholder = placeholder;
+  elements.welcomeTitle.textContent = welcomeTitle;
+  elements.welcomeCopy.textContent = welcomeCopy;
   const needsImage = mode === "edit" || mode === "animate";
   elements.uploadButton.hidden = mode === "video";
   elements.countWrap.hidden = mode !== "image";
@@ -201,6 +214,61 @@ function rememberRequest(prompt) {
       elements.prompt.focus();
     });
     elements.historyList.append(button);
+  });
+}
+
+function closeGallery() {
+  state.galleryOpen = false;
+  if (elements.galleryView) elements.galleryView.hidden = true;
+  if (elements.composerWrap) elements.composerWrap.hidden = false;
+  elements.messages.hidden = false;
+  elements.welcome.hidden = elements.messages.childElementCount > 0;
+  if (elements.galleryButton) elements.galleryButton.classList.remove("is-active");
+}
+
+function showGallery() {
+  state.galleryOpen = true;
+  elements.welcome.hidden = true;
+  elements.messages.hidden = true;
+  elements.galleryView.hidden = false;
+  elements.composerWrap.hidden = true;
+  document.querySelectorAll(".mode-nav-button").forEach((button) => button.classList.remove("is-active"));
+  elements.galleryButton.classList.add("is-active");
+  renderGallery();
+}
+
+function renderGallery() {
+  const items = state.gallery.filter((item) => state.galleryFilter === "all" || item.type === state.galleryFilter);
+  elements.galleryGrid.replaceChildren();
+  elements.galleryEmpty.hidden = items.length > 0;
+  items.forEach((item) => {
+    const article = document.createElement("article");
+    article.className = "gallery-card";
+    const frame = document.createElement("div");
+    frame.className = "gallery-card__frame";
+    let media;
+    if (item.type === "video") {
+      media = document.createElement("video");
+      media.src = item.url; media.muted = true; media.playsInline = true; media.preload = "metadata";
+      media.setAttribute("aria-label", "Видео, созданное Photozhab");
+      const badge = document.createElement("span"); badge.className = "gallery-card__badge"; badge.textContent = "▶ видео"; frame.append(badge);
+    } else {
+      media = document.createElement("img"); media.src = item.url; media.alt = "Работа, созданная Photozhab"; media.loading = "lazy";
+    }
+    frame.append(media);
+    const footer = document.createElement("div");
+    footer.className = "gallery-card__footer";
+    const meta = document.createElement("span"); meta.textContent = item.meta;
+    const actions = document.createElement("span");
+    const open = document.createElement("a"); open.href = item.url; open.target = "_blank"; open.rel = "noopener"; open.title = "Открыть"; open.textContent = "↗";
+    const repeat = document.createElement("button"); repeat.type = "button"; repeat.title = "Повторить запрос"; repeat.textContent = "↻";
+    repeat.addEventListener("click", () => {
+      setMode(item.mode);
+      elements.prompt.value = item.prompt;
+      resizePrompt();
+      elements.prompt.focus();
+    });
+    actions.append(open, repeat); footer.append(meta, actions); article.append(frame, footer); elements.galleryGrid.append(article);
   });
 }
 
@@ -255,6 +323,7 @@ async function startTelegramLogin() {
     const result = await api("/web/api/auth/telegram/start", {method: "POST", body: "{}"});
     elements.telegramForm.hidden = false;
     elements.telegramCode.value = "";
+    renderTelegramCode();
     sessionStorage.setItem(TELEGRAM_PENDING_KEY, String(Date.now()));
     if (popup) popup.location.href = result.url;
     else {
@@ -268,6 +337,16 @@ async function startTelegramLogin() {
   } finally {
     elements.telegramLogin.disabled = false;
   }
+}
+
+function renderTelegramCode() {
+  const value = elements.telegramCode.value.replace(/\D/g, "").slice(0, 6);
+  if (elements.telegramCode.value !== value) elements.telegramCode.value = value;
+  elements.telegramSlots.querySelectorAll("span").forEach((slot, index) => {
+    const digit = value[index];
+    slot.textContent = digit || "•";
+    slot.classList.toggle("is-filled", Boolean(digit));
+  });
 }
 
 async function completeTelegramLogin(event) {
@@ -358,21 +437,37 @@ function message(role, text, sourceImage = null) {
 
 function loadingMessage() {
   const item = message("assistant", "");
-  const typing = document.createElement("span");
-  typing.className = "typing";
-  typing.setAttribute("aria-label", "Генерация выполняется");
-  typing.append(document.createElement("i"), document.createElement("i"), document.createElement("i"));
-  item.content.append(typing);
+  const intro = document.createElement("p");
+  const isVideo = state.mode === "video" || state.mode === "animate";
+  intro.textContent = isVideo ? "Создаю видео — это обычно занимает несколько минут." : "Создаю результат — картинка обычно готова примерно за 1 минуту.";
+  item.content.append(intro);
+  const grid = document.createElement("div");
+  grid.className = "generation-progress-grid";
+  const count = state.mode === "image" ? Number(elements.count.value || 1) : 1;
+  for (let index = 0; index < count; index += 1) {
+    const card = document.createElement("div");
+    card.className = "generation-progress-card";
+    card.style.setProperty("--delay", `${index * 0.24}s`);
+    const shimmer = document.createElement("span"); shimmer.className = "generation-progress-card__shimmer";
+    const copy = document.createElement("span"); copy.className = "generation-progress-card__copy";
+    const mark = document.createElement("b"); mark.textContent = "✦";
+    const label = document.createElement("strong"); label.textContent = index === 0 ? "Создаём…" : `Вариант ${index + 1} в очереди`;
+    const hint = document.createElement("small"); hint.textContent = isVideo ? "видео обрабатывается" : "примерно 1 минута";
+    copy.append(mark, label, hint);
+    const progress = document.createElement("span"); progress.className = "generation-progress-card__bar";
+    card.append(shimmer, copy, progress); grid.append(card);
+  }
+  item.content.append(grid);
   const meta = document.createElement("div");
   meta.className = "message-meta";
-  meta.textContent = state.mode === "video" || state.mode === "animate" ? "Видео обычно занимает несколько минут" : "Создаю результат";
+  meta.textContent = `${requestPrice()} кр зарезервированы — вернутся при технической ошибке`;
   item.content.append(meta);
   return item;
 }
 
 function scrollBottom() { requestAnimationFrame(() => { elements.conversation.scrollTop = elements.conversation.scrollHeight; }); }
 
-function renderResult(target, payload) {
+function renderResult(target, payload, request) {
   target.content.replaceChildren();
   const intro = document.createElement("p");
   intro.textContent = "Готово. Результат можно открыть или сохранить:";
@@ -389,16 +484,56 @@ function renderResult(target, payload) {
       node = document.createElement("img"); node.alt = "Изображение, созданное Photozhab"; node.loading = "lazy";
     }
     node.src = media.url;
+    const actions = document.createElement("div"); actions.className = "media-result-actions";
     const link = document.createElement("a");
-    link.className = "media-result-action"; link.href = media.url; link.target = "_blank"; link.rel = "noopener"; link.textContent = "Открыть ↗";
-    figure.append(node, link); grid.append(figure);
+    link.href = media.url; link.target = "_blank"; link.rel = "noopener"; link.download = ""; link.textContent = "↓ Скачать";
+    actions.append(link);
+    if (media.type !== "video") {
+      const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "✎ Изменить";
+      edit.addEventListener("click", () => useResultAsSource(media.url, "edit"));
+      const animate = document.createElement("button"); animate.type = "button"; animate.textContent = "◉ Оживить";
+      animate.addEventListener("click", () => useResultAsSource(media.url, "animate"));
+      actions.append(edit, animate);
+    }
+    figure.append(node, actions); grid.append(figure);
+    state.gallery.unshift({
+      type: media.type === "video" ? "video" : "image",
+      url: media.url,
+      prompt: request.prompt,
+      mode: request.mode,
+      meta: `${request.modelLabel} · ${request.aspectLabel}`,
+    });
   });
   target.content.append(grid);
   const meta = document.createElement("div");
   meta.className = "message-meta"; meta.textContent = `Списано ${payload.charged} кр · баланс ${payload.balance} кр`;
   target.content.append(meta);
   setBalance(payload.balance);
+  if (state.galleryOpen) renderGallery();
   scrollBottom();
+}
+
+async function useResultAsSource(url, mode) {
+  try {
+    const response = await fetch(url, {credentials: "same-origin"});
+    if (!response.ok) throw new Error("media_unavailable");
+    const blob = await response.blob();
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+    setMode(mode);
+    state.imageData = dataUrl;
+    state.imageName = "Результат Photozhab";
+    elements.uploadImage.src = dataUrl;
+    elements.uploadName.textContent = state.imageName;
+    elements.uploadPreview.hidden = false;
+    elements.prompt.focus();
+  } catch (_) {
+    toast("Откройте результат и загрузите его как референс");
+  }
 }
 
 const errorMessages = {
@@ -419,24 +554,38 @@ async function generate() {
   if ((state.mode === "edit" || state.mode === "animate") && !state.imageData) { toast("Сначала добавьте фотографию"); elements.uploadInput.click(); return; }
   state.busy = true; elements.send.disabled = true;
   rememberRequest(prompt);
-  message("user", prompt, state.imageData);
+  const model = selectedModel();
+  const userMessage = message("user", prompt, state.imageData);
+  const userMeta = document.createElement("div");
+  userMeta.className = "message-meta";
+  userMeta.textContent = `${model.label} · ${elements.aspect.options[elements.aspect.selectedIndex]?.textContent || elements.aspect.value} · ${requestPrice()} кр`;
+  userMessage.content.append(userMeta);
   const pending = loadingMessage();
   elements.prompt.value = ""; resizePrompt();
   try {
-    const model = selectedModel();
     const payload = await api("/web/api/generate", {method: "POST", body: JSON.stringify({
       mode: state.mode, prompt, aspect: elements.aspect.value, count: Number(elements.count.value),
       image_model: state.mode === "image" || state.mode === "edit" ? model.id : undefined,
       video_model: state.mode === "video" || state.mode === "animate" ? model.id : undefined,
       image_b64: state.imageData,
     })});
-    renderResult(pending, payload);
+    renderResult(pending, payload, {
+      prompt,
+      mode: state.mode,
+      modelLabel: model.label,
+      aspectLabel: elements.aspect.options[elements.aspect.selectedIndex]?.textContent || elements.aspect.value,
+    });
     if (state.mode === "edit" || state.mode === "animate") clearUpload();
   } catch (error) {
     pending.content.replaceChildren();
+    const errorBox = document.createElement("div");
+    errorBox.className = "generation-error";
+    const title = document.createElement("strong"); title.textContent = "Не получилось создать";
     const paragraph = document.createElement("p");
     paragraph.textContent = errorMessages[error.message] || "Сервис временно недоступен. Кредиты не списаны.";
-    pending.content.append(paragraph);
+    const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "Изменить запрос";
+    retry.addEventListener("click", () => { elements.prompt.value = prompt; resizePrompt(); elements.prompt.focus(); });
+    errorBox.append(title, paragraph, retry); pending.content.append(errorBox);
     if (error.payload && Number.isFinite(Number(error.payload.balance))) setBalance(error.payload.balance);
     if (error.message === "insufficient_credits") openPayment();
     if (error.message === "auth_required") applyAuthState();
@@ -451,17 +600,36 @@ function renderPacks() {
   const packs = state.session?.packs || [];
   elements.packs.replaceChildren();
   if (!packs.length) { const p = document.createElement("p"); p.textContent = "Оплата временно недоступна."; elements.packs.append(p); return; }
+  state.selectedPack = packs.find((pack) => pack.best) || packs[0];
   packs.forEach((pack) => {
     const button = document.createElement("button"); button.type = "button"; button.className = `pack-button${pack.best ? " is-best" : ""}`;
+    button.dataset.packId = pack.id;
     const copy = document.createElement("span"); const strong = document.createElement("strong"); strong.textContent = `${pack.credits} кр`;
-    const hint = document.createElement("span"); hint.textContent = `≈ ${Math.floor(pack.credits / 10)} изображений`; copy.append(strong, hint);
+    const hint = document.createElement("span");
+    hint.textContent = Number(pack.credits) === 45
+      ? "только картинки: примерно 4 изображения"
+      : `примерно ${Math.floor(pack.credits / 10)} картинок или ${Math.max(1, Math.floor(pack.credits / 50))} коротких видео`;
+    copy.append(strong, hint);
     const price = document.createElement("em"); price.textContent = `${pack.rub} ₽`; button.append(copy, price);
-    button.addEventListener("click", () => beginPayment(pack.id, button)); elements.packs.append(button);
+    button.addEventListener("click", () => selectPack(pack)); elements.packs.append(button);
   });
+  selectPack(state.selectedPack);
+}
+
+function selectPack(pack) {
+  state.selectedPack = pack;
+  elements.packs.querySelectorAll(".pack-button").forEach((button) => {
+    const selected = button.dataset.packId === pack.id;
+    button.classList.toggle("is-selected", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+  elements.paymentSubmit.disabled = false;
+  elements.paymentSubmit.textContent = `Оплатить ${pack.rub} ₽ → +${pack.credits} кр`;
 }
 
 function openPayment() {
   if (!state.session?.authenticated) { applyAuthState(); return; }
+  setBalance(state.session.balance);
   renderPacks(); if (!elements.dialog.open) elements.dialog.showModal();
 }
 
@@ -546,14 +714,29 @@ elements.uploadInput.addEventListener("change", () => {
   reader.readAsDataURL(file);
 });
 $("#remove-upload").addEventListener("click", clearUpload);
-$("#new-chat").addEventListener("click", () => { elements.messages.replaceChildren(); elements.welcome.hidden = false; clearUpload(); elements.prompt.value = ""; resizePrompt(); });
+$("#new-chat").addEventListener("click", () => { closeGallery(); elements.messages.replaceChildren(); elements.welcome.hidden = false; clearUpload(); elements.prompt.value = ""; resizePrompt(); });
+elements.galleryButton.addEventListener("click", showGallery);
+$("#gallery-create").addEventListener("click", () => { setMode("image"); elements.prompt.focus(); });
+document.querySelectorAll("[data-gallery-filter]").forEach((button) => button.addEventListener("click", () => {
+  state.galleryFilter = button.dataset.galleryFilter;
+  document.querySelectorAll("[data-gallery-filter]").forEach((item) => {
+    const active = item === button;
+    item.classList.toggle("is-active", active);
+    item.setAttribute("aria-pressed", String(active));
+  });
+  renderGallery();
+}));
 $("#open-payment").addEventListener("click", openPayment);
 $("#mobile-payment").addEventListener("click", openPayment);
 $("#close-payment").addEventListener("click", () => elements.dialog.close());
+elements.paymentSubmit.addEventListener("click", () => {
+  if (state.selectedPack) beginPayment(state.selectedPack.id, elements.paymentSubmit);
+});
 elements.dialog.addEventListener("click", (event) => { if (event.target === elements.dialog) elements.dialog.close(); });
 elements.authDialog.addEventListener("cancel", (event) => event.preventDefault());
 elements.telegramLogin.addEventListener("click", startTelegramLogin);
 elements.telegramForm.addEventListener("submit", completeTelegramLogin);
+elements.telegramCode.addEventListener("input", renderTelegramCode);
 elements.yandexLogin.addEventListener("click", handleYandexLogin);
 elements.logout.addEventListener("click", logoutUser);
 elements.mobileAccount.addEventListener("click", () => {

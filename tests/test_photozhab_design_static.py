@@ -37,6 +37,7 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
             'id="showcase-title"',
             'id="steps-title"',
             'id="prices"',
+            'class="pz-section pz-messengers"',
             'id="faq"',
             'class="pz-cta"',
             'class="pz-footer"',
@@ -48,8 +49,8 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertIn("@media (max-width: 480px)", self.landing_css)
 
     def test_landing_skin_is_isolated_from_legacy_public_components(self) -> None:
-        self.assertIn('href="/landing.css?v=20260714-d1"', self.home)
-        self.assertIn('src="/landing.js?v=20260714-d1"', self.home)
+        self.assertIn('href="/landing.css?v=20260715-a1"', self.home)
+        self.assertIn('src="/landing.js?v=20260715-a1"', self.home)
         self.assertNotIn("Claude Design B v2: public landing", self.styles)
         self.assertNotIn('class="price-row', self.home)
         self.assertNotIn('class="showcase-', self.home)
@@ -83,6 +84,22 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertIn("prefers-reduced-motion: reduce", self.landing_css)
         self.assertIn("reducedMotion.matches", self.landing_js)
         self.assertIn("IntersectionObserver", self.landing_js)
+
+    def test_final_archive_hero_and_messenger_composition_are_complete(self) -> None:
+        self.assertIn("Идея → картинка<br>за 1 минуту", self.home)
+        self.assertNotIn("за 9 секунд", self.home)
+        self.assertNotIn("~12 сек", self.home)
+        for marker in (
+            'class="pz-demo"',
+            '/assets/showcase/neon.webp',
+            'id="messengers-title"',
+            'class="pz-phone"',
+            '/assets/showcase/motion.webp',
+            'class="pz-sticky-cta"',
+        ):
+            self.assertIn(marker, self.home)
+        self.assertIn("@keyframes pz-demo-image", self.landing_css)
+        self.assertIn(".pz-messengers__grid", self.landing_css)
 
     def test_landing_runs_a_stable_five_way_hero_experiment(self) -> None:
         asset_dir = SITE / "assets" / "heroes"
@@ -121,10 +138,16 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertIn("@media (max-width: 820px)", self.app_css)
         for marker in ('id="model-options"', 'id="aspect-options"', 'id="count-range"', 'class="send-button-label"'):
             self.assertIn(marker, self.app)
+        for marker in ('id="open-gallery"', 'id="gallery-view"', 'id="gallery-grid"', 'id="payment-submit"'):
+            self.assertIn(marker, self.app)
         self.assertIn("syncModelButtons", self.app_js)
         self.assertIn("syncAspectButtons", self.app_js)
+        self.assertIn("renderGallery", self.app_js)
+        self.assertIn("state.gallery.unshift", self.app_js)
+        self.assertIn("selectPack", self.app_js)
         self.assertIn('if (state.mode === "image") setMode("edit")', self.app_js)
         self.assertIn("width: min(820px", self.app_css)
+        self.assertIn(".generation-progress-card", self.app_css)
 
     def test_admin_uses_b_v2_tokens_without_mocking_live_values(self) -> None:
         for tab in (
@@ -137,6 +160,8 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertIn("--font-display:", self.admin)
         self.assertIn('id="stat-rev-today">—</div>', self.admin)
         self.assertIn('id="stat-rev-total">—</div>', self.admin)
+        self.assertIn('<span class="sb-icon">▣</span> Обзор', self.admin)
+        self.assertNotIn('<span class="sb-icon">📊</span>', self.admin)
         self.assertIn("@media(max-width:760px)", self.admin)
 
 

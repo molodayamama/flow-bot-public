@@ -9,14 +9,14 @@
   <meta name="theme-color" content="#0b0d0c">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self' https://auth.robokassa.ru">
   <link rel="stylesheet" href="/styles.css?v=20260714-b2">
-  <link rel="stylesheet" href="/app.css?v=20260714-c1">
-  <script src="/app.js?v=20260714-c1" defer></script>
+  <link rel="stylesheet" href="/app.css?v=20260715-a1">
+  <script src="/app.js?v=20260715-a1" defer></script>
 </head>
 <body class="web-app-body">
   <div class="web-app-shell">
     <aside class="app-sidebar" aria-label="Режимы генерации">
       <a class="brand app-brand" href="/" aria-label="Photozhab — на главную">
-        <span class="brand-mark" aria-hidden="true">P</span>
+        <span class="brand-mark" aria-hidden="true"><svg width="17" height="17" viewBox="0 0 32 32"><ellipse cx="16" cy="20" rx="12" ry="9.5" fill="currentColor"></ellipse><circle cx="9.5" cy="9.5" r="5.5" fill="currentColor"></circle><circle cx="22.5" cy="9.5" r="5.5" fill="currentColor"></circle><circle cx="9.5" cy="9" r="2.2" fill="#d3f36b"></circle><circle cx="22.5" cy="9" r="2.2" fill="#d3f36b"></circle><path d="M10 22 Q16 26 22 22" stroke="#d3f36b" stroke-width="1.8" fill="none" stroke-linecap="round"></path></svg></span>
         <span>Photozhab</span>
       </a>
       <button class="new-chat-button" id="new-chat" type="button"><span aria-hidden="true">＋</span> Новый чат</button>
@@ -25,9 +25,10 @@
         <button class="mode-nav-button" type="button" data-mode="edit"><span>◫</span><span><strong>Редактировать</strong><small>загруженное фото</small></span></button>
         <button class="mode-nav-button" type="button" data-mode="video"><span>▶</span><span><strong>Видео</strong><small>по описанию</small></span></button>
         <button class="mode-nav-button" type="button" data-mode="animate"><span>◉</span><span><strong>Оживить фото</strong><small>фото в видео</small></span></button>
+        <button class="mode-nav-button" id="open-gallery" type="button"><span>▦</span><span><strong>Мои работы</strong><small>галерея этой вкладки</small></span></button>
       </nav>
       <section class="chat-history" aria-labelledby="chat-history-title">
-        <h2 id="chat-history-title">История</h2>
+        <p class="chat-history-label" id="chat-history-title">История</p>
         <div class="chat-history-list" id="chat-history-list">
           <p class="chat-history-empty" id="chat-history-empty">Запросы текущей вкладки появятся здесь</p>
         </div>
@@ -48,7 +49,7 @@
 
     <main class="chat-main">
       <header class="chat-topbar">
-        <a class="mobile-brand" href="/" aria-label="Photozhab — на главную"><span class="brand-mark">P</span></a>
+        <a class="mobile-brand" href="/" aria-label="Photozhab — на главную"><span class="brand-mark"><svg width="18" height="18" viewBox="0 0 32 32" aria-hidden="true"><ellipse cx="16" cy="20" rx="12" ry="9.5" fill="currentColor"></ellipse><circle cx="9.5" cy="9.5" r="5.5" fill="currentColor"></circle><circle cx="22.5" cy="9.5" r="5.5" fill="currentColor"></circle><circle cx="9.5" cy="9" r="2.2" fill="#d3f36b"></circle><circle cx="22.5" cy="9" r="2.2" fill="#d3f36b"></circle><path d="M10 22 Q16 26 22 22" stroke="#d3f36b" stroke-width="1.8" fill="none" stroke-linecap="round"></path></svg></span></a>
         <div class="chat-title"><strong id="chat-mode-title">Генерация картинки</strong><span id="chat-mode-subtitle">Nano Banana создаст изображение по описанию</span></div>
         <button class="mobile-balance" id="mobile-payment" type="button"><span id="mobile-balance-value">—</span> кр <span aria-hidden="true">＋</span></button>
         <button class="mobile-account" id="mobile-account" type="button" aria-label="Аккаунт">Войти</button>
@@ -57,15 +58,37 @@
       <section class="conversation" id="conversation" aria-live="polite">
         <div class="welcome-card" id="welcome-card">
           <p class="eyebrow">Photozhab AI</p>
-          <h1>Что создадим?</h1>
-          <p>Опиши идею обычными словами — модель, формат и стоимость выбираются в панели ниже.</p>
+          <h1 id="welcome-title">Что создадим?</h1>
+          <p id="welcome-copy">Опиши идею обычными словами — модель, формат и стоимость выбираются в панели ниже.</p>
           <div class="prompt-suggestions" id="prompt-suggestions">
-            <button type="button">Предметное фото аромата</button>
-            <button type="button">Дом в лесу после дождя</button>
-            <button type="button">Киберпанк-рынок ночью</button>
+            <div class="prompt-suggestions__track">
+              <button type="button">Предметное фото аромата</button>
+              <button type="button">Дом в лесу после дождя</button>
+              <button type="button">Киберпанк-рынок ночью</button>
+              <button type="button">Портрет в мягком студийном свете</button>
+              <button type="button">Кот-космонавт, акварель</button>
+              <button type="button">Рекламный кадр кроссовок</button>
+            </div>
           </div>
         </div>
         <div class="message-list" id="message-list"></div>
+        <section class="gallery-view" id="gallery-view" aria-labelledby="gallery-title" hidden>
+          <div class="gallery-head">
+            <div><p class="eyebrow">Текущая вкладка</p><h2 id="gallery-title">Мои работы</h2></div>
+            <div class="gallery-filters" role="group" aria-label="Фильтр работ">
+              <button class="is-active" type="button" data-gallery-filter="all" aria-pressed="true">Все</button>
+              <button type="button" data-gallery-filter="image" aria-pressed="false">Картинки</button>
+              <button type="button" data-gallery-filter="video" aria-pressed="false">Видео</button>
+            </div>
+          </div>
+          <div class="gallery-grid" id="gallery-grid"></div>
+          <div class="gallery-empty" id="gallery-empty">
+            <span class="gallery-empty__frog" aria-hidden="true"><svg width="46" height="46" viewBox="0 0 32 32"><ellipse cx="16" cy="20" rx="12" ry="9.5" fill="currentColor"></ellipse><circle cx="9.5" cy="9.5" r="5.5" fill="currentColor"></circle><circle cx="22.5" cy="9.5" r="5.5" fill="currentColor"></circle><circle cx="9.5" cy="9" r="2.2" fill="#0b0d0c"></circle><circle cx="22.5" cy="9" r="2.2" fill="#0b0d0c"></circle><path d="M10 22 Q16 26 22 22" stroke="#0b0d0c" stroke-width="1.8" fill="none" stroke-linecap="round"></path></svg></span>
+            <h2>Пока пусто</h2>
+            <p>Работы, созданные в этой вкладке, появятся здесь. Их можно будет открыть или повторить.</p>
+            <button id="gallery-create" type="button">Создать первую работу</button>
+          </div>
+        </section>
       </section>
 
       <section class="composer-wrap" aria-label="Новый запрос">
@@ -99,8 +122,7 @@
               </div>
               <select class="control-native" id="aspect-select" aria-hidden="true" tabindex="-1"><option value="portrait">9:16</option><option value="landscape">16:9</option><option value="square">1:1</option><option value="portrait_34">3:4</option><option value="landscape_43">4:3</option></select>
             </div>
-          </div>
-          <div class="composer-footer">
+            <div class="composer-divider" aria-hidden="true"></div>
             <div class="count-select">
               <label class="composer-field-label" for="count-range">Кол-во</label>
               <input id="count-range" type="range" min="1" max="4" step="1" value="1">
@@ -121,7 +143,7 @@
 
   <dialog class="auth-dialog" id="auth-dialog" aria-labelledby="auth-title">
     <div class="auth-panel">
-      <span class="welcome-mark auth-mark" aria-hidden="true">P</span>
+      <span class="welcome-mark auth-mark" aria-hidden="true"><svg width="27" height="27" viewBox="0 0 32 32"><ellipse cx="16" cy="20" rx="12" ry="9.5" fill="currentColor"></ellipse><circle cx="9.5" cy="9.5" r="5.5" fill="currentColor"></circle><circle cx="22.5" cy="9.5" r="5.5" fill="currentColor"></circle><circle cx="9.5" cy="9" r="2.2" fill="#d3f36b"></circle><circle cx="22.5" cy="9" r="2.2" fill="#d3f36b"></circle><path d="M10 22 Q16 26 22 22" stroke="#d3f36b" stroke-width="1.8" fill="none" stroke-linecap="round"></path></svg></span>
       <p class="eyebrow">Безопасный вход</p>
       <h2 id="auth-title">Войдите, чтобы создавать</h2>
       <p class="auth-copy">Генерация, баланс и оплата доступны только после подтверждения аккаунта. Пароли Photozhab не получает.</p>
@@ -132,7 +154,11 @@
       </div>
       <form class="telegram-code" id="telegram-code-form" hidden>
         <p>Бот пришлёт одноразовый шестизначный код. Введите его здесь:</p>
-        <div><input id="telegram-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="000000" aria-label="Код из Telegram"><button type="submit">Подтвердить</button></div>
+        <div class="telegram-code-entry">
+          <div class="telegram-code-slots" id="telegram-code-slots" aria-hidden="true"><span>•</span><span>•</span><span>•</span><span>•</span><span>•</span><span>•</span></div>
+          <input id="telegram-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" aria-label="Шестизначный код из Telegram">
+        </div>
+        <button class="telegram-code-submit" type="submit">Подтвердить и войти</button>
       </form>
       <p class="auth-note" id="auth-note">MAX-вход работает внутри официального мини-приложения Photozhab.</p>
       <p class="payment-legal">Продолжая, вы принимаете <a href="/oferta.html">оферту</a> и <a href="/privacy.html">политику конфиденциальности</a>.</p>
@@ -141,9 +167,10 @@
 
   <dialog class="payment-dialog" id="payment-dialog" aria-labelledby="payment-title">
     <div class="dialog-head"><div><p class="eyebrow">Пополнение</p><h2 id="payment-title">Пополнить баланс</h2></div><button id="close-payment" type="button" aria-label="Закрыть">×</button></div>
-    <p class="dialog-copy">Кредиты не сгорают. Оплата картой или через СБП, баланс обновится автоматически после подтверждения.</p>
+    <p class="dialog-copy">Сейчас у вас <b id="payment-current-balance">— кр</b> · кредиты не сгорают</p>
     <div class="pack-grid" id="pack-grid"></div>
-    <p class="payment-legal">Продолжая, вы принимаете <a href="/oferta.html">оферту</a>. Не закрывайте этот браузер до возврата на сайт.</p>
+    <button class="payment-submit" id="payment-submit" type="button" disabled>Выберите пакет</button>
+    <p class="payment-legal">Оплата на странице Robokassa — СБП, карта или другой способ на выбор. Баланс обновится автоматически. Нажимая «Оплатить», вы принимаете <a href="/oferta.html">оферту</a>.</p>
   </dialog>
   <div class="toast" id="toast" role="status" hidden></div>
 </body>

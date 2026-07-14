@@ -50,6 +50,13 @@ modes, session-only (non-`localStorage`) history, all twelve admin tabs and
 reload the page and confirm the browser actually loaded the new URL before
 judging the render.
 
+The final B v2 archive additionally requires the animated generation demo,
+Telegram/MAX continuation cards, the frog CTA and the mobile sticky CTA. All
+media slots must resolve to tracked first-party image/video assets. The public
+speed promise is `за 1 минуту`; stale nine/twelve-second image claims are a
+release blocker. Keep the five-way hero assignment intact and ensure the demo
+animation becomes static under `prefers-reduced-motion`.
+
 For generated landing media, run the additional offline gate:
 
 ```bash
@@ -137,6 +144,15 @@ button/range controls. Verify model/format/count synchronization, request-price
 updates, image-upload transition into edit mode, the 820px desktop composer and
 the horizontal-scroll mobile control rail without substituting screenshot mock
 balance, account or history values.
+
+The final B v2 app also requires a six-slot visual Telegram code field backed by
+one real accessible numeric input, an explicit pack-selection then payment step,
+and generation loading/error/result actions. `Мои работы` is intentionally a
+current-tab gallery: it may render only media returned by successful
+`/web/api/generate` responses, must not use `localStorage`, and must not claim
+server or cross-device history. Download/open/reuse actions must operate on the
+real response media and fail with a user-visible message when a source cannot be
+fetched.
 
 For browser QA, serve `deploy/photozhab/` locally and inspect desktop plus a
 390x844 viewport. Confirm the non-dismissible account gate, Telegram code form,

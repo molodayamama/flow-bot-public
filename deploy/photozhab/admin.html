@@ -66,7 +66,7 @@ button{font-family:var(--font-sans);cursor:pointer}
   border-bottom:0;
 }
 .sb-mark{
-  width:28px;height:28px;display:grid;place-items:center;
+  width:30px;height:30px;display:grid;place-items:center;
   border-radius:8px;background:var(--pz-lime);
   color:var(--pz-lime-ink);font-family:var(--font-display);font-weight:700;font-size:15px;flex-shrink:0;
 }
@@ -75,14 +75,15 @@ button{font-family:var(--font-sans);cursor:pointer}
 .sb-nav{flex:1;padding:0;display:flex;flex-direction:column;gap:2px}
 .sb-item{
   display:flex;align-items:center;gap:10px;
-  padding:9px 10px;border-radius:10px;
+  padding:9px 11px;border-radius:8px;
   border:none;background:transparent;color:rgba(242,239,228,.5);
   font-size:13px;font-weight:500;text-align:left;width:100%;
   transition:background var(--dur-base),color var(--dur-base);
 }
 .sb-item:hover{background:rgba(242,239,228,.04);color:var(--pz-ink)}
-.sb-item.active{background:rgba(242,239,228,.07);color:var(--pz-ink);font-weight:600}
-.sb-icon{font-size:14px;line-height:1;width:19px;text-align:center;filter:saturate(.75)}
+.sb-item.active{background:rgba(211,243,107,.09);color:var(--pz-lime);font-weight:600}
+.sb-icon{font-size:14px;line-height:1;width:18px;text-align:center;opacity:.5}
+.sb-item.active .sb-icon{opacity:.9}
 .sb-footer{
   padding:14px 6px 4px;border-top:1px solid var(--pz-line-faint);
   display:flex;flex-direction:column;gap:8px;
@@ -224,6 +225,7 @@ tr:hover td{background:var(--pz-surface-2)}
 .btn-danger:hover{background:rgba(255,123,109,.1)}
 .btn-sm{padding:5px 10px;font-size:12px}
 .btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+.btn:active:not(:disabled),.sb-item:active{transform:scale(.98)}
 
 /* ── Form fields ───────────────────────────────────── */
 .form-row{margin-bottom:14px}
@@ -444,7 +446,7 @@ tr:hover td{background:rgba(242,239,228,.025)}
   .sb-brand,.sb-footer{display:none}
   .sb-nav{display:flex;flex-direction:row;gap:4px;overflow-x:auto;scrollbar-width:none}
   .sb-nav::-webkit-scrollbar{display:none}
-  .sb-item{flex:0 0 auto;width:auto;padding:8px 11px;white-space:nowrap}
+  .sb-item{flex:0 0 auto;width:auto;min-height:44px;padding:8px 11px;white-space:nowrap}
   .main{min-height:0}
   .topbar{padding:14px 16px 0}
   .page-title{font-size:22px}.page-sub{font-size:11px}
@@ -472,7 +474,7 @@ tr:hover td{background:rgba(242,239,228,.025)}
   <!-- Sidebar -->
   <aside class="sidebar">
     <div class="sb-brand">
-      <div class="sb-mark">P</div>
+      <div class="sb-mark"><svg width="19" height="19" viewBox="0 0 32 32" aria-hidden="true"><ellipse cx="16" cy="20" rx="12" ry="9.5" fill="currentColor"></ellipse><circle cx="9.5" cy="9.5" r="5.5" fill="currentColor"></circle><circle cx="22.5" cy="9.5" r="5.5" fill="currentColor"></circle><circle cx="9.5" cy="9" r="2.2" fill="#d3f36b"></circle><circle cx="22.5" cy="9" r="2.2" fill="#d3f36b"></circle><path d="M10 22 Q16 26 22 22" stroke="#d3f36b" stroke-width="1.8" fill="none" stroke-linecap="round"></path></svg></div>
       <div>
         <div class="sb-name">Photozhab</div>
         <div class="sb-sub">Admin Panel</div>
@@ -480,41 +482,41 @@ tr:hover td{background:rgba(242,239,228,.025)}
     </div>
     <nav class="sb-nav">
       <button class="sb-item active" data-tab="overview">
-        <span class="sb-icon">📊</span> Обзор
+        <span class="sb-icon">▣</span> Обзор
       </button>
       <button class="sb-item" data-tab="accounts">
-        <span class="sb-icon">🤖</span> Аккаунты
+        <span class="sb-icon">◈</span> Аккаунты
       </button>
       <button class="sb-item" data-tab="messages">
-        <span class="sb-icon">💬</span> Сообщения
+        <span class="sb-icon">◧</span> Сообщения
       </button>
       <button class="sb-item" data-tab="labels">
-        <span class="sb-icon">🏷</span> Кнопки
+        <span class="sb-icon">◪</span> Кнопки
       </button>
       <button class="sb-item" data-tab="prices">
-        <span class="sb-icon">💰</span> Цены
+        <span class="sb-icon">◇</span> Цены
       </button>
       <button class="sb-item" data-tab="settings">
-        <span class="sb-icon">🔧</span> Настройки
+        <span class="sb-icon">⚙</span> Настройки
       </button>
       <div style="height:1px;background:var(--pz-line-faint);margin:8px 0"></div>
       <button class="sb-item" data-tab="support">
-        <span class="sb-icon">🛟</span> Support
+        <span class="sb-icon">◎</span> Support
       </button>
       <button class="sb-item" data-tab="users">
-        <span class="sb-icon">👤</span> Пользователи
+        <span class="sb-icon">◔</span> Пользователи
       </button>
       <button class="sb-item" data-tab="sellers">
-        <span class="sb-icon">🛒</span> Селлеры
+        <span class="sb-icon">◫</span> Селлеры
       </button>
       <button class="sb-item" data-tab="referrals">
-        <span class="sb-icon">🤝</span> Рефералки
+        <span class="sb-icon">◭</span> Рефералки
       </button>
       <button class="sb-item" data-tab="analytics">
-        <span class="sb-icon">📈</span> Аналитика
+        <span class="sb-icon">◮</span> Аналитика
       </button>
       <button class="sb-item" data-tab="adcalc">
-        <span class="sb-icon">📣</span> Реклама
+        <span class="sb-icon">◍</span> Реклама
       </button>
     </nav>
     <div class="sb-footer">
@@ -533,7 +535,7 @@ tr:hover td{background:rgba(242,239,228,.025)}
     </div>
     <div class="topbar">
       <div>
-        <div class="page-title" id="page-title">Обзор</div>
+        <h1 class="page-title" id="page-title">Обзор</h1>
         <div class="page-sub" id="page-sub">Статус системы и быстрая статистика</div>
       </div>
       <button class="btn btn-ghost btn-sm" id="refresh-btn">↻ Обновить</button>

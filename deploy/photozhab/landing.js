@@ -24,8 +24,24 @@
     } catch (_) {
       trackExperiment("exposure");
     }
-    document.querySelectorAll(".pz-actions a, .pz-landing__nav-cta").forEach((link) => {
+    document.querySelectorAll(".pz-actions a, .pz-landing__nav-cta, .pz-sticky-cta a").forEach((link) => {
       link.addEventListener("click", () => trackExperiment("cta"));
+    });
+  }
+
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const revealTargets = document.querySelectorAll("main > section:not(.pz-hero) > div > *, .pz-cta > div > *, .pz-footer__inner");
+  if ("IntersectionObserver" in window && !reducedMotion.matches) {
+    const revealObserver = new IntersectionObserver((entries, observer) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        entry.target.classList.add("is-visible");
+        observer.unobserve(entry.target);
+      });
+    }, {rootMargin: "0px 0px -10%", threshold: 0.05});
+    revealTargets.forEach((target) => {
+      target.classList.add("pz-reveal");
+      revealObserver.observe(target);
     });
   }
 
@@ -33,7 +49,6 @@
   const toggle = document.querySelector("[data-video-toggle]");
   if (!(video instanceof HTMLVideoElement) || !(toggle instanceof HTMLButtonElement)) return;
 
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let pausedByUser = reducedMotion.matches;
 
   const render = () => {
