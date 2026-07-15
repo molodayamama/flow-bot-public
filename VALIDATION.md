@@ -1122,3 +1122,25 @@ For the documentation bootstrap task:
 - Ingredients/Reference Veo model keys encode both tier and orientation:
   `veo_3_1_r2v_{tier}_{portrait|landscape}`. A key without the orientation was
   observed live to reach the correct endpoint but return provider HTTP 500.
+
+## 2026-07-15 — archive 3 web/runtime wave
+
+- Full offline gate: `python -m unittest discover -s tests -p 'test_*.py' -q`
+  — **1545 tests OK**. This includes the Yandex OAuth callback/grant retry,
+  atomic welcome-credit ledger, archive-3 static/accessibility contracts,
+  SEO pages, and production preflight.
+- JavaScript syntax: `node --check deploy/photozhab/app.js` — passed.
+- Production preflight: `.venv/bin/python tools/production_preflight.py
+  --root . --env-file .env` — passed.
+- Deployment: immutable `6512ea4b3700d9da72826b0ccfeb41f962b6ed0b` checked out;
+  backend services active; nginx static root synchronized and source/public
+  hashes matched; public `/`, `/app.html`, and `/generaciya-video.html` all
+  returned HTTP 200.
+- Runtime pool: exactly `sub1`, `sub4`, `sub2`; `IDLE_PARK_SEC=0`; gost
+  sub1/sub2/sub4 active+enabled; old gost account services inactive+disabled.
+  Egress checks were sanitized to status/IP only and matched the operator's
+  three supplied endpoints.
+- Browser visual QA was not claimed because the browser connector exposed no
+  available instance. When one is available, inspect `/app.html` at desktop
+  and 360px widths, especially onboarding skip placement and video controls;
+  do not generate or pay during that check.
