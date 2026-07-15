@@ -2178,6 +2178,14 @@ _agent_flow = AgentFlow(AgentFlowDeps(
 ))
 
 
+async def _web_prompt_improve(user_id: int, prompt: str, mode: str) -> dict:
+    """Expose the existing Flow creation-agent to the first-party web app."""
+    instruction_fn = _agent_edit_instruction if mode == "edit" else None
+    return await _agent_flow.improve_call(
+        int(user_id), str(prompt), instruction_fn=instruction_fn
+    )
+
+
 async def _agent_improve_flow(
     callback: types.CallbackQuery, *, user_id: int, prompt_key: str,
     source: str, pick_prefix: str, keep_data: str, rerender, edit_fn,
@@ -2534,6 +2542,7 @@ def _register_public_web(app: web.Application) -> None:
         WebAppDeps(
             config=_web_app_config,
             backend_generate=_backend_generate,
+            prompt_improve=_web_prompt_improve,
             metrics=metrics,
             credit_pack=credit_pack,
             public_pack_ids=lambda: public_pack_ids(seller=False),

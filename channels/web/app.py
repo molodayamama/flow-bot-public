@@ -151,6 +151,7 @@ class WebAppDeps:
     new_inv_id: Callable[[], int]
     payment_url: Callable[[int, str, int, str], str]
     log: Any
+    prompt_improve: Callable[[int, str, str], Awaitable[dict[str, Any]]] | None = None
 
 
 @dataclass(frozen=True)
@@ -461,6 +462,7 @@ class _WebAdapter:
         )
         self._payment_gate = _GenerationGate(10, 60)
         self._experiment_gate = _GenerationGate(20, 60)
+        self._prompt_gate = _GenerationGate(10, 60)
         self._media = _MediaStore(deps.config)
 
     def register(self, app: web.Application) -> None:
@@ -472,6 +474,7 @@ class _WebAdapter:
         app.router.add_get("/web/api/auth/yandex/callback", self.yandex_callback)
         app.router.add_post("/web/api/auth/logout", self.logout)
         app.router.add_post("/web/api/experiment", self.experiment)
+        app.router.add_post("/web/api/prompt-improve", self.prompt_improve)
         app.router.add_post("/web/api/generate", self.generate)
         app.router.add_post("/web/api/payment", self.payment)
         app.router.add_get("/web/api/media/{token}", self.media)
@@ -929,6 +932,84 @@ class _WebAdapter:
             user_id=session.internal_user_id,
             source="web",
             payload={"mode": mode, "model": image_model if mode in {"image", "edit"} else video_model, "count": count, "price": price},
+        )
+        result["balance"] = self._credits.balance(session.internal_user_id)
+        result["charged"] = price
+        return self._response(result, session=session)
+
+    @staticmethod
+    def _public_prompt_result(raw: dict[str, Any]) -> dict[str, Any]:
+        """Expose only the parsed prompt text returned by the Flow agent."""
+        if not isinstance(raw, dict) or raw.get("error"):
+            raise ValueError("backend failure")
+        variants: list[dict[str, str]] = []
+        for item in raw.get("variants") or []:
+            if not isinstance(item, dict):
+                continue
+            prompt = str(item.get("prompt") or "").strip()
+            if not 3 <= len(prompt) <= 2000:
+                continue
+            title = str(item.get("title") or "Вариант").strip()
+            variants.append({
+                "tag": (title[:64] or "Вариант"),
+                "text": prompt,
+            })
+        single = str(raw.get("single") or "").strip()
+        if not variants and 3 <= len(single) <= 2000:
+            variants.append({"tag": "Улучшенный", "text": single})
+        if not variants:
+            raise ValueError("backend returned no valid variants")
+        return {"variants": variants[:3]}
+
+    async def prompt_improve(self, request: web.Request) -> web.Response:
+        """Improve a prompt through the same Flow agent as Telegram."""
+        if not self._same_origin(request):
+            return self._response({"error": "origin_rejected"}, status=403)
+        session = self._session(request)
+        if session is None:
+            return self._response({"error": "session_unavailable"}, status=503)
+        if not session.authenticated:
+            return self._auth_required(session)
+        if self._d.prompt_improve is None:
+            return self._response(
+                {"error": "prompt_improve_unavailable"}, status=503, session=session
+            )
+        body = await self._json_body(request)
+        prompt = str((body or {}).get("prompt") or "").strip()
+        mode = str((body or {}).get("mode") or "image").strip().lower()
+        if mode not in _MODES or not 3 <= len(prompt) <= 2000:
+            return self._response({"error": "invalid_request"}, status=400, session=session)
+        price = action_price("prompt_improve")
+        try:
+            async with self._prompt_gate.enter(session.sid):
+                async with open_credit_gate(
+                    self._credits, session.internal_user_id, price
+                ) as charge:
+                    raw = await self._d.prompt_improve(
+                        session.internal_user_id, prompt, mode
+                    )
+                    result = self._public_prompt_result(raw)
+                    charge.ok = True
+        except NotEnoughCredits:
+            return self._response(
+                {
+                    "error": "insufficient_credits",
+                    "balance": self._credits.balance(session.internal_user_id),
+                    "required": price,
+                },
+                status=402,
+                session=session,
+            )
+        except (_Busy, _RateLimited):
+            return self._response({"error": "rate_limited"}, status=429, session=session)
+        except Exception:
+            self._d.log.exception("web prompt improvement failed mode=%s", mode)
+            return self._response(
+                {"error": "prompt_improve_failed"}, status=502, session=session
+            )
+        self._d.metrics.log_event(
+            "prompt_improve", user_id=session.internal_user_id, source="web",
+            payload={"mode": mode, "price": price},
         )
         result["balance"] = self._credits.balance(session.internal_user_id)
         result["charged"] = price

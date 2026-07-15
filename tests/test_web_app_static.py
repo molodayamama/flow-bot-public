@@ -88,12 +88,13 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertIn('aria-live="polite"', self.html)
         self.assertIn('aria-label="Описание результата"', self.html)
 
-    def test_archive_three_onboarding_and_prompt_helper_are_real_ui(self) -> None:
+    def test_archive_three_onboarding_and_backend_prompt_helper_are_real_ui(self) -> None:
         for marker in ('id="onboarding"', 'id="skip-onboarding"', 'id="improve-button"', 'id="improve-variants"'):
             self.assertIn(marker, self.html)
-        self.assertIn("function improvedPromptVariants()", self.js)
-        self.assertIn("бесплатно · обрабатывается в браузере", self.html)
-        self.assertNotIn("/web/api/improve", self.js)
+        self.assertIn('api("/web/api/prompt-improve"', self.js)
+        self.assertIn("AI-варианты из backend", self.html)
+        self.assertNotIn("function improvedPromptVariants()", self.js)
+        self.assertNotIn("state.improveRound", self.js)
         self.assertIn("min-height: 54px", self.css)
 
     def test_video_models_have_their_own_overflow_rail(self) -> None:

@@ -14,7 +14,6 @@ const state = {
   galleryOpen: false,
   selectedPack: null,
   onboardingStep: 0,
-  improveRound: 0,
 };
 
 const launchHash = new URLSearchParams(window.location.hash.slice(1));
@@ -23,7 +22,6 @@ if (maxInitData) history.replaceState(null, "", `${location.pathname}${location.
 const TELEGRAM_PENDING_KEY = "photozhabTelegramPendingAt";
 const TELEGRAM_PENDING_MAX_AGE = 11 * 60 * 1000;
 const ONBOARDING_KEY_PREFIX = "photozhabOnboardingV1";
-let improveTimer = 0;
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
@@ -277,7 +275,6 @@ function finishOnboarding() {
 }
 
 function closeImprove() {
-  window.clearTimeout(improveTimer);
   if (!elements.improvePanel) return;
   elements.improvePanel.hidden = true;
   elements.improveLoading.hidden = true;
@@ -292,7 +289,10 @@ function updateImproveButton() {
   elements.improveButton.hidden = elements.prompt.value.trim().length < 3 || panelOpen;
 }
 
-function improvedPromptVariants() {
+/* Legacy local prompt variants intentionally disabled: prompt improvement is backend-only. */
+function legacyPromptVariantsDisabled() {
+  return [];
+/*
   const baseRaw = elements.prompt.value.trim();
   const base = baseRaw.charAt(0).toLocaleUpperCase("ru-RU") + baseRaw.slice(1);
   const video = state.mode === "video" || state.mode === "animate";
@@ -319,11 +319,13 @@ function improvedPromptVariants() {
       ["Тёплый", ", уютный рассеянный свет, натуральные материалы, спокойная палитра, тактильные фактуры, сбалансированная композиция"],
     ],
   ];
-  return sets[state.improveRound % sets.length].map(([tag, suffix]) => ({tag, text: base + suffix}));
+  return sets[state.legacyImproveRound % sets.length].map(([tag, suffix]) => ({tag, text: base + suffix}));
+}
+*/
 }
 
-function renderImproveVariants() {
-  elements.improveVariants.replaceChildren(...improvedPromptVariants().map((item) => {
+function renderImproveVariants(items) {
+  elements.improveVariants.replaceChildren(...items.map((item) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "improve-variant";
@@ -340,19 +342,32 @@ function renderImproveVariants() {
   }));
 }
 
-function openImprove({next = false} = {}) {
-  if (elements.prompt.value.trim().length < 3) return;
-  if (next) state.improveRound += 1;
+async function openImprove() {
+  const prompt = elements.prompt.value.trim();
+  if (prompt.length < 3 || state.busy) return;
+  if (!state.session?.authenticated) { applyAuthState(); return; }
   elements.improvePanel.hidden = false;
   elements.improveButton.setAttribute("aria-expanded", "true");
   updateImproveButton();
   elements.improveVariants.replaceChildren();
   elements.improveLoading.hidden = false;
-  window.clearTimeout(improveTimer);
-  improveTimer = window.setTimeout(() => {
+  try {
+    const result = await api("/web/api/prompt-improve", {method: "POST", body: JSON.stringify({
+      prompt, mode: state.mode,
+    })});
     elements.improveLoading.hidden = true;
-    renderImproveVariants();
-  }, 320);
+    renderImproveVariants(Array.isArray(result.variants) ? result.variants : []);
+    if (Number.isFinite(Number(result.balance))) setBalance(result.balance);
+  } catch (error) {
+    elements.improveLoading.hidden = true;
+    if (error.payload && Number.isFinite(Number(error.payload.balance))) setBalance(error.payload.balance);
+    if (error.message === "insufficient_credits") openPayment();
+    else if (error.message === "auth_required") applyAuthState();
+    else toast(error.message === "prompt_improve_failed"
+      ? "Не удалось улучшить промпт. Кредиты возвращены — попробуйте ещё раз."
+      : "Не удалось получить варианты промпта.");
+    if (elements.improveVariants.childElementCount === 0) closeImprove();
+  }
 }
 
 function providerLabel(provider) {
@@ -912,7 +927,7 @@ elements.telegramForm.addEventListener("submit", completeTelegramLogin);
 elements.telegramCode.addEventListener("input", renderTelegramCode);
 elements.improveButton.addEventListener("click", () => openImprove());
 $("#close-improve").addEventListener("click", closeImprove);
-$("#regenerate-improve").addEventListener("click", () => openImprove({next: true}));
+$("#regenerate-improve").addEventListener("click", () => openImprove());
 elements.onboardingSkip.addEventListener("click", finishOnboarding);
 elements.onboardingBack.addEventListener("click", () => { state.onboardingStep = Math.max(0, state.onboardingStep - 1); renderOnboarding(); });
 elements.onboardingNext.addEventListener("click", () => {

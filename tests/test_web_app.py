@@ -137,6 +137,13 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.metrics = _Metrics()
         self.backend_calls = []
+        self.prompt_calls = []
+        self.prompt_result = {
+            "variants": [
+                {"title": "Кино", "prompt": "cinematic portrait with soft light"},
+                {"title": "Документальный", "prompt": "documentary portrait in natural light"},
+            ]
+        }
         self.backend_result = {"images": [{"url": "https://media.example/result.png"}]}
         self.backend_wait: asyncio.Event | None = None
         self.backend_started: asyncio.Event | None = None
@@ -149,6 +156,10 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
             if self.backend_wait is not None:
                 await self.backend_wait.wait()
             return self.backend_result
+
+        async def prompt_improve(user_id, prompt, mode):
+            self.prompt_calls.append((user_id, prompt, mode))
+            return self.prompt_result
 
         def payment_url(user_id, pack_id, inv_id, channel):
             self.payment_calls.append((user_id, pack_id, inv_id, channel))
@@ -169,6 +180,7 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
         deps = WebAppDeps(
             config=self.config,
             backend_generate=backend,
+            prompt_improve=prompt_improve,
             metrics=self.metrics,
             credit_pack=lambda pack: {"credits": 45, "stars": 35} if pack == "trial" else None,
             public_pack_ids=lambda: ["trial"],
@@ -274,6 +286,47 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(paid.status, 401)
         self.assertEqual(self.backend_calls, [])
         self.assertEqual(self.payment_calls, [])
+
+    async def test_prompt_improve_uses_backend_variants_and_canonical_price(self):
+        response = await self.post(
+            "/web/api/prompt-improve", {"prompt": "portrait of a fox", "mode": "image"}
+        )
+        payload = await response.json()
+        self.assertEqual(response.status, 200, payload)
+        self.assertEqual(payload["variants"][0], {"tag": "Кино", "text": "cinematic portrait with soft light"})
+        self.assertEqual(payload["charged"], 5)
+        self.assertEqual(payload["balance"], 95)
+        self.assertEqual(self.prompt_calls, [(777, "portrait of a fox", "image")])
+
+    async def test_prompt_improve_failure_refunds_and_hides_provider_body(self):
+        self.prompt_result = {"error": "provider token must not escape"}
+        response = await self.post(
+            "/web/api/prompt-improve", {"prompt": "portrait of a fox", "mode": "video"}
+        )
+        self.assertEqual(response.status, 502)
+        self.assertEqual(await response.json(), {"error": "prompt_improve_failed"})
+        internal_id = next(iter(self.metrics.credits))
+        self.assertEqual(self.metrics.credits[internal_id], 100)
+
+    async def test_prompt_improve_insufficient_balance_never_calls_backend(self):
+        internal_id = next(iter(self.metrics.credits))
+        self.metrics.credits[internal_id] = 0
+        response = await self.post(
+            "/web/api/prompt-improve", {"prompt": "portrait of a fox", "mode": "image"}
+        )
+        payload = await response.json()
+        self.assertEqual(response.status, 402)
+        self.assertEqual(payload["required"], 5)
+        self.assertEqual(self.prompt_calls, [])
+
+    async def test_prompt_improve_requires_auth_and_does_not_call_backend(self):
+        self.client.session.cookie_jar.clear()
+        await self.client.get("/web/api/session")
+        response = await self.post(
+            "/web/api/prompt-improve", {"prompt": "portrait of a fox", "mode": "image"}
+        )
+        self.assertEqual(response.status, 401)
+        self.assertEqual(self.prompt_calls, [])
 
     async def test_cross_origin_generation_is_rejected_before_backend(self):
         response = await self.post("/web/api/generate", {"mode": "image", "prompt": "safe prompt"}, origin="https://evil.test")

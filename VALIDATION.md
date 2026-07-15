@@ -1145,3 +1145,16 @@ For the documentation bootstrap task:
   available instance. When one is available, inspect `/app.html` at desktop
   and 360px widths, especially onboarding skip placement and video controls;
   do not generate or pay during that check.
+
+## 2026-07-15 — web prompt-improve backend correction
+
+- Focused web/API gate: `python -m unittest discover -s tests -p
+  'test_web_app*.py' -q` — **34 tests OK**.
+- `node --check deploy/photozhab/app.js` and `python -m py_compile
+  channels/web/app.py flow_bot.py` — passed.
+- Full offline gate: `python -m unittest discover -s tests -p 'test_*.py' -q`
+  — **1549 tests OK**.
+- The browser now calls same-origin `POST /web/api/prompt-improve`; the server
+  delegates to the existing Flow `AgentFlow.improve_call`, charges 5 credits
+  only on a valid result, and refunds provider failures. No live paid prompt
+  request was made during validation.
