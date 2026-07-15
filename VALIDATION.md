@@ -1132,10 +1132,11 @@ For the documentation bootstrap task:
 - JavaScript syntax: `node --check deploy/photozhab/app.js` — passed.
 - Production preflight: `.venv/bin/python tools/production_preflight.py
   --root . --env-file .env` — passed.
-- Deployment: immutable `6512ea4b3700d9da72826b0ccfeb41f962b6ed0b` checked out;
-  backend services active; nginx static root synchronized and source/public
-  hashes matched; public `/`, `/app.html`, and `/generaciya-video.html` all
-  returned HTTP 200.
+- Deployment: runtime immutable `6512ea4b3700d9da72826b0ccfeb41f962b6ed0b`
+  was deployed; docs-only closeout `22503102c59a31098d77d19f732c2739b38a8748`
+  is the current VPS checkout. Backend services are active; nginx static root
+  synchronized and source/public hashes matched; public `/`, `/app.html`, and
+  `/generaciya-video.html` all returned HTTP 200.
 - Runtime pool: exactly `sub1`, `sub4`, `sub2`; `IDLE_PARK_SEC=0`; gost
   sub1/sub2/sub4 active+enabled; old gost account services inactive+disabled.
   Egress checks were sanitized to status/IP only and matched the operator's
