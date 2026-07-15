@@ -38,6 +38,10 @@ class WebAppStaticTests(unittest.TestCase):
     def test_frontend_calls_only_same_origin_public_api(self) -> None:
         self.assertIn('api("/web/api/session"', self.js)
         self.assertIn('api("/web/api/generate"', self.js)
+        self.assertIn('clipboardData?.files', self.js)
+        self.assertIn('chat_id: state.chatId', self.js)
+        self.assertIn('async function openChat', self.js)
+        self.assertIn('api(`/web/api/chats/${encodeURIComponent(chatId)}`)', self.js)
         self.assertIn('api("/web/api/payment"', self.js)
         self.assertNotIn("INTERNAL_API_TOKEN", self.html + self.js)
         self.assertNotIn("/internal/generate", self.html + self.js)

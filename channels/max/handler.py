@@ -331,6 +331,20 @@ class MetricsWallet:
 
         return metrics.ensure_user_identity(platform, user_id)
 
+    def observe_user(self, platform: str, user: Any) -> int:
+        """Project the latest MAX profile into shared admin analytics."""
+        import metrics
+
+        internal_id = metrics.ensure_user_identity(platform, user.platform_user_id)
+        if internal_id:
+            metrics.upsert_user(
+                internal_id,
+                username=user.username,
+                first_name=user.first_name,
+                channel=platform,
+            )
+        return internal_id
+
     def balance(self, platform: str, user_id: str) -> int:
         import metrics
 
@@ -409,6 +423,9 @@ class MaxMvpBot:
     async def handle(
         self, event: IncomingMessage | IncomingCallback
     ) -> None:
+        observe_user = getattr(self.wallet, "observe_user", None)
+        if callable(observe_user):
+            observe_user(event.platform, event.user)
         if isinstance(event, IncomingCallback):
             await self.handle_callback(event)
         elif isinstance(event, IncomingMessage):

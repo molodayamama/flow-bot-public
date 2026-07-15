@@ -111,6 +111,50 @@ class WebAuthenticationStateTests(MetricsTestBase):
         self.assertEqual(metrics.credits_balance(internal_id, 0), 30)
         self.assertEqual(self._count("identity_welcome_grants"), 1)
 
+    def test_external_identities_are_projected_into_shared_users(self) -> None:
+        max_id = metrics.ensure_user_identity("max", "max-55")
+        yandex_id = metrics.ensure_user_identity("yandex", "ya-55")
+
+        max_profile = metrics.get_user_profile(max_id)
+        yandex_profile = metrics.get_user_profile(yandex_id)
+        self.assertEqual(max_profile["acq_channel"], "max")
+        self.assertEqual(yandex_profile["acq_channel"], "web_yandex")
+
+        metrics.bind_web_auth_session(
+            "session-id", "yandex", "ya-55", "Яна",
+            now=100, expires_at=200,
+        )
+        self.assertEqual(metrics.get_user_profile(yandex_id)["first_name"], "Яна")
+
+    def test_web_chat_storage_is_user_scoped_and_ordered(self) -> None:
+        owner = metrics.ensure_user_identity("telegram", "42")
+        other = metrics.ensure_user_identity("max", "42")
+        self.assertTrue(metrics.create_web_chat(owner, "chat-owner-123456", "Дом"))
+        self.assertTrue(metrics.append_web_chat_message(
+            owner, "chat-owner-123456", role="user", text="сделай дом"
+        ))
+        self.assertTrue(metrics.append_web_chat_message(
+            owner, "chat-owner-123456", role="assistant", text="Готово", media=[{"type":"image","url":"https://media/x"}]
+        ))
+        self.assertIsNone(metrics.get_web_chat(other, "chat-owner-123456"))
+        loaded = metrics.get_web_chat(owner, "chat-owner-123456")
+        self.assertEqual(loaded["chat"]["title"], "Дом")
+        self.assertEqual([row["role"] for row in loaded["messages"]], ["user", "assistant"])
+
+    def test_init_backfills_historical_identity_projection(self) -> None:
+        conn = metrics._conn()
+        with conn:
+            conn.execute(
+                "INSERT INTO user_identities "
+                "(platform, platform_user_id, internal_user_id) VALUES ('max','legacy',-99)"
+            )
+        metrics.close()
+        metrics.init_db(self.db_path)
+
+        profile = metrics.get_user_profile(-99)
+        self.assertEqual(profile["user_id"], -99)
+        self.assertEqual(profile["acq_channel"], "max")
+
     def test_welcome_credit_rejects_mismatched_identity_owner(self) -> None:
         yandex_id = metrics.ensure_user_identity("yandex", "ya-55")
         other_id = metrics.ensure_user_identity("yandex", "ya-99")

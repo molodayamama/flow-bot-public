@@ -170,12 +170,16 @@ class FakeService:
         )
 
 
-def _msg(text="", user_id="u1", chat_id="c1", photos=()):
+def _msg(text="", user_id="u1", chat_id="c1", photos=(), username=None, first_name=None):
     return webhook.parse_update(
         {
             "update_type": "message_created",
             "message": {
-                "sender": {"user_id": user_id},
+                "sender": {
+                    "user_id": user_id,
+                    "username": username,
+                    "first_name": first_name,
+                },
                 "recipient": {"chat_id": chat_id, "chat_type": "dialog", "user_id": user_id},
                 "body": {
                     "mid": "m1",
@@ -249,6 +253,20 @@ class MaxMvpTests(unittest.TestCase):
         self.assertIn(CB_INVITE, payloads)
         self.assertNotIn(CB_VIDEO_INGREDIENTS, payloads)
         self.assertNotIn(CB_VIDEO_FRAMES, payloads)
+
+    def test_max_interaction_projects_profile_into_shared_admin_users(self) -> None:
+        bot = self._bot()
+        run(bot.handle(_msg(
+            "/start", user_id="max-profile", username="max_user", first_name="Максим"
+        )))
+
+        internal_id = metrics.ensure_user_identity("max", "max-profile")
+        profile = metrics.get_user_profile(internal_id)
+        detail = metrics.get_admin_user_detail(internal_id)
+        self.assertEqual(profile["username"], "max_user")
+        self.assertEqual(profile["first_name"], "Максим")
+        self.assertEqual(profile["acq_channel"], "max")
+        self.assertEqual(detail["identity"]["platform"], "max")
 
     def test_callback_is_answered(self) -> None:
         bot = self._bot()

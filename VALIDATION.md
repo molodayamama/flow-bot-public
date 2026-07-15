@@ -1164,3 +1164,21 @@ For the documentation bootstrap task:
   both bot services are active, source/public app hashes match, and public
   `/`, `/app.html`, and `/generaciya-video.html` return HTTP 200. Anonymous
   `POST /web/api/prompt-improve` returns 401 without a provider call.
+
+## 2026-07-15 — durable web chats, clipboard paste, and archive-4 UI
+
+- Canonical full offline gate: `python -m pytest -q` — **1556 tests OK**.
+- Focused final gate: `python -m pytest -q tests/test_web_app.py
+  tests/test_web_app_static.py tests/test_metrics.py` — **109 tests OK**.
+- `node --check deploy/photozhab/app.js`, Python compilation for modified
+  modules, and `git diff --check` passed.
+- Covered contracts: authenticated owner-scoped chat list/detail, bounded
+  ten-turn context, successful-only prompt/chat persistence, New chat reset,
+  chat restore, clipboard image validation/attachment, cross-platform identity
+  projection, admin user detail/escaping, slider/footer/accessibility, and
+  truthful SEO metadata/crawl files.
+- No generation, payment, OAuth token exchange, captcha, browser-profile, or
+  other paid/stateful provider call was made. The in-app browser connector had
+  no instance, so screenshot/manual visual QA is not claimed.
+- VPS backup, `sub2` → `sub5` runtime switch, immutable deployment, and public
+  health checks remain the controlled post-commit steps.

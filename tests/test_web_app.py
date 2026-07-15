@@ -46,6 +46,9 @@ class _Metrics:
         self.oauth_states = {}
         self.assertions = set()
         self.welcome_grants = set()
+        self.prompt_history: dict[int, list[str]] = {}
+        self.users: dict[int, dict] = {}
+        self.chats: dict[tuple[int, str], dict] = {}
 
     def ensure_user_identity(self, platform, platform_user_id):
         key = (str(platform), str(platform_user_id))
@@ -72,6 +75,47 @@ class _Metrics:
 
     def log_event(self, *args, **kwargs):
         self.events.append((args, kwargs))
+
+    def upsert_user(self, user_id, **profile):
+        self.users[int(user_id)] = {**self.users.get(int(user_id), {}), **profile}
+
+    def save_prompt_history(self, user_id, prompt):
+        items = self.prompt_history.setdefault(int(user_id), [])
+        items.insert(0, str(prompt))
+        del items[20:]
+
+    def get_prompt_history(self, user_id, limit=10):
+        return list(self.prompt_history.get(int(user_id), []))[:int(limit)]
+
+    def create_web_chat(self, user_id, chat_id, title=""):
+        key = (int(user_id), str(chat_id))
+        self.chats.setdefault(key, {"chat_id": str(chat_id), "user_id": int(user_id), "title": str(title), "messages": []})
+        return True
+
+    def list_web_chats(self, user_id, limit=30):
+        values = [
+            {"chat_id": chat["chat_id"], "title": chat["title"], "messages": len(chat["messages"])}
+            for (owner, _), chat in self.chats.items() if owner == int(user_id)
+        ]
+        return values[:int(limit)]
+
+    def get_web_chat(self, user_id, chat_id, limit=40):
+        chat = self.chats.get((int(user_id), str(chat_id)))
+        if chat is None:
+            return None
+        return {"chat": {"chat_id": chat["chat_id"], "title": chat["title"]}, "messages": chat["messages"][:int(limit)]}
+
+    def append_web_chat_message(self, user_id, chat_id, **message):
+        chat = self.chats.get((int(user_id), str(chat_id)))
+        if chat is None:
+            return False
+        item = {"role": message.get("role"), "text": message.get("text", ""), "media": message.get("media", []),
+                "mode": message.get("mode"), "model": message.get("model"), "aspect": message.get("aspect"),
+                "charged": message.get("charged", 0), "balance": message.get("balance")}
+        chat["messages"].append(item)
+        if item["role"] == "user" and not chat["title"]:
+            chat["title"] = item["text"][:120]
+        return True
 
     def get_web_auth_session(self, sid):
         return self.auth_sessions.get(sid)
@@ -280,6 +324,7 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
         payload = await response.json()
         self.assertFalse(payload["authenticated"])
         self.assertEqual(payload["packs"], [])
+        self.assertNotIn("history", payload)
         generated = await self.post("/web/api/generate", {"mode": "image", "prompt": "safe prompt"})
         paid = await self.post("/web/api/payment", {"pack_id": "trial"})
         self.assertEqual(generated.status, 401)
@@ -343,9 +388,39 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["charged"], 30)
         self.assertEqual(payload["balance"], 70)
         self.assertEqual(payload["media"], [{"type": "image", "url": "https://media.example/result.png"}])
+        self.assertRegex(payload["chat_id"], r"^[A-Za-z0-9_-]{16,96}$")
+        self.assertEqual(payload["chat"]["title"], "safe prompt")
         self.assertNotIn("account_id", payload)
         self.assertEqual(self.backend_calls[0]["user_id"], 777)
         self.assertEqual(self.backend_calls[0]["num_images"], 2)
+        internal_id = next(iter(self.metrics.credits))
+        self.assertEqual(self.metrics.prompt_history[internal_id], ["safe prompt"])
+        session = await self.client.get("/web/api/session")
+        self.assertEqual((await session.json())["history"], ["safe prompt"])
+
+    async def test_chat_context_and_restore_are_scoped_to_selected_chat(self):
+        first = await self.post("/web/api/generate", {"mode": "image", "prompt": "сделай красный дом"})
+        first_payload = await first.json()
+        chat_id = first_payload["chat_id"]
+        second = await self.post("/web/api/generate", {
+            "mode": "image", "prompt": "добавь снег", "chat_id": chat_id,
+        })
+        self.assertEqual(second.status, 200, await second.json())
+        self.assertIn("сделай красный дом", self.backend_calls[-1]["prompt"])
+        self.assertIn("добавь снег", self.backend_calls[-1]["prompt"])
+
+        loaded = await self.client.get(f"/web/api/chats/{chat_id}")
+        self.assertEqual(loaded.status, 200)
+        messages = (await loaded.json())["messages"]
+        self.assertEqual([item["role"] for item in messages], ["user", "assistant", "user", "assistant"])
+        self.assertEqual(messages[2]["text"], "добавь снег")
+
+    async def test_unknown_chat_cannot_be_used_for_generation(self):
+        response = await self.post("/web/api/generate", {
+            "mode": "image", "prompt": "safe prompt", "chat_id": "not-a-valid-chat-id",
+        })
+        self.assertEqual(response.status, 404)
+        self.assertEqual((await response.json())["error"], "chat_not_found")
 
     async def test_backend_failure_refunds_reserved_credits(self):
         self.backend_result = {"error": "provider body must not escape"}
@@ -355,6 +430,7 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload, {"error": "generation_failed"})
         internal_id = next(iter(self.metrics.credits))
         self.assertEqual(self.metrics.credits[internal_id], 100)
+        self.assertEqual(self.metrics.prompt_history.get(internal_id, []), [])
         self.assertNotIn("provider body", str(payload))
 
     async def test_insufficient_balance_never_calls_backend(self):

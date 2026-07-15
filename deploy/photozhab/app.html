@@ -8,9 +8,9 @@
   <meta name="robots" content="noindex, follow">
   <meta name="theme-color" content="#0b0d0c">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self' https://auth.robokassa.ru">
-  <link rel="stylesheet" href="/styles.css?v=20260715-b3">
-  <link rel="stylesheet" href="/app.css?v=20260715-a2">
-  <script src="/app.js?v=20260715-a2" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=20260715-b4">
+  <link rel="stylesheet" href="/app.css?v=20260715-b4">
+  <script src="/app.js?v=20260715-b4" defer></script>
 </head>
 <body class="web-app-body">
   <div class="web-app-shell">
@@ -30,7 +30,7 @@
       <section class="chat-history" aria-labelledby="chat-history-title">
         <p class="chat-history-label" id="chat-history-title">История</p>
         <div class="chat-history-list" id="chat-history-list">
-          <p class="chat-history-empty" id="chat-history-empty">Запросы текущей вкладки появятся здесь</p>
+          <p class="chat-history-empty" id="chat-history-empty">Успешные запросы появятся здесь</p>
         </div>
       </section>
       <div class="sidebar-bottom">
@@ -138,7 +138,10 @@
             <div class="composer-divider" aria-hidden="true"></div>
             <div class="count-select">
               <label class="composer-field-label" for="count-range">Кол-во</label>
-              <input id="count-range" type="range" min="1" max="4" step="1" value="1">
+              <span class="count-slider">
+                <input id="count-range" type="range" min="1" max="4" step="1" value="1" aria-valuetext="1 изображение">
+                <span class="count-slider__ticks" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+              </span>
               <output id="count-output" for="count-range">1</output>
               <select class="control-native" id="count-select" aria-hidden="true" tabindex="-1"><option value="1">1 шт.</option><option value="2">2 шт.</option><option value="3">3 шт.</option><option value="4">4 шт.</option></select>
             </div>

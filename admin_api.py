@@ -2056,10 +2056,15 @@ async def handle_users_get(request: web.Request) -> web.Response:
         params_count: list = []
         params_rows:  list = []
         if q:
-            where = "WHERE (u.username LIKE ? OR CAST(u.user_id AS TEXT) LIKE ?)"
+            where = (
+                "WHERE (u.username LIKE ? OR CAST(u.user_id AS TEXT) LIKE ? "
+                "OR EXISTS (SELECT 1 FROM user_identities ui "
+                "           WHERE ui.internal_user_id=u.user_id "
+                "             AND (ui.platform_user_id LIKE ? OR ui.platform LIKE ?)))"
+            )
             like  = f"%{q}%"
-            params_count = [like, like]
-            params_rows  = [like, like, limit, offset]
+            params_count = [like, like, like, like]
+            params_rows  = [like, like, like, like, limit, offset]
         else:
             params_rows = [limit, offset]
 
@@ -2072,6 +2077,8 @@ async def handle_users_get(request: web.Request) -> web.Response:
             f"                u.acq_channel) AS acq_channel, u.is_blocked, "
             f"       COALESCE(c.balance, 0) AS balance, "
             f"       COALESCE(c.granted, 0) AS granted, "
+            f"       (SELECT ui.platform FROM user_identities ui WHERE ui.internal_user_id=u.user_id LIMIT 1) AS platform, "
+            f"       (SELECT ui.platform_user_id FROM user_identities ui WHERE ui.internal_user_id=u.user_id LIMIT 1) AS platform_user_id, "
             f"       (SELECT COUNT(*) FROM transactions t WHERE t.user_id=u.user_id AND t.status='paid') AS payments_count, "
             f"       (SELECT COALESCE(SUM(t.amount_rub),0) FROM transactions t WHERE t.user_id=u.user_id AND t.status='paid') AS rub_total, "
             f"       (SELECT COUNT(*) FROM support_tickets st WHERE st.user_id=u.user_id AND st.status='open') AS open_tickets, "
@@ -2096,6 +2103,8 @@ async def handle_users_get(request: web.Request) -> web.Response:
                 "is_blocked":  bool(r["is_blocked"]),
                 "balance":     int(r["balance"]),
                 "granted":     int(r["granted"]),
+                "platform":    r["platform"] or "telegram",
+                "platform_user_id": r["platform_user_id"] or str(r["user_id"]),
                 "payments_count": int(r["payments_count"] or 0),
                 "rub_total": float(r["rub_total"] or 0.0),
                 "open_tickets": int(r["open_tickets"] or 0),

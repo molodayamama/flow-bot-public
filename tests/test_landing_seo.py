@@ -122,6 +122,8 @@ class LandingSeoTests(unittest.TestCase):
             self.assertTrue(page.meta.get("og:title"), name)
             self.assertTrue(page.meta.get("og:description"), name)
             self.assertTrue(page.meta.get("og:image", "").startswith("https://"), name)
+            self.assertTrue(page.meta.get("og:image:alt"), name)
+            self.assertEqual(page.meta.get("twitter:card"), "summary_large_image", name)
 
     def test_home_json_ld_is_valid_and_truthful(self) -> None:
         page = parse_page("index.html")
@@ -129,10 +131,24 @@ class LandingSeoTests(unittest.TestCase):
         data = json.loads(page.json_ld[0])
         types = {item.get("@type") for item in data.get("@graph", [])}
         self.assertIn("WebSite", types)
-        self.assertIn("SoftwareApplication", types)
-        app = next(item for item in data["@graph"] if item.get("@type") == "SoftwareApplication")
-        self.assertEqual(app["operatingSystem"], "Telegram, MAX")
+        self.assertIn("WebApplication", types)
+        self.assertIn("Organization", types)
+        app = next(item for item in data["@graph"] if item.get("@type") == "WebApplication")
+        self.assertIn("Telegram", app["operatingSystem"])
+        self.assertEqual(app["url"], "https://photozhab.ru/app.html")
         self.assertEqual(app["offers"]["price"], "0")
+
+    def test_search_landing_breadcrumb_json_ld_is_valid(self) -> None:
+        for name in SEARCH_PAGES[1:]:
+            page = parse_page(name)
+            self.assertEqual(len(page.json_ld), 1, name)
+            data = json.loads(page.json_ld[0])
+            self.assertEqual(data.get("@type"), "BreadcrumbList", name)
+            self.assertEqual(
+                [item.get("position") for item in data.get("itemListElement", [])],
+                [1, 2],
+                name,
+            )
 
     def test_internal_links_resolve_to_versioned_static_files(self) -> None:
         for name in SEARCH_PAGES:

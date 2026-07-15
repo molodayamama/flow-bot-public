@@ -49,7 +49,7 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertIn("@media (max-width: 480px)", self.landing_css)
 
     def test_landing_skin_is_isolated_from_legacy_public_components(self) -> None:
-        self.assertIn('href="/landing.css?v=20260715-a1"', self.home)
+        self.assertIn('href="/landing.css?v=20260715-b4"', self.home)
         self.assertIn('src="/landing.js?v=20260715-a1"', self.home)
         self.assertNotIn("Claude Design B v2: public landing", self.styles)
         self.assertNotIn('class="price-row', self.home)
@@ -131,11 +131,11 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
             'id="payment-dialog"',
         ):
             self.assertIn(marker, self.app)
-        self.assertIn("rememberRequest(prompt)", self.app_js)
+        self.assertIn("rememberRequest(prompt,", self.app_js)
         self.assertIn('ONBOARDING_KEY_PREFIX = "photozhabOnboardingV1"', self.app_js)
         self.assertNotIn("localStorage.setItem(\"gallery", self.app_js)
         self.assertIn("Claude Design B v2: generation app", self.app_css)
-        self.assertIn("grid-template-columns: 264px", self.app_css)
+        self.assertIn("grid-template-columns: 280px", self.app_css)
         self.assertIn("@media (max-width: 820px)", self.app_css)
         for marker in ('id="model-options"', 'id="aspect-options"', 'id="count-range"', 'class="send-button-label"'):
             self.assertIn(marker, self.app)
@@ -154,6 +154,8 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertIn('composer.dataset.mode = mode', self.app_js)
         self.assertIn('.composer[data-mode="video"] .composer-field--models', self.app_css)
         self.assertIn('.onboarding-topline', self.app_css)
+        self.assertIn('class="count-slider__ticks"', self.app)
+        self.assertIn('get_prompt_history', (ROOT / "channels" / "web" / "app.py").read_text(encoding="utf-8"))
 
     def test_secondary_pages_share_archive_three_chrome(self) -> None:
         for name in (
@@ -163,7 +165,7 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
             source = (SITE / name).read_text(encoding="utf-8")
             self.assertIn('class="topbar-cta" href="/app.html"', source, name)
             self.assertIn('<svg width="18" height="18" viewBox="0 0 32 32">', source, name)
-            self.assertIn('styles.css?v=20260715-b3', source, name)
+            self.assertIn('styles.css?v=20260715-b4', source, name)
         self.assertIn("Design archive 3 — shared chrome", self.styles)
 
     def test_admin_uses_b_v2_tokens_without_mocking_live_values(self) -> None:
@@ -180,6 +182,8 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertIn('<span class="sb-icon">▣</span> Обзор', self.admin)
         self.assertNotIn('<span class="sb-icon">📊</span>', self.admin)
         self.assertIn("@media(max-width:760px)", self.admin)
+        for marker in ('id="user-detail-overlay"', 'openUserDetail(', 'renderUserDetail(', 'role="button" tabindex="0"'):
+            self.assertIn(marker, self.admin)
 
 
 if __name__ == "__main__":

@@ -464,9 +464,10 @@ html[data-hero-variant="e"] .pz-hero__image { background-image: url("/assets/her
 
 .pz-sticky-cta { display: none; }
 
-.pz-footer { border-top: 1px solid rgba(242, 239, 228, 0.08); }
-.pz-footer__inner { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-block: 28px; color: rgba(242, 239, 228, 0.4); font-size: 12.5px; }
+.pz-footer { position: relative; z-index: 2; border-top: 1px solid rgba(242, 239, 228, 0.1); background: #0b0d0c; }
+.pz-footer__inner { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-block: 28px; color: rgba(242, 239, 228, 0.64); font-size: 12.5px; line-height: 1.6; }
 .pz-footer nav { display: flex; flex-wrap: wrap; gap: 20px; }
+.pz-footer a { color: rgba(242, 239, 228, 0.72); }
 .pz-footer a:hover { color: var(--pz-ink); }
 
 .pz-reveal { opacity: 0; transform: translateY(26px); transition: opacity 0.7s cubic-bezier(0.2, 0.6, 0.2, 1), transform 0.7s cubic-bezier(0.2, 0.6, 0.2, 1); }
@@ -505,7 +506,7 @@ html[data-hero-variant="e"] .pz-hero__image { background-image: url("/assets/her
   .pz-sticky-cta { position: fixed; z-index: 40; right: 12px; bottom: 12px; left: 12px; min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px 10px 18px; border: 1px solid rgba(211, 243, 107, 0.3); border-radius: var(--r-pill); background: rgba(14, 16, 15, 0.94); box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6); backdrop-filter: blur(16px); }
   .pz-sticky-cta > span { overflow: hidden; color: rgba(242, 239, 228, 0.75); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
   .pz-sticky-cta > a { min-height: 44px; display: inline-flex; align-items: center; flex: 0 0 auto; padding-inline: 20px; border-radius: var(--r-pill); color: var(--pz-lime-ink); background: var(--pz-lime); font-size: 13px; font-weight: 700; }
-  .pz-footer { padding-bottom: 76px; }
+  .pz-footer { padding-bottom: max(92px, env(safe-area-inset-bottom)); }
   .pz-footer__inner { align-items: flex-start; flex-direction: column; }
 }
 

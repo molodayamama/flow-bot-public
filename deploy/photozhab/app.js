@@ -9,6 +9,8 @@ const state = {
   maxAuthAttempted: false,
   initialized: false,
   history: [],
+  chats: [],
+  chatId: null,
   gallery: [],
   galleryFilter: "all",
   galleryOpen: false,
@@ -374,27 +376,108 @@ function providerLabel(provider) {
   return {telegram: "Telegram", max: "MAX", yandex: "Яндекс"}[provider] || "аккаунт";
 }
 
-function rememberRequest(prompt) {
-  state.history = [prompt, ...state.history.filter((item) => item !== prompt)].slice(0, 6);
+function renderHistory() {
   elements.historyList.replaceChildren();
-  state.history.forEach((item) => {
+  if (!state.chats.length) {
+    const empty = document.createElement("p");
+    empty.className = "chat-history-empty";
+    empty.textContent = "Успешные запросы появятся здесь";
+    elements.historyList.append(empty);
+    return;
+  }
+  state.chats.forEach((chat) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "chat-history-item";
-    button.title = item;
+    button.classList.toggle("is-active", chat.chat_id === state.chatId);
+    button.title = chat.title || "Новый чат";
     const mark = document.createElement("span");
     mark.textContent = "✦";
     mark.setAttribute("aria-hidden", "true");
     const label = document.createElement("span");
-    label.textContent = item;
+    label.textContent = chat.title || "Новый чат";
     button.append(mark, label);
-    button.addEventListener("click", () => {
-      elements.prompt.value = item;
-      resizePrompt();
-      elements.prompt.focus();
-    });
+    button.addEventListener("click", () => openChat(chat.chat_id));
     elements.historyList.append(button);
   });
+}
+
+function setChats(items) {
+  state.chats = (Array.isArray(items) ? items : [])
+    .filter((chat) => chat && typeof chat.chat_id === "string")
+    .map((chat) => ({
+      chat_id: chat.chat_id,
+      title: String(chat.title || "Новый чат").trim().slice(0, 120) || "Новый чат",
+      messages: Number(chat.messages || 0),
+      updated_at: chat.updated_at || "",
+    }))
+    .slice(0, 30);
+  renderHistory();
+}
+
+function setHistory(items) {
+  state.history = (Array.isArray(items) ? items : [])
+    .map((item) => String(item || "").trim())
+    .filter((item) => item.length >= 3)
+    .slice(0, 20);
+}
+
+function rememberRequest(prompt, chatSummary = null) {
+  if (chatSummary && chatSummary.chat_id) {
+    const existing = state.chats.filter((chat) => chat.chat_id !== chatSummary.chat_id);
+    setChats([{...chatSummary, title: chatSummary.title || prompt}, ...existing]);
+    state.chatId = chatSummary.chat_id;
+    renderHistory();
+  }
+  state.history = [prompt, ...state.history.filter((item) => item !== prompt)].slice(0, 20);
+}
+
+function resetChatView() {
+  state.chatId = null;
+  elements.messages.replaceChildren();
+  elements.welcome.hidden = false;
+  elements.prompt.value = "";
+  resizePrompt();
+  clearUpload();
+  renderHistory();
+}
+
+async function openChat(chatId) {
+  if (!state.session?.authenticated || state.busy || !chatId) return;
+  try {
+    const data = await api(`/web/api/chats/${encodeURIComponent(chatId)}`);
+    const messages = Array.isArray(data.messages) ? data.messages : [];
+    state.chatId = chatId;
+    state.gallery = [];
+    elements.messages.replaceChildren();
+    elements.welcome.hidden = messages.length > 0;
+    for (const item of messages) {
+      if (item.role === "user") {
+        message("user", item.text || "");
+        continue;
+      }
+      const target = message("assistant", item.text || "");
+      if (Array.isArray(item.media) && item.media.length) {
+        renderResult(target, {media: item.media, charged: item.charged || 0, balance: item.balance ?? state.session.balance}, {
+          prompt: "", mode: item.mode || "image", modelLabel: item.model || "Photozhab", aspectLabel: item.aspect || "",
+        });
+      }
+    }
+    renderHistory();
+    scrollBottom();
+  } catch (error) {
+    if (error.message === "chat_not_found") {
+      setChats(state.chats.filter((chat) => chat.chat_id !== chatId));
+      if (state.chatId === chatId) resetChatView();
+    } else toast("Не удалось открыть историю чата");
+  }
+}
+
+/* Keep the short prompt ledger for admin/audit, while the sidebar renders real chats. */
+function rememberPrompt(prompt) {
+  const seen = new Set();
+  state.history = [prompt, ...state.history.filter((item) => item !== prompt)]
+    .filter((item) => item.length >= 3 && !seen.has(item) && seen.add(item)).slice(0, 20);
 }
 
 function closeGallery() {
@@ -583,6 +666,8 @@ async function tryMaxLogin() {
   try {
     await api("/web/api/auth/max", {method: "POST", body: JSON.stringify({init_data: maxInitData})});
     state.session = await api("/web/api/session", {headers: {}});
+    setChats(state.session.chats);
+    setHistory(state.session.history);
     setBalance(state.session.balance); renderModels(); applyAuthState();
     toast("Вход через MAX выполнен");
   } catch (_) {
@@ -594,7 +679,7 @@ async function logoutUser() {
   try {
     await api("/web/api/auth/logout", {method: "POST", body: "{}"});
     state.session = await api("/web/api/session", {headers: {}});
-    setBalance(0); applyAuthState();
+    setChats([]); setHistory([]); state.chatId = null; setBalance(0); applyAuthState();
   } catch (_) {
     toast("Не удалось выйти. Обновите страницу.");
   }
@@ -735,7 +820,6 @@ async function generate() {
   if (prompt.length < 3) { toast("Опишите идею хотя бы тремя символами"); elements.prompt.focus(); return; }
   if ((state.mode === "edit" || state.mode === "animate") && !state.imageData) { toast("Сначала добавьте фотографию"); elements.uploadInput.click(); return; }
   state.busy = true; elements.send.disabled = true;
-  rememberRequest(prompt);
   const model = selectedModel();
   const userMessage = message("user", prompt, state.imageData);
   const userMeta = document.createElement("div");
@@ -746,11 +830,13 @@ async function generate() {
   elements.prompt.value = ""; resizePrompt();
   try {
     const payload = await api("/web/api/generate", {method: "POST", body: JSON.stringify({
-      mode: state.mode, prompt, aspect: elements.aspect.value, count: Number(elements.count.value),
+      mode: state.mode, prompt, chat_id: state.chatId || undefined, aspect: elements.aspect.value, count: Number(elements.count.value),
       image_model: state.mode === "image" || state.mode === "edit" ? model.id : undefined,
       video_model: state.mode === "video" || state.mode === "animate" ? model.id : undefined,
       image_b64: state.imageData,
     })});
+    state.chatId = payload.chat_id || state.chatId;
+    rememberRequest(prompt, payload.chat);
     renderResult(pending, payload, {
       prompt,
       mode: state.mode,
@@ -843,6 +929,8 @@ async function refreshSession({retryAuthenticated = false} = {}) {
     await new Promise((resolve) => window.setTimeout(resolve, 180));
   }
   state.session = session;
+  setChats(state.session?.chats);
+  setHistory(state.session?.history);
   setBalance(state.session.balance); renderModels(); applyAuthState(); await tryMaxLogin();
   return true;
 }
@@ -884,25 +972,36 @@ const syncCount = (value) => {
   elements.countRange.value = String(count);
   elements.countOutput.value = String(count);
   elements.countOutput.textContent = String(count);
+  elements.countRange.style.setProperty("--count-progress", `${((count - 1) / 3) * 100}%`);
+  elements.countRange.setAttribute("aria-valuetext", `${count} ${count === 1 ? "изображение" : "изображения"}`);
   updatePrice();
 };
 elements.count.addEventListener("change", () => syncCount(elements.count.value));
 elements.countRange.addEventListener("input", () => syncCount(elements.countRange.value));
+syncCount(elements.countRange.value);
 document.querySelectorAll(".mode-nav-button").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
 document.querySelectorAll("#prompt-suggestions button").forEach((button) => button.addEventListener("click", () => { elements.prompt.value = button.textContent; resizePrompt(); elements.prompt.focus(); }));
-elements.uploadInput.addEventListener("change", () => {
-  const file = elements.uploadInput.files[0];
+function attachImageFile(file, fallbackName = "Вставленное изображение") {
   if (!file) return;
   if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > (state.session?.limits.image_bytes || 10485760)) { clearUpload(); toast("PNG, JPEG или WebP — не больше 10 МБ"); return; }
   if (state.mode === "image") setMode("edit");
   const reader = new FileReader();
-  reader.onload = () => { state.imageData = String(reader.result); state.imageName = file.name; elements.uploadImage.src = state.imageData; elements.uploadName.textContent = file.name; elements.uploadPreview.hidden = false; };
+  reader.onload = () => { state.imageData = String(reader.result); state.imageName = file.name || fallbackName; elements.uploadImage.src = state.imageData; elements.uploadName.textContent = state.imageName; elements.uploadPreview.hidden = false; };
   reader.onerror = () => { clearUpload(); toast("Не удалось прочитать изображение"); };
   reader.readAsDataURL(file);
+}
+elements.uploadInput.addEventListener("change", () => attachImageFile(elements.uploadInput.files[0]));
+elements.prompt.addEventListener("paste", (event) => {
+  const files = Array.from(event.clipboardData?.files || []);
+  const image = files.find((file) => String(file.type || "").startsWith("image/"));
+  if (!image) return;
+  event.preventDefault();
+  attachImageFile(image, "Вставленное изображение");
+  toast("Изображение добавлено из буфера обмена");
 });
 elements.uploadDropzoneTrigger.addEventListener("click", () => elements.uploadInput.click());
 $("#remove-upload").addEventListener("click", clearUpload);
-$("#new-chat").addEventListener("click", () => { closeGallery(); elements.messages.replaceChildren(); elements.welcome.hidden = false; clearUpload(); elements.prompt.value = ""; resizePrompt(); });
+$("#new-chat").addEventListener("click", () => { closeGallery(); resetChatView(); elements.prompt.focus(); });
 elements.galleryButton.addEventListener("click", showGallery);
 $("#gallery-create").addEventListener("click", () => { setMode("image"); elements.prompt.focus(); });
 document.querySelectorAll("[data-gallery-filter]").forEach((button) => button.addEventListener("click", () => {

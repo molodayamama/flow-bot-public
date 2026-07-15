@@ -393,6 +393,40 @@ tr:hover td{background:var(--pz-surface-2)}
 }
 @media(max-width:900px){.support-layout{grid-template-columns:1fr}}
 
+/* ── User dossier drawer ──────────────────────────── */
+#users-tbody tr[role="button"]{cursor:pointer}
+#users-tbody tr[role="button"]:focus-visible{outline:2px solid var(--pz-cyan);outline-offset:-2px}
+#users-tbody tr[role="button"]:hover td{background:rgba(242,239,228,.035)}
+.user-detail-overlay{position:fixed;inset:0;z-index:80;display:grid;justify-items:end;background:rgba(4,5,5,.66);backdrop-filter:blur(4px)}
+.user-detail-overlay[hidden]{display:none}
+.user-detail-drawer{width:min(540px,100%);height:100%;overflow-y:auto;padding:26px 28px 36px;border-left:1px solid rgba(242,239,228,.1);background:var(--pz-paper-2);box-shadow:-30px 0 80px rgba(0,0,0,.55)}
+.user-detail-head{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.user-detail-person{min-width:0;display:flex;align-items:center;gap:12px}
+.user-detail-avatar{width:44px;height:44px;display:grid;place-items:center;flex:0 0 auto;border-radius:50%;color:var(--pz-lime);background:rgba(211,243,107,.12);font:700 17px var(--font-display)}
+.user-detail-name{overflow:hidden;font:700 18px var(--font-display);text-overflow:ellipsis;white-space:nowrap}
+.user-detail-meta{margin-top:3px;color:rgba(242,239,228,.42);font:500 10.5px var(--font-mono);line-height:1.5;overflow-wrap:anywhere}
+.user-detail-close{width:34px;height:34px;display:grid;place-items:center;flex:0 0 auto;border:0;border-radius:50%;color:rgba(242,239,228,.55);background:rgba(242,239,228,.06);font-size:20px}
+.user-detail-close:hover{color:var(--pz-ink);background:rgba(242,239,228,.1)}
+.user-detail-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:20px}
+.user-detail-kpi{min-width:0;padding:14px 15px;border:1px solid var(--pz-line-faint);border-radius:12px;background:var(--pz-surface)}
+.user-detail-kpi:first-child{border-color:rgba(211,243,107,.25);background:rgba(211,243,107,.05)}
+.user-detail-kpi small{display:block;color:rgba(242,239,228,.42);font:600 9px var(--font-mono);letter-spacing:.1em;text-transform:uppercase}
+.user-detail-kpi strong{display:block;margin-top:6px;font:700 19px var(--font-mono);overflow:hidden;text-overflow:ellipsis}
+.user-detail-kpi:first-child strong{color:var(--pz-lime)}
+.user-detail-section{margin-top:25px}
+.user-detail-section h3{margin:0 0 10px;font:700 14px var(--font-display)}
+.user-detail-list{overflow:hidden;border:1px solid var(--pz-line-faint);border-radius:12px;background:#101311}
+.user-detail-row{display:grid;grid-template-columns:minmax(90px,.75fr) minmax(0,1.5fr) auto;gap:10px;align-items:center;padding:11px 14px;border-bottom:1px solid rgba(242,239,228,.06);font-size:12px}
+.user-detail-row:last-child{border-bottom:0}
+.user-detail-row time{color:rgba(242,239,228,.42);font:500 10.5px var(--font-mono)}
+.user-detail-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.user-detail-row b{color:var(--pz-lime);font:600 11px var(--font-mono);white-space:nowrap}
+.user-detail-empty{padding:18px 14px;color:var(--pz-faint);font-size:12px;text-align:center}
+.user-detail-profile{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}
+.user-detail-profile div{min-width:0;padding:10px 12px;border:1px solid var(--pz-line-faint);border-radius:10px;background:var(--pz-paper)}
+.user-detail-profile small{display:block;color:var(--pz-faint);font:600 9px var(--font-mono);letter-spacing:.08em;text-transform:uppercase}
+.user-detail-profile span{display:block;margin-top:4px;overflow:hidden;color:var(--pz-muted);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+
 /* ── Toasts ────────────────────────────────────────── */
 #toasts{position:fixed;bottom:24px;right:24px;z-index:999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
 .toast{
@@ -463,6 +497,10 @@ tr:hover td{background:rgba(242,239,228,.025)}
   .profit-card{grid-template-columns:1fr}.profit-secondary{text-align:left;padding-top:14px;border-top:1px solid var(--pz-line-faint)}
   .section-title{font-size:15px}
   .search-row{align-items:stretch;flex-direction:column}
+  .user-detail-drawer{padding:20px 16px 28px}
+  .user-detail-kpis{grid-template-columns:1fr}
+  .user-detail-profile{grid-template-columns:1fr}
+  .user-detail-row{grid-template-columns:1fr auto}.user-detail-row time{grid-column:1/-1}
 }
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}
   </style>
@@ -913,6 +951,22 @@ tr:hover td{background:rgba(242,239,228,.025)}
           </table>
         </div>
         <div class="pagination" id="users-pagination"></div>
+      </div>
+
+      <div class="user-detail-overlay" id="user-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="user-detail-name" hidden>
+        <aside class="user-detail-drawer" id="user-detail-drawer">
+          <div class="user-detail-head">
+            <div class="user-detail-person">
+              <span class="user-detail-avatar" id="user-detail-avatar" aria-hidden="true">P</span>
+              <span style="min-width:0">
+                <strong class="user-detail-name" id="user-detail-name">Пользователь</strong>
+                <small class="user-detail-meta" id="user-detail-meta">Загрузка…</small>
+              </span>
+            </div>
+            <button class="user-detail-close" id="user-detail-close" type="button" aria-label="Закрыть карточку пользователя" onclick="closeUserDetail()">×</button>
+          </div>
+          <div id="user-detail-content"><div class="user-detail-empty">Загрузка данных…</div></div>
+        </aside>
       </div>
 
       <!-- ── Tab: Sellers ───────────────────────────── -->
@@ -2814,6 +2868,92 @@ adRecalc();
 let _usersPage = 1;
 let _usersQ    = '';
 let _usersSearchTimer = null;
+let _userDetailReturnFocus = null;
+
+function userPlatformLabel(platform) {
+  return {telegram:'Telegram', max:'MAX', yandex:'Яндекс ID'}[String(platform||'').toLowerCase()] || String(platform||'—');
+}
+
+function userDetailList(title, rows) {
+  return `<section class="user-detail-section"><h3>${esc(title)}</h3><div class="user-detail-list">${rows.length ? rows.join('') : '<div class="user-detail-empty">Нет данных</div>'}</div></section>`;
+}
+
+function renderUserDetail(data) {
+  const p = data.profile || {};
+  const identity = data.identity || {};
+  const requests = p.requests || {};
+  const spend = p.spend || {};
+  const platform = userPlatformLabel(identity.platform || (p.acq_channel === 'max' ? 'max' : 'telegram'));
+  const displayName = p.username ? `@${p.username}` : (p.first_name || `Пользователь ${p.user_id}`);
+  const initial = String(p.first_name || p.username || 'P').trim().charAt(0).toLocaleUpperCase('ru-RU') || 'P';
+  document.getElementById('user-detail-avatar').textContent = initial;
+  document.getElementById('user-detail-name').textContent = displayName;
+  document.getElementById('user-detail-meta').textContent = `${p.user_id} · ${platform} · с ${fmtDt(p.first_seen)}`;
+
+  const paymentRows = (data.recent_payments || []).map(item => `<div class="user-detail-row">
+    <time>${fmtDt(item.created_at)}</time>
+    <span>${esc(item.package_id || 'пополнение')} · +${fmt(item.credits_issued || 0)} кр · ${esc(item.provider || '—')}</span>
+    <b>${Number(item.amount_rub||0) > 0 ? `${Number(item.amount_rub).toFixed(0)} ₽` : `${fmt(item.stars_amount||0)} Stars`}</b>
+  </div>`);
+  const jobRows = (data.recent_jobs || []).map(item => `<div class="user-detail-row">
+    <time>${fmtDt(item.created_at)}</time>
+    <span title="${esc(`${item.operation_type||''} ${item.model||''}`.trim())}">${esc(item.operation_type || 'генерация')} · ${esc(item.model || '—')}</span>
+    <b style="color:${item.status === 'success' ? 'var(--pz-lime)' : 'var(--pz-coral)'}">${item.status === 'success' ? '✓' : '✕'} ${fmt(item.bot_credits_charged||0)} кр</b>
+  </div>`);
+  const historyRows = (data.prompt_history || []).map(item => `<div class="user-detail-row">
+    <time>${fmtDt(item.created_at)}</time>
+    <span title="${esc(item.prompt || '')}">${esc(item.prompt || '—')}</span>
+    <b>промпт</b>
+  </div>`);
+  const ticketRows = (data.support_tickets || []).map(item => `<div class="user-detail-row">
+    <time>#${fmt(item.id)} · ${fmtDt(item.created_at)}</time>
+    <span title="${esc(item.message_text || '')}">${esc(item.message_text || '—')}</span>
+    <b style="color:${item.status === 'open' ? 'var(--pz-warn)' : 'var(--pz-muted)'}">${esc(item.status || '—')}</b>
+  </div>`);
+
+  document.getElementById('user-detail-content').innerHTML = `
+    <div class="user-detail-kpis">
+      <div class="user-detail-kpi"><small>Баланс</small><strong>${fmt(p.balance||0)} кр</strong></div>
+      <div class="user-detail-kpi"><small>Оплачено</small><strong>${Number(spend.rub||0).toFixed(0)} ₽</strong></div>
+      <div class="user-detail-kpi"><small>Генераций</small><strong>${fmt(requests.total||0)}</strong></div>
+    </div>
+    <div class="user-detail-profile">
+      <div><small>Платформа</small><span>${esc(platform)}</span></div>
+      <div><small>ID платформы</small><span title="${esc(identity.platform_user_id || '')}">${esc(identity.platform_user_id || '—')}</span></div>
+      <div><small>Канал</small><span>${esc(p.acq_channel || 'органика')}</span></div>
+      <div><small>Последняя активность</small><span>${fmtDt(p.last_active)}</span></div>
+    </div>
+    ${userDetailList('Платежи', paymentRows)}
+    ${userDetailList('Последние генерации', jobRows)}
+    ${userDetailList('История запросов', historyRows)}
+    ${userDetailList('Support', ticketRows)}
+  `;
+}
+
+async function openUserDetail(userId, trigger) {
+  const overlay = document.getElementById('user-detail-overlay');
+  _userDetailReturnFocus = trigger || document.activeElement;
+  overlay.hidden = false;
+  document.getElementById('user-detail-avatar').textContent = 'P';
+  document.getElementById('user-detail-name').textContent = 'Пользователь';
+  document.getElementById('user-detail-meta').textContent = 'Загрузка…';
+  document.getElementById('user-detail-content').innerHTML = '<div class="user-detail-empty">Загрузка данных…</div>';
+  document.getElementById('user-detail-close').focus();
+  const data = await api('GET', `/users/${encodeURIComponent(userId)}`);
+  if (!data) {
+    document.getElementById('user-detail-content').innerHTML = '<div class="user-detail-empty" style="color:var(--pz-coral)">Не удалось загрузить карточку пользователя</div>';
+    return;
+  }
+  renderUserDetail(data);
+}
+
+function closeUserDetail() {
+  const overlay = document.getElementById('user-detail-overlay');
+  if (overlay.hidden) return;
+  overlay.hidden = true;
+  if (_userDetailReturnFocus && typeof _userDetailReturnFocus.focus === 'function') _userDetailReturnFocus.focus();
+  _userDetailReturnFocus = null;
+}
 
 function usersSearchDebounce() {
   clearTimeout(_usersSearchTimer);
@@ -2849,16 +2989,16 @@ async function loadUsers(page=1) {
 
   document.getElementById('users-tbody').innerHTML = data.users.length
     ? data.users.map(u => `
-      <tr>
+      <tr role="button" tabindex="0" aria-label="Открыть карточку пользователя ${u.user_id}" onclick="openUserDetail(${u.user_id},this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openUserDetail(${u.user_id},this)}">
         <td class="mono" style="color:var(--pz-cyan)">${u.user_id}</td>
         <td>${u.username ? '<span style="color:var(--pz-muted)">@</span>'+esc(u.username) : '<span style="color:var(--pz-faint)">—</span>'}</td>
         <td style="color:var(--pz-muted)">${esc(u.first_name||'')}</td>
         <td class="mono" style="color:${u.balance>0?'var(--pz-lime)':'var(--pz-faint)'};font-weight:700">${fmt(u.balance)}</td>
         <td class="mono" style="color:var(--pz-faint)">${fmt(u.granted)}</td>
-        <td>${u.acq_channel ? `<span class="badge badge-muted">${esc(u.acq_channel)}</span>` : '<span style="color:var(--pz-faint);font-size:12px">органика</span>'}</td>
+        <td><span class="badge badge-muted">${esc(userPlatformLabel(u.platform))}</span>${u.acq_channel && u.acq_channel !== u.platform ? `<div style="margin-top:3px;color:var(--pz-faint);font-size:10px">${esc(u.acq_channel)}</div>` : ''}</td>
         <td style="font-size:12px;color:var(--pz-faint)">${fmtDt(u.last_active)}</td>
         <td style="font-size:12px;color:var(--pz-faint)">${fmtDt(u.first_seen)}</td>
-        <td>${u.is_blocked?'<span class="badge badge-red">блок</span>':''}</td>
+        <td>${u.is_blocked?'<span class="badge badge-red">блок</span>':'<span aria-hidden="true" style="color:var(--pz-faint)">→</span>'}</td>
       </tr>
     `).join('')
     : `<tr><td colspan="9" style="color:var(--pz-faint);text-align:center;padding:24px">Нет результатов</td></tr>`;
@@ -2876,6 +3016,14 @@ async function loadUsers(page=1) {
   html += `<span class="pg-info">${fmt(data.total)} записей</span>`;
   pg.innerHTML = html;
 }
+
+document.getElementById('user-detail-overlay').addEventListener('click', event => {
+  if (event.target === event.currentTarget) closeUserDetail();
+});
+document.getElementById('user-detail-overlay').addEventListener('keydown', event => {
+  if (event.key === 'Escape') { event.preventDefault(); closeUserDetail(); }
+  if (event.key === 'Tab') { event.preventDefault(); document.getElementById('user-detail-close').focus(); }
+});
 
 /* ── Sellers ───────────────────────────────────────── */
 let _sellersRows = [];

@@ -891,8 +891,8 @@ h1 {
 .legal-page .text-block { padding: clamp(22px, 4vw, 38px); border: 1px solid rgba(242, 239, 228, 0.1); border-radius: 18px; background: linear-gradient(160deg, rgba(18, 21, 18, .92), rgba(14, 16, 15, .92)); }
 .legal-page .text-block h2 { color: var(--pz-ink); font-family: var(--font-display); letter-spacing: -.02em; }
 
-.site-footer { justify-content: space-between; gap: 18px 24px; padding: 26px clamp(20px, 5vw, 72px); color: rgba(242, 239, 228, 0.38); border-color: rgba(242, 239, 228, 0.08); background: var(--pz-paper); font: 500 11.5px var(--font-mono); }
-.site-footer a { color: rgba(242, 239, 228, 0.48); text-decoration: none; }
+.site-footer { justify-content: space-between; gap: 18px 24px; padding: 26px clamp(20px, 5vw, 72px); color: rgba(242, 239, 228, 0.64); border-color: rgba(242, 239, 228, 0.1); background: var(--pz-paper); font: 500 11.5px/1.6 var(--font-mono); }
+.site-footer a { color: rgba(242, 239, 228, 0.72); text-decoration: none; }
 .site-footer a:hover { color: var(--pz-lime); }
 
 @media (max-width: 820px) {

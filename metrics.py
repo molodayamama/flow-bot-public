@@ -112,6 +112,10 @@ __all__ = [
     # prompt history
     "save_prompt_history",
     "get_prompt_history",
+    "create_web_chat",
+    "list_web_chats",
+    "get_web_chat",
+    "append_web_chat_message",
     "get_seller_history",
     # seller SKU projects
     "create_seller_sku_project",
@@ -404,6 +408,34 @@ CREATE TABLE IF NOT EXISTS prompt_history (
 );
 CREATE INDEX IF NOT EXISTS idx_prompt_history_user ON prompt_history(user_id, id DESC);
 
+-- Authenticated website conversations.  Chat ids are opaque capabilities;
+-- every query below also scopes by internal user id.
+CREATE TABLE IF NOT EXISTS web_chats (
+    chat_id     TEXT PRIMARY KEY,
+    user_id     INTEGER NOT NULL,
+    title       TEXT NOT NULL DEFAULT '',
+    created_at  TEXT DEFAULT (datetime('now')),
+    updated_at  TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_web_chats_user ON web_chats(user_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS web_chat_messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id     TEXT NOT NULL,
+    user_id     INTEGER NOT NULL,
+    role        TEXT NOT NULL,
+    text        TEXT NOT NULL DEFAULT '',
+    media_json  TEXT,
+    mode        TEXT,
+    model       TEXT,
+    aspect      TEXT,
+    charged     INTEGER NOT NULL DEFAULT 0,
+    balance     INTEGER,
+    created_at  TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY(chat_id) REFERENCES web_chats(chat_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_web_chat_messages_chat ON web_chat_messages(chat_id, id ASC);
+
 CREATE TABLE IF NOT EXISTS promo_codes (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     code         TEXT UNIQUE NOT NULL COLLATE NOCASE,
@@ -456,6 +488,73 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
             pass  # "duplicate column name" — already present, skip
 
 
+def _identity_channel(platform: str) -> str:
+    """Return the first-touch channel used by the shared admin projection."""
+    value = str(platform or "").strip().lower()
+    if value == "yandex":
+        return "web_yandex"
+    return value or "unknown"
+
+
+def _project_identity_user(
+    conn: sqlite3.Connection,
+    *,
+    internal_user_id: int,
+    platform: str,
+    username: str | None = None,
+    first_name: str | None = None,
+) -> None:
+    """Upsert one identity into the channel-neutral ``users`` projection.
+
+    The projection powers admin/analytics only; identity ownership and balances
+    remain in their dedicated tables.  Keeping this helper connection-local
+    avoids recursively acquiring the module's non-reentrant lock.
+    """
+    conn.execute(
+        """
+        INSERT INTO users (user_id, username, first_name, acq_channel)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+          username = CASE WHEN excluded.username IS NOT NULL
+                           THEN excluded.username ELSE users.username END,
+          first_name = CASE WHEN excluded.first_name IS NOT NULL
+                             THEN excluded.first_name ELSE users.first_name END,
+          acq_channel = CASE WHEN users.acq_channel IS NULL
+                             THEN excluded.acq_channel ELSE users.acq_channel END,
+          last_active = datetime('now'),
+          updated_at = datetime('now')
+        """,
+        (
+            int(internal_user_id),
+            str(username).strip()[:64] if username else None,
+            str(first_name).strip()[:120] if first_name else None,
+            _identity_channel(platform),
+        ),
+    )
+
+
+def _backfill_identity_users(conn: sqlite3.Connection) -> None:
+    """Idempotently expose historical website/MAX identities in admin."""
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO users
+          (user_id, first_name, first_seen, last_active, acq_channel, updated_at)
+        SELECT
+          i.internal_user_id,
+          (SELECT s.display_name
+             FROM web_auth_sessions s
+            WHERE s.internal_user_id=i.internal_user_id
+              AND s.display_name IS NOT NULL
+            ORDER BY s.last_seen_at DESC LIMIT 1),
+          COALESCE(i.created_at, datetime('now')),
+          COALESCE(i.last_seen_at, datetime('now')),
+          CASE i.platform WHEN 'yandex' THEN 'web_yandex' ELSE i.platform END,
+          COALESCE(i.last_seen_at, datetime('now'))
+        FROM user_identities i
+        """
+    )
+
+
 # ── connection lifecycle ───────────────────────────────────────────────
 
 
@@ -481,6 +580,7 @@ def init_db(path: str | None = None) -> None:
         conn.row_factory = sqlite3.Row
         conn.executescript(_SCHEMA)
         _migrate_columns(conn)
+        _backfill_identity_users(conn)
         # PII-ретеншн: username в events — персональные данные; чистим старое
         # при каждом старте. Денежные таблицы не трогаем (нужны для сверки).
         days = _events_retention_days()
@@ -522,6 +622,7 @@ def _conn() -> sqlite3.Connection:
         conn = sqlite3.connect(path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.executescript(_SCHEMA)
+        _backfill_identity_users(conn)
         conn.commit()
         _CONN = conn
         _DB_PATH = path
@@ -1106,6 +1207,11 @@ def ensure_user_identity(
                     "WHERE platform=? AND platform_user_id=?",
                     (identity.platform, identity.platform_user_id),
                 )
+                _project_identity_user(
+                    conn,
+                    internal_user_id=internal_id,
+                    platform=identity.platform,
+                )
                 conn.commit()
                 return internal_id
 
@@ -1115,6 +1221,11 @@ def ensure_user_identity(
                 "(platform, platform_user_id, internal_user_id, created_at, last_seen_at) "
                 "VALUES (?, ?, ?, datetime('now'), datetime('now'))",
                 (identity.platform, identity.platform_user_id, internal_id),
+            )
+            _project_identity_user(
+                conn,
+                internal_user_id=internal_id,
+                platform=identity.platform,
             )
             conn.commit()
             return int(internal_id)
@@ -1206,6 +1317,12 @@ def bind_web_auth_session(
                     timestamp,
                     expiry,
                 ),
+            )
+            _project_identity_user(
+                conn,
+                internal_user_id=internal_id,
+                platform=identity.platform,
+                first_name=(str(display_name).strip()[:120] if display_name else None),
             )
             conn.execute("DELETE FROM web_auth_sessions WHERE expires_at <= ?", (timestamp,))
             conn.commit()
@@ -3002,7 +3119,8 @@ def get_user_profile(user_id: int) -> dict:
 
             # Q1 — user profile row
             row = conn.execute(
-                "SELECT user_id, username, first_name, first_seen, last_active, is_blocked "
+                "SELECT user_id, username, first_name, first_seen, last_active, "
+                "is_blocked, acq_channel "
                 "FROM users WHERE user_id=?",
                 (user_id,),
             ).fetchone()
@@ -3095,7 +3213,9 @@ def get_user_profile(user_id: int) -> dict:
             result["balance"] = int(credits_row["balance"] or 0)
             result["starter_granted"] = bool(credits_row["granted"])
 
-        result["acq_channel"] = acq_row["channel"] if acq_row else None
+        result["acq_channel"] = (
+            acq_row["channel"] if acq_row else (row["acq_channel"] if row else None)
+        )
 
         result["requests"] = {
             "image":   int(req_row["image"]   or 0) if req_row else 0,
@@ -4244,6 +4364,170 @@ def list_promo_codes() -> list[dict]:
 
 _PROMPT_HISTORY_KEEP = 20  # max stored per user (trim older ones)
 
+_WEB_CHAT_ID_MAX = 96
+_WEB_CHAT_TEXT_MAX = 2000
+_WEB_CHAT_MEDIA_MAX = 24_000
+
+
+def create_web_chat(user_id: int, chat_id: str, title: str = "") -> bool:
+    """Create an opaque, user-owned website conversation idempotently."""
+    value = str(chat_id or "").strip()
+    if not value or len(value) > _WEB_CHAT_ID_MAX:
+        return False
+    try:
+        with _LOCK:
+            conn = _conn()
+            conn.execute(
+                "INSERT OR IGNORE INTO web_chats (chat_id, user_id, title) VALUES (?,?,?)",
+                (value, int(user_id), str(title or "").strip()[:120]),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT user_id FROM web_chats WHERE chat_id=?", (value,)
+            ).fetchone()
+            return bool(row and int(row[0]) == int(user_id))
+    except Exception:  # noqa: BLE001
+        log.warning("create_web_chat failed", exc_info=True)
+        return False
+
+
+def list_web_chats(user_id: int, limit: int = 30) -> list[dict]:
+    """Return the newest conversations for one authenticated website user."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            rows = _rows(
+                conn,
+                """
+                SELECT c.chat_id, c.title, c.created_at, c.updated_at,
+                       (SELECT COUNT(*) FROM web_chat_messages m
+                        WHERE m.chat_id=c.chat_id AND m.user_id=c.user_id) AS messages
+                FROM web_chats c
+                WHERE c.user_id=?
+                ORDER BY c.updated_at DESC, c.chat_id DESC LIMIT ?
+                """,
+                (int(user_id), max(1, min(int(limit), 50))),
+            )
+            return [dict(row) for row in rows]
+    except Exception:  # noqa: BLE001
+        log.warning("list_web_chats failed for user_id=%r", user_id, exc_info=True)
+        return []
+
+
+def get_web_chat(user_id: int, chat_id: str, limit: int = 40) -> dict | None:
+    """Load one conversation only when it belongs to ``user_id``."""
+    value = str(chat_id or "").strip()
+    if not value or len(value) > _WEB_CHAT_ID_MAX:
+        return None
+    try:
+        with _LOCK:
+            conn = _conn()
+            chat = conn.execute(
+                "SELECT chat_id, user_id, title, created_at, updated_at "
+                "FROM web_chats WHERE chat_id=? AND user_id=?",
+                (value, int(user_id)),
+            ).fetchone()
+            if chat is None:
+                return None
+            rows = _rows(
+                conn,
+                """
+                SELECT role, text, media_json, mode, model, aspect,
+                       charged, balance, created_at
+                FROM web_chat_messages
+                WHERE chat_id=? AND user_id=?
+                ORDER BY id ASC LIMIT ?
+                """,
+                (value, int(user_id), max(1, min(int(limit), 80))),
+            )
+            messages = []
+            for row in rows:
+                media = []
+                if row["media_json"]:
+                    try:
+                        parsed = json.loads(row["media_json"])
+                        if isinstance(parsed, list):
+                            media = parsed[:4]
+                    except (TypeError, ValueError):
+                        media = []
+                messages.append({
+                    "role": row["role"],
+                    "text": row["text"],
+                    "media": media,
+                    "mode": row["mode"],
+                    "model": row["model"],
+                    "aspect": row["aspect"],
+                    "charged": int(row["charged"] or 0),
+                    "balance": row["balance"],
+                    "created_at": row["created_at"],
+                })
+            return {"chat": dict(chat), "messages": messages}
+    except Exception:  # noqa: BLE001
+        log.warning("get_web_chat failed for user_id=%r", user_id, exc_info=True)
+        return None
+
+
+def append_web_chat_message(
+    user_id: int,
+    chat_id: str,
+    *,
+    role: str,
+    text: str = "",
+    media: list[dict] | None = None,
+    mode: str | None = None,
+    model: str | None = None,
+    aspect: str | None = None,
+    charged: int = 0,
+    balance: int | None = None,
+) -> bool:
+    """Append one bounded message to an owned web chat."""
+    value = str(chat_id or "").strip()
+    role_value = str(role or "").strip().lower()
+    if role_value not in {"user", "assistant"} or not value:
+        return False
+    try:
+        encoded_media = json.dumps((media or [])[:4], ensure_ascii=False, separators=(",", ":"))
+        if len(encoded_media) > _WEB_CHAT_MEDIA_MAX:
+            encoded_media = "[]"
+        with _LOCK:
+            conn = _conn()
+            owned = conn.execute(
+                "SELECT 1 FROM web_chats WHERE chat_id=? AND user_id=?",
+                (value, int(user_id)),
+            ).fetchone()
+            if owned is None:
+                return False
+            clean_text = str(text or "")[:_WEB_CHAT_TEXT_MAX]
+            conn.execute(
+                """
+                INSERT INTO web_chat_messages
+                  (chat_id, user_id, role, text, media_json, mode, model, aspect, charged, balance)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    value, int(user_id), role_value, clean_text, encoded_media,
+                    str(mode or "")[:32] or None, str(model or "")[:64] or None,
+                    str(aspect or "")[:32] or None, max(0, int(charged or 0)),
+                    int(balance) if balance is not None else None,
+                ),
+            )
+            if role_value == "user":
+                conn.execute(
+                    "UPDATE web_chats SET title=CASE WHEN title='' THEN ? ELSE title END, "
+                    "updated_at=datetime('now') WHERE chat_id=? AND user_id=?",
+                    (clean_text[:120], value, int(user_id)),
+                )
+            else:
+                conn.execute(
+                    "UPDATE web_chats SET updated_at=datetime('now') WHERE chat_id=? AND user_id=?",
+                    (value, int(user_id)),
+                )
+            conn.commit()
+            return True
+    except Exception:  # noqa: BLE001
+        log.warning("append_web_chat_message failed for user_id=%r", user_id, exc_info=True)
+        return False
+
 
 def save_prompt_history(user_id: int, prompt: str) -> None:
     """Persist a generated prompt; trims to keep only the latest N per user."""
@@ -4890,8 +5174,9 @@ def _support_tickets_for_admin(conn: sqlite3.Connection, user_id: int, limit: in
 
 
 def get_admin_user_detail(user_id: int) -> dict:
-    """Return an operator/debug dossier for one Telegram user."""
+    """Return an operator/debug dossier for one cross-platform user."""
     profile = get_user_profile(int(user_id))
+    identity = get_identity_by_internal_id(int(user_id))
     try:
         with _LOCK:
             conn = _conn()
@@ -4920,21 +5205,41 @@ def get_admin_user_detail(user_id: int) -> dict:
                     (int(user_id),),
                 )
             ]
+            prompt_history = [
+                {
+                    "prompt": str(r["prompt"] or ""),
+                    "created_at": r["created_at"],
+                }
+                for r in _rows(
+                    conn,
+                    """
+                    SELECT prompt, created_at
+                    FROM prompt_history
+                    WHERE user_id=?
+                    ORDER BY id DESC LIMIT 20
+                    """,
+                    (int(user_id),),
+                )
+            ]
         return {
             "profile": profile,
+            "identity": identity,
             "recent_payments": recent_payments,
             "recent_jobs": recent_jobs,
             "credit_events": credit_events,
             "support_tickets": support_tickets,
+            "prompt_history": prompt_history,
         }
     except Exception:  # noqa: BLE001
         log.warning("get_admin_user_detail failed for user_id=%r", user_id, exc_info=True)
         return {
             "profile": profile,
+            "identity": identity,
             "recent_payments": [],
             "recent_jobs": [],
             "credit_events": [],
             "support_tickets": [],
+            "prompt_history": [],
         }
 
 

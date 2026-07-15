@@ -50,6 +50,7 @@ _VIDEO_ASPECTS = frozenset({"portrait", "landscape"})
 _MODES = frozenset({"image", "edit", "video", "animate"})
 _CONFIRMATION_RE = re.compile(r"^[0-9]{6}$")
 _TELEGRAM_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,32}$")
+_WEB_CHAT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,96}$")
 
 
 @dataclass(frozen=True)
@@ -467,6 +468,8 @@ class _WebAdapter:
 
     def register(self, app: web.Application) -> None:
         app.router.add_get("/web/api/session", self.session)
+        app.router.add_get("/web/api/chats", self.chats)
+        app.router.add_get("/web/api/chats/{chat_id}", self.chat)
         app.router.add_post("/web/api/auth/telegram/start", self.telegram_start)
         app.router.add_post("/web/api/auth/telegram/complete", self.telegram_complete)
         app.router.add_post("/web/api/auth/max", self.max_complete)
@@ -498,6 +501,16 @@ class _WebAdapter:
         internal_id = int(identity.get("internal_user_id") or 0)
         if not internal_id:
             return _Session(sid, 0, needs_cookie)
+        observe_user = getattr(self._d.metrics, "upsert_user", None)
+        if callable(observe_user):
+            try:
+                observe_user(
+                    internal_id,
+                    first_name=str(identity.get("display_name") or "") or None,
+                    channel=f"web_{str(identity.get('platform') or '').strip().lower()}",
+                )
+            except Exception:
+                self._d.log.warning("web user projection failed", exc_info=True)
         return _Session(
             sid,
             internal_id,
@@ -618,7 +631,60 @@ class _WebAdapter:
             },
             "limits": {"prompt": 2000, "image_bytes": self._d.config.max_image_bytes},
         }
+        if session.authenticated:
+            payload["history"] = self._d.metrics.get_prompt_history(
+                session.internal_user_id, limit=20
+            )
+            payload["chats"] = self._d.metrics.list_web_chats(
+                session.internal_user_id, limit=30
+            )
         return self._response(payload, session=session)
+
+    async def chats(self, request: web.Request) -> web.Response:
+        """List authenticated website conversations owned by this account."""
+        session = self._session(request)
+        if session is None:
+            return self._response({"error": "session_unavailable"}, status=503)
+        if not session.authenticated:
+            return self._auth_required(session)
+        return self._response(
+            {"chats": self._d.metrics.list_web_chats(session.internal_user_id, limit=30)},
+            session=session,
+        )
+
+    async def chat(self, request: web.Request) -> web.Response:
+        """Load one owned chat; ids are opaque and never accepted cross-user."""
+        session = self._session(request, create=False)
+        if session is None or not session.authenticated:
+            return self._auth_required(session or _Session("", 0, False))
+        chat_id = str(request.match_info.get("chat_id") or "")
+        if not _WEB_CHAT_ID_RE.fullmatch(chat_id):
+            return self._response({"error": "invalid_chat"}, status=400, session=session)
+        value = self._d.metrics.get_web_chat(session.internal_user_id, chat_id, limit=80)
+        if value is None:
+            return self._response({"error": "chat_not_found"}, status=404, session=session)
+        return self._response(value, session=session)
+
+    @staticmethod
+    def _context_prompt(chat: dict | None, prompt: str) -> str:
+        """Bound prior turns and delimit them from the new user instruction."""
+        if not chat:
+            return prompt
+        turns = []
+        for item in (chat.get("messages") or [])[-10:]:
+            role = "user" if item.get("role") == "user" else "assistant"
+            text = str(item.get("text") or "").strip()
+            if text:
+                turns.append(f"{role}: {text[:1200]}")
+        if not turns:
+            return prompt
+        context = "\n".join(turns)
+        return (
+            "Контекст предыдущих сообщений этого чата. Используй его только "
+            "для понимания ссылок и продолжения задачи; текущая инструкция "
+            "имеет приоритет.\n<chat_context>\n"
+            f"{context}\n</chat_context>\nТекущая инструкция пользователя:\n{prompt}"
+        )[:8000]
 
     async def experiment(self, request: web.Request) -> web.Response:
         """Record a bounded, non-identifying public landing experiment event."""
@@ -853,6 +919,17 @@ class _WebAdapter:
         if mode not in _MODES or not 3 <= len(prompt) <= 2000:
             return self._response({"error": "invalid_request"}, status=400, session=session)
 
+        requested_chat_id = str(body.get("chat_id") or "").strip()
+        chat = None
+        if requested_chat_id:
+            if not _WEB_CHAT_ID_RE.fullmatch(requested_chat_id):
+                return self._response({"error": "invalid_chat"}, status=400, session=session)
+            chat = self._d.metrics.get_web_chat(
+                session.internal_user_id, requested_chat_id, limit=80
+            )
+            if chat is None:
+                return self._response({"error": "chat_not_found"}, status=404, session=session)
+
         image_model = str(body.get("image_model") or DEFAULT_IMAGE_MODEL).strip().lower()
         video_model = str(body.get("video_model") or "omni-flash-4s").strip().lower()
         if image_model not in IMAGE_MODELS or video_model not in VIDEO_MODELS:
@@ -891,7 +968,7 @@ class _WebAdapter:
 
         backend_request: dict[str, Any] = {
             "kind": kind,
-            "prompt": prompt,
+            "prompt": self._context_prompt(chat, prompt),
             "user_id": session.internal_user_id,
             "aspect_ratio": aspect,
             "num_images": count,
@@ -933,6 +1010,44 @@ class _WebAdapter:
             source="web",
             payload={"mode": mode, "model": image_model if mode in {"image", "edit"} else video_model, "count": count, "price": price},
         )
+        self._d.metrics.save_prompt_history(session.internal_user_id, prompt)
+        chat_id = requested_chat_id or secrets.token_urlsafe(18)
+        if not _WEB_CHAT_ID_RE.fullmatch(chat_id):
+            self._d.log.warning("web chat id generation failed after successful request")
+        elif self._d.metrics.create_web_chat(session.internal_user_id, chat_id, prompt[:120]):
+            if not self._d.metrics.append_web_chat_message(
+                session.internal_user_id,
+                chat_id,
+                role="user",
+                text=prompt,
+                mode=mode,
+                model=image_model if mode in {"image", "edit"} else video_model,
+                aspect=aspect,
+            ):
+                self._d.log.warning("web chat user message persistence failed")
+            result_balance = self._credits.balance(session.internal_user_id)
+            if not self._d.metrics.append_web_chat_message(
+                session.internal_user_id,
+                chat_id,
+                role="assistant",
+                text="Готово",
+                media=result.get("media") or [],
+                mode=mode,
+                model=image_model if mode in {"image", "edit"} else video_model,
+                aspect=aspect,
+                charged=price,
+                balance=result_balance,
+            ):
+                self._d.log.warning("web chat assistant message persistence failed")
+            result["chat_id"] = chat_id
+            chat_rows = self._d.metrics.list_web_chats(session.internal_user_id, limit=30)
+            result["chat"] = next((row for row in chat_rows if row.get("chat_id") == chat_id), {
+                "chat_id": chat_id, "title": prompt[:120], "messages": 2,
+            })
+        else:
+            # Generation and billing already succeeded.  Never turn a storage
+            # outage into a paid 502; the prompt ledger still records the turn.
+            self._d.log.warning("web chat creation failed after successful request")
         result["balance"] = self._credits.balance(session.internal_user_id)
         result["charged"] = price
         return self._response(result, session=session)
