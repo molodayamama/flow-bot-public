@@ -1182,3 +1182,21 @@ For the documentation bootstrap task:
   no instance, so screenshot/manual visual QA is not claimed.
 - VPS backup, `sub2` → `sub5` runtime switch, immutable deployment, and public
   health checks remain the controlled post-commit steps.
+
+## 2026-07-15 — production closeout
+
+- Pushed immutable commit `7c5132951f9a02ba9ebe900e4b908e7069f43e0a` to
+  `origin/refactor`; `deploy.sh` passed tracked-secret audit, compilation, two
+  production preflight runs, static synchronization, and bot restarts.
+- Runtime state backup `/root/backups/geminifree-20260715-182759/` passed the
+  repository backup verifier (13 state/SQLite files). Protected env/systemd/
+  gost configuration and sub2/sub5 profile archives were retained separately;
+  the manifest SHA-256 was recorded in `HANDOFF.md`.
+- Sanitized VPS inspection confirmed exactly `sub1,sub4,sub5`, all three
+  profiles and proxy channels present, and `IDLE_PARK_SEC=0`. `gost-sub2` is
+  disabled/inactive; `gost-sub5` is enabled/active; consumer and seller bot
+  services are active.
+- `nginx -t` passed. Source and `/var/www/photozhab` hashes match for app
+  HTML/JS/CSS. Public home, app, image page, video page, and sitemap returned
+  HTTP 200. No paid generation, payment, captcha, OAuth token exchange, or
+  browser-profile login smoke was performed.
