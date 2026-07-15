@@ -1218,3 +1218,10 @@ For the documentation bootstrap task:
 - No generation, payment, captcha, OAuth exchange, proxy, or browser-profile
   call was made. The in-app browser runtime exposed no browser instance, so
   screenshot/manual visual QA is not claimed.
+- Deployment: immutable `5b2f2ec440b1c9bbd186e92decce4a1239272266` is checked
+  out on the VPS. `deploy.sh` created and verified 13 runtime backup files at
+  `/root/backups/geminifree-deploy/runtime-20260715T193611Z-7c5132951f9a`;
+  tracked-secret audit, both production preflight runs, service restarts, and
+  static synchronization passed. Public `/`, `/app.html`, `/robots.txt`, and
+  `/sitemap.xml` returned HTTP 200; an anonymous invalid download token returned
+  HTTP 404. No paid generation/payment/OAuth/captcha smoke was performed.
