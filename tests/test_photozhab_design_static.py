@@ -156,6 +156,14 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertIn('.onboarding-topline', self.app_css)
         self.assertIn('class="count-slider__ticks"', self.app)
         self.assertIn('get_prompt_history', (ROOT / "channels" / "web" / "app.py").read_text(encoding="utf-8"))
+        for marker in (
+            ".media-result-frame", ".media-result-actions", ".media-flight-clone",
+            "@keyframes pz-reference-arrival",
+        ):
+            self.assertIn(marker, self.app_css)
+        self.assertIn('useResultAsSource(media, "edit"', self.app_js)
+        self.assertIn('useResultAsSource(media, "animate"', self.app_js)
+        self.assertIn("media.download_url || media.url", self.app_js)
 
     def test_secondary_pages_share_archive_three_chrome(self) -> None:
         for name in (

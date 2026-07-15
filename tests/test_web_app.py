@@ -23,6 +23,45 @@ from channels.web.app import WebAppConfig, WebAppDeps, register_web_app
 ORIGIN = "https://photozhab.test"
 
 
+class _RemoteImageContent:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    async def iter_chunked(self, _size: int):
+        yield self._body
+
+
+class _RemoteImageResponse:
+    def __init__(self, body: bytes) -> None:
+        self.status = 200
+        self.headers = {"Content-Length": str(len(body))}
+        self.content = _RemoteImageContent(body)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+class _RemoteImageClient:
+    body = b"\x89PNG\r\n\x1a\nphotozhab-test-image"
+    requests: list[tuple[str, dict]] = []
+
+    def __init__(self, **_kwargs) -> None:
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    def get(self, url: str, **kwargs):
+        type(self).requests.append((url, kwargs))
+        return _RemoteImageResponse(type(self).body)
+
+
 def _max_init_data(token: str, *, user_id: int = 55, auth_date: int | None = None) -> str:
     values = {
         "auth_date": str(int(time.time()) if auth_date is None else auth_date),
@@ -188,7 +227,9 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
                 {"title": "Документальный", "prompt": "documentary portrait in natural light"},
             ]
         }
-        self.backend_result = {"images": [{"url": "https://media.example/result.png"}]}
+        self.backend_result = {
+            "images": [{"url": "https://flow-content.google/image/result.png"}]
+        }
         self.backend_wait: asyncio.Event | None = None
         self.backend_started: asyncio.Event | None = None
         self.payment_calls = []
@@ -387,7 +428,15 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200, payload)
         self.assertEqual(payload["charged"], 30)
         self.assertEqual(payload["balance"], 70)
-        self.assertEqual(payload["media"], [{"type": "image", "url": "https://media.example/result.png"}])
+        self.assertEqual(payload["media"][0]["type"], "image")
+        self.assertEqual(
+            payload["media"][0]["url"],
+            "https://flow-content.google/image/result.png",
+        )
+        self.assertRegex(
+            payload["media"][0]["download_url"],
+            r"^/web/api/download/[A-Za-z0-9_-]{16,96}$",
+        )
         self.assertRegex(payload["chat_id"], r"^[A-Za-z0-9_-]{16,96}$")
         self.assertEqual(payload["chat"]["title"], "safe prompt")
         self.assertNotIn("account_id", payload)
@@ -397,6 +446,43 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.metrics.prompt_history[internal_id], ["safe prompt"])
         session = await self.client.get("/web/api/session")
         self.assertEqual((await session.json())["history"], ["safe prompt"])
+
+    async def test_image_download_is_attachment_owner_scoped_and_never_follows_automatically(self):
+        generated = await self.post(
+            "/web/api/generate", {"mode": "image", "prompt": "safe prompt"}
+        )
+        payload = await generated.json()
+        download_url = payload["media"][0]["download_url"]
+        _RemoteImageClient.requests.clear()
+        with patch("channels.web.app.ClientSession", _RemoteImageClient):
+            downloaded = await self.client.get(download_url)
+        self.assertEqual(downloaded.status, 200)
+        self.assertEqual(await downloaded.read(), _RemoteImageClient.body)
+        self.assertEqual(downloaded.content_type, "image/png")
+        self.assertEqual(
+            downloaded.headers["Content-Disposition"],
+            'attachment; filename="photozhab-image.png"',
+        )
+        self.assertEqual(downloaded.headers["Cache-Control"], "private, no-store")
+        self.assertEqual(len(_RemoteImageClient.requests), 1)
+        requested_url, options = _RemoteImageClient.requests[0]
+        self.assertEqual(requested_url, "https://flow-content.google/image/result.png")
+        self.assertFalse(options["allow_redirects"])
+
+        self.client.session.cookie_jar.clear()
+        await self.client.get("/web/api/session")
+        denied = await self.client.get(download_url)
+        self.assertEqual(denied.status, 404)
+
+    async def test_untrusted_backend_image_url_is_rejected_and_refunded(self):
+        self.backend_result = {"images": [{"url": "https://media.example/result.png"}]}
+        response = await self.post(
+            "/web/api/generate", {"mode": "image", "prompt": "safe prompt"}
+        )
+        self.assertEqual(response.status, 502)
+        self.assertEqual(await response.json(), {"error": "generation_failed"})
+        internal_id = next(iter(self.metrics.credits))
+        self.assertEqual(self.metrics.credits[internal_id], 100)
 
     async def test_chat_context_and_restore_are_scoped_to_selected_chat(self):
         first = await self.post("/web/api/generate", {"mode": "image", "prompt": "сделай красный дом"})
@@ -471,9 +557,17 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
         payload = await response.json()
         self.assertEqual(response.status, 200, payload)
         media_url = payload["media"][0]["url"]
+        download_url = payload["media"][0]["download_url"]
         media = await self.client.get(media_url)
         self.assertEqual(media.status, 200)
         self.assertEqual(await media.read(), video)
+        self.assertTrue(media.headers["Content-Disposition"].startswith("inline;"))
+        downloaded = await self.client.get(download_url)
+        self.assertEqual(downloaded.status, 200)
+        self.assertEqual(await downloaded.read(), video)
+        self.assertTrue(
+            downloaded.headers["Content-Disposition"].startswith("attachment;")
+        )
         self.client.session.cookie_jar.clear()
         await self.client.get("/web/api/session")
         denied = await self.client.get(media_url)

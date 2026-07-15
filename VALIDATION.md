@@ -1200,3 +1200,21 @@ For the documentation bootstrap task:
   HTML/JS/CSS. Public home, app, image page, video page, and sitemap returned
   HTTP 200. No paid generation, payment, captcha, OAuth token exchange, or
   browser-profile login smoke was performed.
+
+## 2026-07-16 — result actions and owner-scoped downloads
+
+- Canonical full offline gate: `python -m pytest -q` — **1559 tests passed**.
+- Focused web/API/design gate: `python -m pytest -q tests/test_web_app.py
+  tests/test_web_app_static.py tests/test_photozhab_design_static.py` — **48
+  tests passed**.
+- `python -m py_compile channels/web/app.py`, `node --check
+  deploy/photozhab/app.js`, and `git diff --check` passed.
+- Covered contracts: Google-host allowlisting, opaque owner-scoped image
+  download tokens, fixed attachment disposition, cross-session denial,
+  untrusted upstream rejection with credit refund, video inline/download
+  separation, archive-4 Edit/Animate actions, button busy recovery,
+  fly-to-composer motion, mobile wrapping, keyboard focus, and
+  `prefers-reduced-motion` fallback.
+- No generation, payment, captcha, OAuth exchange, proxy, or browser-profile
+  call was made. The in-app browser runtime exposed no browser instance, so
+  screenshot/manual visual QA is not claimed.

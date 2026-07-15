@@ -744,6 +744,9 @@ function renderResult(target, payload, request) {
   payload.media.forEach((media) => {
     const figure = document.createElement("figure");
     figure.className = "media-result";
+    figure.dataset.result = "generated";
+    const frame = document.createElement("div");
+    frame.className = "media-result-frame";
     let node;
     if (media.type === "video") {
       node = document.createElement("video"); node.controls = true; node.playsInline = true; node.preload = "metadata";
@@ -751,18 +754,23 @@ function renderResult(target, payload, request) {
       node = document.createElement("img"); node.alt = "Изображение, созданное Photozhab"; node.loading = "lazy";
     }
     node.src = media.url;
+    frame.append(node);
     const actions = document.createElement("div"); actions.className = "media-result-actions";
     const link = document.createElement("a");
-    link.href = media.url; link.target = "_blank"; link.rel = "noopener"; link.download = ""; link.textContent = "↓ Скачать";
+    link.className = "media-result-action media-result-action--download";
+    link.href = media.download_url || media.url;
+    link.download = media.type === "video" ? "photozhab-video.mp4" : "photozhab-image";
+    link.textContent = "↓ Скачать";
+    link.setAttribute("aria-label", media.type === "video" ? "Скачать видео" : "Скачать изображение");
     actions.append(link);
     if (media.type !== "video") {
-      const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "✎ Изменить";
-      edit.addEventListener("click", () => useResultAsSource(media.url, "edit"));
-      const animate = document.createElement("button"); animate.type = "button"; animate.textContent = "◉ Оживить";
-      animate.addEventListener("click", () => useResultAsSource(media.url, "animate"));
+      const edit = document.createElement("button"); edit.type = "button"; edit.className = "media-result-action"; edit.textContent = "✎ Редактировать";
+      edit.addEventListener("click", () => useResultAsSource(media, "edit", node, edit));
+      const animate = document.createElement("button"); animate.type = "button"; animate.className = "media-result-action"; animate.textContent = "◉ Оживить";
+      animate.addEventListener("click", () => useResultAsSource(media, "animate", node, animate));
       actions.append(edit, animate);
     }
-    figure.append(node, actions); grid.append(figure);
+    figure.append(frame, actions); grid.append(figure);
     state.gallery.unshift({
       type: media.type === "video" ? "video" : "image",
       url: media.url,
@@ -780,11 +788,56 @@ function renderResult(target, payload, request) {
   scrollBottom();
 }
 
-async function useResultAsSource(url, mode) {
+function reducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+}
+
+async function animateReferenceTransfer(sourceNode) {
+  if (!sourceNode || reducedMotion()) return;
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const from = sourceNode.getBoundingClientRect();
+  const to = elements.uploadImage.getBoundingClientRect();
+  if (!from.width || !from.height || !to.width || !to.height) return;
+  const clone = sourceNode.cloneNode(true);
+  clone.className = "media-flight-clone";
+  clone.removeAttribute("loading");
+  Object.assign(clone.style, {
+    left: `${from.left}px`, top: `${from.top}px`, width: `${from.width}px`, height: `${from.height}px`,
+  });
+  document.body.append(clone);
+  const shiftX = to.left - from.left;
+  const shiftY = to.top - from.top;
+  const scaleX = to.width / from.width;
+  const scaleY = to.height / from.height;
   try {
-    const response = await fetch(url, {credentials: "same-origin"});
+    await clone.animate([
+      {transform: "translate3d(0, 0, 0) scale(1)", opacity: 1, borderRadius: "16px"},
+      {transform: `translate3d(${shiftX}px, ${shiftY}px, 0) scale(${scaleX}, ${scaleY})`, opacity: 0.34, borderRadius: "9px"},
+    ], {duration: 560, easing: "cubic-bezier(0.4, 0, 0.2, 1)", fill: "forwards"}).finished;
+  } catch (_) {
+    // Attachment is already complete; interrupted decorative motion must not fail it.
+  } finally {
+    clone.remove();
+  }
+  elements.uploadPreview.classList.remove("is-reference-arrival");
+  void elements.uploadPreview.offsetWidth;
+  elements.uploadPreview.classList.add("is-reference-arrival");
+}
+
+async function useResultAsSource(media, mode, sourceNode, trigger) {
+  const idleLabel = trigger?.textContent || "";
+  if (trigger) {
+    trigger.disabled = true;
+    trigger.setAttribute("aria-busy", "true");
+    trigger.textContent = "Прикрепляю…";
+  }
+  try {
+    const sourceUrl = media.download_url || media.url;
+    const response = await fetch(sourceUrl, {credentials: "same-origin", cache: "no-store"});
     if (!response.ok) throw new Error("media_unavailable");
     const blob = await response.blob();
+    const maximum = Number(state.session?.limits.image_bytes || 10485760);
+    if (!blob.type.startsWith("image/") || !blob.size || blob.size > maximum) throw new Error("invalid_image");
     const dataUrl = await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result));
@@ -793,13 +846,22 @@ async function useResultAsSource(url, mode) {
     });
     setMode(mode);
     state.imageData = dataUrl;
-    state.imageName = "Результат Photozhab";
+    state.imageName = mode === "edit" ? "Редактировать это фото" : "Оживить это фото";
     elements.uploadImage.src = dataUrl;
     elements.uploadName.textContent = state.imageName;
     elements.uploadPreview.hidden = false;
+    await animateReferenceTransfer(sourceNode);
+    elements.composerWrap.scrollIntoView({behavior: reducedMotion() ? "auto" : "smooth", block: "end"});
     elements.prompt.focus();
+    toast(mode === "edit" ? "Фото прикреплено для редактирования" : "Фото прикреплено для оживления");
   } catch (_) {
-    toast("Откройте результат и загрузите его как референс");
+    toast("Не удалось прикрепить результат. Скачайте его и загрузите вручную.");
+  } finally {
+    if (trigger) {
+      trigger.disabled = false;
+      trigger.removeAttribute("aria-busy");
+      trigger.textContent = idleLabel;
+    }
   }
 }
 

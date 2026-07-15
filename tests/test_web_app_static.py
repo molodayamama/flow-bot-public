@@ -73,7 +73,9 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertIn("handleYandexLogin", self.js)
         self.assertIn("Яндекс ID пока недоступен", self.js)
         self.assertIn("consumeAuthResult", self.js)
-        self.assertNotIn('pointer-events: none', self.css)
+        self.assertNotIn(
+            '.auth-provider[aria-disabled="true"] { pointer-events: none', self.css
+        )
 
     def test_oauth_return_waits_for_authoritative_session_before_dialog(self) -> None:
         self.assertIn("async function initializeApp()", self.js)
@@ -105,6 +107,17 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertIn('elements.composer.dataset.mode = mode', self.js)
         self.assertIn('.composer[data-mode="video"] .composer-field--models', self.css)
         self.assertIn("overflow-x: auto", self.css)
+
+    def test_result_actions_download_and_reuse_real_media(self) -> None:
+        self.assertIn("media.download_url || media.url", self.js)
+        self.assertIn('link.download = media.type === "video"', self.js)
+        self.assertIn('useResultAsSource(media, "edit"', self.js)
+        self.assertIn('useResultAsSource(media, "animate"', self.js)
+        self.assertIn("async function animateReferenceTransfer", self.js)
+        self.assertIn("media-flight-clone", self.js)
+        self.assertIn("prefers-reduced-motion: reduce", self.css)
+        self.assertIn(".media-result-actions", self.css)
+        self.assertIn("app.js?v=20260716-a1", self.html)
 
     def test_home_promotes_first_party_generation(self) -> None:
         self.assertIn('href="/app.html">Создать на сайте</a>', self.home)

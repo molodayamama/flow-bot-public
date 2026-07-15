@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
-from urllib.parse import parse_qsl, urlencode, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from aiohttp import ClientSession, ClientTimeout, web
 
@@ -51,6 +51,14 @@ _MODES = frozenset({"image", "edit", "video", "animate"})
 _CONFIRMATION_RE = re.compile(r"^[0-9]{6}$")
 _TELEGRAM_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,32}$")
 _WEB_CHAT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,96}$")
+_REMOTE_MEDIA_HOSTS = (
+    "flow-content.google",
+    "labs.google",
+    "googleusercontent.com",
+    "googleapis.com",
+    "google.com",
+)
+_REMOTE_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 
 @dataclass(frozen=True)
@@ -248,6 +256,13 @@ class _MediaEntry:
     expires_at: float
 
 
+@dataclass(frozen=True)
+class _RemoteMediaEntry:
+    url: str
+    owner: str
+    expires_at: float
+
+
 class _MediaStore:
     def __init__(self, config: WebAppConfig) -> None:
         self._dir = config.media_dir.resolve()
@@ -307,6 +322,43 @@ class _MediaStore:
             entry.path.unlink(missing_ok=True)
 
 
+class _RemoteMediaStore:
+    """Bounded owner-scoped registry for provider images already generated."""
+
+    def __init__(self, ttl_seconds: int) -> None:
+        self._ttl = ttl_seconds
+        self._entries: dict[str, _RemoteMediaEntry] = {}
+        self._lock = asyncio.Lock()
+
+    async def put(self, owner: str, url: str) -> str:
+        if not _safe_remote_media_url(url):
+            raise ValueError("unsupported remote media url")
+        token = secrets.token_urlsafe(32)
+        async with self._lock:
+            self._cleanup_locked()
+            self._entries[token] = _RemoteMediaEntry(
+                url, owner, time.monotonic() + self._ttl
+            )
+        return token
+
+    async def get(self, owner: str, token: str) -> str | None:
+        if not _MEDIA_RE.fullmatch(token):
+            return None
+        async with self._lock:
+            self._cleanup_locked()
+            entry = self._entries.get(token)
+            if entry is None or entry.owner != owner:
+                return None
+            return entry.url
+
+    def _cleanup_locked(self) -> None:
+        now = time.monotonic()
+        for token in [
+            token for token, entry in self._entries.items() if entry.expires_at <= now
+        ]:
+            self._entries.pop(token, None)
+
+
 def _image_label(model_id: str, meta: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": model_id,
@@ -328,6 +380,27 @@ def _safe_https_url(value: Any) -> str | None:
     if len(url) > 4096 or parsed.scheme != "https" or not parsed.hostname:
         return None
     return url
+
+
+def _safe_remote_media_url(value: Any) -> str | None:
+    """Allow only known Google media hosts; never accept generic HTTPS URLs."""
+    url = _safe_https_url(value)
+    if url is None:
+        return None
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
+    if not any(host == allowed or host.endswith(f".{allowed}") for allowed in _REMOTE_MEDIA_HOSTS):
+        return None
+    return url
+
+
+def _image_content_type(data: bytes) -> tuple[str, str] | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png", "png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg", "jpg"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp", "webp"
+    return None
 
 
 def _decode_image(value: Any, maximum: int) -> str | None:
@@ -465,6 +538,7 @@ class _WebAdapter:
         self._experiment_gate = _GenerationGate(20, 60)
         self._prompt_gate = _GenerationGate(10, 60)
         self._media = _MediaStore(deps.config)
+        self._remote_media = _RemoteMediaStore(deps.config.media_ttl_seconds)
 
     def register(self, app: web.Application) -> None:
         app.router.add_get("/web/api/session", self.session)
@@ -480,6 +554,7 @@ class _WebAdapter:
         app.router.add_post("/web/api/prompt-improve", self.prompt_improve)
         app.router.add_post("/web/api/generate", self.generate)
         app.router.add_post("/web/api/payment", self.payment)
+        app.router.add_get("/web/api/download/{token}", self.download)
         app.router.add_get("/web/api/media/{token}", self.media)
 
     def _session(
@@ -663,7 +738,21 @@ class _WebAdapter:
         value = self._d.metrics.get_web_chat(session.internal_user_id, chat_id, limit=80)
         if value is None:
             return self._response({"error": "chat_not_found"}, status=404, session=session)
+        await self._refresh_download_urls(session, value)
         return self._response(value, session=session)
+
+    async def _refresh_download_urls(self, session: _Session, chat: dict[str, Any]) -> None:
+        """Issue fresh owner-scoped image download tokens when restoring a chat."""
+        for message in chat.get("messages") or []:
+            for media in message.get("media") or []:
+                if not isinstance(media, dict) or media.get("type") != "image":
+                    continue
+                url = _safe_remote_media_url(media.get("url"))
+                if url is None:
+                    media.pop("download_url", None)
+                    continue
+                token = await self._remote_media.put(session.sid, url)
+                media["download_url"] = f"/web/api/download/{token}"
 
     @staticmethod
     def _context_prompt(chat: dict | None, prompt: str) -> str:
@@ -1136,9 +1225,14 @@ class _WebAdapter:
         images = []
         for item in raw.get("images") or []:
             if isinstance(item, dict):
-                url = _safe_https_url(item.get("url"))
+                url = _safe_remote_media_url(item.get("url"))
                 if url:
-                    images.append({"type": "image", "url": url})
+                    token = await self._remote_media.put(session.sid, url)
+                    images.append({
+                        "type": "image",
+                        "url": url,
+                        "download_url": f"/web/api/download/{token}",
+                    })
         videos = []
         for item in raw.get("videos") or []:
             if not isinstance(item, dict):
@@ -1154,7 +1248,11 @@ class _WebAdapter:
                 token = await self._media.put(session.sid, data)
             except ValueError:
                 continue
-            videos.append({"type": "video", "url": f"/web/api/media/{token}"})
+            videos.append({
+                "type": "video",
+                "url": f"/web/api/media/{token}",
+                "download_url": f"/web/api/media/{token}?download=1",
+            })
         media = [*images, *videos]
         if not media:
             raise ValueError("backend returned no valid media")
@@ -1196,13 +1294,80 @@ class _WebAdapter:
         path = await self._media.get(session.sid, request.match_info.get("token", ""))
         if path is None:
             raise web.HTTPNotFound()
+        disposition = "attachment" if request.query.get("download") == "1" else "inline"
         response = web.FileResponse(path, headers={
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
-            "Content-Disposition": 'inline; filename="photozhab-video.mp4"',
+            "Content-Disposition": f'{disposition}; filename="photozhab-video.mp4"',
         })
         response.content_type = "video/mp4"
         return response
+
+    async def download(self, request: web.Request) -> web.StreamResponse:
+        """Proxy a generated Google image as a real, owner-scoped attachment."""
+        session = self._session(request, create=False)
+        if session is None or not session.authenticated:
+            raise web.HTTPNotFound()
+        url = await self._remote_media.get(
+            session.sid, request.match_info.get("token", "")
+        )
+        if url is None:
+            raise web.HTTPNotFound()
+        try:
+            body, content_type, extension = await self._fetch_remote_image(url)
+        except Exception:
+            self._d.log.warning("web image download proxy failed", exc_info=True)
+            raise web.HTTPBadGateway()
+        return web.Response(
+            body=body,
+            content_type=content_type,
+            headers={
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": (
+                    f'attachment; filename="photozhab-image.{extension}"'
+                ),
+            },
+        )
+
+    async def _fetch_remote_image(self, initial_url: str) -> tuple[bytes, str, str]:
+        timeout = ClientTimeout(total=30, connect=8)
+        current = initial_url
+        async with ClientSession(timeout=timeout) as client:
+            for redirect_count in range(5):
+                safe_url = _safe_remote_media_url(current)
+                if safe_url is None:
+                    raise ValueError("unsafe media redirect")
+                async with client.get(
+                    safe_url,
+                    allow_redirects=False,
+                    headers={"Accept": "image/avif,image/webp,image/png,image/jpeg"},
+                ) as response:
+                    if response.status in _REMOTE_REDIRECT_STATUSES:
+                        location = response.headers.get("Location", "")
+                        if not location or redirect_count == 4:
+                            raise ValueError("invalid media redirect")
+                        current = urljoin(safe_url, location)
+                        continue
+                    if response.status != 200:
+                        raise ValueError("media download failed")
+                    length = response.headers.get("Content-Length", "")
+                    if length:
+                        try:
+                            if int(length) > self._d.config.max_image_bytes:
+                                raise ValueError("media too large")
+                        except ValueError as exc:
+                            raise ValueError("invalid media length") from exc
+                    chunks = bytearray()
+                    async for chunk in response.content.iter_chunked(64 * 1024):
+                        chunks.extend(chunk)
+                        if len(chunks) > self._d.config.max_image_bytes:
+                            raise ValueError("media too large")
+                    kind = _image_content_type(bytes(chunks))
+                    if kind is None:
+                        raise ValueError("invalid image payload")
+                    return bytes(chunks), kind[0], kind[1]
+        raise ValueError("too many media redirects")
 
 
 def register_web_app(app: web.Application, deps: WebAppDeps) -> bool:
