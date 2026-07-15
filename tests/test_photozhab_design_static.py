@@ -132,7 +132,8 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         ):
             self.assertIn(marker, self.app)
         self.assertIn("rememberRequest(prompt)", self.app_js)
-        self.assertNotIn("localStorage", self.app_js)
+        self.assertIn('ONBOARDING_KEY_PREFIX = "photozhabOnboardingV1"', self.app_js)
+        self.assertNotIn("localStorage.setItem(\"gallery", self.app_js)
         self.assertIn("Claude Design B v2: generation app", self.app_css)
         self.assertIn("grid-template-columns: 264px", self.app_css)
         self.assertIn("@media (max-width: 820px)", self.app_css)
@@ -148,6 +149,22 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertIn('if (state.mode === "image") setMode("edit")', self.app_js)
         self.assertIn("width: min(820px", self.app_css)
         self.assertIn(".generation-progress-card", self.app_css)
+        for marker in ('id="improve-button"', 'id="improve-panel"', 'id="onboarding"', 'id="skip-onboarding"'):
+            self.assertIn(marker, self.app)
+        self.assertIn('composer.dataset.mode = mode', self.app_js)
+        self.assertIn('.composer[data-mode="video"] .composer-field--models', self.app_css)
+        self.assertIn('.onboarding-topline', self.app_css)
+
+    def test_secondary_pages_share_archive_three_chrome(self) -> None:
+        for name in (
+            "generaciya-kartinok.html", "generaciya-video.html", "nano-banana.html",
+            "max-bot.html", "oferta.html", "privacy.html", "consent.html",
+        ):
+            source = (SITE / name).read_text(encoding="utf-8")
+            self.assertIn('class="topbar-cta" href="/app.html"', source, name)
+            self.assertIn('<svg width="18" height="18" viewBox="0 0 32 32">', source, name)
+            self.assertIn('styles.css?v=20260715-b3', source, name)
+        self.assertIn("Design archive 3 — shared chrome", self.styles)
 
     def test_admin_uses_b_v2_tokens_without_mocking_live_values(self) -> None:
         for tab in (

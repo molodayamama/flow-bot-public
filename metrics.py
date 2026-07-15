@@ -81,6 +81,7 @@ __all__ = [
     "create_web_oauth_state",
     "consume_web_oauth_state",
     "consume_web_auth_assertion",
+    "grant_identity_welcome_credits",
     "credits_balance_for_identity",
     "credits_charge_for_identity",
     "credits_refund_for_identity",
@@ -325,6 +326,20 @@ CREATE TABLE IF NOT EXISTS web_auth_assertions (
     expires_at        INTEGER NOT NULL,
     PRIMARY KEY (provider, assertion_hash)
 );
+
+-- Provider-scoped welcome credits.  The ledger row and balance mutation are
+-- committed in one transaction so retries/concurrent OAuth callbacks cannot
+-- grant the same identity twice.
+CREATE TABLE IF NOT EXISTS identity_welcome_grants (
+    platform          TEXT NOT NULL,
+    platform_user_id  TEXT NOT NULL,
+    internal_user_id  INTEGER NOT NULL,
+    credits           INTEGER NOT NULL,
+    created_at        TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (platform, platform_user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_identity_welcome_grants_internal
+    ON identity_welcome_grants(internal_user_id);
 
 CREATE TABLE IF NOT EXISTS user_gallery (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1246,6 +1261,69 @@ def delete_web_auth_session(session_id: str) -> bool:
     except Exception:  # noqa: BLE001
         log.warning("delete_web_auth_session failed", exc_info=True)
         return False
+
+
+def grant_identity_welcome_credits(
+    platform: str,
+    platform_user_id: str | int,
+    internal_user_id: int,
+    credits: int,
+) -> dict | None:
+    """Atomically grant provider-scoped welcome credits at most once.
+
+    The verified identity must already be present in ``user_identities`` and
+    own ``internal_user_id``.  A successful retry returns the current balance
+    with ``granted=False``; storage/identity errors return ``None`` so callers
+    can fail closed instead of promising a bonus that was not persisted.
+    """
+    try:
+        identity = platform_identity(platform, platform_user_id)
+        uid = int(internal_user_id)
+        amount = int(credits)
+        if not uid or amount <= 0:
+            return None
+        with _LOCK:
+            conn = _conn()
+            conn.execute("BEGIN IMMEDIATE")
+            owner = conn.execute(
+                "SELECT internal_user_id FROM user_identities "
+                "WHERE platform=? AND platform_user_id=?",
+                (identity.platform, identity.platform_user_id),
+            ).fetchone()
+            if owner is None or int(owner[0]) != uid:
+                conn.rollback()
+                return None
+            inserted = conn.execute(
+                "INSERT OR IGNORE INTO identity_welcome_grants "
+                "(platform, platform_user_id, internal_user_id, credits) "
+                "VALUES (?, ?, ?, ?)",
+                (identity.platform, identity.platform_user_id, uid, amount),
+            ).rowcount
+            if inserted:
+                conn.execute(
+                    "INSERT INTO credits (user_id, balance, granted, updated_at) "
+                    "VALUES (?, ?, 1, datetime('now')) "
+                    "ON CONFLICT(user_id) DO UPDATE SET "
+                    "balance=balance+excluded.balance, granted=1, "
+                    "updated_at=datetime('now')",
+                    (uid, amount),
+                )
+            row = conn.execute(
+                "SELECT balance FROM credits WHERE user_id=?", (uid,)
+            ).fetchone()
+            conn.commit()
+            return {
+                "granted": bool(inserted),
+                "balance": int(row[0]) if row else 0,
+            }
+    except Exception:  # noqa: BLE001 - welcome credit must fail closed
+        try:
+            if _CONN is not None:
+                _CONN.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        log.warning("grant_identity_welcome_credits failed", exc_info=True)
+        return None
 
 
 def create_web_login_challenge(

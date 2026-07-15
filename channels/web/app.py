@@ -74,6 +74,7 @@ class WebAppConfig:
     max_mini_app_url: str = "https://max.ru/se13461237_bot?startapp=web"
     yandex_client_id: str = ""
     yandex_client_secret: str = ""
+    yandex_starter_credits: int = 30
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "WebAppConfig":
@@ -116,6 +117,7 @@ class WebAppConfig:
             ),
             yandex_client_id=str(source.get("WEB_YANDEX_CLIENT_ID", "")),
             yandex_client_secret=str(source.get("WEB_YANDEX_CLIENT_SECRET", "")),
+            yandex_starter_credits=integer("WEB_YANDEX_STARTER_CREDITS", 30, 0, 1000),
         )
 
     def validate(self) -> None:
@@ -804,6 +806,15 @@ class _WebAdapter:
             raise web.HTTPFound("/app.html?auth=failed")
         authenticated = self._bind_authenticated(session, identity)
         if authenticated is None:
+            raise web.HTTPFound("/app.html?auth=failed")
+        welcome = self._d.metrics.grant_identity_welcome_credits(
+            "yandex",
+            str(identity.get("platform_user_id") or ""),
+            authenticated.internal_user_id,
+            self._d.config.yandex_starter_credits,
+        )
+        if welcome is None:
+            self._d.metrics.delete_web_auth_session(authenticated.sid)
             raise web.HTTPFound("/app.html?auth=failed")
         self._d.metrics.log_event(
             "web_login_success", user_id=authenticated.internal_user_id, source="yandex"

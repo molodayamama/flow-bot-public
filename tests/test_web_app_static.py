@@ -88,6 +88,19 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertIn('aria-live="polite"', self.html)
         self.assertIn('aria-label="Описание результата"', self.html)
 
+    def test_archive_three_onboarding_and_prompt_helper_are_real_ui(self) -> None:
+        for marker in ('id="onboarding"', 'id="skip-onboarding"', 'id="improve-button"', 'id="improve-variants"'):
+            self.assertIn(marker, self.html)
+        self.assertIn("function improvedPromptVariants()", self.js)
+        self.assertIn("бесплатно · обрабатывается в браузере", self.html)
+        self.assertNotIn("/web/api/improve", self.js)
+        self.assertIn("min-height: 54px", self.css)
+
+    def test_video_models_have_their_own_overflow_rail(self) -> None:
+        self.assertIn('elements.composer.dataset.mode = mode', self.js)
+        self.assertIn('.composer[data-mode="video"] .composer-field--models', self.css)
+        self.assertIn("overflow-x: auto", self.css)
+
     def test_home_promotes_first_party_generation(self) -> None:
         self.assertIn('href="/app.html">Создать на сайте</a>', self.home)
         self.assertIn("прямо на сайте, в Telegram или MAX", self.home)

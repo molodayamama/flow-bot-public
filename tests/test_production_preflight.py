@@ -293,6 +293,24 @@ class ProductionPreflightTests(unittest.TestCase):
         )
         self.assertIn("WEB_MAX_MINI_APP_URL must use https://max.ru", report.errors)
 
+    def test_yandex_welcome_credit_must_remain_thirty_in_production(self) -> None:
+        env = dict(
+            self.env,
+            WEB_APP_ENABLED="1",
+            WEB_SESSION_SECRET="a-random-runtime-secret-over-thirty-two-chars",
+            WEB_PUBLIC_ORIGIN="https://photozhab.test",
+            WEB_YANDEX_CLIENT_ID="client",
+            WEB_YANDEX_CLIENT_SECRET="secret",
+            WEB_YANDEX_STARTER_CREDITS="0",
+            ROBOKASSA_ENABLED="1",
+            ROBOKASSA_MERCHANT_LOGIN="merchant",
+            ROBOKASSA_PASSWORD1="one",
+            ROBOKASSA_PASSWORD2="two",
+            ROBOKASSA_PUBLIC_BASE_URL="https://pay.photozhab.test",
+        )
+        report = validate_environment(env, root=self.root)
+        self.assertIn("WEB_YANDEX_STARTER_CREDITS must be 30 in production", report.errors)
+
     def test_legacy_json_credit_store_is_rejected_in_production(self) -> None:
         env = dict(self.env, CREDITS_SQLITE="0")
         report = validate_environment(env, root=self.root)

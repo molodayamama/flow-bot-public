@@ -205,6 +205,12 @@ def validate_environment(
             errors.append(
                 "WEB_YANDEX_CLIENT_ID and WEB_YANDEX_CLIENT_SECRET must be set together"
             )
+        try:
+            yandex_starter = int(source.get("WEB_YANDEX_STARTER_CREDITS", "30"))
+        except ValueError:
+            yandex_starter = -1
+        if production and yandex_client_id and yandex_starter != 30:
+            errors.append("WEB_YANDEX_STARTER_CREDITS must be 30 in production")
         max_mini_raw = source.get(
             "WEB_MAX_MINI_APP_URL", "https://max.ru/se13461237_bot?startapp=web"
         ).strip()

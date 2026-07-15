@@ -8,9 +8,9 @@
   <meta name="robots" content="noindex, follow">
   <meta name="theme-color" content="#0b0d0c">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self' https://auth.robokassa.ru">
-  <link rel="stylesheet" href="/styles.css?v=20260714-b2">
-  <link rel="stylesheet" href="/app.css?v=20260715-a1">
-  <script src="/app.js?v=20260715-a1" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=20260715-b3">
+  <link rel="stylesheet" href="/app.css?v=20260715-a2">
+  <script src="/app.js?v=20260715-a2" defer></script>
 </head>
 <body class="web-app-body">
   <div class="web-app-shell">
@@ -98,7 +98,20 @@
           <button id="remove-upload" type="button" aria-label="Удалить изображение">×</button>
         </div>
         <div class="composer" id="composer">
-          <textarea id="prompt" rows="1" maxlength="2000" placeholder="Опиши изображение, которое хочешь создать…" aria-label="Описание результата"></textarea>
+          <div class="upload-dropzone" id="upload-dropzone" hidden>
+            <button class="upload-dropzone__icon" id="upload-dropzone-trigger" type="button" aria-label="Выбрать фотографию">＋</button>
+            <span><strong id="upload-dropzone-title">Добавьте фотографию</strong><small>PNG, JPG или WebP до 10 МБ — нажмите, чтобы выбрать</small></span>
+          </div>
+          <div class="prompt-editor">
+            <textarea id="prompt" rows="1" maxlength="2000" placeholder="Опиши изображение, которое хочешь создать…" aria-label="Описание результата"></textarea>
+            <button class="improve-button" id="improve-button" type="button" hidden aria-expanded="false" aria-controls="improve-panel"><span aria-hidden="true">✦</span> Улучшить</button>
+          </div>
+          <section class="improve-panel" id="improve-panel" hidden aria-labelledby="improve-title">
+            <div class="improve-panel__head"><span id="improve-title"><b aria-hidden="true">✦</b> Варианты формулировки</span><button id="close-improve" type="button" aria-label="Закрыть варианты">×</button></div>
+            <div class="improve-loading" id="improve-loading" hidden aria-label="Подготавливаем варианты"><i></i><i></i><i></i></div>
+            <div class="improve-variants" id="improve-variants"></div>
+            <div class="improve-panel__foot"><button id="regenerate-improve" type="button">↻ Ещё варианты</button><span>бесплатно · обрабатывается в браузере</span></div>
+          </section>
           <div class="composer-toolbar" aria-label="Параметры генерации">
             <label class="mobile-mode-select"><span class="sr-only">Режим</span><select id="mode-select" aria-label="Режим"><option value="image">Картинка</option><option value="edit">Редактировать</option><option value="video">Видео</option><option value="animate">Оживить фото</option></select></label>
             <label class="upload-button" id="upload-button">
@@ -172,6 +185,23 @@
     <button class="payment-submit" id="payment-submit" type="button" disabled>Выберите пакет</button>
     <p class="payment-legal">Оплата на странице Robokassa — СБП, карта или другой способ на выбор. Баланс обновится автоматически. Нажимая «Оплатить», вы принимаете <a href="/oferta.html">оферту</a>.</p>
   </dialog>
+
+  <section class="onboarding" id="onboarding" hidden aria-modal="true" role="dialog" aria-labelledby="onboarding-title">
+    <div class="onboarding-panel">
+      <div class="onboarding-topline"><button id="skip-onboarding" type="button">Пропустить</button></div>
+      <div class="onboarding-art" id="onboarding-art" aria-hidden="true"><span id="onboarding-icon">✦</span></div>
+      <p class="onboarding-kicker" id="onboarding-kicker">Добро пожаловать</p>
+      <h2 id="onboarding-title">Photozhab — картинки и видео по тексту</h2>
+      <p class="onboarding-copy" id="onboarding-copy">Опишите идею обычными словами — нейросеть создаст изображение или видео. Без промпт-инженерии и VPN.</p>
+      <div class="onboarding-footer">
+        <div class="onboarding-dots" id="onboarding-dots" aria-label="Шаг 1 из 3"></div>
+        <div class="onboarding-actions">
+          <button class="onboarding-back" id="onboarding-back" type="button" aria-label="Назад" hidden>←</button>
+          <button class="onboarding-next" id="onboarding-next" type="button">Дальше <span aria-hidden="true">→</span></button>
+        </div>
+      </div>
+    </div>
+  </section>
   <div class="toast" id="toast" role="status" hidden></div>
 </body>
 </html>

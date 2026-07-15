@@ -45,6 +45,7 @@ class _Metrics:
         self.challenges = {}
         self.oauth_states = {}
         self.assertions = set()
+        self.welcome_grants = set()
 
     def ensure_user_identity(self, platform, platform_user_id):
         key = (str(platform), str(platform_user_id))
@@ -86,6 +87,14 @@ class _Metrics:
 
     def delete_web_auth_session(self, sid):
         return self.auth_sessions.pop(sid, None) is not None
+
+    def grant_identity_welcome_credits(self, platform, platform_user_id, internal_user_id, credits):
+        key = (str(platform), str(platform_user_id))
+        granted = key not in self.welcome_grants
+        if granted:
+            self.welcome_grants.add(key)
+            self.credits[int(internal_user_id)] = self.credits.get(int(internal_user_id), 0) + int(credits)
+        return {"granted": granted, "balance": self.credits.get(int(internal_user_id), 0)}
 
     def create_web_login_challenge(self, sid, challenge, **kwargs):
         self.challenges[challenge] = {"sid": sid}
@@ -417,6 +426,23 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
         payload = await current.json()
         self.assertTrue(payload["authenticated"])
         self.assertEqual(payload["identity"]["provider"], "yandex")
+        self.assertEqual(payload["balance"], 30)
+        self.assertEqual(self.metrics.welcome_grants, {("yandex", "ya-55")})
+
+        await self.post("/web/api/auth/logout", {})
+        started_again = await self.client.get("/web/api/auth/yandex/start", allow_redirects=False)
+        state_again = parse_qs(urlparse(started_again.headers["Location"]).query)["state"][0]
+        with patch(
+            "channels.web.app._fetch_yandex_identity",
+            new=AsyncMock(return_value=fake_identity),
+        ):
+            callback_again = await self.client.get(
+                f"/web/api/auth/yandex/callback?code=another-code&state={state_again}",
+                allow_redirects=False,
+            )
+        self.assertEqual(callback_again.headers["Location"], "/app.html?auth=success")
+        current_again = await self.client.get("/web/api/session")
+        self.assertEqual((await current_again.json())["balance"], 30)
 
     async def test_yandex_callback_rejects_different_browser_cookie(self):
         await self.post("/web/api/auth/logout", {})

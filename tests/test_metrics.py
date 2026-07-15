@@ -98,6 +98,30 @@ class WebAuthenticationStateTests(MetricsTestBase):
             "max", "expired", now=201, expires_at=200
         ))
 
+    def test_yandex_welcome_credit_is_atomic_and_idempotent(self) -> None:
+        internal_id = metrics.ensure_user_identity("yandex", "ya-55")
+        self.assertLess(internal_id, 0)
+        metrics.credits_balance(internal_id, 0)
+
+        first = metrics.grant_identity_welcome_credits("yandex", "ya-55", internal_id, 30)
+        second = metrics.grant_identity_welcome_credits("yandex", "ya-55", internal_id, 30)
+
+        self.assertEqual(first, {"granted": True, "balance": 30})
+        self.assertEqual(second, {"granted": False, "balance": 30})
+        self.assertEqual(metrics.credits_balance(internal_id, 0), 30)
+        self.assertEqual(self._count("identity_welcome_grants"), 1)
+
+    def test_welcome_credit_rejects_mismatched_identity_owner(self) -> None:
+        yandex_id = metrics.ensure_user_identity("yandex", "ya-55")
+        other_id = metrics.ensure_user_identity("yandex", "ya-99")
+
+        self.assertIsNone(
+            metrics.grant_identity_welcome_credits("yandex", "ya-55", other_id, 30)
+        )
+        self.assertEqual(metrics.credits_balance(yandex_id, 0), 0)
+        self.assertEqual(metrics.credits_balance(other_id, 0), 0)
+        self.assertEqual(self._count("identity_welcome_grants"), 0)
+
 
 class EventTests(MetricsTestBase):
     def test_log_event_inserts_row_and_roundtrips_payload(self) -> None:

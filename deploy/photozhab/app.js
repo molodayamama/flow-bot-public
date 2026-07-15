@@ -13,6 +13,8 @@ const state = {
   galleryFilter: "all",
   galleryOpen: false,
   selectedPack: null,
+  onboardingStep: 0,
+  improveRound: 0,
 };
 
 const launchHash = new URLSearchParams(window.location.hash.slice(1));
@@ -20,6 +22,8 @@ const maxInitData = launchHash.get("WebAppData") || "";
 if (maxInitData) history.replaceState(null, "", `${location.pathname}${location.search}`);
 const TELEGRAM_PENDING_KEY = "photozhabTelegramPendingAt";
 const TELEGRAM_PENDING_MAX_AGE = 11 * 60 * 1000;
+const ONBOARDING_KEY_PREFIX = "photozhabOnboardingV1";
+let improveTimer = 0;
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
@@ -30,6 +34,7 @@ const elements = {
   aspect: $("#aspect-select"), count: $("#count-select"), countWrap: $(".count-select"),
   aspectOptions: $("#aspect-options"), countRange: $("#count-range"), countOutput: $("#count-output"),
   uploadButton: $("#upload-button"), uploadInput: $("#image-upload"), uploadPreview: $("#upload-preview"),
+  uploadDropzone: $("#upload-dropzone"), uploadDropzoneTrigger: $("#upload-dropzone-trigger"),
   uploadImage: $("#upload-preview-image"), uploadName: $("#upload-file-name"),
   price: $("#request-price"), title: $("#chat-mode-title"), subtitle: $("#chat-mode-subtitle"),
   sidebarBalance: $("#sidebar-balance"), mobileBalance: $("#mobile-balance-value"),
@@ -46,6 +51,14 @@ const elements = {
   composerWrap: $(".composer-wrap"), galleryButton: $("#open-gallery"),
   paymentBalance: $("#payment-current-balance"), paymentSubmit: $("#payment-submit"),
   telegramSlots: $("#telegram-code-slots"),
+  composer: $("#composer"), improveButton: $("#improve-button"),
+  improvePanel: $("#improve-panel"), improveLoading: $("#improve-loading"),
+  improveVariants: $("#improve-variants"),
+  onboarding: $("#onboarding"), onboardingArt: $("#onboarding-art"),
+  onboardingIcon: $("#onboarding-icon"), onboardingKicker: $("#onboarding-kicker"),
+  onboardingTitle: $("#onboarding-title"), onboardingCopy: $("#onboarding-copy"),
+  onboardingDots: $("#onboarding-dots"), onboardingBack: $("#onboarding-back"),
+  onboardingNext: $("#onboarding-next"), onboardingSkip: $("#skip-onboarding"),
 };
 
 const modeCopy = {
@@ -162,6 +175,8 @@ function setMode(mode) {
   if (!modeCopy[mode] || state.busy) return;
   closeGallery();
   state.mode = mode;
+  elements.composer.dataset.mode = mode;
+  closeImprove();
   elements.mode.value = mode;
   document.querySelectorAll(".mode-nav-button").forEach((button) => button.classList.toggle("is-active", button.dataset.mode === mode));
   const [title, subtitle, placeholder, welcomeTitle, welcomeCopy] = modeCopy[mode];
@@ -172,6 +187,8 @@ function setMode(mode) {
   elements.welcomeCopy.textContent = welcomeCopy;
   const needsImage = mode === "edit" || mode === "animate";
   elements.uploadButton.hidden = mode === "video";
+  elements.uploadDropzone.hidden = !needsImage;
+  if (needsImage) elements.uploadDropzone.querySelector("strong").textContent = mode === "animate" ? "Добавьте фото для оживления" : "Добавьте фотографию для редактирования";
   elements.countWrap.hidden = mode !== "image";
   [...elements.aspect.options].forEach((item) => { item.disabled = (mode === "video" || mode === "animate") && !["portrait", "landscape"].includes(item.value); });
   if ((mode === "video" || mode === "animate") && !["portrait", "landscape"].includes(elements.aspect.value)) elements.aspect.value = "portrait";
@@ -188,6 +205,154 @@ function toast(message) {
   elements.toast.hidden = false;
   window.clearTimeout(toast.timer);
   toast.timer = window.setTimeout(() => { elements.toast.hidden = true; }, 3600);
+}
+
+function onboardingStorageKey() {
+  const provider = state.session?.identity?.provider || "account";
+  return `${ONBOARDING_KEY_PREFIX}:${provider}`;
+}
+
+function onboardingCompleted() {
+  try { return localStorage.getItem(onboardingStorageKey()) === "done"; }
+  catch (_) { return false; }
+}
+
+const onboardingSteps = [
+  {
+    kicker: "Добро пожаловать",
+    title: "Photozhab — картинки и видео по тексту",
+    copy: "Опишите идею обычными словами — нейросеть создаст изображение или видео. Без промпт-инженерии и VPN.",
+    icon: "✦",
+    art: "radial-gradient(circle at 50% 55%, rgba(211,243,107,.18), transparent 60%), linear-gradient(160deg, #17200f, #0e100f)",
+  },
+  {
+    kicker: "Как это работает",
+    title: "Кредиты вместо подписки",
+    copy: "Цена видна до запуска: картинка — от 10 кредитов, видео — от 50. Платите только за то, что создаёте.",
+    icon: "◈",
+    art: "radial-gradient(circle at 50% 55%, rgba(127,216,215,.16), transparent 60%), linear-gradient(160deg, #0f2321, #0e100f)",
+  },
+  {
+    kicker: "Подарок на старт",
+    title: "30 кредитов на старте",
+    copy: "Новому пользователю хватает стартового бонуса на 3 картинки. Пополнить баланс можно через СБП или карту.",
+    icon: "30",
+    art: "radial-gradient(circle at 50% 55%, rgba(211,243,107,.22), transparent 60%), linear-gradient(160deg, #1c2410, #0e100f)",
+  },
+];
+
+function renderOnboarding() {
+  const step = Math.max(0, Math.min(onboardingSteps.length - 1, state.onboardingStep));
+  const item = onboardingSteps[step];
+  elements.onboardingKicker.textContent = item.kicker;
+  elements.onboardingTitle.textContent = item.title;
+  elements.onboardingCopy.textContent = item.copy;
+  elements.onboardingIcon.textContent = item.icon;
+  elements.onboardingArt.style.background = item.art;
+  elements.onboardingBack.hidden = step === 0;
+  elements.onboardingNext.firstChild.textContent = step === onboardingSteps.length - 1 ? "Начать творить " : "Дальше ";
+  elements.onboardingDots.setAttribute("aria-label", `Шаг ${step + 1} из ${onboardingSteps.length}`);
+  elements.onboardingDots.replaceChildren(...onboardingSteps.map((_, index) => {
+    const dot = document.createElement("i");
+    dot.classList.toggle("is-active", index === step);
+    return dot;
+  }));
+}
+
+function maybeShowOnboarding() {
+  if (!state.session?.authenticated || onboardingCompleted()) {
+    elements.onboarding.hidden = true;
+    return;
+  }
+  state.onboardingStep = 0;
+  renderOnboarding();
+  elements.onboarding.hidden = false;
+  window.setTimeout(() => elements.onboardingSkip.focus(), 0);
+}
+
+function finishOnboarding() {
+  try { localStorage.setItem(onboardingStorageKey(), "done"); } catch (_) { /* private mode */ }
+  elements.onboarding.hidden = true;
+  elements.prompt.focus();
+}
+
+function closeImprove() {
+  window.clearTimeout(improveTimer);
+  if (!elements.improvePanel) return;
+  elements.improvePanel.hidden = true;
+  elements.improveLoading.hidden = true;
+  elements.improveVariants.replaceChildren();
+  elements.improveButton.setAttribute("aria-expanded", "false");
+  updateImproveButton();
+}
+
+function updateImproveButton() {
+  if (!elements.improveButton) return;
+  const panelOpen = !elements.improvePanel.hidden;
+  elements.improveButton.hidden = elements.prompt.value.trim().length < 3 || panelOpen;
+}
+
+function improvedPromptVariants() {
+  const baseRaw = elements.prompt.value.trim();
+  const base = baseRaw.charAt(0).toLocaleUpperCase("ru-RU") + baseRaw.slice(1);
+  const video = state.mode === "video" || state.mode === "animate";
+  const sets = video ? [
+    [
+      ["Кинематограф", ", плавное движение камеры dolly-in, кинематографический свет, глубина резкости, 24 кадра в секунду, выразительная цветокоррекция"],
+      ["Атмосфера", ", мягкий рассеянный свет золотого часа, лёгкий туман, частицы в воздухе, медленное панорамирование, спокойное настроение"],
+      ["Динамика", ", энергичное движение камеры, контровой неоновый свет, отражения и блики, ясный главный объект, ощущение скорости"],
+    ],
+    [
+      ["Реклама", ", чистый рекламный кадр, плавный облёт объекта, контролируемые блики, премиальный свет, точный фокус на продукте"],
+      ["Документальный", ", естественное движение камеры с рук, реалистичный дневной свет, правдоподобная физика, ненавязчивое наблюдение"],
+      ["Сказочный", ", медленный пролёт камеры, объёмный свет, воздушная дымка, мягкие частицы, выразительная глубина пространства"],
+    ],
+  ] : [
+    [
+      ["Детальный", ", сверхдетализация, студийный свет, объектив 85 мм, малая глубина резкости, фотореализм, богатая фактура"],
+      ["Художественный", ", кинематографическая композиция, драматичный контровой свет, насыщенная палитра, атмосферная дымка"],
+      ["Минимализм", ", чистая композиция, мягкий естественный свет, приглушённые тона, много воздуха, аккуратная геометрия кадра"],
+    ],
+    [
+      ["Предметный", ", премиальная предметная съёмка, бесшовный фон, контролируемые отражения, резкий объект, мягкие студийные тени"],
+      ["Редакционный", ", журнальная композиция, выразительный ракурс, естественная текстура, сложный мягкий свет, современная цветокоррекция"],
+      ["Тёплый", ", уютный рассеянный свет, натуральные материалы, спокойная палитра, тактильные фактуры, сбалансированная композиция"],
+    ],
+  ];
+  return sets[state.improveRound % sets.length].map(([tag, suffix]) => ({tag, text: base + suffix}));
+}
+
+function renderImproveVariants() {
+  elements.improveVariants.replaceChildren(...improvedPromptVariants().map((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "improve-variant";
+    const tag = document.createElement("b"); tag.textContent = item.tag;
+    const copy = document.createElement("span"); copy.textContent = item.text;
+    button.append(tag, copy);
+    button.addEventListener("click", () => {
+      elements.prompt.value = item.text;
+      closeImprove();
+      resizePrompt();
+      elements.prompt.focus();
+    });
+    return button;
+  }));
+}
+
+function openImprove({next = false} = {}) {
+  if (elements.prompt.value.trim().length < 3) return;
+  if (next) state.improveRound += 1;
+  elements.improvePanel.hidden = false;
+  elements.improveButton.setAttribute("aria-expanded", "true");
+  updateImproveButton();
+  elements.improveVariants.replaceChildren();
+  elements.improveLoading.hidden = false;
+  window.clearTimeout(improveTimer);
+  improveTimer = window.setTimeout(() => {
+    elements.improveLoading.hidden = true;
+    renderImproveVariants();
+  }, 320);
 }
 
 function providerLabel(provider) {
@@ -306,7 +471,9 @@ function applyAuthState() {
   setProviderAvailability();
   if (authenticated) {
     if (elements.authDialog.open) elements.authDialog.close();
+    if (state.initialized) maybeShowOnboarding();
   } else if (!elements.authDialog.open) {
+    elements.onboarding.hidden = true;
     elements.authDialog.showModal();
   }
 }
@@ -594,7 +761,11 @@ async function generate() {
   }
 }
 
-function resizePrompt() { elements.prompt.style.height = "auto"; elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 180)}px`; }
+function resizePrompt() {
+  elements.prompt.style.height = "auto";
+  elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 180)}px`;
+  updateImproveButton();
+}
 
 function renderPacks() {
   const packs = state.session?.packs || [];
@@ -669,6 +840,7 @@ async function initializeApp() {
   const authResult = consumeAuthResult();
   await refreshSession({retryAuthenticated: authResult === "success"});
   state.initialized = true;
+  maybeShowOnboarding();
   if (authResult === "success") {
     toast(state.session?.authenticated
       ? "Вход через Яндекс выполнен"
@@ -713,6 +885,7 @@ elements.uploadInput.addEventListener("change", () => {
   reader.onerror = () => { clearUpload(); toast("Не удалось прочитать изображение"); };
   reader.readAsDataURL(file);
 });
+elements.uploadDropzoneTrigger.addEventListener("click", () => elements.uploadInput.click());
 $("#remove-upload").addEventListener("click", clearUpload);
 $("#new-chat").addEventListener("click", () => { closeGallery(); elements.messages.replaceChildren(); elements.welcome.hidden = false; clearUpload(); elements.prompt.value = ""; resizePrompt(); });
 elements.galleryButton.addEventListener("click", showGallery);
@@ -737,6 +910,15 @@ elements.authDialog.addEventListener("cancel", (event) => event.preventDefault()
 elements.telegramLogin.addEventListener("click", startTelegramLogin);
 elements.telegramForm.addEventListener("submit", completeTelegramLogin);
 elements.telegramCode.addEventListener("input", renderTelegramCode);
+elements.improveButton.addEventListener("click", () => openImprove());
+$("#close-improve").addEventListener("click", closeImprove);
+$("#regenerate-improve").addEventListener("click", () => openImprove({next: true}));
+elements.onboardingSkip.addEventListener("click", finishOnboarding);
+elements.onboardingBack.addEventListener("click", () => { state.onboardingStep = Math.max(0, state.onboardingStep - 1); renderOnboarding(); });
+elements.onboardingNext.addEventListener("click", () => {
+  if (state.onboardingStep >= onboardingSteps.length - 1) finishOnboarding();
+  else { state.onboardingStep += 1; renderOnboarding(); }
+});
 elements.yandexLogin.addEventListener("click", handleYandexLogin);
 elements.logout.addEventListener("click", logoutUser);
 elements.mobileAccount.addEventListener("click", () => {
