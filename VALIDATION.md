@@ -1158,3 +1158,9 @@ For the documentation bootstrap task:
   delegates to the existing Flow `AgentFlow.improve_call`, charges 5 credits
   only on a valid result, and refunds provider failures. No live paid prompt
   request was made during validation.
+- Deployment: commit `a6c791d8a4a471d49458140f15e4590141201779` is checked out on
+  the VPS and pushed to `origin/refactor`; fresh protected backup is at
+  `/root/backups/geminifree-20260715-1838/`. Production preflight passed,
+  both bot services are active, source/public app hashes match, and public
+  `/`, `/app.html`, and `/generaciya-video.html` return HTTP 200. Anonymous
+  `POST /web/api/prompt-improve` returns 401 without a provider call.
