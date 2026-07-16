@@ -1702,7 +1702,7 @@ def claim_web_login_challenge(
     platform: str,
     platform_user_id: str | int,
     display_name: str | None,
-    confirmation_code: str,
+    confirmation_code: str | None = None,
     *,
     now: int | None = None,
 ) -> bool:
@@ -1713,8 +1713,10 @@ def claim_web_login_challenge(
             return False
         timestamp = int(time.time() if now is None else now)
         challenge_hash = _web_auth_digest("challenge", str(challenge))
-        confirmation_hash = _web_auth_digest(
-            f"confirmation:{challenge_hash}", str(confirmation_code)
+        confirmation_hash = (
+            _web_auth_digest(f"confirmation:{challenge_hash}", str(confirmation_code))
+            if str(confirmation_code or "").strip()
+            else None
         )
         with _LOCK:
             conn = _conn()
@@ -1739,12 +1741,12 @@ def claim_web_login_challenge(
 
 def complete_web_login_challenge(
     session_id: str,
-    confirmation_code: str,
+    confirmation_code: str | None = None,
     *,
     now: int | None = None,
     max_attempts: int = 5,
 ) -> dict | None:
-    """Consume a claimed Telegram challenge after the browser enters its code."""
+    """Consume a claimed Telegram challenge, with optional one-time-code verification."""
     try:
         timestamp = int(time.time() if now is None else now)
         session_hash = _web_auth_digest("session", str(session_id))
@@ -1758,11 +1760,28 @@ def complete_web_login_challenge(
                 "ORDER BY created_at DESC LIMIT 1",
                 (session_hash, timestamp),
             ).fetchone()
-            if row is None or int(row["attempts"] or 0) >= int(max_attempts):
+            if row is None:
+                return None
+            code = str(confirmation_code or "").strip()
+            if not code:
+                changed = conn.execute(
+                    "UPDATE web_login_challenges SET attempts=?, consumed_at=? "
+                    "WHERE challenge_hash=? AND consumed_at IS NULL",
+                    (int(row["attempts"] or 0), timestamp, row["challenge_hash"]),
+                ).rowcount
+                conn.commit()
+                if changed != 1:
+                    return None
+                return {
+                    "platform": str(row["platform"]),
+                    "platform_user_id": str(row["platform_user_id"]),
+                    "display_name": row["display_name"],
+                }
+            if int(row["attempts"] or 0) >= int(max_attempts):
                 return None
             attempts = int(row["attempts"] or 0) + 1
             supplied_hash = _web_auth_digest(
-                f"confirmation:{row['challenge_hash']}", str(confirmation_code)
+                f"confirmation:{row['challenge_hash']}", code
             )
             valid = bool(row["confirmation_hash"]) and hmac.compare_digest(
                 supplied_hash, str(row["confirmation_hash"])

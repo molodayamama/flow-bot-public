@@ -183,7 +183,7 @@ class _Metrics:
         self.challenges[challenge] = {"sid": sid}
         return True
 
-    def claim_web_login_challenge(self, challenge, platform, platform_user_id, display_name, code, **kwargs):
+    def claim_web_login_challenge(self, challenge, platform, platform_user_id, display_name, code=None, **kwargs):
         item = self.challenges.get(challenge)
         if not item or item.get("identity"):
             return False
@@ -193,11 +193,16 @@ class _Metrics:
         item["code"] = code
         return True
 
-    def complete_web_login_challenge(self, sid, code, **kwargs):
+    def complete_web_login_challenge(self, sid, code=None, **kwargs):
         for item in self.challenges.values():
-            if item.get("sid") == sid and item.get("code") == code and not item.get("used"):
-                item["used"] = True
-                return item["identity"]
+            if item.get("sid") != sid or item.get("used"):
+                continue
+            if not item.get("identity"):
+                return None
+            if code is not None and item.get("code") != code:
+                continue
+            item["used"] = True
+            return item["identity"]
         return None
 
     def create_web_oauth_state(self, sid, state, provider, verifier, **kwargs):
@@ -294,16 +299,16 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
     async def post(self, path, payload, *, origin=ORIGIN):
         return await self.client.post(path, json=payload, headers={"Origin": origin})
 
-    async def login_telegram(self, *, user_id=777, code="123456"):
+    async def login_telegram(self, *, user_id=777):
         response = await self.post("/web/api/auth/telegram/start", {})
         self.assertEqual(response.status, 200)
         url = (await response.json())["url"]
         payload = parse_qs(urlparse(url).query)["start"][0]
         self.assertTrue(payload.startswith("web_"))
         self.assertTrue(self.metrics.claim_web_login_challenge(
-            payload.removeprefix("web_"), "telegram", user_id, "Test User", code
+            payload.removeprefix("web_"), "telegram", user_id, "Test User"
         ))
-        response = await self.post("/web/api/auth/telegram/complete", {"code": code})
+        response = await self.post("/web/api/auth/telegram/complete", {})
         self.assertEqual(response.status, 200, await response.json())
         return response
 
@@ -590,7 +595,7 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 400)
         self.assertEqual(self.payment_calls, [])
 
-    async def test_telegram_code_is_single_use_and_logout_revokes_session(self):
+    async def test_telegram_login_is_single_use_and_logout_revokes_session(self):
         response = await self.post("/web/api/auth/logout", {})
         self.assertEqual(response.status, 200)
         response = await self.client.get("/web/api/session")
@@ -599,15 +604,15 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
         started = await self.post("/web/api/auth/telegram/start", {})
         url = (await started.json())["url"]
         token = parse_qs(urlparse(url).query)["start"][0].removeprefix("web_")
+        pending = await self.post("/web/api/auth/telegram/complete", {})
+        self.assertEqual(pending.status, 409)
         self.assertTrue(self.metrics.claim_web_login_challenge(
-            token, "telegram", 888, "Other User", "654321"
+            token, "telegram", 888, "Other User"
         ))
-        wrong = await self.post("/web/api/auth/telegram/complete", {"code": "000000"})
-        self.assertEqual(wrong.status, 401)
-        accepted = await self.post("/web/api/auth/telegram/complete", {"code": "654321"})
+        accepted = await self.post("/web/api/auth/telegram/complete", {})
         self.assertEqual(accepted.status, 200)
-        replayed = await self.post("/web/api/auth/telegram/complete", {"code": "654321"})
-        self.assertEqual(replayed.status, 401)
+        replayed = await self.post("/web/api/auth/telegram/complete", {})
+        self.assertEqual(replayed.status, 409)
         current = await self.client.get("/web/api/session")
         self.assertEqual((await current.json())["identity"]["display_name"], "Other User")
 

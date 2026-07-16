@@ -54,18 +54,25 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertIn('id="auth-dialog"', self.html)
         self.assertIn('api("/web/api/auth/telegram/start"', self.js)
         self.assertIn('api("/web/api/auth/telegram/complete"', self.js)
+        self.assertNotIn('id="telegram-code-form"', self.html)
+        self.assertNotIn('id="telegram-code"', self.html)
+        self.assertNotIn('telegramCode', self.js)
+        self.assertNotIn('telegramForm', self.js)
+        self.assertNotIn('renderTelegramCode', self.js)
         self.assertIn('api("/web/api/auth/max"', self.js)
         self.assertIn('api("/web/api/auth/logout"', self.js)
         self.assertIn("if (!state.session?.authenticated)", self.js)
+        self.assertIn("бот подтвердит вход без кода", self.html)
         self.assertNotIn("Баланс привязан к этому браузеру", self.html)
 
-    def test_mobile_telegram_login_uses_same_tab_and_restores_code_form(self) -> None:
+    def test_mobile_telegram_login_uses_same_tab_and_restores_pending_polling(self) -> None:
         self.assertIn('matchMedia("(pointer: coarse)")', self.js)
         self.assertIn("window.innerWidth <= 820", self.js)
         self.assertIn("window.location.assign(result.url)", self.js)
         self.assertIn('sessionStorage.setItem(TELEGRAM_PENDING_KEY', self.js)
         self.assertIn("TELEGRAM_PENDING_MAX_AGE", self.js)
         self.assertIn("restoreTelegramPending()", self.js)
+        self.assertIn("startTelegramLoginPolling()", self.js)
         self.assertNotIn('sessionStorage.setItem(TELEGRAM_PENDING_KEY, result.url)', self.js)
 
     def test_unavailable_yandex_login_explains_state(self) -> None:
@@ -117,7 +124,7 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertIn("media-flight-clone", self.js)
         self.assertIn("prefers-reduced-motion: reduce", self.css)
         self.assertIn(".media-result-actions", self.css)
-        self.assertIn("app.js?v=20260716-a1", self.html)
+        self.assertIn("app.js?v=20260716-a2", self.html)
 
     def test_low_credit_cta_focus_and_edit_button_contracts(self) -> None:
         self.assertIn('"Пополнить баланс"', self.js)

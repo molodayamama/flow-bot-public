@@ -836,11 +836,13 @@ class _WebAdapter:
             return self._response({"error": "session_unavailable"}, status=503)
         body = await self._json_body(request)
         code = str((body or {}).get("code") or "").strip()
-        if not _CONFIRMATION_RE.fullmatch(code):
+        if code and not _CONFIRMATION_RE.fullmatch(code):
             return self._response({"error": "invalid_code"}, status=400, session=session)
-        identity = self._d.metrics.complete_web_login_challenge(session.sid, code)
+        identity = self._d.metrics.complete_web_login_challenge(session.sid, code or None)
         if not identity:
-            return self._response({"error": "invalid_code"}, status=401, session=session)
+            if code:
+                return self._response({"error": "invalid_code"}, status=401, session=session)
+            return self._response({"error": "auth_pending"}, status=409, session=session)
         authenticated = self._bind_authenticated(session, identity)
         if authenticated is None:
             return self._response({"error": "auth_unavailable"}, status=503, session=session)

@@ -63,6 +63,18 @@ class WebAuthenticationStateTests(MetricsTestBase):
         self.assertEqual(identity["platform_user_id"], "55")
         self.assertIsNone(metrics.complete_web_login_challenge("sid", "123456", now=122))
 
+    def test_telegram_challenge_can_complete_without_visible_code(self) -> None:
+        self.assertTrue(metrics.create_web_login_challenge(
+            "sid", "challenge-token", now=100, expires_at=200
+        ))
+        self.assertTrue(metrics.claim_web_login_challenge(
+            "challenge-token", "telegram", 55, "Test User", now=110
+        ))
+        self.assertIsNone(metrics.complete_web_login_challenge("other-sid", now=120))
+        identity = metrics.complete_web_login_challenge("sid", now=120)
+        self.assertEqual(identity["platform_user_id"], "55")
+        self.assertIsNone(metrics.complete_web_login_challenge("sid", now=121))
+
     def test_expired_challenge_and_wrong_platform_fail_closed(self) -> None:
         metrics.create_web_login_challenge("sid", "expired-token", now=100, expires_at=101)
         self.assertFalse(metrics.claim_web_login_challenge(

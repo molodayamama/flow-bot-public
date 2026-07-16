@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from channels.telegram.routers.start import StartDeps, create_handler
 
@@ -50,7 +50,7 @@ def _deps(metrics: _Metrics) -> StartDeps:
 
 
 class TelegramWebLoginTests(unittest.IsolatedAsyncioTestCase):
-    async def test_valid_deep_link_claims_challenge_and_returns_one_time_code(self) -> None:
+    async def test_valid_deep_link_claims_challenge_without_showing_code(self) -> None:
         metrics = _Metrics(True)
         message = SimpleNamespace(
             text="/start web_abcdefghijklmnopqrstuvwxyz123456",
@@ -59,15 +59,14 @@ class TelegramWebLoginTests(unittest.IsolatedAsyncioTestCase):
             ),
             answer=AsyncMock(),
         )
-        with patch("channels.telegram.routers.start.secrets.randbelow", return_value=12345):
-            await create_handler(_deps(metrics))(message)
+        await create_handler(_deps(metrics))(message)
 
         self.assertEqual(metrics.claim_calls[0][0], "abcdefghijklmnopqrstuvwxyz123456")
         self.assertEqual(metrics.claim_calls[0][1:3], ("telegram", 42))
-        self.assertEqual(metrics.claim_calls[0][-1], "012345")
+        self.assertEqual(len(metrics.claim_calls[0]), 4)
         text = message.answer.await_args.args[0]
-        self.assertIn("012345", text)
-        self.assertIn("одноразовый", text)
+        self.assertNotIn("012345", text)
+        self.assertIn("подтвержд", text.lower())
 
     async def test_already_used_deep_link_returns_no_code(self) -> None:
         metrics = _Metrics(False)

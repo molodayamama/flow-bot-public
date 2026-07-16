@@ -10,7 +10,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self' https://auth.robokassa.ru">
   <link rel="stylesheet" href="/styles.css?v=20260715-b4">
   <link rel="stylesheet" href="/app.css?v=20260716-a1">
-  <script src="/app.js?v=20260716-a1" defer></script>
+  <script src="/app.js?v=20260716-a2" defer></script>
 </head>
 <body class="web-app-body">
   <div class="web-app-shell">
@@ -164,18 +164,10 @@
       <h2 id="auth-title">Войдите, чтобы создавать</h2>
       <p class="auth-copy">Генерация, баланс и оплата доступны только после подтверждения аккаунта. Пароли Photozhab не получает.</p>
       <div class="auth-providers">
-        <button class="auth-provider auth-provider--telegram" id="login-telegram" type="button"><span class="provider-icon">✈</span><span class="provider-copy"><strong>Продолжить с Telegram</strong><small>бот пришлёт код за секунду</small></span><span class="provider-arrow" aria-hidden="true">→</span></button>
+        <button class="auth-provider auth-provider--telegram" id="login-telegram" type="button"><span class="provider-icon">✈</span><span class="provider-copy"><strong>Продолжить с Telegram</strong><small>бот подтвердит вход без кода</small></span><span class="provider-arrow" aria-hidden="true">→</span></button>
         <a class="auth-provider auth-provider--max" id="login-max" href="https://max.ru/se13461237_bot?startapp=web" target="_blank" rel="noopener"><span class="provider-icon">MAX</span><span class="provider-copy"><strong>Продолжить с MAX</strong><small>через мини-приложение Photozhab</small></span><span class="provider-arrow" aria-hidden="true">→</span></a>
         <a class="auth-provider auth-provider--yandex" id="login-yandex" href="#" aria-disabled="true"><span class="provider-icon">Я</span><span class="provider-copy"><strong>Проверяем Яндекс ID</strong><small>без пароля для Photozhab</small></span><span class="provider-arrow" aria-hidden="true">→</span></a>
       </div>
-      <form class="telegram-code" id="telegram-code-form" hidden>
-        <p>Бот пришлёт одноразовый шестизначный код. Введите его здесь:</p>
-        <div class="telegram-code-entry">
-          <div class="telegram-code-slots" id="telegram-code-slots" aria-hidden="true"><span>•</span><span>•</span><span>•</span><span>•</span><span>•</span><span>•</span></div>
-          <input id="telegram-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" aria-label="Шестизначный код из Telegram">
-        </div>
-        <button class="telegram-code-submit" type="submit">Подтвердить и войти</button>
-      </form>
       <p class="auth-note" id="auth-note">MAX-вход работает внутри официального мини-приложения Photozhab.</p>
       <p class="payment-legal">Продолжая, вы принимаете <a href="/oferta.html">оферту</a> и <a href="/privacy.html">политику конфиденциальности</a>.</p>
     </div>

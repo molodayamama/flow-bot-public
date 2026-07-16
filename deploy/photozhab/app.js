@@ -24,6 +24,8 @@ if (maxInitData) history.replaceState(null, "", `${location.pathname}${location.
 const TELEGRAM_PENDING_KEY = "photozhabTelegramPendingAt";
 const TELEGRAM_PENDING_MAX_AGE = 11 * 60 * 1000;
 const ONBOARDING_KEY_PREFIX = "photozhabOnboardingV1";
+let telegramLoginPollTimer = null;
+let telegramLoginPollInFlight = false;
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
@@ -41,7 +43,6 @@ const elements = {
   dialog: $("#payment-dialog"), packs: $("#pack-grid"), toast: $("#toast"),
   authDialog: $("#auth-dialog"), telegramLogin: $("#login-telegram"),
   maxLogin: $("#login-max"), yandexLogin: $("#login-yandex"),
-  telegramForm: $("#telegram-code-form"), telegramCode: $("#telegram-code"),
   authNote: $("#auth-note"), accountCard: $("#account-card"),
   accountName: $("#account-name"), accountAvatar: $("#account-avatar"), logout: $("#logout-button"),
   mobileAccount: $("#mobile-account"),
@@ -50,7 +51,6 @@ const elements = {
   galleryView: $("#gallery-view"), galleryGrid: $("#gallery-grid"), galleryEmpty: $("#gallery-empty"),
   composerWrap: $(".composer-wrap"), galleryButton: $("#open-gallery"),
   paymentBalance: $("#payment-current-balance"), paymentSubmit: $("#payment-submit"),
-  telegramSlots: $("#telegram-code-slots"),
   composer: $("#composer"), improveButton: $("#improve-button"),
   improvePanel: $("#improve-panel"), improveLoading: $("#improve-loading"),
   improveVariants: $("#improve-variants"),
@@ -99,6 +99,75 @@ function option(value, label) {
   node.value = value;
   node.textContent = label;
   return node;
+}
+
+function telegramLoginPending() {
+  const pendingAt = Number(sessionStorage.getItem(TELEGRAM_PENDING_KEY));
+  return Number.isFinite(pendingAt) && pendingAt > 0 && Date.now() - pendingAt <= TELEGRAM_PENDING_MAX_AGE;
+}
+
+function clearTelegramLoginPending() {
+  sessionStorage.removeItem(TELEGRAM_PENDING_KEY);
+}
+
+function stopTelegramLoginPolling() {
+  if (telegramLoginPollTimer !== null) {
+    window.clearInterval(telegramLoginPollTimer);
+    telegramLoginPollTimer = null;
+  }
+  telegramLoginPollInFlight = false;
+}
+
+function updateTelegramAuthNote(maxEnabled, yandexEnabled) {
+  if (telegramLoginPending()) {
+    elements.authNote.textContent = "Откройте Telegram, подтвердите вход и вернитесь сюда — сайт подхватит авторизацию автоматически.";
+    return;
+  }
+  const maxNote = maxEnabled
+    ? "MAX-вход работает внутри официального мини-приложения Photozhab."
+    : "Вход через MAX появится после подключения Mini App.";
+  elements.authNote.textContent = yandexEnabled
+    ? maxNote
+    : `${maxNote} Яндекс ID включим после регистрации OAuth-приложения.`;
+}
+
+async function pollTelegramLogin() {
+  if (!telegramLoginPending() || state.session?.authenticated || telegramLoginPollInFlight) return false;
+  const pendingAt = Number(sessionStorage.getItem(TELEGRAM_PENDING_KEY));
+  if (!Number.isFinite(pendingAt) || pendingAt <= 0 || Date.now() - pendingAt > TELEGRAM_PENDING_MAX_AGE) {
+    clearTelegramLoginPending();
+    stopTelegramLoginPolling();
+    updateTelegramAuthNote(Boolean(state.session?.auth?.providers?.max), Boolean(state.session?.auth?.providers?.yandex));
+    return false;
+  }
+  telegramLoginPollInFlight = true;
+  try {
+    await api("/web/api/auth/telegram/complete", {method: "POST", body: "{}"});
+    clearTelegramLoginPending();
+    stopTelegramLoginPolling();
+    await refreshSession({retryAuthenticated: true});
+    toast("Вход через Telegram выполнен");
+    return true;
+  } catch (error) {
+    if (error.status === 409) return false;
+    clearTelegramLoginPending();
+    stopTelegramLoginPolling();
+    updateTelegramAuthNote(Boolean(state.session?.auth?.providers?.max), Boolean(state.session?.auth?.providers?.yandex));
+    toast(error.status === 401
+      ? "Ссылка для входа недействительна или уже использована. Запросите новую."
+      : "Не удалось подтвердить вход через Telegram");
+    return false;
+  } finally {
+    telegramLoginPollInFlight = false;
+  }
+}
+
+function startTelegramLoginPolling() {
+  if (telegramLoginPollTimer !== null) return;
+  telegramLoginPollTimer = window.setInterval(() => {
+    void pollTelegramLogin();
+  }, 1500);
+  void pollTelegramLogin();
 }
 
 function selectedModel() {
@@ -546,12 +615,7 @@ function setProviderAvailability() {
   elements.yandexLogin.querySelector("strong").textContent = yandexEnabled
     ? "Войти с Яндекс ID"
     : "Яндекс ID пока недоступен";
-  const maxNote = maxEnabled
-    ? "MAX-вход работает внутри официального мини-приложения Photozhab."
-    : "Вход через MAX появится после подключения Mini App.";
-  elements.authNote.textContent = yandexEnabled
-    ? maxNote
-    : `${maxNote} Яндекс ID включим после регистрации OAuth-приложения.`;
+  updateTelegramAuthNote(maxEnabled, yandexEnabled);
 }
 
 function applyAuthState() {
@@ -568,6 +632,8 @@ function applyAuthState() {
   elements.send.disabled = !authenticated || state.busy;
   setProviderAvailability();
   if (authenticated) {
+    clearTelegramLoginPending();
+    stopTelegramLoginPolling();
     if (elements.authDialog.open) elements.authDialog.close();
     if (state.initialized) maybeShowOnboarding();
   } else if (!elements.authDialog.open) {
@@ -586,63 +652,34 @@ async function startTelegramLogin() {
   if (popup) popup.opener = null;
   try {
     const result = await api("/web/api/auth/telegram/start", {method: "POST", body: "{}"});
-    elements.telegramForm.hidden = false;
-    elements.telegramCode.value = "";
-    renderTelegramCode();
     sessionStorage.setItem(TELEGRAM_PENDING_KEY, String(Date.now()));
+    updateTelegramAuthNote(Boolean(state.session?.auth?.providers?.max), Boolean(state.session?.auth?.providers?.yandex));
+    startTelegramLoginPolling();
     if (popup) popup.location.href = result.url;
     else {
       window.location.assign(result.url);
       return;
     }
-    elements.telegramCode.focus();
   } catch (_) {
     if (popup) popup.close();
+    clearTelegramLoginPending();
+    stopTelegramLoginPolling();
+    updateTelegramAuthNote(Boolean(state.session?.auth?.providers?.max), Boolean(state.session?.auth?.providers?.yandex));
     toast("Не удалось открыть вход через Telegram. Попробуйте ещё раз.");
   } finally {
     elements.telegramLogin.disabled = false;
   }
 }
 
-function renderTelegramCode() {
-  const value = elements.telegramCode.value.replace(/\D/g, "").slice(0, 6);
-  if (elements.telegramCode.value !== value) elements.telegramCode.value = value;
-  elements.telegramSlots.querySelectorAll("span").forEach((slot, index) => {
-    const digit = value[index];
-    slot.textContent = digit || "•";
-    slot.classList.toggle("is-filled", Boolean(digit));
-  });
-}
-
-async function completeTelegramLogin(event) {
-  event.preventDefault();
-  const code = elements.telegramCode.value.trim();
-  if (!/^[0-9]{6}$/.test(code)) {
-    toast("Введите шестизначный код из Telegram");
-    return;
-  }
-  const submit = elements.telegramForm.querySelector("button[type=submit]");
-  submit.disabled = true;
-  try {
-    await api("/web/api/auth/telegram/complete", {method: "POST", body: JSON.stringify({code})});
-    sessionStorage.removeItem(TELEGRAM_PENDING_KEY);
-    elements.telegramForm.hidden = true;
-    await refreshSession();
-    toast("Вход через Telegram выполнен");
-  } catch (error) {
-    toast(error.message === "invalid_code" ? "Код неверный, истёк или уже использован" : "Не удалось подтвердить вход");
-  } finally {
-    submit.disabled = false;
-  }
-}
-
 function restoreTelegramPending() {
   const pendingAt = Number(sessionStorage.getItem(TELEGRAM_PENDING_KEY));
   if (!Number.isFinite(pendingAt) || pendingAt <= 0 || Date.now() - pendingAt > TELEGRAM_PENDING_MAX_AGE) {
-    sessionStorage.removeItem(TELEGRAM_PENDING_KEY);
-    return;
+    clearTelegramLoginPending();
+    stopTelegramLoginPolling();
+    return false;
   }
-  elements.telegramForm.hidden = false;
+  startTelegramLoginPolling();
+  return true;
 }
 
 function handleYandexLogin(event) {
@@ -678,6 +715,8 @@ async function tryMaxLogin() {
 async function logoutUser() {
   try {
     await api("/web/api/auth/logout", {method: "POST", body: "{}"});
+    clearTelegramLoginPending();
+    stopTelegramLoginPolling();
     state.session = await api("/web/api/session", {headers: {}});
     setChats([]); setHistory([]); state.chatId = null; setBalance(0); applyAuthState();
   } catch (_) {
@@ -1102,9 +1141,13 @@ elements.paymentSubmit.addEventListener("click", () => {
 });
 elements.dialog.addEventListener("click", (event) => { if (event.target === elements.dialog) elements.dialog.close(); });
 elements.authDialog.addEventListener("cancel", (event) => event.preventDefault());
+window.addEventListener("pageshow", () => {
+  if (state.initialized) restoreTelegramPending();
+});
+document.addEventListener("visibilitychange", () => {
+  if (state.initialized && document.visibilityState === "visible") restoreTelegramPending();
+});
 elements.telegramLogin.addEventListener("click", startTelegramLogin);
-elements.telegramForm.addEventListener("submit", completeTelegramLogin);
-elements.telegramCode.addEventListener("input", renderTelegramCode);
 elements.improveButton.addEventListener("click", () => openImprove());
 $("#close-improve").addEventListener("click", closeImprove);
 $("#regenerate-improve").addEventListener("click", () => openImprove());

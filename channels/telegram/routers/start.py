@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import secrets
 from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass
 from typing import Any
@@ -100,7 +99,6 @@ def create_handler(deps: StartDeps) -> Callable[[types.Message], Awaitable[Any]]
 
         web_login = _WEB_LOGIN_RE.fullmatch(payload)
         if web_login and not getattr(message.from_user, "is_bot", False):
-            confirmation_code = f"{secrets.randbelow(1_000_000):06d}"
             display_name = " ".join(
                 part for part in (
                     str(getattr(message.from_user, "first_name", "") or "").strip(),
@@ -113,14 +111,10 @@ def create_handler(deps: StartDeps) -> Callable[[types.Message], Awaitable[Any]]
                 "telegram",
                 user_id,
                 display_name,
-                confirmation_code,
             )
             if claimed:
                 await message.answer(
-                    "Код для входа на photozhab.ru:\n\n"
-                    f"<code>{confirmation_code}</code>\n\n"
-                    "Введите его на сайте. Код одноразовый и действует 10 минут. "
-                    "Никому его не пересылайте.",
+                    "Вход на photozhab.ru подтверждён. Вернитесь в браузер — сайт подхватит авторизацию автоматически.",
                     parse_mode="HTML",
                 )
             else:
