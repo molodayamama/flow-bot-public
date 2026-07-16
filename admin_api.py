@@ -12,6 +12,7 @@ Usage in flow_bot.py:
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ import re
 import secrets
 import string
 import time
+from ipaddress import ip_address
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -51,16 +53,76 @@ try:
 except (TypeError, ValueError):
     TELEMETR_CACHE_TTL_SEC = 21600
 _telemetr_cache: dict[str, tuple[float, dict]] = {}
+_ADMIN_SECURITY_MIDDLEWARE_KEY = "admin_api.security_middleware_installed"
+_ADMIN_TOKEN_ENV = "ADMIN_API_TOKEN"
 
 
 # ── helpers ────────────────────────────────────────────────────────────
 
 def _json(data: object, status: int = 200) -> web.Response:
-    return web.Response(
+    response = web.Response(
         text=json.dumps(data, ensure_ascii=False, default=str),
         status=status,
         content_type="application/json",
     )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+def _is_loopback_remote(value: object) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    lowered = raw.lower()
+    if lowered == "localhost":
+        return True
+    if raw.startswith("[") and "]" in raw:
+        raw = raw[1:raw.index("]")]
+    elif raw.count(":") == 1:
+        host, port = raw.rsplit(":", 1)
+        if port.isdigit():
+            raw = host
+    try:
+        return ip_address(raw).is_loopback
+    except ValueError:
+        return False
+
+
+def _admin_request_token(request: web.Request) -> str:
+    auth = str(request.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return str(request.headers.get("X-Admin-Token") or "").strip()
+
+
+def _admin_request_allowed(request: web.Request) -> bool:
+    """Defense-in-depth for admin routes when aiohttp is exposed by mistake."""
+    if _is_loopback_remote(request.remote):
+        return True
+    expected = (os.getenv(_ADMIN_TOKEN_ENV) or "").strip()
+    supplied = _admin_request_token(request)
+    return bool(expected and supplied and hmac.compare_digest(supplied, expected))
+
+
+@web.middleware
+async def _admin_security_middleware(
+    request: web.Request,
+    handler,
+) -> web.StreamResponse:
+    if not request.path.startswith("/api/admin/"):
+        return await handler(request)
+    if _admin_request_allowed(request):
+        return await handler(request)
+    log.warning("admin api rejected non-loopback request")
+    return _json({"error": "admin_forbidden"}, 403)
+
+
+def _install_admin_security(app: web.Application) -> None:
+    if app.get(_ADMIN_SECURITY_MIDDLEWARE_KEY):
+        return
+    app.middlewares.append(_admin_security_middleware)
+    app[_ADMIN_SECURITY_MIDDLEWARE_KEY] = True
 
 
 async def _body(request: web.Request) -> dict | None:
@@ -2553,6 +2615,7 @@ def register_admin_routes(
     ``proxy_supervisor`` enables the ISP-proxy onboarding routes.
     """
     global _ctx
+    _install_admin_security(app)
     _ctx.pool = pool
     _ctx.keepers = keepers
     _ctx.video_clients = video_clients

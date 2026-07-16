@@ -190,6 +190,11 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertIn('<span class="sb-icon">▣</span> Обзор', self.admin)
         self.assertNotIn('<span class="sb-icon">📊</span>', self.admin)
         self.assertIn("@media(max-width:760px)", self.admin)
+        self.assertIn("function jsArg", self.admin)
+        self.assertIn('onclick="resetFailures(${idArg})"', self.admin)
+        self.assertNotIn('onclick="resetFailures(\'${idArg}\')"', self.admin)
+        self.assertNotIn('onchange="toggleVideo(\'${esc(a.id)}\'', self.admin)
+        self.assertNotIn('onclick="copyText(\'${esc(r.local_url)}\')"', self.admin)
         for marker in ('id="user-detail-overlay"', 'openUserDetail(', 'renderUserDetail(', 'role="button" tabindex="0"'):
             self.assertIn(marker, self.admin)
 

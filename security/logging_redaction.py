@@ -10,6 +10,7 @@ from typing import Iterable
 REDACTED = "[redacted]"
 
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}")
+_OAUTH_RE = re.compile(r"(?i)\bOAuth\s+[A-Za-z0-9._~+/=-]{8,}")
 _GOOGLE_TOKEN_RE = re.compile(r"\bya29\.[A-Za-z0-9_-]{8,}")
 _TELEGRAM_TOKEN_RE = re.compile(r"\b\d{8,12}:[A-Za-z0-9_-]{20,}\b")
 _CREDENTIAL_URL_RE = re.compile(
@@ -41,6 +42,7 @@ def redact_text(value: object, *, extra_secrets: Iterable[str] = ()) -> str:
                 text = text.replace(str(secret), REDACTED)
         text = _CREDENTIAL_URL_RE.sub(r"\1[redacted]@", text)
         text = _BEARER_RE.sub(f"Bearer {REDACTED}", text)
+        text = _OAUTH_RE.sub(f"OAuth {REDACTED}", text)
         text = _GOOGLE_TOKEN_RE.sub(REDACTED, text)
         text = _TELEGRAM_TOKEN_RE.sub(REDACTED, text)
         text = _SENSITIVE_ASSIGNMENT_RE.sub(

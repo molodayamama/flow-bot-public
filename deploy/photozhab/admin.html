@@ -1987,7 +1987,7 @@ resetOnboardFlow(true);
 
 function accountActionHtml(a) {
   const id = String(a.id || '');
-  const idArg = esc(id.replace(/\\/g,'\\\\').replace(/'/g,"\\'"));
+  const idArg = jsArg(id);
   const state = accountTestState[id] || {};
   const image = state.image || {};
   const video = state.video || {};
@@ -1997,12 +1997,12 @@ function accountActionHtml(a) {
   const cls = (video.ok === false || image.ok === false) ? 'fail' : ((video.ok === true || image.ok === true) ? 'ok' : '');
   return `
     <div class="account-action-stack">
-      <button class="btn btn-ghost btn-sm" onclick="resetFailures('${idArg}')">Сбросить ошибки</button>
+      <button class="btn btn-ghost btn-sm" onclick="resetFailures(${idArg})">Сбросить ошибки</button>
       <div class="account-action-buttons">
-        <button class="btn btn-ghost btn-sm" onclick="prepareRelogin('${idArg}')">Перелогин</button>
-        <button class="btn btn-ghost btn-sm" ${image.status==='running'?'disabled':''} onclick="runAccountTest('${idArg}','image')">${esc(imageLabel)}</button>
-        <button class="btn btn-ghost btn-sm" ${video.status==='running'?'disabled':''} onclick="runAccountTest('${idArg}','video')">${esc(videoLabel)}</button>
-        <button class="btn btn-ghost btn-sm" title="Удалить аккаунт" onclick="deleteAccount('${idArg}')">🗑</button>
+        <button class="btn btn-ghost btn-sm" onclick="prepareRelogin(${idArg})">Перелогин</button>
+        <button class="btn btn-ghost btn-sm" ${image.status==='running'?'disabled':''} onclick="runAccountTest(${idArg},'image')">${esc(imageLabel)}</button>
+        <button class="btn btn-ghost btn-sm" ${video.status==='running'?'disabled':''} onclick="runAccountTest(${idArg},'video')">${esc(videoLabel)}</button>
+        <button class="btn btn-ghost btn-sm" title="Удалить аккаунт" onclick="deleteAccount(${idArg})">🗑</button>
       </div>
       ${reason ? `<div class="account-test-reason ${cls}">${esc(reason)}</div>` : ''}
     </div>
@@ -2099,8 +2099,8 @@ async function loadAccounts() {
       </td>
       <td class="mono" style="color:${(a.fails||0)>0?'var(--pz-coral)':'var(--pz-faint)'}">${a.fails??0}</td>
       <td class="mono">${gCreditsCell(a)}</td>
-      <td><label class="toggle"><input type="checkbox" ${a.video_allowed?'checked':''} onchange="toggleVideo('${esc(a.id)}',this.checked)"><span class="toggle-slider"></span></label></td>
-      <td><label class="toggle"><input type="checkbox" ${!a.disabled?'checked':''} onchange="toggleDisabled('${esc(a.id)}',!this.checked)"><span class="toggle-slider"></span></label></td>
+      <td><label class="toggle"><input type="checkbox" ${a.video_allowed?'checked':''} onchange="toggleVideo(${jsArg(a.id)},this.checked)"><span class="toggle-slider"></span></label></td>
+      <td><label class="toggle"><input type="checkbox" ${!a.disabled?'checked':''} onchange="toggleDisabled(${jsArg(a.id)},!this.checked)"><span class="toggle-slider"></span></label></td>
       <td>${accountActionHtml(a)}</td>
     </tr>
   `).join('');
@@ -2146,7 +2146,7 @@ function renderProxyManaged(rows) {
   tb.innerHTML = rows.map(r=>`
     <tr>
       <td class="mono" style="color:var(--pz-cyan)">${esc(r.local_url)}
-        <button class="btn btn-ghost btn-sm" style="margin-left:6px" onclick="copyText('${esc(r.local_url)}')">копировать</button>
+        <button class="btn btn-ghost btn-sm" style="margin-left:6px" onclick="copyText(${jsArg(r.local_url)})">копировать</button>
       </td>
       <td class="mono" style="font-size:11px">${esc(r.label)}</td>
       <td>${r.alive?'<span style="color:var(--pz-lime)">да</span>':'<span style="color:var(--pz-coral)">нет</span>'}</td>
@@ -2585,7 +2585,8 @@ function toast(type, msg) {
 }
 
 /* ── Utils ─────────────────────────────────────────── */
-function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function jsArg(value){ return esc(JSON.stringify(String(value??''))); }
 function fmt(n){ return Number(n??0).toLocaleString('ru'); }
 const ADMIN_TZ = 'Asia/Yekaterinburg';
 const _dtFmt = new Intl.DateTimeFormat('ru-RU', {

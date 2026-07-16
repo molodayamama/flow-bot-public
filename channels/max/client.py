@@ -4,9 +4,10 @@ import asyncio
 import os
 import re
 from dataclasses import dataclass, field
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import aiohttp
 
@@ -29,6 +30,7 @@ _MEDIA_KIND_TO_MAX_TYPE = {
 _MAX_UPLOAD_HOSTS = frozenset({"fu.oneme.ru", "iu.oneme.ru", "vu.okcdn.ru"})
 _MAX_INCOMING_IMAGE_BYTES = 50 * 1024 * 1024
 _MAX_OUTGOING_VIDEO_BYTES = 250 * 1024 * 1024
+_BLOCKED_MEDIA_HOSTS = frozenset({"localhost"})
 
 
 MAX_ENABLED_ENV = "MAX_ENABLED"
@@ -116,6 +118,27 @@ def validate_max_config(config: MaxConfig, *, production: bool = False) -> None:
             errors.append(f"{MAX_INBOX_WORKERS_ENV} must be between 1 and 32")
     if errors:
         raise ValueError("; ".join(errors))
+
+
+def _is_safe_media_download_url(raw: str) -> bool:
+    parsed = urlparse(str(raw or ""))
+    if parsed.scheme != "https" or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower().rstrip(".")
+    if host in _BLOCKED_MEDIA_HOSTS or host.endswith(".localhost") or host.endswith(".local"):
+        return False
+    try:
+        ip = ip_address(host)
+    except ValueError:
+        return True
+    return not (
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
 
 
 def build_client_from_env(env: Mapping[str, str] | None = None) -> "MaxBotClient | None":
@@ -407,58 +430,73 @@ class MaxBotClient:
 
     async def _raw_get_bytes(self, url: str, *, max_bytes: int | None = None) -> bytes:
         """GET raw bytes from an absolute URL (file download, no JSON parse)."""
-        parsed = urlparse(url)
-        if parsed.scheme != "https" or not parsed.hostname:
+        if not _is_safe_media_download_url(url):
             raise MaxApiError(
                 status=None, code="media_url_invalid", retryable=False
             )
         session = await self._get_session()
         byte_limit = self.max_download_bytes if max_bytes is None else max(1, int(max_bytes))
         try:
-            async with session.get(
-                url,
-                ssl=self._ssl_arg(),
-                timeout=aiohttp.ClientTimeout(total=120.0),
-            ) as response:
-                status = int(getattr(response, "status", 200))
-                final_url = urlparse(str(getattr(response, "url", None) or url))
-                if final_url.scheme != "https" or not final_url.hostname:
+            current_url = url
+            for _redirect in range(5):
+                if not _is_safe_media_download_url(current_url):
                     raise MaxApiError(
-                        status=status, code="media_url_invalid", retryable=False
+                        status=None, code="media_url_invalid", retryable=False
                     )
-                if status >= 400:
-                    raise MaxApiError(
-                        status=status,
-                        code="media_download_failed",
-                        retryable=False,
-                    )
-                raw_length = getattr(response, "content_length", None)
-                try:
-                    content_length = int(raw_length) if raw_length is not None else None
-                except (TypeError, ValueError):
-                    content_length = None
-                if content_length is not None and content_length > byte_limit:
-                    raise MaxApiError(
-                        status=status, code="media_too_large", retryable=False
-                    )
-
-                content = getattr(response, "content", None)
-                if content is not None and callable(getattr(content, "iter_chunked", None)):
-                    data = bytearray()
-                    async for chunk in content.iter_chunked(64 * 1024):
-                        data.extend(chunk)
-                        if len(data) > byte_limit:
+                async with session.get(
+                    current_url,
+                    ssl=self._ssl_arg(),
+                    timeout=aiohttp.ClientTimeout(total=120.0),
+                    allow_redirects=False,
+                ) as response:
+                    status = int(getattr(response, "status", 200))
+                    if 300 <= status < 400:
+                        location = str(getattr(response, "headers", {}).get("Location") or "")
+                        if not location:
                             raise MaxApiError(
-                                status=status, code="media_too_large", retryable=False
+                                status=status, code="media_url_invalid", retryable=False
                             )
-                    return bytes(data)
+                        current_url = urljoin(current_url, location)
+                        continue
+                    final_url = str(getattr(response, "url", None) or current_url)
+                    if not _is_safe_media_download_url(final_url):
+                        raise MaxApiError(
+                            status=status, code="media_url_invalid", retryable=False
+                        )
+                    if status >= 400:
+                        raise MaxApiError(
+                            status=status,
+                            code="media_download_failed",
+                            retryable=False,
+                        )
+                    raw_length = getattr(response, "content_length", None)
+                    try:
+                        content_length = int(raw_length) if raw_length is not None else None
+                    except (TypeError, ValueError):
+                        content_length = None
+                    if content_length is not None and content_length > byte_limit:
+                        raise MaxApiError(
+                            status=status, code="media_too_large", retryable=False
+                        )
 
-                data = await response.read()
-                if len(data) > byte_limit:
-                    raise MaxApiError(
-                        status=status, code="media_too_large", retryable=False
-                    )
-                return data
+                    content = getattr(response, "content", None)
+                    if content is not None and callable(getattr(content, "iter_chunked", None)):
+                        data = bytearray()
+                        async for chunk in content.iter_chunked(64 * 1024):
+                            data.extend(chunk)
+                            if len(data) > byte_limit:
+                                raise MaxApiError(
+                                    status=status, code="media_too_large", retryable=False
+                                )
+                        return bytes(data)
+
+                    data = await response.read()
+                    if len(data) > byte_limit:
+                        raise MaxApiError(
+                            status=status, code="media_too_large", retryable=False
+                        )
+                    return data
+            raise MaxApiError(status=None, code="media_url_invalid", retryable=False)
         except MaxApiError:
             raise
         except (aiohttp.ClientError, asyncio.TimeoutError):

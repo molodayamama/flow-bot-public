@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote
 
+_ACCOUNT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,31}$")
+
 # ── account pool (multi-account routing; см. docs/MONETIZATION.md §12) ─
 
 
@@ -55,6 +57,11 @@ def parse_flow_accounts(
     """
     accounts: list[FlowAccount] = []
     seen: set[str] = set()
+    fallback_id = (
+        default_id
+        if _ACCOUNT_ID_RE.fullmatch(str(default_id or ""))
+        else "default"
+    )
     for chunk in re.split(r"[;,]", raw or ""):
         entry = chunk.strip()
         if not entry:
@@ -69,6 +76,8 @@ def parse_flow_accounts(
             continue
         if not acc_id:
             acc_id = f"acc{len(accounts) + 1}"
+        if not _ACCOUNT_ID_RE.fullmatch(acc_id):
+            continue
         if acc_id in seen:
             continue
         browser_proxy_url: str | None = None
@@ -112,7 +121,7 @@ def parse_flow_accounts(
             )
         )
     if not accounts:
-        accounts.append(FlowAccount(id=default_id, profile_dir=default_dir))
+        accounts.append(FlowAccount(id=fallback_id, profile_dir=default_dir))
     return accounts
 
 

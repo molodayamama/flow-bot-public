@@ -28,3 +28,23 @@ location = /max/health {
     proxy_pass http://127.0.0.1:8081;
     proxy_http_version 1.1;
 }
+
+# Optional operator panel. Do not expose /admin.html or /api/admin/* without
+# authentication. The Python app also rejects direct non-loopback admin traffic
+# unless ADMIN_API_TOKEN is configured, but nginx Basic Auth remains the primary
+# browser-facing boundary.
+location = /admin.html {
+    auth_basic "Photozhab admin";
+    auth_basic_user_file /etc/nginx/.htpasswd-photozhab-admin;
+    root /var/www/photozhab;
+}
+
+location /api/admin/ {
+    auth_basic "Photozhab admin";
+    auth_basic_user_file /etc/nginx/.htpasswd-photozhab-admin;
+    proxy_pass http://127.0.0.1:8081;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}

@@ -1225,3 +1225,25 @@ For the documentation bootstrap task:
   static synchronization passed. Public `/`, `/app.html`, `/robots.txt`, and
   `/sitemap.xml` returned HTTP 200; an anonymous invalid download token returned
   HTTP 404. No paid generation/payment/OAuth/captcha smoke was performed.
+
+## 2026-07-16 вЂ” security hardening pass
+
+- Canonical full offline gate: `python -m pytest -q` вЂ” **1566 passed, 1
+  skipped**.
+- Focused security gate: `python -m pytest tests/test_admin_api.py
+  tests/test_flow_accounts.py tests/test_logging_redaction.py
+  tests/test_max_client.py tests/test_production_preflight.py
+  tests/test_photozhab_design_static.py -q` вЂ” **167 passed**.
+- Python compilation passed for `admin_api.py`, `accounts/pool.py`,
+  `security/logging_redaction.py`, `channels/max/client.py`, and
+  `tools/production_preflight.py`.
+- `node --check deploy/photozhab/app.js` and syntax-checking the inline script
+  extracted from `deploy/photozhab/admin.html` both passed.
+- `python tools/check_tracked_secrets.py` and `git diff --check` passed.
+- `git check-ignore -v .claude/settings.json bash.exe.stackdump` confirmed both
+  local artifacts are ignored.
+- Local `.env` production preflight was run without printing values and failed
+  closed with missing/unsafe production settings: `FLOW_BROWSER_API_KEY`,
+  `ROBOKASSA_PUBLIC_BASE_URL`, and `CREDITS_SQLITE=1`.
+- No generation, payment, captcha, OAuth exchange, proxy verification,
+  Telegram/MAX live call, or browser-profile action was made.

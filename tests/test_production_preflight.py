@@ -35,6 +35,36 @@ class ProductionPreflightTests(unittest.TestCase):
         self.assertTrue(report.ok, report.errors)
         self.assertEqual(report.warnings, ())
 
+    def test_public_admin_bind_requires_strong_admin_token(self) -> None:
+        env = dict(self.env, ROBOKASSA_WEB_HOST="0.0.0.0")
+
+        report = validate_environment(env, root=self.root)
+
+        self.assertIn(
+            "ADMIN_API_TOKEN must contain at least 32 characters when ROBOKASSA_WEB_HOST is non-loopback",
+            report.errors,
+        )
+
+        ok_env = dict(env, ADMIN_API_TOKEN="admin-runtime-secret-" + "x" * 32)
+        ok = validate_environment(ok_env, root=self.root)
+        self.assertTrue(ok.ok, ok.errors)
+
+    def test_weak_internal_tokens_and_remote_seller_backend_fail_closed(self) -> None:
+        weak = validate_environment(
+            dict(self.env, INTERNAL_API_TOKEN="short"),
+            root=self.root,
+        )
+        self.assertIn("INTERNAL_API_TOKEN must contain at least 32 characters", weak.errors)
+
+        remote = validate_environment(
+            dict(self.env, BOT_MODE="seller", BACKEND_HOST="consumer.internal"),
+            root=self.root,
+        )
+        self.assertIn(
+            "BACKEND_HOST must be loopback for seller production unless BACKEND_ALLOW_REMOTE=1",
+            remote.errors,
+        )
+
     def test_consumer_requires_runtime_browser_api_key(self) -> None:
         env = dict(self.env)
         env.pop("FLOW_BROWSER_API_KEY")

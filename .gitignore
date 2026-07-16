@@ -158,5 +158,7 @@ flow_accounts_state.json
 account_metadata.json
 
 # Local agent/research artifacts
+.claude/settings.json
 .claude/agent-memory/
 Pablo/
+*.stackdump

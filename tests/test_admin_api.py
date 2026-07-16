@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import asyncio
+import os
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import admin_api
 
@@ -133,6 +135,31 @@ class _JsonReq:
 
     async def json(self):
         return self._body
+
+
+class AdminSecurityBoundaryTests(unittest.TestCase):
+    def test_admin_json_responses_are_not_cacheable_or_sniffable(self) -> None:
+        response = admin_api._json({"ok": True})
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+
+    def test_admin_access_allows_loopback_and_rejects_external_without_token(self) -> None:
+        local = SimpleNamespace(remote="127.0.0.1", headers={})
+        external = SimpleNamespace(remote="203.0.113.10", headers={})
+
+        self.assertTrue(admin_api._admin_request_allowed(local))
+        with patch.dict(os.environ, {"ADMIN_API_TOKEN": ""}):
+            self.assertFalse(admin_api._admin_request_allowed(external))
+
+    def test_admin_access_allows_external_only_with_configured_bearer_token(self) -> None:
+        token = "admin-token-" + "x" * 32
+        request = SimpleNamespace(
+            remote="203.0.113.10",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        with patch.dict(os.environ, {"ADMIN_API_TOKEN": token}):
+            self.assertTrue(admin_api._admin_request_allowed(request))
 
 
 class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):

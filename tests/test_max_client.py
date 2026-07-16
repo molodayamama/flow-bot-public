@@ -245,6 +245,22 @@ class SendTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "media_url_invalid")
         self.assertEqual(sess.calls, [])
 
+    def test_get_file_bytes_rejects_private_https_url_before_request(self):
+        c, sess = _client()
+        with self.assertRaises(MaxApiError) as raised:
+            run(c.get_file_bytes(PlatformFile(file_id="f", url="https://127.0.0.1/private")))
+        self.assertEqual(raised.exception.code, "media_url_invalid")
+        self.assertEqual(sess.calls, [])
+
+    def test_get_file_bytes_rejects_redirect_to_private_host(self):
+        c, sess = _client([
+            _FakeResp(status=302, headers={"Location": "https://localhost/private"})
+        ])
+        with self.assertRaises(MaxApiError) as raised:
+            run(c.get_file_bytes(PlatformFile(file_id="f", url="https://cdn.example/f.png")))
+        self.assertEqual(raised.exception.code, "media_url_invalid")
+        self.assertEqual(len(sess.calls), 1)
+
     def test_get_file_bytes_rejects_oversized_response(self):
         c, _ = _client([_FakeResp(raw=b"12345", content_length=5)])
         c.max_download_bytes = 4

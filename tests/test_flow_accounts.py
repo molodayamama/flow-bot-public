@@ -54,6 +54,13 @@ class ParseFlowAccountsTests(unittest.TestCase):
         self.assertEqual(accs[1].profile_dir, "./p2")  # дубль id — первая запись
 
 
+    def test_invalid_configured_ids_are_not_loaded_into_runtime_or_admin_html(self) -> None:
+        accs = parse_flow_accounts("bad'id=./pwn;ok_2=./profile2")
+        self.assertEqual([a.id for a in accs], ["ok_2"])
+
+        fallback = parse_flow_accounts("bad'id=./pwn", default_id="also'bad", default_dir="./safe")
+        self.assertEqual(fallback, [FlowAccount(id="default", profile_dir="./safe")])
+
     def test_account_proxy_option_sets_browser_and_api_proxy(self) -> None:
         accs = parse_flow_accounts(
             "main=./google_profile;"

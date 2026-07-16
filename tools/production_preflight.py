@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import os
 import re
 import ssl
@@ -56,6 +57,26 @@ def _require(env: Mapping[str, str], names: Sequence[str], errors: list[str]) ->
 def _valid_id_list(raw: str) -> bool:
     parts = [part.strip() for part in str(raw or "").split(",") if part.strip()]
     return bool(parts) and all(part.isdigit() and int(part) > 0 for part in parts)
+
+
+def _is_loopback_host(value: str) -> bool:
+    raw = str(value or "").strip().lower()
+    if raw == "localhost":
+        return True
+    if raw.startswith("[") and "]" in raw:
+        raw = raw[1:raw.index("]")]
+    elif raw.count(":") == 1:
+        host, port = raw.rsplit(":", 1)
+        if port.isdigit():
+            raw = host
+    try:
+        return ipaddress.ip_address(raw).is_loopback
+    except ValueError:
+        return False
+
+
+def _secret_is_strong(value: str, *, minimum: int = 32) -> bool:
+    return len(str(value or "").strip()) >= minimum
 
 
 def _profile_paths(env: Mapping[str, str]) -> list[tuple[str, str]]:
@@ -167,6 +188,27 @@ def validate_environment(
             "seller",
         }:
             errors.append("ROBOKASSA_SCOPE must be consumer or seller")
+
+    web_host = source.get("ROBOKASSA_WEB_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    admin_token = source.get("ADMIN_API_TOKEN", "").strip()
+    if admin_token and not _secret_is_strong(admin_token):
+        errors.append("ADMIN_API_TOKEN must contain at least 32 characters")
+    if production and not _is_loopback_host(web_host) and not _secret_is_strong(admin_token):
+        errors.append(
+            "ADMIN_API_TOKEN must contain at least 32 characters when ROBOKASSA_WEB_HOST is non-loopback"
+        )
+
+    internal_token = source.get("INTERNAL_API_TOKEN", "").strip()
+    if production and internal_token and not _secret_is_strong(internal_token):
+        errors.append("INTERNAL_API_TOKEN must contain at least 32 characters")
+    backend_host = source.get("BACKEND_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    if (
+        production
+        and bot_mode == "seller"
+        and not _is_loopback_host(backend_host)
+        and not _enabled(source, "BACKEND_ALLOW_REMOTE")
+    ):
+        errors.append("BACKEND_HOST must be loopback for seller production unless BACKEND_ALLOW_REMOTE=1")
 
     web_app_enabled = _enabled(source, "WEB_APP_ENABLED")
     if web_app_enabled:

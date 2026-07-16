@@ -32,6 +32,7 @@ class LoggingRedactionTests(unittest.TestCase):
         )
         raw = (
             f"Authorization: Bearer {secret_values[0]} "
+            f"Authorization: OAuth yandex-private-token "
             f"telegram={secret_values[1]} "
             f"proxy=http://user:{secret_values[2]}@proxy.example.test:8080 "
             f"project_id={secret_values[3]} email={secret_values[4]} "
@@ -40,7 +41,7 @@ class LoggingRedactionTests(unittest.TestCase):
 
         rendered = redact_text(raw)
 
-        for secret in secret_values:
+        for secret in (*secret_values, "yandex-private-token"):
             self.assertNotIn(secret, rendered)
         self.assertIn("[redacted]", rendered)
 
