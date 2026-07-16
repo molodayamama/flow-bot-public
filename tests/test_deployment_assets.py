@@ -33,6 +33,7 @@ class DeploymentAssetTests(unittest.TestCase):
         cls.requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
 
     def test_security_dependency_floors_are_preserved(self) -> None:
+        self.assertIn("aiogram>=3.29.1", self.requirements)
         self.assertIn("aiohttp>=3.14.1", self.requirements)
         self.assertIn("setuptools>=83.0.0", self.requirements)
 

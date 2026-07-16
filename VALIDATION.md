@@ -1257,19 +1257,24 @@ For the documentation bootstrap task:
 - A read-only OSV query against all 40 installed production Python packages
   identified two affected packages: `aiohttp 3.13.5` and
   `setuptools 82.0.1`. The selected fixed floors are `aiohttp>=3.14.1` and
-  `setuptools>=83.0.0`; no unrelated dependency floor changed.
-- Compatibility was tested by installing the exact `aiohttp 3.14.1` wheel into
-  an isolated temporary target and prepending it with `PYTHONPATH`. Import
-  reported `3.14.1`; focused deployment/web/MAX tests passed **73 tests** and
-  canonical `python -m pytest -q` passed **1569 tests, 1 skipped**.
+  `setuptools>=83.0.0`; no unrelated vulnerability floor changed.
+- The first isolated `aiohttp 3.14.1` run passed 73 focused tests, then the
+  production `pip check` caught that installed `aiogram 3.28.2` requires
+  `aiohttp<3.14`; that attempt was rolled back immediately from the protected
+  wheel set. PyPI metadata confirms `aiogram 3.29.1` supports `aiohttp<3.15`,
+  so the manifest now requires `aiogram>=3.29.1` as the compatibility floor.
+- The compatible isolated exact `aiogram 3.29.1` + `aiohttp 3.14.1` run passed
+  focused deployment/web/MAX tests (**73 tests**) and canonical
+  `python -m pytest -q` passed **1569 tests, 1 skipped**. Production must pass
+  `pip check` after installing those versions and `setuptools 83.0.0`.
 - `python -m py_compile` passed for the security-touched Python modules/tests.
   `node --check` passed for `app.js`, `landing.js`, and `hero-experiment.js`.
   `bash -n` passed for `deploy.sh` and both service runners.
 - `python tools/check_tracked_secrets.py` and `git diff --check` passed. The
   isolated package directory was removed after validation.
-- Production release gate: download exact old/new aiohttp and setuptools
-  wheels into a root-only rollback directory, run the backup-aware immutable
-  deploy, install only the two exact fixed versions, run `pip check`, restart
+- Production release gate: download exact old/new aiogram, aiohttp, and
+  setuptools wheels into a root-only rollback directory, run the backup-aware
+  immutable deploy, install only the three exact target versions, run `pip check`, restart
   both services, recheck nginx/listeners/health/journals/public auth boundaries,
   and rerun the OSV query expecting zero affected installed packages.
 - No generation, payment, captcha, OAuth exchange, Telegram/MAX provider call,
