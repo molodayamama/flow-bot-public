@@ -124,6 +124,7 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertIn("media-flight-clone", self.js)
         self.assertIn("prefers-reduced-motion: reduce", self.css)
         self.assertIn(".media-result-actions", self.css)
+        self.assertIn("app.css?v=20260716-a2", self.html)
         self.assertIn("app.js?v=20260716-a2", self.html)
 
     def test_low_credit_cta_focus_and_edit_button_contracts(self) -> None:
@@ -135,6 +136,8 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertIn("media-result-action--edit", self.js)
         self.assertIn(".media-result-actions .media-result-action--edit", self.css)
         self.assertIn("white-space: nowrap", self.css)
+        self.assertNotIn(".media-result-actions { flex-wrap: wrap; }", self.css)
+        self.assertNotIn(".media-result-actions .media-result-action--download { flex-basis: 100%; }", self.css)
 
     def test_home_promotes_first_party_generation(self) -> None:
         self.assertIn('href="/app.html">Создать на сайте</a>', self.home)
