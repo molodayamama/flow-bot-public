@@ -30,6 +30,11 @@ class DeploymentAssetTests(unittest.TestCase):
         cls.seller_runner = (
             ROOT / "deploy/bin/geminifree-seller-bot-run"
         ).read_text(encoding="utf-8")
+        cls.requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+    def test_security_dependency_floors_are_preserved(self) -> None:
+        self.assertIn("aiohttp>=3.14.1", self.requirements)
+        self.assertIn("setuptools>=83.0.0", self.requirements)
 
     def test_deploy_uses_immutable_remote_target_and_no_pull(self) -> None:
         self.assertIn('git fetch --prune origin "$DEPLOY_BRANCH"', self.deploy)

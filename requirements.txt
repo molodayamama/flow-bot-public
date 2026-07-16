@@ -13,7 +13,7 @@
 
 # --- Ядро бота (flow_bot.py) ---
 aiogram>=3.24        # Bot API 9.4: поле style у inline-кнопок (зелёная кнопка выбора в визарде)
-aiohttp>=3.9         # прямые HTTP-вызовы Flow API (FlowHttpClient) + сессия aiogram
+aiohttp>=3.14.1      # security fixes: request limits, redirects/cookies, multipart and WebSocket handling
 playwright>=1.40     # SessionKeeper: живой Chrome-профиль (перехват Bearer/reCAPTCHA); channel="chrome"
 python-dotenv>=1.0   # load_dotenv(".env") в flow_bot.py и tools/*.py
 
@@ -22,6 +22,9 @@ aiohttp-socks        # ProxyConnector: SOCKS-прокси для Telegram API (T
 2captcha-python      # `from twocaptcha import TwoCaptcha` — платный решатель (CAPTCHA_PROVIDER=2captcha, TWOCAPTCHA_KEY)
 telethon             # только для tg_e2e/ (telegram_bot_tester.py, внешние режимы E2E-тестера)
 Pillow>=10.0         # infographic_text.py: текст-слой поверх AI-фона. Нужен ТОЛЬКО при INFOGRAPHIC_TEXT_LAYER_ENABLED=True; без него модуль graceful-degrade'ит (возвращает фон как есть).
+
+# --- Инструменты сборки/установки ---
+setuptools>=83.0.0   # security floor for source-distribution file selection
 
 # Стандартная библиотека покрывает остальное: sqlite3 (metrics.py), json, re,
 # asyncio и т.д. flow_profiler/ и flow_core.py — stdlib-only (playwright у
