@@ -764,7 +764,7 @@ function renderResult(target, payload, request) {
     link.setAttribute("aria-label", media.type === "video" ? "Скачать видео" : "Скачать изображение");
     actions.append(link);
     if (media.type !== "video") {
-      const edit = document.createElement("button"); edit.type = "button"; edit.className = "media-result-action"; edit.textContent = "✎ Редактировать";
+      const edit = document.createElement("button"); edit.type = "button"; edit.className = "media-result-action media-result-action--edit"; edit.textContent = "✎ Редактировать";
       edit.addEventListener("click", () => useResultAsSource(media, "edit", node, edit));
       const animate = document.createElement("button"); animate.type = "button"; animate.className = "media-result-action"; animate.textContent = "◉ Оживить";
       animate.addEventListener("click", () => useResultAsSource(media, "animate", node, animate));
@@ -913,9 +913,25 @@ async function generate() {
     const title = document.createElement("strong"); title.textContent = "Не получилось создать";
     const paragraph = document.createElement("p");
     paragraph.textContent = errorMessages[error.message] || "Сервис временно недоступен. Кредиты не списаны.";
-    const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "Изменить запрос";
-    retry.addEventListener("click", () => { elements.prompt.value = prompt; resizePrompt(); elements.prompt.focus(); });
-    errorBox.append(title, paragraph, retry); pending.content.append(errorBox);
+    const actions = document.createElement("div");
+    actions.className = "generation-error-actions";
+    const retry = document.createElement("button");
+    retry.type = "button";
+    if (error.message === "insufficient_credits") {
+      retry.textContent = "Пополнить баланс";
+      retry.addEventListener("click", () => { elements.prompt.value = prompt; resizePrompt(); openPayment(); });
+      const editPrompt = document.createElement("button");
+      editPrompt.type = "button";
+      editPrompt.className = "generation-error-secondary";
+      editPrompt.textContent = "Изменить запрос";
+      editPrompt.addEventListener("click", () => { elements.prompt.value = prompt; resizePrompt(); elements.prompt.focus(); });
+      actions.append(retry, editPrompt);
+    } else {
+      retry.textContent = "Изменить запрос";
+      retry.addEventListener("click", () => { elements.prompt.value = prompt; resizePrompt(); elements.prompt.focus(); });
+      actions.append(retry);
+    }
+    errorBox.append(title, paragraph, actions); pending.content.append(errorBox);
     if (error.payload && Number.isFinite(Number(error.payload.balance))) setBalance(error.payload.balance);
     if (error.message === "insufficient_credits") openPayment();
     if (error.message === "auth_required") applyAuthState();

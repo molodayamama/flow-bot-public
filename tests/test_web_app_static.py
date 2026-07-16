@@ -119,6 +119,16 @@ class WebAppStaticTests(unittest.TestCase):
         self.assertIn(".media-result-actions", self.css)
         self.assertIn("app.js?v=20260716-a1", self.html)
 
+    def test_low_credit_cta_focus_and_edit_button_contracts(self) -> None:
+        self.assertIn('"Пополнить баланс"', self.js)
+        self.assertIn("openPayment()", self.js)
+        self.assertIn("generation-error-actions", self.js)
+        self.assertIn(".composer textarea:focus-visible", self.css)
+        self.assertIn("outline: 0", self.css)
+        self.assertIn("media-result-action--edit", self.js)
+        self.assertIn(".media-result-actions .media-result-action--edit", self.css)
+        self.assertIn("white-space: nowrap", self.css)
+
     def test_home_promotes_first_party_generation(self) -> None:
         self.assertIn('href="/app.html">Создать на сайте</a>', self.home)
         self.assertIn("прямо на сайте, в Telegram или MAX", self.home)

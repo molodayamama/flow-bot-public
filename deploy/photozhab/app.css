@@ -74,7 +74,7 @@
 
 .composer-wrap { z-index: 3; width: min(900px, calc(100% - 34px)); margin: 0 auto; padding: 8px 0 max(14px, env(safe-area-inset-bottom)); background: linear-gradient(0deg, var(--pz-paper) 72%, transparent); }
 .composer { padding: 13px 14px 11px; border: 1px solid var(--pz-line-strong); border-radius: var(--r-xl); background: rgba(23, 26, 24, 0.96); box-shadow: var(--shadow-md); transition: border-color var(--dur-base), box-shadow var(--dur-base); }
-.composer:focus-within { border-color: rgba(84, 215, 214, 0.55); box-shadow: var(--shadow-md), 0 0 0 3px rgba(84, 215, 214, 0.08); }
+.composer:focus-within { border-color: rgba(242, 239, 228, 0.18); box-shadow: var(--shadow-md); }
 .composer textarea { display: block; width: 100%; max-height: 180px; resize: none; padding: 3px 3px 14px; color: var(--pz-ink); font: 500 15px/1.5 var(--font-sans); border: 0; outline: 0; background: transparent; }
 .composer textarea::placeholder { color: var(--pz-faint); }
 .composer-toolbar, .composer-controls, .send-group { display: flex; align-items: center; }
@@ -371,7 +371,7 @@
   background: linear-gradient(160deg, rgba(18, 21, 18, 0.96), rgba(14, 16, 15, 0.98));
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3);
 }
-.composer:focus-within { border-color: rgba(211, 243, 107, 0.38); box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(211, 243, 107, 0.08); }
+.composer:focus-within { border-color: rgba(242, 239, 228, 0.18); box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3); }
 .composer textarea { min-height: 44px; color: var(--pz-ink); font-size: 14.5px; line-height: 1.55; }
 .composer textarea::placeholder { color: rgba(242, 239, 228, 0.32); }
 .composer-toolbar { margin-top: 8px; }
@@ -892,7 +892,10 @@
 .generation-error { max-width: 480px; padding: 20px 22px; border: 1px solid rgba(255, 154, 140, 0.35); border-radius: 16px; background: rgba(255, 154, 140, 0.05); }
 .generation-error strong { font: 700 15.5px var(--font-display); }
 .generation-error p { margin: 12px 0 0; color: rgba(242, 239, 228, 0.65); font-size: 13.5px; line-height: 1.6; }
-.generation-error button { min-height: 36px; margin-top: 16px; padding: 0 18px; border: 0; border-radius: var(--r-pill); color: var(--pz-lime-ink); background: var(--pz-lime); font: 700 12.5px var(--font-sans); cursor: pointer; }
+.generation-error-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.generation-error button { min-height: 36px; padding: 0 18px; border: 0; border-radius: var(--r-pill); color: var(--pz-lime-ink); background: var(--pz-lime); font: 700 12.5px var(--font-sans); cursor: pointer; }
+.generation-error .generation-error-secondary { color: rgba(242, 239, 228, 0.72); border: 1px solid rgba(242, 239, 228, 0.18); background: transparent; }
+.generation-error .generation-error-secondary:hover { color: var(--pz-lime); border-color: rgba(211, 243, 107, 0.48); }
 
 .payment-dialog .dialog-copy b { color: var(--pz-lime); font: 700 13px var(--font-mono); }
 .telegram-code > .telegram-code-entry { position: relative; display: block; }
@@ -908,7 +911,8 @@
 .payment-submit:hover:not(:disabled) { background: #e3fb92; }
 .payment-submit:disabled { color: rgba(242, 239, 228, 0.4); background: var(--pz-surface-3); box-shadow: none; cursor: not-allowed; }
 
-.web-app-body :is(button, a, input, textarea, select):focus-visible { outline: 3px solid var(--pz-cyan); outline-offset: 3px; }
+.web-app-body :is(button, a, input, textarea, select):focus-visible { outline: 3px solid var(--pz-lime); outline-offset: 3px; }
+.composer textarea:focus-visible { outline: 0; }
 .web-app-body :is(.new-chat-button, .mode-nav-button, .choice-pill, .send-button, .auth-provider, .pack-button, .payment-submit, .gallery-filters button, .gallery-card__footer a, .gallery-card__footer button, .gallery-empty button) { transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease, transform 0.2s ease; }
 .web-app-body :is(.new-chat-button, .choice-pill, .send-button, .auth-provider, .pack-button, .payment-submit, .gallery-filters button, .gallery-card__footer a, .gallery-card__footer button, .gallery-empty button):active:not(:disabled) { transform: scale(0.98); }
 
@@ -1101,6 +1105,7 @@
 }
 
 .media-result-actions .media-result-action--download { color: var(--pz-ink); }
+.media-result-actions .media-result-action--edit { flex: 1.35 0 auto; white-space: nowrap; }
 
 .media-result-actions .media-result-action:hover:not(:disabled) {
   color: var(--pz-lime);

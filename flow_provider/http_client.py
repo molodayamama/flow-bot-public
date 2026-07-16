@@ -427,6 +427,7 @@ class FlowHttpClient:
         image_inputs: list | None = None,
         allow_browser_fallback: bool = True,
         image_model: str = DEFAULT_IMAGE_MODEL,
+        session_id: str | None = None,
     ) -> dict:
         """Сгенерировать (или, при ``image_inputs``, отредактировать) изображения.
 
@@ -456,7 +457,7 @@ class FlowHttpClient:
 
         url = f"{self.API_BASE}/projects/{project_id}/flowMedia:batchGenerateImages"
         seed = random.randint(100_000, 999_999)
-        sess_id = f";{int(time.time() * 1000)}"
+        sess_id = str(session_id or "").strip() or f";{int(time.time() * 1000)}"
 
         # Ротация actions: пробуем каждый action пока Google не примет
         actions = list(RECAPTCHA_ACTIONS)
@@ -852,6 +853,7 @@ class FlowHttpClient:
         source_workflow_id: str | None = None,
         source_scene_id: str | None = None,
         source_duration_s: float | None = None,
+        session_id: str | None = None,
         progress_cb=None,
     ) -> dict:
         """Сгенерировать видео через асинхронный Flow video API.
@@ -878,7 +880,7 @@ class FlowHttpClient:
         if not project_id:
             return {"error": "Нет project_id для видео"}
 
-        sess_id  = f";{int(time.time() * 1000)}"
+        sess_id  = str(session_id or "").strip() or f";{int(time.time() * 1000)}"
         headers  = self._build_headers(session)
         proxy    = self._api_proxy()
         reference_images = build_video_reference_images(reference_sources)

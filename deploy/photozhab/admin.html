@@ -426,6 +426,14 @@ tr:hover td{background:var(--pz-surface-2)}
 .user-detail-profile div{min-width:0;padding:10px 12px;border:1px solid var(--pz-line-faint);border-radius:10px;background:var(--pz-paper)}
 .user-detail-profile small{display:block;color:var(--pz-faint);font:600 9px var(--font-mono);letter-spacing:.08em;text-transform:uppercase}
 .user-detail-profile span{display:block;margin-top:4px;overflow:hidden;color:var(--pz-muted);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.user-admin-actions{display:grid;gap:10px;margin-top:16px}
+.user-admin-action{padding:12px;border:1px solid var(--pz-line-faint);border-radius:12px;background:var(--pz-surface)}
+.user-admin-action label{display:block;margin-bottom:7px;color:var(--pz-faint);font:600 9px var(--font-mono);letter-spacing:.1em;text-transform:uppercase}
+.user-admin-action-row{display:flex;gap:8px;align-items:center}
+.user-admin-action-row .form-input{min-width:0;flex:1}
+.user-admin-action p{margin:7px 0 0;color:var(--pz-faint);font-size:11px;line-height:1.45}
+.user-admin-action--danger{border-color:rgba(255,123,109,.18);background:rgba(255,123,109,.035)}
+.user-table-sub{margin-top:3px;color:var(--pz-faint);font-size:10px;line-height:1.35;overflow-wrap:anywhere}
 
 /* ── Toasts ────────────────────────────────────────── */
 #toasts{position:fixed;bottom:24px;right:24px;z-index:999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
@@ -927,18 +935,18 @@ tr:hover td{background:rgba(242,239,228,.025)}
           </div>
         </div>
         <div class="search-row">
-          <input id="users-search" class="search-input" type="text" placeholder="Поиск по username или user_id…" oninput="usersSearchDebounce()">
+          <input id="users-search" class="search-input" type="text" placeholder="Поиск по логину, имени, внутреннему или внешнему ID…" oninput="usersSearchDebounce()">
           <span id="users-count-label" style="font-size:13px;color:var(--pz-faint);white-space:nowrap"></span>
         </div>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>User ID</th>
-                <th>Username</th>
+                <th>Внутр. ID</th>
+                <th>Логин</th>
                 <th>Имя</th>
                 <th>Баланс</th>
-                <th>Выдано</th>
+                <th>Бонус</th>
                 <th>Канал</th>
                 <th>Активен</th>
                 <th>Регистрация</th>
@@ -2872,7 +2880,38 @@ let _usersSearchTimer = null;
 let _userDetailReturnFocus = null;
 
 function userPlatformLabel(platform) {
-  return {telegram:'Telegram', max:'MAX', yandex:'Яндекс ID'}[String(platform||'').toLowerCase()] || String(platform||'—');
+  const key = String(platform || '').toLowerCase();
+  return {telegram:'Telegram', max:'MAX', yandex:'Яндекс ID', web:'web'}[key] || String(platform || '—');
+}
+
+function userDisplayName(u) {
+  if (u?.first_name) return String(u.first_name);
+  if (u?.username) return `@${u.username}`;
+  const platform = String(u?.platform || '').toLowerCase();
+  const platformId = String(u?.platform_user_id || '').trim();
+  if (platform && platform !== 'telegram' && platformId) return `${userPlatformLabel(platform)} ${platformId}`;
+  return `Пользователь ${u?.user_id ?? '—'}`;
+}
+
+function userLoginCell(u) {
+  if (u?.username) return `<span style="color:var(--pz-muted)">@</span>${esc(u.username)}`;
+  const platform = String(u?.platform || '').toLowerCase();
+  if (platform && platform !== 'telegram') return `<span class="badge badge-muted">${esc(userPlatformLabel(platform))}</span>`;
+  return '<span style="color:var(--pz-faint)">—</span>';
+}
+
+function userInternalIdCell(u) {
+  const platform = String(u?.platform || '').toLowerCase();
+  const platformId = String(u?.platform_user_id || '').trim();
+  const showExternal = platform && platform !== 'telegram' && platformId && platformId !== String(u?.user_id ?? '');
+  return `<span style="color:var(--pz-cyan)">${esc(u?.user_id ?? '—')}</span>${
+    showExternal ? `<div class="user-table-sub">${esc(userPlatformLabel(platform))}: ${esc(platformId)}</div>` : ''
+  }`;
+}
+
+function userChannelText(channel) {
+  const raw = String(channel || '').trim();
+  return raw || 'органика';
 }
 
 function userDetailList(title, rows) {
@@ -2884,12 +2923,15 @@ function renderUserDetail(data) {
   const identity = data.identity || {};
   const requests = p.requests || {};
   const spend = p.spend || {};
-  const platform = userPlatformLabel(identity.platform || (p.acq_channel === 'max' ? 'max' : 'telegram'));
-  const displayName = p.username ? `@${p.username}` : (p.first_name || `Пользователь ${p.user_id}`);
-  const initial = String(p.first_name || p.username || 'P').trim().charAt(0).toLocaleUpperCase('ru-RU') || 'P';
+  const rawPlatform = identity.platform || p.platform || (p.acq_channel === 'max' ? 'max' : 'telegram');
+  const platform = userPlatformLabel(rawPlatform);
+  const platformId = identity.platform_user_id || p.platform_user_id || '';
+  const displayName = userDisplayName({...p, platform: rawPlatform, platform_user_id: platformId});
+  const loginText = p.username ? `@${p.username}` : '—';
+  const initial = String(p.first_name || p.username || platform || 'P').trim().charAt(0).toLocaleUpperCase('ru-RU') || 'P';
   document.getElementById('user-detail-avatar').textContent = initial;
   document.getElementById('user-detail-name').textContent = displayName;
-  document.getElementById('user-detail-meta').textContent = `${p.user_id} · ${platform} · с ${fmtDt(p.first_seen)}`;
+  document.getElementById('user-detail-meta').textContent = `внутр. ${p.user_id} · ${platform}${platformId ? ` · ${platformId}` : ''} · с ${fmtDt(p.first_seen)}`;
 
   const paymentRows = (data.recent_payments || []).map(item => `<div class="user-detail-row">
     <time>${fmtDt(item.created_at)}</time>
@@ -2920,15 +2962,92 @@ function renderUserDetail(data) {
     </div>
     <div class="user-detail-profile">
       <div><small>Платформа</small><span>${esc(platform)}</span></div>
-      <div><small>ID платформы</small><span title="${esc(identity.platform_user_id || '')}">${esc(identity.platform_user_id || '—')}</span></div>
-      <div><small>Канал</small><span>${esc(p.acq_channel || 'органика')}</span></div>
+      <div><small>ID платформы</small><span title="${esc(platformId || '')}">${esc(platformId || '—')}</span></div>
+      <div><small>Внутренний ID</small><span>${esc(p.user_id || '—')}</span></div>
+      <div><small>Логин</small><span>${esc(loginText)}</span></div>
+      <div><small>Канал / seed</small><span>${esc(userChannelText(p.acq_channel))}</span></div>
       <div><small>Последняя активность</small><span>${fmtDt(p.last_active)}</span></div>
+    </div>
+    <div class="user-admin-actions" aria-label="Управление пользователем">
+      <div class="user-admin-action">
+        <label for="user-credit-amount">Выдать кредиты</label>
+        <div class="user-admin-action-row">
+          <input id="user-credit-amount" class="form-input" type="number" min="1" max="100000" step="1" placeholder="100">
+          <button class="btn btn-primary btn-sm" type="button" onclick="grantUserCredits(${Number(p.user_id)||0})">Выдать</button>
+        </div>
+        <p>Добавляет кредиты к текущему балансу. Лимит одного действия — 100 000.</p>
+      </div>
+      <div class="user-admin-action">
+        <label for="user-channel-input">Канал / seed</label>
+        <div class="user-admin-action-row">
+          <input id="user-channel-input" class="form-input" type="text" inputmode="latin" maxlength="32" value="${esc(p.acq_channel || '')}" placeholder="seed_slug">
+          <button class="btn btn-ghost btn-sm" type="button" onclick="saveUserChannel(${Number(p.user_id)||0})">Сохранить</button>
+        </div>
+        <p>Разрешены латиница, цифры, дефис и подчёркивание. Значение попадает в атрибуцию.</p>
+      </div>
+      <div class="user-admin-action user-admin-action--danger">
+        <div class="user-admin-action-row">
+          <button class="btn btn-ghost btn-sm" type="button" onclick="detachUserSeed(${Number(p.user_id)||0})">Отвязать seed</button>
+        </div>
+        <p>Удаляет first-touch seed у пользователя, но не отвязывает его аккаунт ${esc(platform)}.</p>
+      </div>
     </div>
     ${userDetailList('Платежи', paymentRows)}
     ${userDetailList('Последние генерации', jobRows)}
     ${userDetailList('История запросов', historyRows)}
     ${userDetailList('Support', ticketRows)}
   `;
+}
+
+async function reloadUserDetail(userId) {
+  const data = await api('GET', `/users/${encodeURIComponent(userId)}`);
+  if (data) renderUserDetail(data);
+}
+
+async function grantUserCredits(userId) {
+  const input = document.getElementById('user-credit-amount');
+  const amount = Number(input?.value || 0);
+  if (!Number.isInteger(amount) || amount <= 0 || amount > 100000) {
+    toast('error', 'Введите целое число кредитов от 1 до 100000');
+    return;
+  }
+  const res = await apiSave(`/users/${encodeURIComponent(userId)}/credits`, {amount});
+  if (!res.ok) {
+    toast('error', describeSaveError(res));
+    return;
+  }
+  if (input) input.value = '';
+  toast('success', `Выдано ${fmt(amount)} кр. Баланс: ${fmt(res.data?.balance || 0)}`);
+  await reloadUserDetail(userId);
+  loadUsers(_usersPage);
+}
+
+async function saveUserChannel(userId) {
+  const input = document.getElementById('user-channel-input');
+  const channel = String(input?.value || '').trim().toLowerCase();
+  if (!/^[a-z0-9_-]{1,32}$/.test(channel)) {
+    toast('error', 'Канал: 1–32 символа, только a-z, 0-9, _ и -');
+    return;
+  }
+  const res = await apiSave(`/users/${encodeURIComponent(userId)}/channel`, {channel});
+  if (!res.ok) {
+    toast('error', describeSaveError(res));
+    return;
+  }
+  toast('success', `Канал сохранён: ${res.data?.acq_channel || channel}`);
+  await reloadUserDetail(userId);
+  loadUsers(_usersPage);
+}
+
+async function detachUserSeed(userId) {
+  const res = await apiSave(`/users/${encodeURIComponent(userId)}/seed-detach`, {});
+  if (!res.ok) {
+    toast('error', describeSaveError(res));
+    return;
+  }
+  toast('success', 'Seed отвязан');
+  await reloadUserDetail(userId);
+  loadUsers(_usersPage);
 }
 
 async function openUserDetail(userId, trigger) {
@@ -2991,12 +3110,12 @@ async function loadUsers(page=1) {
   document.getElementById('users-tbody').innerHTML = data.users.length
     ? data.users.map(u => `
       <tr role="button" tabindex="0" aria-label="Открыть карточку пользователя ${u.user_id}" onclick="openUserDetail(${u.user_id},this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openUserDetail(${u.user_id},this)}">
-        <td class="mono" style="color:var(--pz-cyan)">${u.user_id}</td>
-        <td>${u.username ? '<span style="color:var(--pz-muted)">@</span>'+esc(u.username) : '<span style="color:var(--pz-faint)">—</span>'}</td>
-        <td style="color:var(--pz-muted)">${esc(u.first_name||'')}</td>
+        <td class="mono">${userInternalIdCell(u)}</td>
+        <td>${userLoginCell(u)}</td>
+        <td style="color:var(--pz-muted)">${esc(userDisplayName(u))}</td>
         <td class="mono" style="color:${u.balance>0?'var(--pz-lime)':'var(--pz-faint)'};font-weight:700">${fmt(u.balance)}</td>
-        <td class="mono" style="color:var(--pz-faint)">${fmt(u.granted)}</td>
-        <td><span class="badge badge-muted">${esc(userPlatformLabel(u.platform))}</span>${u.acq_channel && u.acq_channel !== u.platform ? `<div style="margin-top:3px;color:var(--pz-faint);font-size:10px">${esc(u.acq_channel)}</div>` : ''}</td>
+        <td>${u.granted ? '<span class="badge badge-green">да</span>' : '<span class="badge badge-muted">нет</span>'}</td>
+        <td><span class="badge badge-muted">${esc(userChannelText(u.acq_channel))}</span><div class="user-table-sub">${esc(userPlatformLabel(u.platform))}</div></td>
         <td style="font-size:12px;color:var(--pz-faint)">${fmtDt(u.last_active)}</td>
         <td style="font-size:12px;color:var(--pz-faint)">${fmtDt(u.first_seen)}</td>
         <td>${u.is_blocked?'<span class="badge badge-red">блок</span>':'<span aria-hidden="true" style="color:var(--pz-faint)">→</span>'}</td>

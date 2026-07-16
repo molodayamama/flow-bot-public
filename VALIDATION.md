@@ -180,6 +180,23 @@ Anonymous initialization must still open the dialog, API failure must leave
 generation controls disabled, and pageshow/visibility refresh must run only
 after initial session loading completes.
 
+## Admin user and attribution checks
+
+When changing the admin Users table, cross-platform identity projection,
+acquisition/seed attribution, or recent-event user labels, run:
+
+```bash
+python -m pytest tests/test_admin_api.py tests/test_metrics.py tests/test_photozhab_design_static.py -q
+```
+
+Required assertions: MAX/Yandex/web identities render with provider labels and
+external platform ids instead of relying on Telegram username/name fields;
+manual credit grants are positive, bounded, existing-user-only and audited;
+channel changes accept only canonical seed slugs; seed detach clears acquisition
+attribution without unlinking the provider identity; recent events include web
+generation/prompt-improve rows for non-Telegram users with a readable user
+label.
+
 After green CI, back up the protected VPS env and nginx config, set a random
 32+ character `WEB_SESSION_SECRET`, enable the consumer-only web app, keep
 `WEB_STARTER_CREDITS=0`, add the `/web/api/` reverse proxy to the

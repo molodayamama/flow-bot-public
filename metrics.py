@@ -36,6 +36,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -86,6 +87,9 @@ __all__ = [
     "credits_charge_for_identity",
     "credits_refund_for_identity",
     "credits_add_for_identity",
+    "admin_add_user_credits",
+    "admin_set_user_channel",
+    "admin_clear_user_channel",
     "credits_balance",
     "credits_charge",
     "credits_refund",
@@ -919,6 +923,97 @@ def record_acquisition(*, user_id: int, channel: str) -> bool:
     except Exception:  # noqa: BLE001
         log.warning("record_acquisition failed", exc_info=True)
         return False
+
+
+_ADMIN_CHANNEL_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+
+
+def admin_add_user_credits(user_id: int, amount: int, *, max_amount: int = 100_000) -> dict | None:
+    """Grant credits to an existing user from the admin UI.
+
+    Returns the new balance, or ``None`` when the user/amount is invalid.
+    The starter bonus flag is not changed; this is a manual top-up.
+    """
+    try:
+        uid = int(user_id)
+        value = int(amount)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0 or value > int(max_amount):
+        return None
+    try:
+        with _LOCK:
+            conn = _conn()
+            if conn.execute("SELECT 1 FROM users WHERE user_id=?", (uid,)).fetchone() is None:
+                return None
+            conn.execute(
+                "INSERT INTO credits (user_id, balance, granted, updated_at) "
+                "VALUES (?, ?, 0, datetime('now')) "
+                "ON CONFLICT(user_id) DO UPDATE SET "
+                "balance=balance+excluded.balance, updated_at=datetime('now')",
+                (uid, value),
+            )
+            row = conn.execute(
+                "SELECT balance FROM credits WHERE user_id=?", (uid,)
+            ).fetchone()
+            conn.commit()
+            return {"user_id": uid, "balance": int(row[0]) if row else value}
+    except Exception:  # noqa: BLE001
+        log.warning("admin_add_user_credits failed for user_id=%r", user_id, exc_info=True)
+        return None
+
+
+def admin_set_user_channel(user_id: int, channel: str) -> dict | None:
+    """Override a user's acquisition channel with a validated seed slug."""
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    value = str(channel or "").strip().lower()
+    if not _ADMIN_CHANNEL_RE.fullmatch(value):
+        return None
+    try:
+        with _LOCK:
+            conn = _conn()
+            if conn.execute("SELECT 1 FROM users WHERE user_id=?", (uid,)).fetchone() is None:
+                return None
+            conn.execute(
+                "INSERT INTO acquisitions (user_id, channel) VALUES (?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET channel=excluded.channel",
+                (uid, value),
+            )
+            conn.execute(
+                "UPDATE users SET acq_channel=?, updated_at=datetime('now') WHERE user_id=?",
+                (value, uid),
+            )
+            conn.commit()
+            return {"user_id": uid, "acq_channel": value}
+    except Exception:  # noqa: BLE001
+        log.warning("admin_set_user_channel failed for user_id=%r", user_id, exc_info=True)
+        return None
+
+
+def admin_clear_user_channel(user_id: int) -> dict | None:
+    """Detach first-touch seed attribution from a user."""
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    try:
+        with _LOCK:
+            conn = _conn()
+            if conn.execute("SELECT 1 FROM users WHERE user_id=?", (uid,)).fetchone() is None:
+                return None
+            conn.execute("DELETE FROM acquisitions WHERE user_id=?", (uid,))
+            conn.execute(
+                "UPDATE users SET acq_channel=NULL, updated_at=datetime('now') WHERE user_id=?",
+                (uid,),
+            )
+            conn.commit()
+            return {"user_id": uid, "acq_channel": None}
+    except Exception:  # noqa: BLE001
+        log.warning("admin_clear_user_channel failed for user_id=%r", user_id, exc_info=True)
+        return None
 
 
 def grant_milestone_if_joined(
@@ -3546,6 +3641,26 @@ def report_recent_events(limit: int = 50) -> list:
         "video_extend":       ("🎬",  "video"),
         "video_edit":         ("🎬",  "video"),
     }
+    def _identity_label(
+        uid: int | str | None,
+        username: str | None,
+        first_name: str | None = None,
+        platform: str | None = None,
+        platform_user_id: str | None = None,
+    ) -> str:
+        username = str(username or "").strip()
+        if username:
+            return f"@{username}"
+        name = str(first_name or "").strip()
+        if name:
+            return name[:48]
+        platform_value = str(platform or "").strip().lower()
+        platform_id = str(platform_user_id or "").strip()
+        if platform_value and platform_value != "telegram":
+            label = {"max": "MAX", "yandex": "Yandex ID"}.get(platform_value, platform_value)
+            return f"{label}:{platform_id or uid}"
+        return f"#{uid}" if uid else "—"
+
     try:
         with _LOCK:
             conn = _conn()
@@ -3562,8 +3677,14 @@ def report_recent_events(limit: int = 50) -> list:
                        fj.user_id,
                        (SELECT e.username FROM events e
                         WHERE e.user_id = fj.user_id AND e.username IS NOT NULL
-                        ORDER BY e.id DESC LIMIT 1) AS username
+                        ORDER BY e.id DESC LIMIT 1) AS username,
+                       u.first_name,
+                       (SELECT ui.platform FROM user_identities ui
+                        WHERE ui.internal_user_id=fj.user_id LIMIT 1) AS platform,
+                       (SELECT ui.platform_user_id FROM user_identities ui
+                        WHERE ui.internal_user_id=fj.user_id LIMIT 1) AS platform_user_id
                 FROM flow_jobs fj
+                LEFT JOIN users u ON u.user_id=fj.user_id
                 ORDER BY fj.id DESC LIMIT ?
                 """,
                 (int(limit),),
@@ -3572,14 +3693,20 @@ def report_recent_events(limit: int = 50) -> list:
             system_event_rows = _rows(
                 conn,
                 """
-                SELECT event_name, user_id, username, source, payload_json, created_at
-                FROM events
-                WHERE event_name IN (
+                SELECT e.event_name, e.user_id, e.username, e.source, e.payload_json,
+                       e.created_at, u.first_name,
+                       (SELECT ui.platform FROM user_identities ui
+                        WHERE ui.internal_user_id=e.user_id LIMIT 1) AS platform,
+                       (SELECT ui.platform_user_id FROM user_identities ui
+                        WHERE ui.internal_user_id=e.user_id LIMIT 1) AS platform_user_id
+                FROM events e
+                LEFT JOIN users u ON u.user_id=e.user_id
+                WHERE e.event_name IN (
                     'gen_failover', 'user_started', 'new_user',
                     'account_cooldown', 'payment_success',
-                    'video_ab'
+                    'video_ab', 'web_generation_success', 'prompt_improve'
                 )
-                ORDER BY id DESC LIMIT ?
+                ORDER BY e.id DESC LIMIT ?
                 """,
                 (int(limit),),
             )
@@ -3599,9 +3726,9 @@ def report_recent_events(limit: int = 50) -> list:
                 chip_label = f"{icon} {status[:4]}"
                 color = "muted"
 
-            username = r["username"] or ""
-            uid = r["user_id"] or ""
-            user_label = f"@{username}" if username else f"#{uid}" if uid else "—"
+            user_label = _identity_label(
+                r["user_id"] or "", r["username"], r["first_name"], r["platform"], r["platform_user_id"]
+            )
             acc = r["account_id"] or "?"
             model = r["model"] or ""
             dur_s = f"{r['duration_ms'] / 1000:.1f}s" if r["duration_ms"] else ""
@@ -3637,6 +3764,9 @@ def report_recent_events(limit: int = 50) -> list:
             username = fr["username"] or ""
             uid = fr["user_id"] or ""
             user_label = f"@{username}" if username else f"#{uid}" if uid else "—"
+            user_label = _identity_label(
+                uid, fr["username"], fr["first_name"], fr["platform"], fr["platform_user_id"]
+            )
             ts = str(fr["created_at"] or "")
             time_str = ts[11:16] if len(ts) >= 16 else ts
             ev = fr["event_name"]
@@ -3711,6 +3841,28 @@ def report_recent_events(limit: int = 50) -> list:
                     "time": time_str, "created_at": ts, "text": text,
                     "chip": "🎬 video_ab", "color": "cyan",
                     "account": acc, "kind": "video", "_sort_ts": ts,
+                })
+
+            elif ev in ("web_generation_success", "prompt_improve"):
+                mode = str(payload.get("mode") or ("prompt" if ev == "prompt_improve" else "web"))
+                model = str(payload.get("model") or "")
+                price = payload.get("price")
+                count = payload.get("count")
+                icon, kind = _OP_CHIP.get(mode, ("✦", "web"))
+                text = f"{user_label}  {mode}"
+                if model:
+                    text += f"  [{model}]"
+                details = []
+                if count:
+                    details.append(f"x{count}")
+                if price:
+                    details.append(f"{price}кр")
+                if details:
+                    text += "  " + " · ".join(details)
+                result.append({
+                    "time": time_str, "created_at": ts, "text": text,
+                    "chip": f"{icon} web", "color": "lime",
+                    "account": fr["source"] or "web", "kind": kind, "_sort_ts": ts,
                 })
 
         # Сортируем по времени (новейшие первыми), обрезаем до limit

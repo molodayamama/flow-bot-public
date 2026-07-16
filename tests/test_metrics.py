@@ -552,6 +552,27 @@ class AcquisitionTests(MetricsTestBase):
         self.assertFalse(metrics.record_acquisition(user_id=1, channel="  "))
         self.assertEqual(self._count("acquisitions"), 0)
 
+    def test_admin_credit_and_channel_controls_existing_users_only(self) -> None:
+        user_id = metrics.ensure_user_identity("yandex", "ya-55")
+        self.assertLess(user_id, 0)
+
+        self.assertIsNone(metrics.admin_add_user_credits(999, 10))
+        self.assertIsNone(metrics.admin_add_user_credits(user_id, 0))
+        self.assertIsNone(metrics.admin_add_user_credits(user_id, 100_001))
+
+        credited = metrics.admin_add_user_credits(user_id, 12)
+        self.assertEqual(credited["balance"], 12)
+        self.assertEqual(metrics.credits_balance(user_id, 0), 12)
+
+        self.assertIsNone(metrics.admin_set_user_channel(user_id, "bad seed"))
+        changed = metrics.admin_set_user_channel(user_id, "Seed_A")
+        self.assertEqual(changed["acq_channel"], "seed_a")
+        self.assertEqual(metrics.get_user_profile(user_id)["acq_channel"], "seed_a")
+
+        cleared = metrics.admin_clear_user_channel(user_id)
+        self.assertIsNone(cleared["acq_channel"])
+        self.assertIsNone(metrics.get_user_profile(user_id)["acq_channel"])
+
     def test_acquisition_never_raises_on_broken_db(self) -> None:
         metrics.close()
         metrics.init_db(self.db_path)
@@ -744,6 +765,26 @@ class ReportResilienceTests(MetricsTestBase):
         events = metrics.report_recent_events(10)
         self.assertEqual(events[0]["chip"], "🎬 video_ab")
         self.assertIn("sub1", events[0]["text"])
+
+    def test_recent_events_includes_web_generation_for_non_telegram_users(self) -> None:
+        user_id = metrics.ensure_user_identity("yandex", "ya-55")
+        metrics.bind_web_auth_session(
+            "browser-session", "yandex", "ya-55", "Яна",
+            now=100, expires_at=200,
+        )
+        metrics.log_event(
+            "web_generation_success",
+            user_id=user_id,
+            source="web_yandex",
+            payload={"mode": "image", "model": "nbpro", "price": 30, "count": 2},
+        )
+
+        events = metrics.report_recent_events(10)
+        self.assertEqual(events[0]["kind"], "image")
+        self.assertEqual(events[0]["account"], "web_yandex")
+        self.assertIn("Яна", events[0]["text"])
+        self.assertIn("[nbpro]", events[0]["text"])
+        self.assertIn("x2", events[0]["text"])
 
     def test_report_ops_health_summarizes_recent_jobs_and_tickets(self) -> None:
         metrics.log_flow_job(

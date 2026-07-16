@@ -161,6 +161,39 @@ class ServiceTests(unittest.TestCase):
         self.assertIs(EditService(DEPS)._backend, backend_service.generate_i2i)
         self.assertIs(VideoService(DEPS)._backend, backend_service.generate_video_ingredients)
 
+    def test_image_backend_passes_native_flow_session_id(self) -> None:
+        generation = {}
+
+        class Slot:
+            async def __aenter__(self): return None
+            async def __aexit__(self, *args): return None
+
+        class Pool:
+            def image_slot(self, account_id): return Slot()
+            def mark_success(self, account_id): pass
+            def mark_failure(self, account_id): pass
+
+        class Client:
+            async def generate_images(self, prompt, **kwargs):
+                generation.update(kwargs)
+                return {"ok": True}
+
+        deps = SimpleNamespace(
+            default_image_model="GEM_PIX_2",
+            account_for_image=lambda user_id, exclude=None, prefer_image_only=False: "account",
+            ensure_user_project=lambda *args, **kwargs: asyncio.sleep(0, result="project"),
+            account_pool=Pool(),
+            client_for_acc=lambda account_id: Client(),
+            mark_image_account_failure=lambda *args: None,
+            result_pairs=lambda result: [("https://flow-content.google/image.png", "img")],
+            log=SimpleNamespace(exception=lambda *args, **kwargs: None),
+        )
+        result = run(backend_service.generate_images(deps, {
+            "prompt": "safe prompt", "user_id": -1, "session_id": ";web_chat",
+        }))
+        self.assertIn("images", result)
+        self.assertEqual(generation["session_id"], ";web_chat")
+
     def test_text_video_backend_uses_plain_model_and_returns_mp4(self) -> None:
         calls = []
 
@@ -194,6 +227,7 @@ class ServiceTests(unittest.TestCase):
         result = run(backend_service.generate_video_text(deps, {
             "prompt": "moving clouds", "video_model": "omni-flash-4s",
             "aspect_ratio": "landscape", "user_id": -1,
+            "session_id": ";web_video",
         }))
         self.assertIn("videos", result)
         self.assertEqual(result["videos"][0]["model_id"], "omni-flash-4s")
@@ -201,6 +235,7 @@ class ServiceTests(unittest.TestCase):
         generation = calls[0][1]
         self.assertEqual(generation["model_key"], "abra_t2v_4s")
         self.assertIsNone(generation["reference_sources"])
+        self.assertEqual(generation["session_id"], ";web_video")
 
     def test_reference_backend_uploads_all_images_on_one_account(self) -> None:
         calls = []
@@ -237,11 +272,13 @@ class ServiceTests(unittest.TestCase):
         result = run(backend_service.generate_video_ingredients(deps, {
             "prompt": "three friends walk", "user_id": -5,
             "images_b64": ["QQ==", "Qg==", "Qw=="], "video_model": "veo-lite",
+            "session_id": ";web_ref",
         }))
         self.assertIn("videos", result)
         self.assertEqual(len([call for call in calls if call[0] == "upload"]), 3)
         generation = [call for call in calls if call[0] == "generate"][0][2]
         self.assertEqual(len(generation["reference_sources"]), 3)
+        self.assertEqual(generation["session_id"], ";web_ref")
 
     def test_frames_backend_uses_start_and_end_sources(self) -> None:
         generation = {}
@@ -279,11 +316,13 @@ class ServiceTests(unittest.TestCase):
         result = run(backend_service.generate_video_frames(deps, {
             "prompt": "day becomes night", "user_id": -6,
             "images_b64": ["QQ==", "Qg=="], "video_model": "veo-lite",
+            "session_id": ";web_frames",
         }))
         self.assertIn("videos", result)
         self.assertEqual(generation["start_source"]["mediaId"], "frame-1")
         self.assertEqual(generation["end_source"]["mediaId"], "frame-2")
         self.assertIsNone(generation.get("reference_sources"))
+        self.assertEqual(generation["session_id"], ";web_frames")
 
 
 class PurityTests(unittest.TestCase):

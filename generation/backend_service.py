@@ -20,6 +20,7 @@ async def generate_images(deps: Any, req: dict) -> dict:
     aspect_ratio = str(req.get("aspect_ratio") or "portrait")
     image_model = str(req.get("image_model") or deps.default_image_model)
     user_id = int(req.get("user_id") or 0)
+    session_id = str(req.get("session_id") or "").strip() or None
 
     tried: set[str] = set()
     for attempt in range(2):
@@ -36,6 +37,7 @@ async def generate_images(deps: Any, req: dict) -> dict:
                     num_images=num_images,
                     project_id=project_id,
                     image_model=image_model,
+                    session_id=session_id,
                 )
         except Exception:
             deps.log.exception("backend gen failed (account %s, attempt %d)", acc_id, attempt)
@@ -78,6 +80,7 @@ async def generate_i2i(deps: Any, req: dict) -> dict:
     aspect_ratio = str(req.get("aspect_ratio") or "portrait")
     image_model = str(req.get("image_model") or deps.default_image_model)
     user_id = int(req.get("user_id") or 0)
+    session_id = str(req.get("session_id") or "").strip() or None
 
     tried: set[str] = set()
     last_error = "generation failed"
@@ -116,6 +119,7 @@ async def generate_i2i(deps: Any, req: dict) -> dict:
                     image_inputs=inputs,
                     allow_browser_fallback=False,
                     image_model=image_model,
+                    session_id=session_id,
                 )
         except Exception:
             deps.log.exception("backend i2i failed (account %s, attempt %d)", acc_id, attempt)
@@ -154,6 +158,7 @@ async def generate_video_text(deps: Any, req: dict) -> dict:
     if aspect not in {"portrait", "landscape"}:
         aspect = "portrait"
     user_id = int(req.get("user_id") or 0)
+    session_id = str(req.get("session_id") or "").strip() or None
 
     acc_id = deps.account_for_video(user_id)
     if acc_id is None:
@@ -168,6 +173,7 @@ async def generate_video_text(deps: Any, req: dict) -> dict:
                 project_id=project_id,
                 reference_sources=None,
                 operation="generate",
+                session_id=session_id,
             )
     except Exception:
         deps.log.exception("backend text video generation failed (account %s)", acc_id)
@@ -226,6 +232,7 @@ async def generate_video_ingredients(deps: Any, req: dict) -> dict:
     if aspect not in {"portrait", "landscape"}:
         aspect = "portrait"
     user_id = int(req.get("user_id") or 0)
+    session_id = str(req.get("session_id") or "").strip() or None
 
     acc_id = deps.account_for_video(user_id)
     if acc_id is None:
@@ -257,6 +264,7 @@ async def generate_video_ingredients(deps: Any, req: dict) -> dict:
                 project_id=video_project_id,
                 reference_sources=sources,
                 operation="generate",
+                session_id=session_id,
             )
     except Exception:
         deps.log.exception("backend video generation failed (account %s)", acc_id)
@@ -308,6 +316,7 @@ async def generate_video_frames(deps: Any, req: dict) -> dict:
     if aspect not in {"portrait", "landscape"}:
         aspect = "portrait"
     user_id = int(req.get("user_id") or 0)
+    session_id = str(req.get("session_id") or "").strip() or None
 
     acc_id = deps.account_for_video(user_id)
     if acc_id is None:
@@ -340,6 +349,7 @@ async def generate_video_frames(deps: Any, req: dict) -> dict:
                 start_source=sources[0],
                 end_source=sources[1],
                 operation="generate",
+                session_id=session_id,
             )
     except Exception:
         deps.log.exception("backend frames generation failed (account %s)", acc_id)

@@ -2119,14 +2119,14 @@ async def handle_users_get(request: web.Request) -> web.Response:
         params_rows:  list = []
         if q:
             where = (
-                "WHERE (u.username LIKE ? OR CAST(u.user_id AS TEXT) LIKE ? "
+                "WHERE (u.username LIKE ? OR u.first_name LIKE ? OR CAST(u.user_id AS TEXT) LIKE ? "
                 "OR EXISTS (SELECT 1 FROM user_identities ui "
                 "           WHERE ui.internal_user_id=u.user_id "
                 "             AND (ui.platform_user_id LIKE ? OR ui.platform LIKE ?)))"
             )
             like  = f"%{q}%"
-            params_count = [like, like, like, like]
-            params_rows  = [like, like, like, like, limit, offset]
+            params_count = [like, like, like, like, like]
+            params_rows  = [like, like, like, like, like, limit, offset]
         else:
             params_rows = [limit, offset]
 
@@ -2193,6 +2193,80 @@ async def handle_user_detail_get(request: web.Request) -> web.Response:
     except (TypeError, ValueError):
         return _json({"error": "invalid user id"}, 400)
     return _json(metrics.get_admin_user_detail(user_id))
+
+
+async def handle_user_credits_post(request: web.Request) -> web.Response:
+    try:
+        user_id = int(request.match_info["id"])
+    except (TypeError, ValueError):
+        return _json({"error": "invalid user id"}, 400)
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    try:
+        amount = int(body.get("amount"))
+    except (TypeError, ValueError):
+        return _json({"error": "invalid_amount"}, 400)
+    if not metrics.user_exists(user_id):
+        return _json({"error": "user_not_found"}, 404)
+    old = metrics.get_user_profile(user_id)
+    result = metrics.admin_add_user_credits(user_id, amount)
+    if result is None:
+        _audit(request, "user.credits.add", old={"user_id": user_id}, new={"amount": amount}, result="invalid")
+        return _json({"error": "invalid_amount"}, 400)
+    _audit(
+        request,
+        "user.credits.add",
+        old={"user_id": user_id, "balance": old.get("balance")},
+        new={"amount": amount, "balance": result.get("balance")},
+    )
+    return _json({"ok": True, **result})
+
+
+async def handle_user_channel_post(request: web.Request) -> web.Response:
+    try:
+        user_id = int(request.match_info["id"])
+    except (TypeError, ValueError):
+        return _json({"error": "invalid user id"}, 400)
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    channel = str(body.get("channel") or "").strip()
+    if not metrics.user_exists(user_id):
+        return _json({"error": "user_not_found"}, 404)
+    old = metrics.get_user_profile(user_id)
+    result = metrics.admin_set_user_channel(user_id, channel)
+    if result is None:
+        _audit(request, "user.channel.set", old={"user_id": user_id}, new={"channel": channel}, result="invalid")
+        return _json({"error": "invalid_channel"}, 400)
+    _audit(
+        request,
+        "user.channel.set",
+        old={"user_id": user_id, "acq_channel": old.get("acq_channel")},
+        new={"acq_channel": result.get("acq_channel")},
+    )
+    return _json({"ok": True, **result})
+
+
+async def handle_user_seed_detach_post(request: web.Request) -> web.Response:
+    try:
+        user_id = int(request.match_info["id"])
+    except (TypeError, ValueError):
+        return _json({"error": "invalid user id"}, 400)
+    if not metrics.user_exists(user_id):
+        return _json({"error": "user_not_found"}, 404)
+    old = metrics.get_user_profile(user_id)
+    result = metrics.admin_clear_user_channel(user_id)
+    if result is None:
+        _audit(request, "user.seed.detach", old={"user_id": user_id}, result="invalid")
+        return _json({"error": "seed_detach_failed"}, 400)
+    _audit(
+        request,
+        "user.seed.detach",
+        old={"user_id": user_id, "acq_channel": old.get("acq_channel")},
+        new={"acq_channel": None},
+    )
+    return _json({"ok": True, **result})
 
 
 # ── support cockpit ───────────────────────────────────────────────────
@@ -2652,6 +2726,9 @@ def register_admin_routes(
     r.add_post("/api/admin/config/flags",              handle_flags_post)
     # Users
     r.add_get ("/api/admin/users",                     handle_users_get)
+    r.add_post("/api/admin/users/{id}/credits",        handle_user_credits_post)
+    r.add_post("/api/admin/users/{id}/channel",        handle_user_channel_post)
+    r.add_post("/api/admin/users/{id}/seed-detach",    handle_user_seed_detach_post)
     r.add_get ("/api/admin/users/{id}",                handle_user_detail_get)
     # Sellers (seller-bot segment)
     r.add_get ("/api/admin/sellers",                   handle_sellers_get)

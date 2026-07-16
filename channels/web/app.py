@@ -770,25 +770,9 @@ class _WebAdapter:
                 media["download_url"] = f"/web/api/download/{token}"
 
     @staticmethod
-    def _context_prompt(chat: dict | None, prompt: str) -> str:
-        """Bound prior turns and delimit them from the new user instruction."""
-        if not chat:
-            return prompt
-        turns = []
-        for item in (chat.get("messages") or [])[-10:]:
-            role = "user" if item.get("role") == "user" else "assistant"
-            text = str(item.get("text") or "").strip()
-            if text:
-                turns.append(f"{role}: {text[:1200]}")
-        if not turns:
-            return prompt
-        context = "\n".join(turns)
-        return (
-            "Контекст предыдущих сообщений этого чата. Используй его только "
-            "для понимания ссылок и продолжения задачи; текущая инструкция "
-            "имеет приоритет.\n<chat_context>\n"
-            f"{context}\n</chat_context>\nТекущая инструкция пользователя:\n{prompt}"
-        )[:8000]
+    def _flow_session_id(chat_id: str) -> str:
+        """Bind a web conversation to Flow's native session context."""
+        return f";web_{str(chat_id or '').strip()[:80]}"
 
     async def experiment(self, request: web.Request) -> web.Response:
         """Record a bounded, non-identifying public landing experiment event."""
@@ -1033,6 +1017,10 @@ class _WebAdapter:
             )
             if chat is None:
                 return self._response({"error": "chat_not_found"}, status=404, session=session)
+        chat_id = requested_chat_id or secrets.token_urlsafe(18)
+        if not _WEB_CHAT_ID_RE.fullmatch(chat_id):
+            self._d.log.warning("web chat id generation failed before provider request")
+            return self._response({"error": "invalid_chat"}, status=503, session=session)
 
         image_model = str(body.get("image_model") or DEFAULT_IMAGE_MODEL).strip().lower()
         video_model = str(body.get("video_model") or "omni-flash-4s").strip().lower()
@@ -1072,7 +1060,8 @@ class _WebAdapter:
 
         backend_request: dict[str, Any] = {
             "kind": kind,
-            "prompt": self._context_prompt(chat, prompt),
+            "prompt": prompt,
+            "session_id": self._flow_session_id(chat_id),
             "user_id": session.internal_user_id,
             "aspect_ratio": aspect,
             "num_images": count,
@@ -1115,10 +1104,7 @@ class _WebAdapter:
             payload={"mode": mode, "model": image_model if mode in {"image", "edit"} else video_model, "count": count, "price": price},
         )
         self._d.metrics.save_prompt_history(session.internal_user_id, prompt)
-        chat_id = requested_chat_id or secrets.token_urlsafe(18)
-        if not _WEB_CHAT_ID_RE.fullmatch(chat_id):
-            self._d.log.warning("web chat id generation failed after successful request")
-        elif self._d.metrics.create_web_chat(session.internal_user_id, chat_id, prompt[:120]):
+        if self._d.metrics.create_web_chat(session.internal_user_id, chat_id, prompt[:120]):
             if not self._d.metrics.append_web_chat_message(
                 session.internal_user_id,
                 chat_id,

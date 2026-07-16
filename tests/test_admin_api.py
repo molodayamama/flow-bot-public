@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import asyncio
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import admin_api
+import metrics
 
 
 class WipeProfileDirTests(unittest.TestCase):
@@ -160,6 +163,62 @@ class AdminSecurityBoundaryTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"ADMIN_API_TOKEN": token}):
             self.assertTrue(admin_api._admin_request_allowed(request))
+
+
+class AdminUserControlsTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        metrics.close()
+        metrics.init_db(str(Path(self.temp.name) / "metrics.db"))
+
+    def tearDown(self):
+        metrics.close()
+        self.temp.cleanup()
+
+    async def test_credit_channel_and_seed_handlers_update_existing_user(self):
+        user_id = metrics.ensure_user_identity("yandex", "ya-55")
+
+        credit_resp = await admin_api.handle_user_credits_post(
+            _JsonReq({"amount": 7}, {"id": str(user_id)})
+        )
+        credit_body = json.loads(credit_resp.body)
+        self.assertEqual(credit_resp.status, 200)
+        self.assertTrue(credit_body["ok"])
+        self.assertEqual(credit_body["balance"], 7)
+
+        channel_resp = await admin_api.handle_user_channel_post(
+            _JsonReq({"channel": "Seed_A"}, {"id": str(user_id)})
+        )
+        channel_body = json.loads(channel_resp.body)
+        self.assertEqual(channel_resp.status, 200)
+        self.assertEqual(channel_body["acq_channel"], "seed_a")
+        self.assertEqual(metrics.get_user_profile(user_id)["acq_channel"], "seed_a")
+
+        detach_resp = await admin_api.handle_user_seed_detach_post(
+            _JsonReq({}, {"id": str(user_id)})
+        )
+        detach_body = json.loads(detach_resp.body)
+        self.assertEqual(detach_resp.status, 200)
+        self.assertIsNone(detach_body["acq_channel"])
+        self.assertIsNone(metrics.get_user_profile(user_id)["acq_channel"])
+
+    async def test_user_controls_reject_bad_input_and_missing_users(self):
+        user_id = metrics.ensure_user_identity("max", "mx-1")
+
+        bad_credit = await admin_api.handle_user_credits_post(
+            _JsonReq({"amount": 0}, {"id": str(user_id)})
+        )
+        self.assertEqual(bad_credit.status, 400)
+
+        missing = await admin_api.handle_user_credits_post(
+            _JsonReq({"amount": 5}, {"id": "123456"})
+        )
+        self.assertEqual(missing.status, 404)
+
+        bad_channel = await admin_api.handle_user_channel_post(
+            _JsonReq({"channel": "bad seed"}, {"id": str(user_id)})
+        )
+        self.assertEqual(bad_channel.status, 400)
 
 
 class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):

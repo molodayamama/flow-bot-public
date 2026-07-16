@@ -197,6 +197,11 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertNotIn('onclick="copyText(\'${esc(r.local_url)}\')"', self.admin)
         for marker in ('id="user-detail-overlay"', 'openUserDetail(', 'renderUserDetail(', 'role="button" tabindex="0"'):
             self.assertIn(marker, self.admin)
+        for marker in (
+            "userInternalIdCell", "userLoginCell", "grantUserCredits(",
+            "saveUserChannel(", "detachUserSeed(", "/credits", "/channel", "/seed-detach",
+        ):
+            self.assertIn(marker, self.admin)
 
 
 if __name__ == "__main__":

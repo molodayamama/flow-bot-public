@@ -488,12 +488,15 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
         first = await self.post("/web/api/generate", {"mode": "image", "prompt": "сделай красный дом"})
         first_payload = await first.json()
         chat_id = first_payload["chat_id"]
+        first_session_id = self.backend_calls[-1]["session_id"]
+        self.assertEqual(self.backend_calls[-1]["prompt"], "сделай красный дом")
+        self.assertEqual(first_session_id, f";web_{chat_id[:80]}")
         second = await self.post("/web/api/generate", {
             "mode": "image", "prompt": "добавь снег", "chat_id": chat_id,
         })
         self.assertEqual(second.status, 200, await second.json())
-        self.assertIn("сделай красный дом", self.backend_calls[-1]["prompt"])
-        self.assertIn("добавь снег", self.backend_calls[-1]["prompt"])
+        self.assertEqual(self.backend_calls[-1]["prompt"], "добавь снег")
+        self.assertEqual(self.backend_calls[-1]["session_id"], first_session_id)
 
         loaded = await self.client.get(f"/web/api/chats/{chat_id}")
         self.assertEqual(loaded.status, 200)
