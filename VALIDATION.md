@@ -1277,5 +1277,17 @@ For the documentation bootstrap task:
   immutable deploy, install only the three exact target versions, run `pip check`, restart
   both services, recheck nginx/listeners/health/journals/public auth boundaries,
   and rerun the OSV query expecting zero affected installed packages.
+- Completed production release: immutable commit
+  `692a726a8489d8b4cd50c393c5cd4f48e8988d95` is deployed. Runtime backup
+  `/var/backups/geminifree/runtime-20260716T112424Z-d33c74f0ecae` passed the
+  verifier; `pip check`, exact package versions, both service active/enabled
+  states, loopback-only listeners, nginx `-t`, source/public static hashes,
+  local health endpoints, and error-priority journal checks passed. The final
+  OSV rescan covered **40 packages with 0 affected**.
+- Public boundary smoke: `/` and `/app.html` returned 200; `/admin.html` and
+  `/api/admin/summary` returned 401; external `/max/health` returned 403;
+  `/robokassa/health` returned 200; anonymous generation/prompt mutations were
+  rejected; `.env`, config, database, `.git`, and deploy-file guesses returned
+  404. HSTS, frame, nosniff, and referrer-policy headers were present.
 - No generation, payment, captcha, OAuth exchange, Telegram/MAX provider call,
   proxy verification, or browser-profile action is part of this validation.
