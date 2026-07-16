@@ -1245,5 +1245,9 @@ For the documentation bootstrap task:
 - Local `.env` production preflight was run without printing values and failed
   closed with missing/unsafe production settings: `FLOW_BROWSER_API_KEY`,
   `ROBOKASSA_PUBLIC_BASE_URL`, and `CREDITS_SQLITE=1`.
+- Security re-audit additions: runtime `WEB_PUBLIC_ORIGIN` rejects credentials
+  and provider media download URLs reject embedded credentials; focused
+  regression suite passed **135 tests** and the full suite passed **1568 tests,
+  1 skipped**.
 - No generation, payment, captcha, OAuth exchange, proxy verification,
   Telegram/MAX live call, or browser-profile action was made.

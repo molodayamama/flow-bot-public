@@ -135,7 +135,16 @@ class WebAppConfig:
         if len(self.session_secret) < 32:
             raise ValueError("WEB_SESSION_SECRET must contain at least 32 characters")
         origin = urlparse(self.public_origin)
-        if origin.scheme != "https" or not origin.netloc or origin.path not in {"", "/"}:
+        if (
+            origin.scheme != "https"
+            or not origin.netloc
+            or origin.path not in {"", "/"}
+            or origin.params
+            or origin.query
+            or origin.fragment
+            or origin.username
+            or origin.password
+        ):
             raise ValueError("WEB_PUBLIC_ORIGIN must be an HTTPS origin without a path")
         if not re.fullmatch(r"[A-Za-z0-9_-]{3,64}", self.cookie_name):
             raise ValueError("WEB_COOKIE_NAME is invalid")
@@ -377,7 +386,13 @@ def _video_label(model_id: str, meta: dict[str, Any]) -> str:
 def _safe_https_url(value: Any) -> str | None:
     url = str(value or "")
     parsed = urlparse(url)
-    if len(url) > 4096 or parsed.scheme != "https" or not parsed.hostname:
+    if (
+        len(url) > 4096
+        or parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         return None
     return url
 

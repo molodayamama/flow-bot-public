@@ -122,7 +122,12 @@ def validate_max_config(config: MaxConfig, *, production: bool = False) -> None:
 
 def _is_safe_media_download_url(raw: str) -> bool:
     parsed = urlparse(str(raw or ""))
-    if parsed.scheme != "https" or not parsed.hostname:
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         return False
     host = parsed.hostname.lower().rstrip(".")
     if host in _BLOCKED_MEDIA_HOSTS or host.endswith(".localhost") or host.endswith(".local"):

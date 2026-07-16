@@ -689,6 +689,15 @@ class WebAppHttpTests(unittest.IsolatedAsyncioTestCase):
 
 
 class WebAppDisabledTests(unittest.TestCase):
+    def test_runtime_origin_rejects_credentials(self):
+        config = WebAppConfig(
+            enabled=True,
+            session_secret="test-secret-that-is-longer-than-thirty-two-characters",
+            public_origin="http://REDACTED:REDACTED@proxy.example.invalid:8080",
+        )
+        with self.assertRaisesRegex(ValueError, "WEB_PUBLIC_ORIGIN"):
+            config.validate()
+
     def test_disabled_app_registers_no_routes(self):
         app = web.Application()
         deps = WebAppDeps(

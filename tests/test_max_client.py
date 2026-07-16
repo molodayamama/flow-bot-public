@@ -252,6 +252,13 @@ class SendTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "media_url_invalid")
         self.assertEqual(sess.calls, [])
 
+    def test_get_file_bytes_rejects_embedded_url_credentials(self):
+        c, sess = _client()
+        with self.assertRaises(MaxApiError) as raised:
+            run(c.get_file_bytes(PlatformFile(file_id="f", url="http://REDACTED:REDACTED@proxy.example.invalid:8080/f.png")))
+        self.assertEqual(raised.exception.code, "media_url_invalid")
+        self.assertEqual(sess.calls, [])
+
     def test_get_file_bytes_rejects_redirect_to_private_host(self):
         c, sess = _client([
             _FakeResp(status=302, headers={"Location": "https://localhost/private"})
