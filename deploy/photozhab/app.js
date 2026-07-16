@@ -764,7 +764,10 @@ function renderResult(target, payload, request) {
     link.setAttribute("aria-label", media.type === "video" ? "Скачать видео" : "Скачать изображение");
     actions.append(link);
     if (media.type !== "video") {
-      const edit = document.createElement("button"); edit.type = "button"; edit.className = "media-result-action media-result-action--edit"; edit.textContent = "✎ Редактировать";
+      const edit = document.createElement("button"); edit.type = "button"; edit.className = "media-result-action media-result-action--edit";
+      const editIcon = document.createElement("span"); editIcon.setAttribute("aria-hidden", "true"); editIcon.textContent = "✎";
+      const editLabel = document.createElement("span"); editLabel.textContent = "Редактировать";
+      edit.append(editIcon, editLabel);
       edit.addEventListener("click", () => useResultAsSource(media, "edit", node, edit));
       const animate = document.createElement("button"); animate.type = "button"; animate.className = "media-result-action"; animate.textContent = "◉ Оживить";
       animate.addEventListener("click", () => useResultAsSource(media, "animate", node, animate));

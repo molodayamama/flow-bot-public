@@ -75,7 +75,9 @@
 .composer-wrap { z-index: 3; width: min(900px, calc(100% - 34px)); margin: 0 auto; padding: 8px 0 max(14px, env(safe-area-inset-bottom)); background: linear-gradient(0deg, var(--pz-paper) 72%, transparent); }
 .composer { padding: 13px 14px 11px; border: 1px solid var(--pz-line-strong); border-radius: var(--r-xl); background: rgba(23, 26, 24, 0.96); box-shadow: var(--shadow-md); transition: border-color var(--dur-base), box-shadow var(--dur-base); }
 .composer:focus-within { border-color: rgba(242, 239, 228, 0.18); box-shadow: var(--shadow-md); }
-.composer textarea { display: block; width: 100%; max-height: 180px; resize: none; padding: 3px 3px 14px; color: var(--pz-ink); font: 500 15px/1.5 var(--font-sans); border: 0; outline: 0; background: transparent; }
+.composer textarea { display: block; width: 100%; max-height: 180px; resize: none; padding: 3px 3px 14px; color: var(--pz-ink); font: 500 15px/1.5 var(--font-sans); border: 0; outline: 0; box-shadow: none; background: transparent; appearance: none; -webkit-appearance: none; }
+.composer textarea:focus { outline: 0; box-shadow: none; }
+.composer:has(textarea:focus-visible) { border-color: rgba(211, 243, 107, 0.44); box-shadow: 0 0 0 1px rgba(211, 243, 107, 0.18), var(--shadow-md); }
 .composer textarea::placeholder { color: var(--pz-faint); }
 .composer-toolbar, .composer-controls, .send-group { display: flex; align-items: center; }
 .composer-toolbar { justify-content: space-between; gap: 12px; }
@@ -1105,7 +1107,8 @@
 }
 
 .media-result-actions .media-result-action--download { color: var(--pz-ink); }
-.media-result-actions .media-result-action--edit { flex: 1.35 0 auto; white-space: nowrap; }
+.media-result-actions .media-result-action--edit { flex: 1.35 0 auto; gap: 4px; white-space: nowrap; }
+.media-result-actions .media-result-action--edit > span { white-space: nowrap; }
 
 .media-result-actions .media-result-action:hover:not(:disabled) {
   color: var(--pz-lime);
@@ -1154,6 +1157,7 @@
 @media (max-width: 560px) {
   .media-result-actions { flex-wrap: wrap; }
   .media-result-actions .media-result-action { flex: 1 1 calc(50% - 4px); }
+  .media-result-actions .media-result-action--edit { padding-inline: 6px; font-size: 10.5px; }
   .media-result-actions .media-result-action--download { flex-basis: 100%; }
 }
 

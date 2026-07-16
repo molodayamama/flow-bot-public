@@ -220,6 +220,36 @@ class AdminUserControlsTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(bad_channel.status, 400)
 
+    async def test_user_delete_requires_confirm_and_removes_user(self):
+        user_id = metrics.ensure_user_identity("web", "opaque")
+        metrics.admin_add_user_credits(user_id, 5)
+
+        missing_confirm = await admin_api.handle_user_delete_post(
+            _JsonReq({}, {"id": str(user_id)})
+        )
+        self.assertEqual(missing_confirm.status, 400)
+        self.assertTrue(metrics.user_exists(user_id))
+
+        deleted = await admin_api.handle_user_delete_post(
+            _JsonReq({"confirm_delete": True}, {"id": str(user_id)})
+        )
+        body = json.loads(deleted.body)
+        self.assertEqual(deleted.status, 200)
+        self.assertTrue(body["ok"])
+        self.assertGreaterEqual(body["rows_deleted"], 2)
+        self.assertFalse(metrics.user_exists(user_id))
+
+    async def test_landing_hero_analytics_endpoint_returns_aggregate(self):
+        metrics.log_event("landing_hero_exposure", source="web", payload={"variant": "c"})
+        metrics.log_event("landing_hero_cta", source="web", payload={"variant": "c"})
+
+        resp = await admin_api.handle_analytics_landing_hero(SimpleNamespace())
+        body = json.loads(resp.body)
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(body["total_exposures"], 1)
+        self.assertEqual(body["total_ctas"], 1)
+        self.assertEqual(body["variants"][0]["variant"], "c")
+
 
 class AccountsEndpointGCreditsTests(unittest.IsolatedAsyncioTestCase):
     """handle_accounts_get() attaches a live g_credits field per account."""

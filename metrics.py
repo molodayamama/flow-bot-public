@@ -70,6 +70,7 @@ __all__ = [
     "report_payment_repeat",
     "report_margin",
     "report_referral_quality",
+    "report_landing_hero_experiment",
     # credits store
     "ensure_user_identity",
     "get_user_identity",
@@ -90,6 +91,7 @@ __all__ = [
     "admin_add_user_credits",
     "admin_set_user_channel",
     "admin_clear_user_channel",
+    "admin_delete_user",
     "credits_balance",
     "credits_charge",
     "credits_refund",
@@ -1013,6 +1015,128 @@ def admin_clear_user_channel(user_id: int) -> dict | None:
             return {"user_id": uid, "acq_channel": None}
     except Exception:  # noqa: BLE001
         log.warning("admin_clear_user_channel failed for user_id=%r", user_id, exc_info=True)
+        return None
+
+
+def admin_delete_user(user_id: int) -> dict | None:
+    """Hard-delete a user and every row scoped to that user id."""
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return None
+
+    def _rowcount(cur: sqlite3.Cursor) -> int:
+        return max(int(cur.rowcount or 0), 0)
+
+    def _delete(
+        conn: sqlite3.Connection,
+        deleted: dict[str, int],
+        table: str,
+        where: str,
+        params: tuple,
+    ) -> int:
+        cur = conn.execute(f"DELETE FROM {table} WHERE {where}", params)
+        count = _rowcount(cur)
+        deleted[table] = deleted.get(table, 0) + count
+        return count
+
+    try:
+        with _LOCK:
+            conn = _conn()
+            if conn.execute("SELECT 1 FROM users WHERE user_id=?", (uid,)).fetchone() is None:
+                return None
+
+            identities = [
+                {
+                    "platform": str(r["platform"] or ""),
+                    "platform_user_id": str(r["platform_user_id"] or ""),
+                }
+                for r in _rows(
+                    conn,
+                    "SELECT platform, platform_user_id FROM user_identities WHERE internal_user_id=?",
+                    (uid,),
+                )
+            ]
+            session_hashes = [
+                str(r["session_hash"] or "")
+                for r in _rows(
+                    conn,
+                    "SELECT session_hash FROM web_auth_sessions WHERE internal_user_id=?",
+                    (uid,),
+                )
+                if r["session_hash"]
+            ]
+            deleted: dict[str, int] = {}
+
+            _delete(conn, deleted, "web_chat_messages", "user_id=?", (uid,))
+            _delete(conn, deleted, "web_chats", "user_id=?", (uid,))
+            _delete(conn, deleted, "seller_sku_items", "user_id=?", (uid,))
+            _delete(conn, deleted, "seller_sku_projects", "user_id=?", (uid,))
+            _delete(conn, deleted, "seller_profiles", "user_id=?", (uid,))
+            _delete(conn, deleted, "user_gallery", "user_id=?", (uid,))
+            _delete(conn, deleted, "prompt_history", "user_id=?", (uid,))
+            _delete(conn, deleted, "support_tickets", "user_id=?", (uid,))
+            _delete(conn, deleted, "promo_redemptions", "user_id=?", (uid,))
+            _delete(conn, deleted, "user_streaks", "user_id=?", (uid,))
+            _delete(conn, deleted, "acquisitions", "user_id=?", (uid,))
+            _delete(conn, deleted, "credits", "user_id=?", (uid,))
+            _delete(conn, deleted, "events", "user_id=?", (uid,))
+            _delete(conn, deleted, "flow_jobs", "user_id=?", (uid,))
+            _delete(conn, deleted, "transactions", "user_id=?", (uid,))
+            _delete(conn, deleted, "referrals", "referrer_user_id=?", (uid,))
+            _delete(conn, deleted, "referrals", "referred_user_id=?", (uid,))
+            _delete(conn, deleted, "referral_ongoing_rewards", "referrer_user_id=?", (uid,))
+            _delete(conn, deleted, "referral_ongoing_rewards", "referred_user_id=?", (uid,))
+            _delete(conn, deleted, "referral_first_generation_rewards", "referrer_user_id=?", (uid,))
+            _delete(conn, deleted, "referral_first_generation_rewards", "referred_user_id=?", (uid,))
+            _delete(conn, deleted, "identity_welcome_grants", "internal_user_id=?", (uid,))
+            if session_hashes:
+                placeholders = ",".join("?" for _ in session_hashes)
+                _delete(
+                    conn,
+                    deleted,
+                    "web_oauth_states",
+                    f"session_hash IN ({placeholders})",
+                    tuple(session_hashes),
+                )
+                _delete(
+                    conn,
+                    deleted,
+                    "web_login_challenges",
+                    f"session_hash IN ({placeholders})",
+                    tuple(session_hashes),
+                )
+            _delete(conn, deleted, "web_auth_sessions", "internal_user_id=?", (uid,))
+
+            if identities:
+                clauses = []
+                params: list[str] = []
+                for item in identities:
+                    platform = item["platform"]
+                    platform_user_id = item["platform_user_id"]
+                    if not platform or not platform_user_id:
+                        continue
+                    clauses.append("(platform=? AND platform_user_id=?)")
+                    params.extend([platform, platform_user_id])
+                if clauses:
+                    cur = conn.execute(
+                        "DELETE FROM web_login_challenges WHERE " + " OR ".join(clauses),
+                        tuple(params),
+                    )
+                    deleted["web_login_challenges"] = max(int(cur.rowcount or 0), 0)
+
+            _delete(conn, deleted, "user_identities", "internal_user_id=?", (uid,))
+            _delete(conn, deleted, "users", "user_id=?", (uid,))
+            conn.commit()
+
+        return {
+            "user_id": uid,
+            "identities_deleted": len(identities),
+            "deleted": deleted,
+            "rows_deleted": int(sum(deleted.values())),
+        }
+    except Exception:  # noqa: BLE001
+        log.warning("admin_delete_user failed for user_id=%r", user_id, exc_info=True)
         return None
 
 
@@ -3623,11 +3747,66 @@ def report_admin_stats() -> dict:
                 "image_fail": 0, "video_fail": 0}
 
 
+def report_landing_hero_experiment() -> dict:
+    """Aggregate the public landing hero A/B test by assigned variant."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            rows = _rows(
+                conn,
+                """
+                SELECT COALESCE(json_extract(payload_json, '$.variant'), '?') AS variant,
+                       SUM(CASE WHEN event_name='landing_hero_exposure' THEN 1 ELSE 0 END) AS exposures,
+                       SUM(CASE WHEN event_name='landing_hero_cta' THEN 1 ELSE 0 END) AS ctas,
+                       MIN(created_at) AS first_seen,
+                       MAX(created_at) AS last_seen
+                FROM events
+                WHERE event_name IN ('landing_hero_exposure', 'landing_hero_cta')
+                GROUP BY COALESCE(json_extract(payload_json, '$.variant'), '?')
+                ORDER BY variant
+                """,
+            )
+
+        variants = []
+        total_exposures = 0
+        total_ctas = 0
+        for r in rows:
+            exposures = int(r["exposures"] or 0)
+            ctas = int(r["ctas"] or 0)
+            total_exposures += exposures
+            total_ctas += ctas
+            variants.append({
+                "variant": str(r["variant"] or "?"),
+                "exposures": exposures,
+                "ctas": ctas,
+                "ctr": round((ctas / exposures) * 100, 2) if exposures else None,
+                "first_seen": r["first_seen"],
+                "last_seen": r["last_seen"],
+            })
+
+        return {
+            "experiment": "landing_hero",
+            "total_exposures": total_exposures,
+            "total_ctas": total_ctas,
+            "ctr": round((total_ctas / total_exposures) * 100, 2) if total_exposures else None,
+            "variants": variants,
+        }
+    except Exception:  # noqa: BLE001
+        log.warning("report_landing_hero_experiment failed", exc_info=True)
+        return {
+            "experiment": "landing_hero",
+            "total_exposures": 0,
+            "total_ctas": 0,
+            "ctr": None,
+            "variants": [],
+        }
+
+
 def report_recent_events(limit: int = 50) -> list:
     """Recent events for the admin Overview log panel.
 
     Sourced from flow_jobs (has account_id) joined with latest username from
-    events.  Returns ``{time, created_at, text, chip, color, account, kind}`` dicts.
+    events.  Returns ``{time, created_at, text, chip, color, account, source, kind}`` dicts.
     Newest first.  Falls back to ``[]`` on any error.
     """
     _OP_CHIP = {
@@ -3660,6 +3839,19 @@ def report_recent_events(limit: int = 50) -> list:
             label = {"max": "MAX", "yandex": "Yandex ID"}.get(platform_value, platform_value)
             return f"{label}:{platform_id or uid}"
         return f"#{uid}" if uid else "—"
+
+    def _source_label(platform: str | None = None, fallback: str | None = None) -> str:
+        value = str(platform or "").strip().lower()
+        if value:
+            return {
+                "telegram": "Telegram",
+                "max": "MAX",
+                "yandex": "Yandex ID",
+                "web_yandex": "Yandex ID",
+                "web": "web",
+            }.get(value, value)
+        fallback_value = str(fallback or "").strip()
+        return fallback_value or "—"
 
     try:
         with _LOCK:
@@ -3704,7 +3896,8 @@ def report_recent_events(limit: int = 50) -> list:
                 WHERE e.event_name IN (
                     'gen_failover', 'user_started', 'new_user',
                     'account_cooldown', 'payment_success',
-                    'video_ab', 'web_generation_success', 'prompt_improve'
+                    'video_ab', 'web_generation_success', 'prompt_improve',
+                    'landing_hero_exposure', 'landing_hero_cta'
                 )
                 ORDER BY e.id DESC LIMIT ?
                 """,
@@ -3750,6 +3943,7 @@ def report_recent_events(limit: int = 50) -> list:
                 "chip":     chip_label,
                 "color":    color,
                 "account":  acc,
+                "source":   _source_label(r["platform"], "Telegram" if r["user_id"] else None),
                 "kind":     kind,
                 "_sort_ts": ts,
             })
@@ -3780,7 +3974,7 @@ def report_recent_events(limit: int = 50) -> list:
                 result.append({
                     "time": time_str, "created_at": ts, "text": text,
                     "chip": "⚠ failover", "color": "warn",
-                    "account": from_acc, "kind": "system", "_sort_ts": ts,
+                    "account": from_acc, "source": "failover", "kind": "system", "_sort_ts": ts,
                 })
 
             elif ev in ("user_started", "new_user"):
@@ -3798,7 +3992,7 @@ def report_recent_events(limit: int = 50) -> list:
                     result.append({
                         "time": time_str, "created_at": ts, "text": text,
                         "chip": "user new", "color": "cyan",
-                        "account": "—", "kind": "new", "_sort_ts": ts,
+                        "account": user_label, "source": channel or "organic", "kind": "new", "_sort_ts": ts,
                     })
 
             elif ev == "account_cooldown":
@@ -3811,7 +4005,7 @@ def report_recent_events(limit: int = 50) -> list:
                 result.append({
                     "time": time_str, "created_at": ts, "text": text,
                     "chip": "❄ cooldown", "color": "coral",
-                    "account": acc, "kind": "system", "_sort_ts": ts,
+                    "account": acc, "source": op or "cooldown", "kind": "system", "_sort_ts": ts,
                 })
 
             elif ev == "payment_success":
@@ -3826,7 +4020,7 @@ def report_recent_events(limit: int = 50) -> list:
                 result.append({
                     "time": time_str, "created_at": ts, "text": text,
                     "chip": "💳 topup", "color": "lime",
-                    "account": "—", "kind": "topup", "_sort_ts": ts,
+                    "account": user_label, "source": source or "payment", "kind": "topup", "_sort_ts": ts,
                 })
 
             elif ev == "video_ab":
@@ -3840,7 +4034,7 @@ def report_recent_events(limit: int = 50) -> list:
                 result.append({
                     "time": time_str, "created_at": ts, "text": text,
                     "chip": "🎬 video_ab", "color": "cyan",
-                    "account": acc, "kind": "video", "_sort_ts": ts,
+                    "account": acc, "source": model, "kind": "video", "_sort_ts": ts,
                 })
 
             elif ev in ("web_generation_success", "prompt_improve"):
@@ -3862,7 +4056,22 @@ def report_recent_events(limit: int = 50) -> list:
                 result.append({
                     "time": time_str, "created_at": ts, "text": text,
                     "chip": f"{icon} web", "color": "lime",
-                    "account": fr["source"] or "web", "kind": kind, "_sort_ts": ts,
+                    "account": user_label, "source": fr["source"] or "web", "kind": kind, "_sort_ts": ts,
+                })
+
+            elif ev in ("landing_hero_exposure", "landing_hero_cta"):
+                variant = str(payload.get("variant") or "?")[:8]
+                action = "cta" if ev == "landing_hero_cta" else "exposure"
+                result.append({
+                    "time": time_str,
+                    "created_at": ts,
+                    "text": f"landing hero {action}",
+                    "chip": "🧪 hero",
+                    "color": "lime" if action == "cta" else "cyan",
+                    "account": "web",
+                    "source": variant,
+                    "kind": "system",
+                    "_sort_ts": ts,
                 })
 
         # Сортируем по времени (новейшие первыми), обрезаем до limit

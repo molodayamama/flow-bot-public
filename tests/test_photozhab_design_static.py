@@ -119,6 +119,7 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
         self.assertIn('const variants = Object.freeze(["a", "b", "c", "d", "e"])', self.hero_js)
         self.assertIn("Max-Age=7776000", self.hero_js)
         self.assertIn('fetch("/web/api/experiment"', self.landing_js)
+        self.assertNotIn(".pz-footer__inner", self.landing_js)
         self.assertNotIn("localStorage", self.hero_js + self.landing_js)
 
     def test_generation_app_keeps_real_contracts_under_new_skin(self) -> None:
@@ -199,8 +200,11 @@ class PhotozhabDesignStaticTests(unittest.TestCase):
             self.assertIn(marker, self.admin)
         for marker in (
             "userInternalIdCell", "userLoginCell", "grantUserCredits(",
-            "saveUserChannel(", "detachUserSeed(", "/credits", "/channel", "/seed-detach",
+            "saveUserChannel(", "detachUserSeed(", "deleteUser(", "/credits",
+            "/channel", "/seed-detach", "/delete",
         ):
+            self.assertIn(marker, self.admin)
+        for marker in ("hero-ab-summary", "/analytics/landing-hero", "renderHeroAbSummary"):
             self.assertIn(marker, self.admin)
 
 

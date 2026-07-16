@@ -2269,6 +2269,41 @@ async def handle_user_seed_detach_post(request: web.Request) -> web.Response:
     return _json({"ok": True, **result})
 
 
+async def handle_user_delete_post(request: web.Request) -> web.Response:
+    try:
+        user_id = int(request.match_info["id"])
+    except (TypeError, ValueError):
+        return _json({"error": "invalid user id"}, 400)
+    body = await _body(request)
+    if body is None:
+        return _json({"error": "invalid JSON body"}, 400)
+    if body.get("confirm_delete") is not True:
+        return _json({"error": "confirm_delete=true required"}, 400)
+    if not metrics.user_exists(user_id):
+        return _json({"error": "user_not_found"}, 404)
+    old = metrics.get_user_profile(user_id)
+    result = metrics.admin_delete_user(user_id)
+    if result is None:
+        _audit(request, "user.delete", old={"user_id": user_id}, result="failed")
+        return _json({"error": "delete_failed"}, 500)
+    _audit(
+        request,
+        "user.delete",
+        old={
+            "user_id": user_id,
+            "username": old.get("username"),
+            "first_name": old.get("first_name"),
+            "balance": old.get("balance"),
+            "acq_channel": old.get("acq_channel"),
+        },
+        new={
+            "rows_deleted": result.get("rows_deleted"),
+            "identities_deleted": result.get("identities_deleted"),
+        },
+    )
+    return _json({"ok": True, **result})
+
+
 # ── support cockpit ───────────────────────────────────────────────────
 
 async def handle_support_get(request: web.Request) -> web.Response:
@@ -2637,6 +2672,10 @@ async def handle_analytics_active(request: web.Request) -> web.Response:
     return _json({**dau_wau_mau, "top_users": top_users.get("users", [])})
 
 
+async def handle_analytics_landing_hero(request: web.Request) -> web.Response:
+    return _json(metrics.report_landing_hero_experiment())
+
+
 async def handle_analytics_activation(request: web.Request) -> web.Response:
     try:
         hours = min(max(int(request.rel_url.query.get("hours", "24")), 1), 720)
@@ -2729,6 +2768,7 @@ def register_admin_routes(
     r.add_post("/api/admin/users/{id}/credits",        handle_user_credits_post)
     r.add_post("/api/admin/users/{id}/channel",        handle_user_channel_post)
     r.add_post("/api/admin/users/{id}/seed-detach",    handle_user_seed_detach_post)
+    r.add_post("/api/admin/users/{id}/delete",         handle_user_delete_post)
     r.add_get ("/api/admin/users/{id}",                handle_user_detail_get)
     # Sellers (seller-bot segment)
     r.add_get ("/api/admin/sellers",                   handle_sellers_get)
@@ -2758,6 +2798,7 @@ def register_admin_routes(
     r.add_get ("/api/admin/analytics/channels",        handle_analytics_channels)
     r.add_get ("/api/admin/analytics/errors",          handle_analytics_errors)
     r.add_get ("/api/admin/analytics/active",          handle_analytics_active)
+    r.add_get ("/api/admin/analytics/landing-hero",    handle_analytics_landing_hero)
     r.add_get ("/api/admin/analytics/activation",      handle_analytics_activation)
     r.add_get ("/api/admin/analytics/repeat",          handle_analytics_repeat)
     r.add_get ("/api/admin/analytics/margin",          handle_analytics_margin)

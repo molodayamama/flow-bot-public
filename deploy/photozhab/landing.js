@@ -30,7 +30,7 @@
   }
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-  const revealTargets = document.querySelectorAll("main > section:not(.pz-hero) > div > *, .pz-cta > div > *, .pz-footer__inner");
+  const revealTargets = document.querySelectorAll("main > section:not(.pz-hero) > div > *, .pz-cta > div > *");
   if ("IntersectionObserver" in window && !reducedMotion.matches) {
     const revealObserver = new IntersectionObserver((entries, observer) => {
       entries.forEach((entry) => {

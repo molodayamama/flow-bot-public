@@ -573,6 +573,45 @@ class AcquisitionTests(MetricsTestBase):
         self.assertIsNone(cleared["acq_channel"])
         self.assertIsNone(metrics.get_user_profile(user_id)["acq_channel"])
 
+    def test_admin_delete_user_removes_user_scoped_rows(self) -> None:
+        user_id = metrics.ensure_user_identity("web", "opaque-session")
+        metrics.bind_web_auth_session(
+            "browser-session", "web", "opaque-session", "Web User",
+            now=100, expires_at=200,
+        )
+        metrics.create_web_oauth_state(
+            "browser-session", "oauth-state-delete", "web", "pkce", now=100, expires_at=200
+        )
+        metrics.create_web_login_challenge(
+            "browser-session", "login-challenge-delete", now=100, expires_at=200
+        )
+        metrics.grant_identity_welcome_credits("web", "opaque-session", user_id, 30)
+        metrics.admin_add_user_credits(user_id, 12)
+        metrics.admin_set_user_channel(user_id, "seed_a")
+        metrics.create_web_chat(user_id, "chat-1", "Test")
+        metrics.append_web_chat_message(user_id, "chat-1", role="user", text="hello")
+        metrics.log_event("web_generation_success", user_id=user_id, source="web", payload={"mode": "image"})
+        metrics.log_flow_job(user_id=user_id, account_id="sub1", operation_type="image", status="success")
+        metrics.record_transaction(
+            provider="robokassa", provider_payment_id="pay-delete", user_id=user_id,
+            package_id="small", amount_rub=90.0, stars_amount=0,
+            credits_issued=100, status="paid",
+        )
+        metrics.save_prompt_history(user_id, "prompt")
+
+        result = metrics.admin_delete_user(user_id)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["user_id"], user_id)
+        self.assertFalse(metrics.user_exists(user_id))
+        self.assertIsNone(metrics.get_user_identity("web", "opaque-session"))
+        for table in (
+            "users", "credits", "acquisitions", "events", "flow_jobs",
+            "transactions", "prompt_history", "web_chats", "web_chat_messages",
+            "web_auth_sessions", "web_oauth_states", "web_login_challenges",
+            "identity_welcome_grants", "user_identities",
+        ):
+            self.assertEqual(self._count(table), 0, table)
+
     def test_acquisition_never_raises_on_broken_db(self) -> None:
         metrics.close()
         metrics.init_db(self.db_path)
@@ -781,10 +820,32 @@ class ReportResilienceTests(MetricsTestBase):
 
         events = metrics.report_recent_events(10)
         self.assertEqual(events[0]["kind"], "image")
-        self.assertEqual(events[0]["account"], "web_yandex")
+        self.assertEqual(events[0]["account"], "Яна")
+        self.assertEqual(events[0]["source"], "web_yandex")
         self.assertIn("Яна", events[0]["text"])
         self.assertIn("[nbpro]", events[0]["text"])
         self.assertIn("x2", events[0]["text"])
+
+    def test_landing_hero_experiment_groups_exposure_and_cta(self) -> None:
+        metrics.log_event("landing_hero_exposure", source="web", payload={"variant": "a"})
+        metrics.log_event("landing_hero_exposure", source="web", payload={"variant": "a"})
+        metrics.log_event("landing_hero_cta", source="web", payload={"variant": "a"})
+        metrics.log_event("landing_hero_exposure", source="web", payload={"variant": "b"})
+
+        report = metrics.report_landing_hero_experiment()
+        self.assertEqual(report["experiment"], "landing_hero")
+        self.assertEqual(report["total_exposures"], 3)
+        self.assertEqual(report["total_ctas"], 1)
+        by_variant = {row["variant"]: row for row in report["variants"]}
+        self.assertEqual(by_variant["a"]["exposures"], 2)
+        self.assertEqual(by_variant["a"]["ctas"], 1)
+        self.assertEqual(by_variant["a"]["ctr"], 50.0)
+        self.assertEqual(by_variant["b"]["ctr"], 0.0)
+
+        events = metrics.report_recent_events(10)
+        self.assertEqual(events[0]["chip"], "🧪 hero")
+        self.assertEqual(events[0]["account"], "web")
+        self.assertEqual(events[0]["source"], "b")
 
     def test_report_ops_health_summarizes_recent_jobs_and_tickets(self) -> None:
         metrics.log_flow_job(

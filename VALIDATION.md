@@ -195,7 +195,10 @@ manual credit grants are positive, bounded, existing-user-only and audited;
 channel changes accept only canonical seed slugs; seed detach clears acquisition
 attribution without unlinking the provider identity; recent events include web
 generation/prompt-improve rows for non-Telegram users with a readable user
-label.
+label plus a separate request-source badge; admin user deletion requires an
+explicit confirmation and clears user-scoped rows; the Overview page exposes
+the `landing_hero` A/B summary from `landing_hero_exposure` /
+`landing_hero_cta`.
 
 After green CI, back up the protected VPS env and nginx config, set a random
 32+ character `WEB_SESSION_SECRET`, enable the consumer-only web app, keep

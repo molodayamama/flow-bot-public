@@ -301,6 +301,11 @@ tr:hover td{background:var(--pz-surface-2)}
 }
 .log-row:last-child{border-bottom:none}
 .log-time{font-family:var(--font-mono);font-size:11px;color:var(--pz-faint);flex-shrink:0;width:80px}
+.log-meta{min-width:0;display:inline-flex;align-items:center;gap:5px;flex:0 1 auto;max-width:260px}
+.log-tag{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 7px;border:1px solid rgba(242,239,228,.1);border-radius:var(--r-pill);font:700 10px var(--font-mono);color:var(--pz-faint);background:rgba(242,239,228,.04)}
+.log-tag--account{color:var(--pz-cyan);border-color:rgba(84,215,214,.22);background:rgba(84,215,214,.08)}
+.log-tag--source{color:var(--pz-muted)}
+.log-meta-sep{color:rgba(242,239,228,.28);font:700 10px var(--font-mono)}
 .log-text{color:var(--pz-muted);flex:1}
 .log-text b{color:var(--pz-ink)}
 .log-chip{
@@ -638,6 +643,11 @@ tr:hover td{background:rgba(242,239,228,.025)}
 
         <div class="section-title">Здоровье аккаунтов</div>
         <div class="card" id="overview-accounts">
+          <div style="color:var(--pz-faint);font-size:13px">Загрузка…</div>
+        </div>
+
+        <div class="section-title">AI hero A/B</div>
+        <div class="card" id="hero-ab-summary">
           <div style="color:var(--pz-faint);font-size:13px">Загрузка…</div>
         </div>
 
@@ -1390,6 +1400,7 @@ const DEMO = {
     { time:'14:27:22', text:'Создано видео Veo Lite', chip:'VID', color:'warn' },
     { time:'14:26:10', text:'Новый пользователь зарегистрирован', chip:'NEW', color:'lime' },
   ],
+  hero: { experiment:'landing_hero', total_exposures:0, total_ctas:0, ctr:null, variants:[] },
   messages: {
     welcome: "👋 Привет! Я делаю картинки и видео по описанию — просто скажи словами, что хочешь увидеть.\n\n🎨 <b>Картинка по тексту.</b> Опиши идею — пришлю готовое изображение.\n🎬 <b>Видео.</b> Сниму ролик по тексту, оживлю твоё фото в движение.\n💡 <b>Не знаешь, с чего начать?</b> Нажми «Идеи и шаблоны».\n🤝 <b>Зови друзей.</b> За каждое их пополнение начислю тебе кредиты.\n\nЖми кнопку ниже — и поехали!",
     menu_title: "Главное меню. Выбери, что сделать:",
@@ -1563,6 +1574,7 @@ async function loadOverview() {
   const stats = (await api('GET','/stats'))    || DEMO.stats;
   const accsRaw = await api('GET','/accounts');
   const accs = Array.isArray(accsRaw) ? accsRaw : null;
+  const hero  = (await api('GET','/analytics/landing-hero')) || DEMO.hero;
   const log   = (await api('GET','/log'))      || DEMO.log;
 
   document.getElementById('stat-users').textContent    = fmt(stats.users);
@@ -1630,7 +1642,40 @@ async function loadOverview() {
       </table>
     </div>`;
 
+  renderHeroAbSummary(hero);
   renderLog(log);
+}
+
+function renderHeroAbSummary(data) {
+  const box = document.getElementById('hero-ab-summary');
+  if (!box) return;
+  const rows = Array.isArray(data?.variants) ? data.variants : [];
+  const totalExposures = Number(data?.total_exposures || 0);
+  const totalCtas = Number(data?.total_ctas || 0);
+  const totalCtr = data?.ctr == null ? '—' : `${Number(data.ctr).toFixed(2)}%`;
+  const body = rows.length ? rows.map(v => {
+    const ctr = v.ctr == null ? '—' : `${Number(v.ctr).toFixed(2)}%`;
+    return `<tr>
+      <td><span class="badge badge-muted">variant ${esc(v.variant || '?')}</span></td>
+      <td class="mono" style="text-align:right">${fmt(v.exposures || 0)}</td>
+      <td class="mono" style="text-align:right">${fmt(v.ctas || 0)}</td>
+      <td class="mono" style="text-align:right;color:${Number(v.ctas||0)>0?'var(--pz-lime)':'var(--pz-faint)'}">${ctr}</td>
+      <td style="font-size:12px;color:var(--pz-faint)">${fmtDt(v.first_seen)}</td>
+      <td style="font-size:12px;color:var(--pz-faint)">${fmtDt(v.last_seen)}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="6" style="color:var(--pz-faint);text-align:center;padding:18px">Пока нет событий landing_hero_exposure / landing_hero_cta</td></tr>`;
+  box.innerHTML = `
+    <div class="stats-grid" style="margin-bottom:14px">
+      <div class="stat-card cyan"><div class="stat-label">Показы</div><div class="stat-value">${fmt(totalExposures)}</div><div class="stat-sub">landing_hero_exposure</div></div>
+      <div class="stat-card lime"><div class="stat-label">CTA</div><div class="stat-value">${fmt(totalCtas)}</div><div class="stat-sub">landing_hero_cta</div></div>
+      <div class="stat-card"><div class="stat-label">CTR</div><div class="stat-value">${totalCtr}</div><div class="stat-sub">клики / показы</div></div>
+    </div>
+    <div class="table-wrap" style="margin-bottom:0">
+      <table>
+        <thead><tr><th>Вариант</th><th style="text-align:right">Показы</th><th style="text-align:right">CTA</th><th style="text-align:right">CTR</th><th>Первое</th><th>Последнее</th></tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>`;
 }
 
 let _logCache = [];
@@ -1657,12 +1702,18 @@ function renderLog(log) {
   const filtered = _logFilter === 'all' ? log : log.filter(_LOG_FILTER_MAP[_logFilter] || (()=>true));
   document.getElementById('log-list').innerHTML = filtered.length ? filtered.map(e=>{
     const logTime = e.created_at ? fmtTm(e.created_at) : (e.time || '—');
-    const accBadge = e.account && e.account !== '—'
-      ? `<span class="mono" style="font-size:12px;color:var(--pz-cyan);flex-shrink:0;background:rgba(84,215,214,.08);border:1px solid rgba(84,215,214,.2);border-radius:4px;padding:1px 6px;margin-right:4px">${esc(e.account)}</span>`
+    const account = e.account && e.account !== '—' ? String(e.account) : '';
+    const source = e.source && e.source !== '—' && String(e.source) !== account ? String(e.source) : '';
+    const metaParts = [
+      account ? `<span class="log-tag log-tag--account" title="${esc(account)}">${esc(account)}</span>` : '',
+      source ? `<span class="log-tag log-tag--source" title="${esc(source)}">${esc(source)}</span>` : '',
+    ].filter(Boolean);
+    const meta = metaParts.length
+      ? `<span class="log-meta">${metaParts.join('<span class="log-meta-sep">|</span>')}</span>`
       : '';
     return `<div class="log-row">
       <span class="log-time">${esc(logTime)}</span>
-      ${accBadge}
+      ${meta}
       <span class="log-text" style="font-size:13px">${esc(e.text)}</span>
       <span class="log-chip" style="background:rgba(${chipColor(e.color)},.12);color:var(--pz-${e.color||'muted'})">${esc(e.chip)}</span>
     </div>`;
@@ -2896,7 +2947,12 @@ function userDisplayName(u) {
 function userLoginCell(u) {
   if (u?.username) return `<span style="color:var(--pz-muted)">@</span>${esc(u.username)}`;
   const platform = String(u?.platform || '').toLowerCase();
-  if (platform && platform !== 'telegram') return `<span class="badge badge-muted">${esc(userPlatformLabel(platform))}</span>`;
+  const platformId = String(u?.platform_user_id || '').trim();
+  if (platform && platform !== 'telegram') {
+    return `<span class="badge badge-muted">${esc(userPlatformLabel(platform))}</span>${
+      platformId ? `<div class="user-table-sub">${esc(platformId)}</div>` : ''
+    }`;
+  }
   return '<span style="color:var(--pz-faint)">—</span>';
 }
 
@@ -2927,7 +2983,7 @@ function renderUserDetail(data) {
   const platform = userPlatformLabel(rawPlatform);
   const platformId = identity.platform_user_id || p.platform_user_id || '';
   const displayName = userDisplayName({...p, platform: rawPlatform, platform_user_id: platformId});
-  const loginText = p.username ? `@${p.username}` : '—';
+  const loginText = p.username ? `@${p.username}` : (platformId ? `${platform} · ${platformId}` : '—');
   const initial = String(p.first_name || p.username || platform || 'P').trim().charAt(0).toLocaleUpperCase('ru-RU') || 'P';
   document.getElementById('user-detail-avatar').textContent = initial;
   document.getElementById('user-detail-name').textContent = displayName;
@@ -2991,6 +3047,12 @@ function renderUserDetail(data) {
         </div>
         <p>Удаляет first-touch seed у пользователя, но не отвязывает его аккаунт ${esc(platform)}.</p>
       </div>
+      <div class="user-admin-action user-admin-action--danger">
+        <div class="user-admin-action-row">
+          <button class="btn btn-danger btn-sm" type="button" onclick="deleteUser(${Number(p.user_id)||0},${jsArg(displayName)})">Удалить пользователя</button>
+        </div>
+        <p>Полное удаление профиля, кредитов, identity-связки, чатов, событий, заявок и платежных строк этого пользователя. Перед продовым массовым удалением нужен runtime backup.</p>
+      </div>
     </div>
     ${userDetailList('Платежи', paymentRows)}
     ${userDetailList('Последние генерации', jobRows)}
@@ -3048,6 +3110,20 @@ async function detachUserSeed(userId) {
   toast('success', 'Seed отвязан');
   await reloadUserDetail(userId);
   loadUsers(_usersPage);
+}
+
+async function deleteUser(userId, label='') {
+  const title = label ? `${label} (${userId})` : String(userId);
+  if (!confirm(`Удалить пользователя ${title}? Это удалит профиль, кредиты, identity, чаты, события и связанные строки.`)) return;
+  const res = await apiSave(`/users/${encodeURIComponent(userId)}/delete`, {confirm_delete:true});
+  if (!res.ok) {
+    toast('error', describeSaveError(res));
+    return;
+  }
+  toast('success', `Пользователь ${userId} удалён · строк: ${fmt(res.data?.rows_deleted || 0)}`);
+  closeUserDetail();
+  loadUsers(_usersPage);
+  loadOverview();
 }
 
 async function openUserDetail(userId, trigger) {
