@@ -262,29 +262,21 @@ async def handle_result(request: web.Request, deps: RobokassaWebDeps) -> web.Res
         return web.Response(status=400, text="bad amount")
 
     pay_id = provider_payment_id(inv_id, scope, legacy=("Shp_bot" not in shp))
-    new_balance: int | None = None
-    if user_id < 0:
-        tx_status, new_balance = deps.settle_external_payment(
-            provider="robokassa",
-            provider_payment_id=pay_id,
-            user_id=user_id,
-            package_id=pack_id,
-            amount_rub=float(Decimal(out_sum)),
-            stars_amount=0,
-            credits_issued=p["credits"],
-            status="paid",
-        )
-    else:
-        tx_status = deps.metrics.record_transaction_status(
-            provider="robokassa",
-            provider_payment_id=pay_id,
-            user_id=user_id,
-            package_id=pack_id,
-            amount_rub=float(Decimal(out_sum)),
-            stars_amount=0,
-            credits_issued=p["credits"],
-            status="paid",
-        )
+    # Единый атомарный settlement для всех юзеров: запись транзакции и
+    # начисление кредитов происходят одной SQLite-транзакцией (BEGIN IMMEDIATE).
+    # Раньше Telegram-юзеры сеттлились двумя раздельными вызовами
+    # (record_transaction_status + add_credits): падение между ними навсегда
+    # теряло оплаченные кредиты — повторный webhook видел "duplicate".
+    tx_status, new_balance = deps.settle_external_payment(
+        provider="robokassa",
+        provider_payment_id=pay_id,
+        user_id=user_id,
+        package_id=pack_id,
+        amount_rub=float(Decimal(out_sum)),
+        stars_amount=0,
+        credits_issued=p["credits"],
+        status="paid",
+    )
     if tx_status == "duplicate":
         return web.Response(text=f"OK{inv_id}")
     if tx_status == "error":

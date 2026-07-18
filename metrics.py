@@ -1321,19 +1321,40 @@ def get_ongoing_reward_by_payment(provider_payment_id: str) -> dict | None:
         return None
 
 
+def get_transaction_id_by_provider_payment_id(provider_payment_id: str) -> int | None:
+    """Return ``transactions.id`` for a provider payment id (or ``None``)."""
+    try:
+        with _LOCK:
+            conn = _conn()
+            row = conn.execute(
+                "SELECT id FROM transactions WHERE provider_payment_id=?",
+                (str(provider_payment_id),),
+            ).fetchone()
+            return int(row[0]) if row else None
+    except Exception:  # noqa: BLE001
+        log.warning("get_transaction_id_by_provider_payment_id failed", exc_info=True)
+        return None
+
+
 def get_milestone_by_referred(referred_user_id: int) -> dict | None:
     """Return the milestone referral row for refund clawback (or None)."""
     try:
         with _LOCK:
             conn = _conn()
             row = conn.execute(
-                "SELECT referrer_user_id, reward_credits, status "
+                "SELECT referrer_user_id, reward_credits, status, "
+                "first_payment_transaction_id "
                 "FROM referrals WHERE referred_user_id=?",
                 (referred_user_id,),
             ).fetchone()
             if not row:
                 return None
-            return {"referrer_user_id": row[0], "reward_credits": row[1], "status": row[2]}
+            return {
+                "referrer_user_id": row[0],
+                "reward_credits": row[1],
+                "status": row[2],
+                "first_payment_transaction_id": row[3],
+            }
     except Exception:  # noqa: BLE001
         log.warning("get_milestone_by_referred failed", exc_info=True)
         return None

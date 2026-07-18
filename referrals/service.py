@@ -64,8 +64,14 @@ class ReferralService:
                 if bonus > 0 and m.get_referral_credits_today(referrer_id) + bonus <= cap:
                     # Atomic joined->rewarded claim: of two concurrent payments by
                     # the referred user exactly one wins the bonus (no TOCTOU gap).
+                    # Запоминаем id триггерного платежа: без него возврат ЛЮБОГО
+                    # платежа реферала переармингует milestone и бонус начислится
+                    # повторно (см. clawback).
                     if m.grant_milestone_if_joined(
-                        referred_user_id=referred_user_id, reward_credits=bonus
+                        referred_user_id=referred_user_id, reward_credits=bonus,
+                        first_payment_transaction_id=m.get_transaction_id_by_provider_payment_id(
+                            provider_payment_id
+                        ),
                     ):
                         self._store.add(referrer_id, bonus)
                         m.log_event("referral_reward_paid", user_id=referrer_id,
@@ -106,12 +112,20 @@ class ReferralService:
                             payload={"amount": ongoing["reward_credits"], "tier": "ongoing"})
             milestone = m.get_milestone_by_referred(referred_user_id)
             if milestone and milestone.get("status") == "rewarded":
-                self._store.charge(milestone["referrer_user_id"],
-                                   min(milestone["reward_credits"],
-                                       self._store.balance(milestone["referrer_user_id"])))
-                m.reset_referral_to_joined(referred_user_id)
-                m.log_event("referral_reward_clawback", user_id=milestone["referrer_user_id"],
-                            payload={"amount": milestone["reward_credits"], "tier": "milestone"})
+                trigger_tx = milestone.get("first_payment_transaction_id")
+                refunded_tx = m.get_transaction_id_by_provider_payment_id(charge_id)
+                # Откатываем milestone только при возврате ТОГО платежа, который
+                # его активировал (trigger_tx=None — legacy-записи без id,
+                # там сохраняем прежнее поведение). Возврат любого другого
+                # платежа не должен ни списывать бонус с реферера, ни
+                # переарминговать milestone (иначе бонус начислится повторно).
+                if trigger_tx is None or refunded_tx == trigger_tx:
+                    self._store.charge(milestone["referrer_user_id"],
+                                       min(milestone["reward_credits"],
+                                           self._store.balance(milestone["referrer_user_id"])))
+                    m.reset_referral_to_joined(referred_user_id)
+                    m.log_event("referral_reward_clawback", user_id=milestone["referrer_user_id"],
+                                payload={"amount": milestone["reward_credits"], "tier": "milestone"})
         except Exception:
             if self._log is not None:
                 self._log.warning("referral clawback failed", exc_info=True)

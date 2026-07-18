@@ -42,6 +42,7 @@ class _Store:
     def charge(self, uid, amt):
         self.charged.append(amt)
         self._bal -= amt
+        return True
 
     def refund(self, uid, amt):
         self.refunded.append(amt)

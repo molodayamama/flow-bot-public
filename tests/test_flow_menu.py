@@ -2470,8 +2470,14 @@ class RobokassaWebhookTests(unittest.TestCase):
             tx_calls.append(kwargs)
             return "duplicate" if len(tx_calls) > 1 else "new"
 
+        settled_pids: set = set()
+
         def record_transaction_and_credit_status(**kwargs):
             tx_calls.append(kwargs)
+            pid = kwargs.get("provider_payment_id")
+            if pid in settled_pids:
+                return "duplicate", None
+            settled_pids.add(pid)
             metric_credits_added.append((
                 int(kwargs["user_id"]),
                 int(kwargs["credits_issued"]),
@@ -2611,7 +2617,10 @@ class RobokassaWebhookTests(unittest.TestCase):
         self.assertEqual(second.status, 200)
         self.assertEqual(first.text, "OK9001")
         self.assertEqual(second.text, "OK9001")
-        self.assertEqual(state.credits_added, [(123, 45)])
+        self.assertEqual(state.credits_added, [])
+        # Settlement теперь атомарный через metrics (транзакция + кредиты в одной
+        # SQLite-транзакции); дубль webhook повторно не начисляет.
+        self.assertEqual(state.metric_credits_added, [(123, 45, flow_core.STARTER_CREDITS)])
         self.assertEqual([c["provider_payment_id"] for c in state.tx_calls], ["robokassa:9001", "robokassa:9001"])
 
     def test_robokassa_scoped_invoice_uses_scoped_payment_id(self) -> None:
@@ -2625,7 +2634,8 @@ class RobokassaWebhookTests(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         self.assertEqual(response.text, "OK9011")
-        self.assertEqual(state.credits_added, [(123, 45)])
+        self.assertEqual(state.credits_added, [])
+        self.assertEqual(state.metric_credits_added, [(123, 45, flow_core.STARTER_CREDITS)])
         self.assertEqual(state.tx_calls[0]["provider_payment_id"], "robokassa:consumer:9011")
 
     def test_robokassa_seller_callback_forwards_to_seller_process(self) -> None:
@@ -2662,7 +2672,8 @@ class RobokassaWebhookTests(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         self.assertEqual(response.text, "OK9013")
-        self.assertEqual(state.credits_added, [(456, 60)])
+        self.assertEqual(state.credits_added, [])
+        self.assertEqual(state.metric_credits_added, [(456, 60, flow_core.STARTER_CREDITS)])
         self.assertEqual(state.tx_calls[0]["provider_payment_id"], "robokassa:seller:9013")
 
     def test_robokassa_webhook_credits_without_success_redirect(self) -> None:
@@ -2674,7 +2685,8 @@ class RobokassaWebhookTests(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         self.assertEqual(response.text, "OK9002")
-        self.assertEqual(state.credits_added, [(456, 45)])
+        self.assertEqual(state.credits_added, [])
+        self.assertEqual(state.metric_credits_added, [(456, 45, flow_core.STARTER_CREDITS)])
         self.assertEqual(state.tx_calls[0]["user_id"], 456)
         self.assertEqual(state.tx_calls[0]["package_id"], "trial")
 

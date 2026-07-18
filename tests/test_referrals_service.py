@@ -35,6 +35,8 @@ class FakeMetrics:
         self.record_wins = kw.get("record_wins", True)
         self.ongoing_reward = kw.get("ongoing_reward")
         self.milestone = kw.get("milestone")
+        self.tx_ids = kw.get("tx_ids", {})
+        self.grant_tx_id = None
         self.events: list[tuple] = []
         self.reset_called: list[int] = []
 
@@ -50,8 +52,13 @@ class FakeMetrics:
     def get_referral_credits_today(self, referrer):
         return self.credits_today
 
-    def grant_milestone_if_joined(self, *, referred_user_id, reward_credits):
+    def grant_milestone_if_joined(self, *, referred_user_id, reward_credits,
+                                  first_payment_transaction_id=None):
+        self.grant_tx_id = first_payment_transaction_id
         return self.grant_wins
+
+    def get_transaction_id_by_provider_payment_id(self, pid):
+        return self.tx_ids.get(pid)
 
     def get_ongoing_reward_by_payment(self, pid):
         return self.dup_payment
@@ -100,12 +107,16 @@ class ApplyRewardTests(unittest.TestCase):
 
     def test_joined_milestone_pays_when_claim_wins(self) -> None:
         store, notified = FakeStore(), []
-        _apply(_svc(FakeMetrics(referrer=1, status="joined", grant_wins=True), store, notified),
-               stars_paid=200)
+        m = FakeMetrics(referrer=1, status="joined", grant_wins=True,
+                        tx_ids={"pay-1": 555})
+        _apply(_svc(m, store, notified), stars_paid=200)
         bonus = referral_milestone_bonus(200)
         self.assertEqual(store.added, [(1, bonus)])
         self.assertEqual(notified, [(1, bonus)])
         self.assertEqual(store.balance(1), bonus)
+        # id триггерного платежа сохраняется — иначе возврат любого платежа
+        # переармингует milestone (двойное начисление бонуса).
+        self.assertEqual(m.grant_tx_id, 555)
 
     def test_joined_milestone_skipped_when_claim_lost(self) -> None:
         store, notified = FakeStore(), []
@@ -164,6 +175,32 @@ class ClawbackTests(unittest.TestCase):
         svc = ReferralService(store=store, metrics=m)
         svc.clawback(referred_user_id=2, charge_id="charge-A")
         self.assertEqual(store.charged, [(1, 5)])  # min(50, balance 5)
+
+    def test_clawback_milestone_only_on_trigger_payment_refund(self) -> None:
+        """Возврат ТОГО платежа, который активировал milestone — откат бонуса."""
+        store = FakeStore(balances={1: 100})
+        m = FakeMetrics(
+            milestone={"referrer_user_id": 1, "reward_credits": 50,
+                       "status": "rewarded", "first_payment_transaction_id": 555},
+            tx_ids={"charge-A": 555},
+        )
+        svc = ReferralService(store=store, metrics=m)
+        svc.clawback(referred_user_id=2, charge_id="charge-A")
+        self.assertEqual(store.charged, [(1, 50)])
+        self.assertEqual(m.reset_called, [2])
+
+    def test_clawback_skips_milestone_on_other_payment_refund(self) -> None:
+        """Возврат ДРУГОГО платежа: milestone не списываем и не переарминговываем."""
+        store = FakeStore(balances={1: 100})
+        m = FakeMetrics(
+            milestone={"referrer_user_id": 1, "reward_credits": 50,
+                       "status": "rewarded", "first_payment_transaction_id": 555},
+            tx_ids={"charge-B": 777},  # возвращён другой платёж, не триггерный
+        )
+        svc = ReferralService(store=store, metrics=m)
+        svc.clawback(referred_user_id=2, charge_id="charge-B")
+        self.assertEqual(store.charged, [])
+        self.assertEqual(m.reset_called, [])
 
 
 if __name__ == "__main__":

@@ -67,7 +67,13 @@ async def open_credit_gate(
             await on_insufficient(have, price)
         raise NotEnoughCredits
 
-    store.charge(user_id, price)
+    if not store.charge(user_id, price):
+        # charge() вернул False: гонка (другой процесс уже списал и баланса не
+        # хватило) или ошибка БД. Раньше результат игнорировался и платное
+        # действие запускалось бесплатно (fail-open) — теперь fail-closed.
+        if on_insufficient is not None:
+            await on_insufficient(store.balance(user_id), price)
+        raise NotEnoughCredits
     charge = Charge()
     try:
         yield charge
