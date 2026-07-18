@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass
 from typing import Any
 
-from aiogram import Router, types
+from aiogram import F, Router, types
 from aiogram.filters import Command
 
 import flow_copy
@@ -99,29 +99,25 @@ def create_handler(deps: StartDeps) -> Callable[[types.Message], Awaitable[Any]]
 
         web_login = _WEB_LOGIN_RE.fullmatch(payload)
         if web_login and not getattr(message.from_user, "is_bot", False):
-            display_name = " ".join(
-                part for part in (
-                    str(getattr(message.from_user, "first_name", "") or "").strip(),
-                    str(getattr(message.from_user, "last_name", "") or "").strip(),
-                    f"@{_username(message)}" if _username(message) else "",
-                ) if part
-            )[:80]
-            claimed = metrics.claim_web_login_challenge(
-                web_login.group(1),
-                "telegram",
-                user_id,
-                display_name,
+            # Claim НЕ делаем сразу: молчаливая привязка по одному диплинку —
+            # это login CSRF (атакующий шлёт жертве ссылку своей браузерной
+            # сессии и логинится под ней). Требуем явное нажатие кнопки.
+            challenge = web_login.group(1)
+            confirm_kb = types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(
+                    text="✅ Подтвердить вход",
+                    callback_data=f"wl:ok:{challenge}",
+                ),
+                types.InlineKeyboardButton(text="❌ Отмена", callback_data="wl:no"),
+            ]])
+            await message.answer(
+                "🔐 <b>Вход на photozhab.ru</b>\n\n"
+                "Запрошен вход в ваш аккаунт через этот чат. Если вы только что "
+                "нажимали «Войти через Telegram» на сайте — подтвердите ниже.\n"
+                "Если вы не открывали сайт — нажмите «Отмена».",
+                reply_markup=confirm_kb,
+                parse_mode="HTML",
             )
-            if claimed:
-                await message.answer(
-                    "Вход на photozhab.ru подтверждён. Вернитесь в браузер — сайт подхватит авторизацию автоматически.",
-                    parse_mode="HTML",
-                )
-            else:
-                await message.answer(
-                    "Ссылка для входа недействительна или уже использована. "
-                    "Вернитесь на сайт и запросите новую."
-                )
             return
 
         _referral_welcome_bonus: int = 0
@@ -219,6 +215,70 @@ def create_handler(deps: StartDeps) -> Callable[[types.Message], Awaitable[Any]]
     return cmd_start
 
 
+def create_web_login_callback(
+    deps: StartDeps,
+) -> Callable[[types.CallbackQuery], Awaitable[Any]]:
+    """Подтверждение веб-логина: claim challenge только по явной кнопке.
+
+    Раньше ``/start web_<challenge>`` привязывал Telegram-аккаунт к браузерной
+    сессии молча: атакующий мог прислать жертве диплинк своей сессии и войти
+    на сайт под ней (login CSRF). Теперь нужно осознанное нажатие
+    «Подтвердить вход» владельцем аккаунта.
+    """
+
+    async def web_login_confirm(call: types.CallbackQuery):
+        data = call.data or ""
+        if data == "wl:no":
+            await call.answer("Вход отменён")
+            try:
+                await call.message.edit_text(
+                    "Вход на photozhab.ru отменён. Никто не вошёл в ваш аккаунт."
+                )
+            except Exception:
+                pass
+            return
+        challenge = data[len("wl:ok:"):]
+        if not _WEB_LOGIN_RE.fullmatch(f"web_{challenge}"):
+            await call.answer("Недействительная ссылка", show_alert=True)
+            return
+        user = call.from_user
+        display_name = " ".join(
+            part for part in (
+                str(getattr(user, "first_name", "") or "").strip(),
+                str(getattr(user, "last_name", "") or "").strip(),
+                f"@{user.username}" if getattr(user, "username", None) else "",
+            ) if part
+        )[:80]
+        claimed = deps.metrics.claim_web_login_challenge(
+            challenge,
+            "telegram",
+            user.id,
+            display_name,
+        )
+        if claimed:
+            await call.answer("Вход подтверждён")
+            try:
+                await call.message.edit_text(
+                    "Вход на photozhab.ru подтверждён. Вернитесь в браузер — "
+                    "сайт подхватит авторизацию автоматически."
+                )
+            except Exception:
+                pass
+        else:
+            await call.answer(
+                "Ссылка недействительна или уже использована", show_alert=True
+            )
+            try:
+                await call.message.edit_text(
+                    "Ссылка для входа недействительна или уже использована. "
+                    "Вернитесь на сайт и запросите новую."
+                )
+            except Exception:
+                pass
+
+    return web_login_confirm
+
+
 def create_router(
     deps: StartDeps,
     *,
@@ -228,4 +288,5 @@ def create_router(
 
     router = Router(name="tg-start")
     router.message(Command("start"))(handler or create_handler(deps))
+    router.callback_query(F.data.startswith("wl:"))(create_web_login_callback(deps))
     return router

@@ -5,7 +5,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from channels.telegram.routers.start import StartDeps, create_handler
+from channels.telegram.routers.start import (
+    StartDeps,
+    create_handler,
+    create_web_login_callback,
+)
 
 
 class _Metrics:
@@ -49,38 +53,72 @@ def _deps(metrics: _Metrics) -> StartDeps:
     )
 
 
+def _start_message() -> SimpleNamespace:
+    return SimpleNamespace(
+        text="/start web_abcdefghijklmnopqrstuvwxyz123456",
+        from_user=SimpleNamespace(
+            id=42, first_name="Alice", last_name="Example", username="alice", is_bot=False
+        ),
+        answer=AsyncMock(),
+    )
+
+
+def _callback(data: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        data=data,
+        from_user=SimpleNamespace(
+            id=42, first_name="Alice", last_name="Example", username="alice", is_bot=False
+        ),
+        answer=AsyncMock(),
+        message=SimpleNamespace(edit_text=AsyncMock()),
+    )
+
+
 class TelegramWebLoginTests(unittest.IsolatedAsyncioTestCase):
-    async def test_valid_deep_link_claims_challenge_without_showing_code(self) -> None:
+    async def test_deep_link_shows_confirm_prompt_without_claim(self) -> None:
+        """Диплинк не должен молча привязывать аккаунт (login CSRF): сначала
+        явное подтверждение кнопкой."""
         metrics = _Metrics(True)
-        message = SimpleNamespace(
-            text="/start web_abcdefghijklmnopqrstuvwxyz123456",
-            from_user=SimpleNamespace(
-                id=42, first_name="Alice", last_name="Example", username="alice", is_bot=False
-            ),
-            answer=AsyncMock(),
-        )
+        message = _start_message()
         await create_handler(_deps(metrics))(message)
 
+        self.assertEqual(metrics.claim_calls, [])
+        text = message.answer.await_args.args[0]
+        self.assertIn("подтверд", text.lower())
+        kb = message.answer.await_args.kwargs["reply_markup"]
+        self.assertEqual(kb.inline_keyboard[0][0].text, "✅ Подтвердить вход")
+        self.assertEqual(
+            kb.inline_keyboard[0][0].callback_data,
+            "wl:ok:abcdefghijklmnopqrstuvwxyz123456",
+        )
+
+    async def test_confirm_button_claims_challenge(self) -> None:
+        metrics = _Metrics(True)
+        call = _callback("wl:ok:abcdefghijklmnopqrstuvwxyz123456")
+        await create_web_login_callback(_deps(metrics))(call)
+
+        self.assertEqual(len(metrics.claim_calls), 1)
         self.assertEqual(metrics.claim_calls[0][0], "abcdefghijklmnopqrstuvwxyz123456")
         self.assertEqual(metrics.claim_calls[0][1:3], ("telegram", 42))
-        self.assertEqual(len(metrics.claim_calls[0]), 4)
-        text = message.answer.await_args.args[0]
-        self.assertNotIn("012345", text)
-        self.assertIn("подтвержд", text.lower())
+        edited = call.message.edit_text.await_args.args[0]
+        self.assertIn("подтвержд", edited.lower())
 
-    async def test_already_used_deep_link_returns_no_code(self) -> None:
+    async def test_confirm_button_with_used_link_reports_invalid(self) -> None:
         metrics = _Metrics(False)
-        message = SimpleNamespace(
-            text="/start web_abcdefghijklmnopqrstuvwxyz123456",
-            from_user=SimpleNamespace(
-                id=42, first_name="Alice", last_name="", username="alice", is_bot=False
-            ),
-            answer=AsyncMock(),
-        )
-        await create_handler(_deps(metrics))(message)
-        text = message.answer.await_args.args[0]
-        self.assertIn("недействительна", text)
-        self.assertNotIn("012345", text)
+        call = _callback("wl:ok:abcdefghijklmnopqrstuvwxyz123456")
+        await create_web_login_callback(_deps(metrics))(call)
+
+        edited = call.message.edit_text.await_args.args[0]
+        self.assertIn("недействительна", edited)
+
+    async def test_cancel_button_does_not_claim(self) -> None:
+        metrics = _Metrics(True)
+        call = _callback("wl:no")
+        await create_web_login_callback(_deps(metrics))(call)
+
+        self.assertEqual(metrics.claim_calls, [])
+        edited = call.message.edit_text.await_args.args[0]
+        self.assertIn("отмен", edited.lower())
 
 
 if __name__ == "__main__":

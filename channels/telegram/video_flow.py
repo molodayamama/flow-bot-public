@@ -564,7 +564,12 @@ class VideoFlow:
                     pass
                 await d.post_generation_referral_hooks(message, user_id)
             else:
-                d.credit_store.refund(user_id, total_price)
+                # Рефандим только невозвращённый остаток: юниты с неудачной
+                # доставкой уже возвращены выше (refunded_units) — иначе
+                # получался двойной возврат (списано 1x, возвращено 2x).
+                remaining = total_price - single_price * refunded_units
+                if remaining > 0:
+                    d.credit_store.refund(user_id, remaining)
                 await status_msg.edit_text(flow_copy.msg("vid_gen_failed"))
 
         except Exception:

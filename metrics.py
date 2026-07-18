@@ -1763,7 +1763,8 @@ def complete_web_login_challenge(
             if row is None:
                 return None
             code = str(confirmation_code or "").strip()
-            if not code:
+            confirmation_required = bool(row["confirmation_hash"])
+            if not code and not confirmation_required:
                 changed = conn.execute(
                     "UPDATE web_login_challenges SET attempts=?, consumed_at=? "
                     "WHERE challenge_hash=? AND consumed_at IS NULL",
@@ -1777,6 +1778,11 @@ def complete_web_login_challenge(
                     "platform_user_id": str(row["platform_user_id"]),
                     "display_name": row["display_name"],
                 }
+            if not code:
+                # Challenge привязан с кодом подтверждения: пустой код не должен
+                # поглощать его — иначе возможен молчаливый захват чужой сессии
+                # (login CSRF через диплинк).
+                return None
             if int(row["attempts"] or 0) >= int(max_attempts):
                 return None
             attempts = int(row["attempts"] or 0) + 1

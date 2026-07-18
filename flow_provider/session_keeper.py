@@ -571,7 +571,9 @@ class SessionKeeper:
         try:
             sitekey = self._recaptcha_sitekey or self.RECAPTCHA_SITEKEY
             log.info(f"🌐 Решаю капчу через браузер JS (action={action})...")
-            token = await self._page.evaluate(
+            # Таймаут обязателен: зависший evaluate раньше держал self._lock
+            # бесконечно и блокировал аккаунт до рестарта процесса.
+            token = await asyncio.wait_for(self._page.evaluate(
                 """async ([sitekey, action]) => {
                     // Ждём загрузки grecaptcha
                     if (typeof grecaptcha === 'undefined' || !grecaptcha.enterprise) {
@@ -585,7 +587,7 @@ class SessionKeeper:
                     }
                 }""",
                 [sitekey, action],
-            )
+            ), timeout=45)
             if token:
                 log.info(f"✅ Капча из браузера JS (action={action}, len={len(token)})")
                 return token
@@ -1051,8 +1053,12 @@ class SessionKeeper:
             if key in headers:
                 self._last_headers[key] = headers[key]
 
-        # Вытаскиваем project_id из URL
-        if "/projects/" in url:
+        # Вытаскиваем project_id из URL — только из запросов СВОЕЙ вкладки:
+        # listener висит на весь browser context, поэтому чужие/фоновые вкладки
+        # (диагностика, создание проекта другого юзера) не должны затирать
+        # сессионный project_id — иначе задачи уезжают в чужой проект.
+        req_page = getattr(request, "page", None)
+        if "/projects/" in url and req_page is not None and req_page is self._page:
             parts = url.split("/projects/")
             if len(parts) > 1:
                 pid = parts[1].split("/")[0].split("?")[0]
@@ -1386,7 +1392,8 @@ class SessionKeeper:
             if status == 401 and attempt == 0:
                 log.warning("🔑 upload_image API bearer expired, refreshing...")
                 await self._refresh_bearer()
-                project_id = self._project_id
+                # project_id НЕ затираем сессионным: он per-user (его выдал
+                # ensure_user_project), иначе ретрай увезёт аплоад в чужой проект.
                 continue
             break
 
@@ -1568,7 +1575,9 @@ class SessionKeeper:
                 # Видео в браузер передаём как base64 (JSON-safe), внутри страницы
                 # декодируем в bytes и заливаем чанками, как делает само веб-приложение.
                 b64 = base64.b64encode(data).decode("ascii")
-                result = await self._page.evaluate(
+                # Таймаут обязателен: зависший fetch внутри evaluate раньше
+                # держал self._lock бесконечно — аккаунт умирал до рестарта.
+                result = await asyncio.wait_for(self._page.evaluate(
                     """async ({b64, startUrl, putUrl, projectId, fileName, contentType, chunkSize}) => {
                         const bin = atob(b64);
                         const bytes = new Uint8Array(bin.length);
@@ -1620,7 +1629,7 @@ class SessionKeeper:
                         "contentType": content_type,
                         "chunkSize": 2 * 1024 * 1024,
                     },
-                )
+                ), timeout=180)
             except Exception as e:
                 if self._is_target_closed_error(e):
                     await self._start_locked()
