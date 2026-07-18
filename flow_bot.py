@@ -1644,6 +1644,7 @@ async def _notify_max_support_admin(
     """Mirror a MAX support ticket into the existing Telegram admin workflow."""
     if not ADMIN_IDS:
         return
+    admin_id = next(iter(ADMIN_IDS))
     label = f"@{username}" if username else "пользователя MAX"
     reply_btn = types.InlineKeyboardMarkup(inline_keyboard=[[
         types.InlineKeyboardButton(
@@ -1652,7 +1653,7 @@ async def _notify_max_support_admin(
         )
     ]])
     sent = await bot.send_message(
-        ADMIN_IDS[0],
+        admin_id,
         f"🎫 MAX-тикет #{int(ticket_id)} от {label}:\n\n{str(text)[:2000]}",
         reply_markup=reply_btn,
     )

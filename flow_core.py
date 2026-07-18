@@ -2038,7 +2038,7 @@ def action_price(action: str, num_images: int = 1) -> int:
     """Credits charged for an action.
 
     - ``gen``/``regen``: per-image (count chosen in the wizard).
-    - ``revary``: image-to-image, ~2 images → priced as 2 images.
+    - ``revary``/``mix``: image-to-image, ~2 images → priced as 2 images.
     - ``edit``/``myphoto``: photo edit price.
     - ``mp_series``: seller marketplace slide-series bundle.
     - ``up2x`` / ``realup``: premium add-on, +0.5x of one image.
@@ -2046,7 +2046,7 @@ def action_price(action: str, num_images: int = 1) -> int:
     """
     if action in ("gen", "regen"):
         return price_gen(num_images)
-    if action == "revary":
+    if action in ("revary", "mix"):
         return price_gen(2)
     if action in ("edit", "myphoto"):
         return _price_override("edit_photo", IMAGE_EDIT_PRICE)

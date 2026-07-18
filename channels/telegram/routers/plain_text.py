@@ -333,7 +333,7 @@ def create_router(deps: PlainTextDeps) -> Router:
                 metrics.log_event("mp_done4you_submitted", user_id=user_id, source=plat or "seller")
             ticket_id = metrics.create_ticket(user_id, username=_username(message), text=ticket_text)
             # Пересылаем администратору
-            admin_id = ADMIN_IDS[0] if ADMIN_IDS else None
+            admin_id = next(iter(ADMIN_IDS), None)
             if admin_id:
                 reply_btn = types.InlineKeyboardMarkup(inline_keyboard=[
                     [types.InlineKeyboardButton(text=f"📝 Ответить #{ticket_id}", callback_data=f"m:sreply:{ticket_id}")]

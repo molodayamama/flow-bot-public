@@ -204,7 +204,12 @@ class VideoFlow:
         refunded_units = 0
 
         st["vstep"] = "vgenerating"
-        status_msg = await message.answer(status_text or flow_copy.msg("vid_working"))
+        try:
+            status_msg = await message.answer(status_text or flow_copy.msg("vid_working"))
+        except Exception:
+            # Кредиты уже списаны, а генерация не стартовала — возвращаем всё.
+            d.credit_store.refund(user_id, total_price)
+            raise
 
         async def update_status(text: str):
             try:

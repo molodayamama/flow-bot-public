@@ -673,13 +673,21 @@ class GenerationFlow:
 
         try:
             async with d.user_slot(user_id, message):
-                await self.do_mix_and_send(message, prompt, image_inputs, user_id)
+                async with d.credit_gate(user_id, "mix", message, 2) as charge:
+                    ok = await self.do_mix_and_send(message, prompt, image_inputs, user_id)
+                    charge.ok = ok
         except d.rate_limited_error:
+            return
+        except d.not_enough_credits_error:
+            d.metrics.log_event(
+                "image_failed", user_id=user_id, source="mix",
+                payload={"reason": "insufficient_credits"},
+            )
             return
 
     async def do_mix_and_send(
         self, message: types.Message, prompt: str, image_inputs: list, user_id: int
-    ) -> None:
+    ) -> bool:
         d = self._d
         status_msg = await message.answer(f"🧩 Собираю микс из {len(image_inputs)} картинок...")
 
@@ -704,16 +712,16 @@ class GenerationFlow:
         except Exception:
             d.log.exception("mix failed")
             await status_msg.edit_text("❌ Ошибка микса. Попробуйте ещё раз.")
-            return
+            return False
 
         if "error" in result:
             await status_msg.edit_text(f"❌ {html.escape(str(result['error'])[:300])}")
-            return
+            return False
 
         pairs = result_pairs(result)
         if not pairs:
             await status_msg.edit_text("⚠️ Микс не дал результата.")
-            return
+            return False
 
         d.mix_baskets[user_id] = []  # корзина израсходована
         await d.send_result_pairs(
@@ -721,6 +729,7 @@ class GenerationFlow:
             prompt=prompt, aspect_ratio="landscape", emoji="🧩", account_id=acc_id,
         )
         await status_msg.delete()
+        return True
 
     async def do_generate_and_send(
         self, message, prompt: str, num_images: int, aspect_ratio: str, user_id: int,

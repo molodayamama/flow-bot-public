@@ -32,6 +32,7 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(flow_core.action_price("gen", 4), 40)
         self.assertEqual(flow_core.action_price("regen", 2), 20)
         self.assertEqual(flow_core.action_price("revary"), 20)   # ~2 images
+        self.assertEqual(flow_core.action_price("mix"), 20)      # коллаж из ингредиентов, ~2 images
         self.assertEqual(flow_core.action_price("edit"), 15)
         self.assertEqual(flow_core.action_price("myphoto"), 15)
         self.assertEqual(flow_core.action_price("up2x"), 5)      # quick enhance
