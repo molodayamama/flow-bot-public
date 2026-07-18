@@ -318,6 +318,18 @@ class AccountOnboardingHelperTests(unittest.TestCase):
         self.assertIn("sub7=./google_profile_sub7", entry)
         self.assertIn("proxy=http://user:p%7C" + "ass@10.0.0.1:8118", entry)
 
+    def test_flow_account_entry_rejects_profile_dir_injection(self) -> None:
+        for bad in (
+            "./prof;evil=./x",
+            "./prof,evil=./x",
+            "./prof|proxy=http://evil",
+            "./prof\nFLOW_ACCOUNTS=evil=./x",
+            "./prof\r\nx",
+        ):
+            with self.assertRaises(ao.AccountOnboardingError) as ctx:
+                ao.flow_account_entry(ao.AccountEntry(account_id="sub7", profile_dir=bad))
+            self.assertEqual(ctx.exception.code, "invalid_profile_dir", bad)
+
     def test_append_flow_account_to_env_updates_existing_value_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / ".env"
@@ -370,6 +382,22 @@ class AccountOnboardingHelperTests(unittest.TestCase):
             text = env_path.read_text(encoding="utf-8")
             self.assertIn("main=./google_profile", text)
             self.assertNotIn("sub7=", text)
+
+    def test_remove_flow_account_from_env_handles_comma_separators(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / ".env"
+            env_path.write_text(
+                "FLOW_ACCOUNTS=acc1=./google_profile_acc1,acc2=./google_profile_acc2\n",
+                encoding="utf-8",
+            )
+
+            result = ao.remove_flow_account_from_env("acc1", env_path=env_path)
+
+            self.assertEqual(result["accounts_count"], 1)
+            text = env_path.read_text(encoding="utf-8")
+            self.assertNotIn("acc1=", text)
+            # acc2 не должен пострадать при удалении acc1.
+            self.assertIn("acc2=./google_profile_acc2", text)
 
 
 class AccountOnboardingFlowStatusTests(unittest.IsolatedAsyncioTestCase):

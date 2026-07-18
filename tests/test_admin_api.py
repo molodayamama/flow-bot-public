@@ -14,21 +14,33 @@ import metrics
 
 
 class WipeProfileDirTests(unittest.TestCase):
-    def test_wipes_only_profile_dirs(self) -> None:
+    def test_wipes_only_known_account_profiles(self) -> None:
         import tempfile
         from pathlib import Path
         with tempfile.TemporaryDirectory() as tmp:
             prof = Path(tmp) / "google_profile_zz"
             prof.mkdir()
             (prof / "Preferences").write_text("{}", encoding="utf-8")
+            rogue = Path(tmp) / "google_profile_victim"
+            rogue.mkdir()
+            (rogue / "keep.txt").write_text("x", encoding="utf-8")
             other = Path(tmp) / "important_data"
             other.mkdir()
             (other / "keep.txt").write_text("x", encoding="utf-8")
-            # Профильный каталог — удаляется.
-            admin_api._wipe_profile_dir(str(prof))
-            self.assertFalse(prof.exists())
-            # Непрофильный — НЕ трогаем (защита от случайного rmtree).
-            admin_api._wipe_profile_dir(str(other))
+            with patch.object(
+                admin_api.account_onboarding, "default_profile_dir", return_value=str(prof)
+            ):
+                # Профиль именно этого аккаунта — удаляется.
+                admin_api._wipe_profile_dir(str(prof), "zz")
+                self.assertFalse(prof.exists())
+                # Чужой google_profile_* без привязки к аккаунту — НЕ трогаем.
+                admin_api._wipe_profile_dir(str(rogue), "zz")
+                self.assertTrue(rogue.exists())
+            # Без account_id вообще ничего не удаляем.
+            admin_api._wipe_profile_dir(str(rogue))
+            self.assertTrue(rogue.exists())
+            # Непрофильный каталог — НЕ трогаем (защита от случайного rmtree).
+            admin_api._wipe_profile_dir(str(other), "zz")
             self.assertTrue(other.exists())
             # Пустой путь — без ошибок.
             admin_api._wipe_profile_dir("")
@@ -163,6 +175,28 @@ class AdminSecurityBoundaryTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"ADMIN_API_TOKEN": token}):
             self.assertTrue(admin_api._admin_request_allowed(request))
+
+    def test_csrf_rejects_cross_site_fetch_site_header(self) -> None:
+        request = SimpleNamespace(
+            method="POST",
+            headers={"Sec-Fetch-Site": "cross-site", "Content-Type": "application/json"},
+        )
+        self.assertTrue(admin_api._admin_csrf_rejected(request))
+
+    def test_csrf_rejects_non_json_content_type(self) -> None:
+        for content_type in ("text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x", ""):
+            request = SimpleNamespace(method="POST", headers={"Content-Type": content_type})
+            self.assertTrue(admin_api._admin_csrf_rejected(request), content_type)
+
+    def test_csrf_allows_same_origin_json_and_safe_methods(self) -> None:
+        same_origin = SimpleNamespace(
+            method="POST",
+            headers={"Sec-Fetch-Site": "same-origin", "Content-Type": "application/json; charset=utf-8"},
+        )
+        self.assertFalse(admin_api._admin_csrf_rejected(same_origin))
+        for method in ("GET", "HEAD", "OPTIONS"):
+            request = SimpleNamespace(method=method, headers={})
+            self.assertFalse(admin_api._admin_csrf_rejected(request), method)
 
 
 class AdminUserControlsTests(unittest.IsolatedAsyncioTestCase):

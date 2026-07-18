@@ -1,8 +1,8 @@
 """Admin REST API — aiohttp routes registered into the existing web.Application.
 
 All routes are under /api/admin/ and are already protected by nginx HTTP Basic
-Auth (lo / password). The Python side requires no additional auth because the
-server binds only to 127.0.0.1 and is unreachable from the internet directly.
+Auth. The Python side requires no additional auth because the server binds
+only to 127.0.0.1 and is unreachable from the internet directly.
 
 Usage in flow_bot.py:
     import admin_api
@@ -105,6 +105,26 @@ def _admin_request_allowed(request: web.Request) -> bool:
     return bool(expected and supplied and hmac.compare_digest(supplied, expected))
 
 
+_CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+_CSRF_ALLOWED_FETCH_SITES = {"same-origin", "same-site", "none"}
+
+
+def _admin_csrf_rejected(request: web.Request) -> bool:
+    """Block cross-site state-changing requests to the admin API.
+
+    The admin UI always sends ``Content-Type: application/json``; classic
+    HTML-form CSRF can only produce ``text/plain``/``application/x-www-form-
+    urlencoded``/``multipart/form-data`` without triggering a CORS preflight.
+    ``Sec-Fetch-Site`` is honoured when the browser supplies it."""
+    if request.method in _CSRF_SAFE_METHODS:
+        return False
+    fetch_site = (request.headers.get("Sec-Fetch-Site") or "").strip().lower()
+    if fetch_site and fetch_site not in _CSRF_ALLOWED_FETCH_SITES:
+        return True
+    content_type = (request.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    return content_type != "application/json"
+
+
 @web.middleware
 async def _admin_security_middleware(
     request: web.Request,
@@ -112,10 +132,13 @@ async def _admin_security_middleware(
 ) -> web.StreamResponse:
     if not request.path.startswith("/api/admin/"):
         return await handler(request)
-    if _admin_request_allowed(request):
-        return await handler(request)
-    log.warning("admin api rejected non-loopback request")
-    return _json({"error": "admin_forbidden"}, 403)
+    if not _admin_request_allowed(request):
+        log.warning("admin api rejected non-loopback request")
+        return _json({"error": "admin_forbidden"}, 403)
+    if _admin_csrf_rejected(request):
+        log.warning("admin api rejected possible CSRF request")
+        return _json({"error": "admin_csrf_rejected"}, 403)
+    return await handler(request)
 
 
 def _install_admin_security(app: web.Application) -> None:
@@ -1139,11 +1162,12 @@ def _get_onboard_item(session_id: str) -> dict | None:
     return item
 
 
-def _wipe_profile_dir(profile_dir: str) -> None:
+def _wipe_profile_dir(profile_dir: str, account_id: str = "") -> None:
     """Удалить каталог профиля (для пересоздания аккаунта).
 
-    Защита: удаляем только пути, чей basename содержит ``google_profile`` —
-    чтобы случайно не снести произвольный каталог."""
+    Защита: удаляем только путь, который после ``resolve()`` совпадает с
+    дефолтным профилем этого ``account_id`` или с профилем аккаунта в пуле.
+    Произвольный путь из тела запроса снести нельзя."""
     import shutil
     try:
         p = (profile_dir or "").strip()
@@ -1152,6 +1176,20 @@ def _wipe_profile_dir(profile_dir: str) -> None:
         base = os.path.basename(os.path.normpath(p))
         if "google_profile" not in base:
             log.warning("refusing to wipe non-profile directory")
+            return
+        target = Path(p).resolve()
+        allowed: set[Path] = set()
+        if account_id:
+            try:
+                allowed.add(Path(account_onboarding.default_profile_dir(account_id)).resolve())
+            except Exception:
+                pass
+        pool_acc = _ctx.pool.get(account_id) if (_ctx.pool is not None and account_id) else None
+        pool_profile = getattr(pool_acc, "profile_dir", None) if pool_acc is not None else None
+        if pool_profile:
+            allowed.add(Path(str(pool_profile)).resolve())
+        if target not in allowed:
+            log.warning("refusing to wipe directory outside known account profiles")
             return
         if os.path.isdir(p):
             shutil.rmtree(p, ignore_errors=True)
@@ -1239,7 +1277,7 @@ async def handle_account_onboard_start_post(request: web.Request) -> web.Respons
         if replace:
             # Чистим старый профиль и старую .env-запись → логин с нуля.
             await _close_runtime_account(account_id)
-            _wipe_profile_dir(profile_dir or account_onboarding.default_profile_dir(account_id))
+            _wipe_profile_dir(profile_dir or account_onboarding.default_profile_dir(account_id), account_id)
             try:
                 account_onboarding.remove_flow_account_from_env(account_id)
             except account_onboarding.AccountOnboardingError:

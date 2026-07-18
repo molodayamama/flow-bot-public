@@ -323,11 +323,24 @@ def _quote_option_value(value: str) -> str:
     return quote(value, safe=":/@._~!$&'()*+=%-")
 
 
+def validate_profile_dir(profile_dir: str) -> str:
+    """Проверить, что путь профиля безопасно вставить в FLOW_ACCOUNTS.
+
+    Значение попадает в .env как есть, а парсер пула разбивает записи по
+    ``;``, ``,`` и опции по ``|`` — эти символы (и переводы строк) позволили
+    бы инъецировать лишние аккаунты/опции или сломать файл."""
+    cleaned = (profile_dir or "").strip()
+    if not cleaned:
+        raise AccountOnboardingError("empty_profile_dir")
+    if any(ch in cleaned for ch in ";,|\n\r"):
+        raise AccountOnboardingError("invalid_profile_dir")
+    return cleaned
+
+
 def flow_account_entry(entry: AccountEntry) -> str:
     account_id = validate_account_id(entry.account_id)
-    if not (entry.profile_dir or "").strip():
-        raise AccountOnboardingError("empty_profile_dir")
-    parts = [f"{account_id}={entry.profile_dir.strip()}"]
+    profile_dir = validate_profile_dir(entry.profile_dir)
+    parts = [f"{account_id}={profile_dir}"]
     proxy = normalize_proxy_url(entry.proxy_url)
     if proxy:
         parts.append(f"proxy={_quote_option_value(proxy)}")
@@ -450,7 +463,9 @@ def remove_flow_account_from_env(
 
     if target_idx < 0:
         raise AccountOnboardingError("account_not_found")
-    entries = [p for p in current_value.split(";") if p.strip()]
+    # Парсер пула принимает и ';', и ',' как разделители — удаление должно
+    # понимать оба, иначе при comma-разделителях стирается чужой аккаунт.
+    entries = [p for p in re.split(r"[;,]", current_value) if p.strip()]
     kept: list[str] = []
     removed: list[str] = []
     for raw in entries:
