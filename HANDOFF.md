@@ -143,3 +143,76 @@ Body: Exclude seller.env and config_override.json while preserving env templates
 Co-Authored-By: Codex <noreply@openai.com>
 Risks: No secret/runtime files, env values, profiles, captures or media included.
 Next role: Verify remote branch tips after upload.
+
+## History restoration — supersedes the earlier squash procedure
+
+The operator needs the development history for reviewing changes. The initial
+publication squash was the wrong choice. Restore all 538 original refactor
+commits (including old main ancestry), with sensitive content removed, and
+retain both subsequent publication commits. Commit hashes necessarily change.
+
+## Role Handoff
+Task: Restore sanitized development history without losing the current source.
+Role completed: Architect
+Files touched: Isolated rewritten repository, HANDOFF.md, VALIDATION.md.
+Assumptions: Preserve commit chronology/topology, including empty commits, and
+the already published README and ignore fixes. Work solo. Prior explicit
+authorization for shared-history rewriting without rotation remains applicable.
+Validation: Verified backup contains 538 refactor ancestors; current public
+source is retained separately. Use git-filter-repo, Gitleaks and object checks.
+Risks: High-impact ref rewrite; original runtime, profiles and backups untouched.
+Rollback: Retain the current clean publication checkout until remote verification.
+Next role: Reviewer
+
+## Role Handoff
+Task: Review preservation and privacy requirements.
+Role completed: Reviewer
+Files touched: HANDOFF.md
+Assumptions: Removing secrets must not remove the development chronology.
+Validation: approved with notes. Preserve all original commits with pruning
+disabled. Remove private operational journals/account instructions from historic
+snapshots and redact remaining credentials, personal contacts and Git emails.
+Do not merge raw backup refs; reattach current publication commits after cleanup.
+Risks: Historical private-file diffs cannot be retained alongside their secrets.
+Next role: Implementer
+
+## Role Handoff
+Task: Rewrite historical content and reattach publication work.
+Role completed: Implementer
+Files touched: All affected historical blobs/metadata; HANDOFF.md, VALIDATION.md.
+Assumptions: SHA changes are required; dates, commit order and parent relationships
+remain useful. Restore current application files exactly from approved publication.
+Validation: All 538 old commits map one-to-one to 538 rewritten commits. Both
+publication commits replayed with original messages/dates. Resulting source tree
+is byte-for-byte identical to the previous published tip before these notes.
+Risks: No runtime, payment, browser or business-logic changes. No plan deviations.
+Next role: Verifier
+
+## Role Handoff
+Task: Verify restored history and current source.
+Role completed: Verifier
+Files touched: HANDOFF.md, VALIDATION.md; private mapping/scan reports outside Git.
+Assumptions: Previous successful unit tests/CI remain applicable because the
+application tree is unchanged; run the history and secret checks again.
+Validation: PASS one-to-one mapping of 538 commits; PASS every parent order and
+author/committer timestamp; PASS scan of 4089 rewritten Git objects for detected
+credentials and personal identifiers; PASS independent Gitleaks history scan.
+PASS equality of publication trees after replaying both newer commits. Final
+source changes are restoration documentation only. No paid/live API calls.
+Risks: Backup copies and GitHub cached objects are separate from rewritten refs.
+Next role: Committer
+
+## Role Handoff
+Task: Publish the restored history on main and refactor.
+Role completed: Committer
+Files touched: HANDOFF.md and VALIDATION.md in the final documentation commit.
+Assumptions: Both branches receive the same verified history through an atomic
+push guarded by explicit expected remote SHAs. Keep private visibility.
+Validation: Stage only restoration documentation; inspect staged paths and run
+diff/secret checks before commit. Re-run full-history scanning before push,
+then verify a fresh GitHub clone, branch tips and both CI runs.
+Commit message: Restore sanitized development history and preserve future commits
+Co-Authored-By: Codex <noreply@openai.com>
+Risks: No real env, tokens, Gmail credentials, profiles, databases, payment state,
+captures, logs or private runtime media are introduced. Public site assets remain.
+Next role: Verify remote publication and synchronize the clean working copy.

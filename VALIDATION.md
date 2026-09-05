@@ -1314,7 +1314,10 @@ For the documentation bootstrap task:
 
 ## Publication / sensitive-history cleanup
 
-- Export the latest approved source tree into a separate repository with no parents.
+- Rewrite sensitive historical content in an isolated repository with
+  git-filter-repo; preserve commits, dates and parent relationships. Keep empty
+  commits with `--prune-empty never --prune-degenerate never` so private-note
+  removal does not erase the visible work chronology. Do not squash history.
 - Audit the complete staged file list, including templates, HTML, extensionless files
   and fixtures: `python tools/check_tracked_secrets.py`.
 - Run `python -m unittest discover -s tests -p "test_tracked_secret_audit.py"`.
@@ -1322,9 +1325,11 @@ For the documentation bootstrap task:
   Gitleaks 8.30.1, with `--redact=100` and `.gitleaks.toml`. The only scoped
   exceptions are a public reCAPTCHA site key and the published RFC 6238 test vector.
 - Check all reachable Git objects and commit metadata for known private values.
-- Confirm one parentless commit and no old tags, branches or alternate object store.
-- Inspect the diff against the original snapshot outside the public repository;
-  do not import old history to perform that comparison.
+- Compare every original commit with its rewrite using the private commit map;
+  confirm matching parent order and author/committer timestamps. No unfiltered
+  branch, tag, replace ref or alternate object store may remain in the result.
+- Preserve the latest approved publication commits and compare the resulting
+  tree with their original tree before adding restoration documentation.
 - Both remote branches must move atomically with expected-SHA force-with-lease
   guards. Credential rotation confirmation is required by AGENTS.md before push.
 - GitHub cached objects, other clones and private rollback bundles are separate
