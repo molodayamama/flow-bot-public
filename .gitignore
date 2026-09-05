@@ -6,9 +6,11 @@
 .env.seller
 .env.consumer
 failover.env
+seller.env
 
 # Local secret config (kept on disk, never committed)
 api_config.json
+config_override.json
 
 # Token and cookie files
 tokens.json

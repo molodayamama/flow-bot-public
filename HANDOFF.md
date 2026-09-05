@@ -75,3 +75,71 @@ so the AGENTS.md shared-history rewrite gate is not satisfied. Repository
 visibility remains private. GitHub caches and other clones are not purged.
 Next role: Operator — rotate affected credentials or explicitly override the
 repository rotation prerequisite, then complete the reviewed remote rewrite.
+
+## Publication closeout
+
+The operator explicitly authorized uploading without prior credential rotation.
+Both remote branches were atomically replaced with the reviewed root commit;
+a fresh GitHub clone contained one commit and passed the secret scan. Both
+GitHub CI runs succeeded. Original local history/backups remain private.
+
+## Role Handoff
+
+Task: Ignore seller.env and config_override.json.
+Role completed: Architect
+Files touched: HANDOFF.md; planned .gitignore only.
+Assumptions: Work in the published clean repository; keep main and refactor aligned.
+Validation: Clean worktree; both remote branches match the published root.
+Use git check-ignore, tracked-file audit and diff checks from VALIDATION.md.
+Risks: Low; no API, payment, browser, runtime or business-logic changes. Existing
+requirements.txt remains applicable. Preserve UTF-8 and existing local files.
+Rollback: Revert the two ignore entries; no runtime migration or deletion.
+Next role: Reviewer
+
+## Role Handoff
+
+Task: Review the two missing ignore entries.
+Role completed: Reviewer
+Files touched: HANDOFF.md
+Assumptions: Match the exact filenames; keep env templates tracked.
+Validation: approved. No blockers or unrelated refactors. Verify neither runtime
+file is tracked and both example env files remain available to Git.
+Risks: Ignore rules cannot protect secrets embedded in tracked source files.
+Next role: Implementer
+
+## Role Handoff
+
+Task: Add missing runtime ignore rules.
+Role completed: Implementer
+Files touched: .gitignore, HANDOFF.md
+Assumptions: Exact filename rules are sufficient for this requested fix.
+Validation: Added seller.env and config_override.json; no deviations.
+Risks: No existing files changed or deleted beyond the two documentation files.
+Next role: Verifier
+
+## Role Handoff
+
+Task: Verify ignore behavior.
+Role completed: Verifier
+Files touched: HANDOFF.md
+Assumptions: No full test suite is needed for two ignore entries.
+Validation: PASS git check-ignore for both runtime paths; PASS both are untracked;
+PASS .env.example and deploy/examples/seller.env.example remain unignored;
+PASS python tools/check_tracked_secrets.py; PASS git diff --check.
+Used VALIDATION.md; no new validation procedure required. No external runtime calls.
+Risks: None introduced to application behavior.
+Next role: Committer
+
+## Role Handoff
+
+Task: Package the ignore fix for main and refactor.
+Role completed: Committer
+Files touched: .gitignore, HANDOFF.md
+Assumptions: Publish one normal fast-forward commit to both clean branches.
+Validation: Reviewed diff contains two ignore entries and task notes only;
+stage exactly these two paths, repeat the staged diff check, then push atomically.
+Commit message: Ignore seller environment and runtime config overrides
+Body: Exclude seller.env and config_override.json while preserving env templates.
+Co-Authored-By: Codex <noreply@openai.com>
+Risks: No secret/runtime files, env values, profiles, captures or media included.
+Next role: Verify remote branch tips after upload.
