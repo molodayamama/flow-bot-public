@@ -88,7 +88,7 @@ API_PROXY_URL=
 `PROXY_URL` задан, но конкретный слой надо пустить напрямую:
 
 ```dotenv
-PROXY_URL=http://REDACTED:REDACTED@proxy.example.invalid:8080
+PROXY_URL=http://user:pass@host:port
 BROWSER_PROXY_URL=off
 API_PROXY_URL=off
 ```
@@ -175,7 +175,7 @@ commit real passwords.
 
 ```dotenv
 ROBOKASSA_ENABLED=1
-ROBOKASSA_MERCHANT_LOGIN=photozhab
+ROBOKASSA_MERCHANT_LOGIN=your_merchant_login
 ROBOKASSA_HASH_ALGO=sha256
 ROBOKASSA_PASSWORD1=replace_me
 ROBOKASSA_PASSWORD2=replace_me

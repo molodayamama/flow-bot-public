@@ -24,8 +24,8 @@ class LoggingRedactionTests(unittest.TestCase):
     def test_common_credentials_and_identity_values_are_redacted(self) -> None:
         secret_values = (
             "example-bearer-value",
-            "123456789:REDACTED",
-            "REDACTED_CREDENTIAL",
+            "123456789:" + "A" * 35,
+            "proxy-password",
             "project-private-value",
             "person@example.test",
             "42",
@@ -53,13 +53,13 @@ class LoggingRedactionTests(unittest.TestCase):
         logger.addHandler(handler)
         try:
             raise ValueError(
-                "token=private-token-value and http://REDACTED:REDACTED@proxy.example.invalid:8080"
+                "token=private-token-value and socks5://user:proxy-password@host:1"
             )
         except ValueError:
             logger.exception("request failed Authorization=Bearer %s", "private-bearer")
 
         rendered = stream.getvalue()
-        for secret in ("private-token-value", "REDACTED_CREDENTIAL", "private-bearer"):
+        for secret in ("private-token-value", "proxy-password", "private-bearer"):
             self.assertNotIn(secret, rendered)
         self.assertIn("ValueError", rendered)
         self.assertIn("exception details redacted", rendered)

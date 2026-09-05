@@ -214,7 +214,7 @@ class WriterTests(unittest.TestCase):
             "warning_signals": [],
             "error_message_redacted": (
                 f"{full_prompt} Bearer abc123 cookie=abc "
-                "person@example.test http://REDACTED:REDACTED@proxy.example.invalid:8080/path "
+                "person@example.test https://user:pass@proxy.invalid/path "
                 "https://images.invalid/result.png"
             ),
             "full_prompt": full_prompt,

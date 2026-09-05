@@ -10,21 +10,26 @@ from pathlib import Path
 
 
 FORBIDDEN_PATHS = (
-    re.compile(r"(^|/)\.env(?:_flow)?$"),
+    re.compile(r"(^|/)(?:\.env[^/]*|[^/]+\.env)$"),
     re.compile(r"(^|/)api_config\.json$"),
     re.compile(r"(^|/)labs\.google\.har$"),
     re.compile(r"(^|/)google_profile(?:_|/|$)"),
     re.compile(r"(^|/)proxylist.*\.txt$"),
     re.compile(r"(^|/)tools/.*_capture\.json$"),
+    re.compile(r"\.(?:db(?:-(?:wal|shm|journal))?|sqlite3?|har|session|bundle|pem|key|p12|pfx)$"),
+    re.compile(r"(^|/)(?:tokens\.json|cookies\.pkl|account_metadata.*\.json|flow_accounts_state.*\.json|payments.*\.json|user_credits.*\.json|user_projects.*\.json)$"),
+    re.compile(r"(^|/)(?:\.claude/agent-memory|chrome_profile|logs)(?:/|$)"),
 )
 SECRET_PATTERNS = (
     re.compile(r"\bya29\.[A-Za-z0-9_-]{20,}"),
     re.compile(r"\bAIza[A-Za-z0-9_-]{30,}"),
     re.compile(r"\b\d{8,12}:[A-Za-z0-9_-]{30,}\b"),
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(r"\b[A-Za-z0-9]{16,}:[A-Za-z0-9]{16,}\b"),
+    re.compile(r"(?i)\b[\w.+-]+@(?:gmail|googlemail)\.com\b"),
 )
 SOURCE_ONLY_SECRET_PATTERNS = (
-    re.compile(r"(?i)\b(?:https?|socks5h?)://[^\s/:]+:[^\s/@]+@"),
+    re.compile(r'''(?i)\b(?:https?|socks5h?)://[^\s/:'"<>\[\]]+:[^\s/@'"<>\[\]]+@'''),
     re.compile(
         r"(?ix)\b(?:TELEGRAM_TOKEN|MAX_BOT_TOKEN|TWOCAPTCHA(?:_API)?_KEY|"
         r"CAPMONSTER_KEY|ROBOKASSA_(?:TEST_)?PASSWORD[12]|INTERNAL_API_TOKEN|"
@@ -33,7 +38,9 @@ SOURCE_ONLY_SECRET_PATTERNS = (
         r"\s*=\s*[\"'][^\"'\r\n]{8,}[\"']"
     ),
 )
-TEXT_SUFFIXES = {".py", ".js", ".json", ".md", ".yml", ".yaml", ".toml", ".txt"}
+PLACEHOLDER_CREDENTIAL = re.compile(
+    r"(?i)(?:replace[_-]|your[_-]|123456789:TEST|https?://user:pass@)"
+)
 
 
 def tracked_paths() -> list[Path]:
@@ -45,19 +52,26 @@ def audit(paths: list[Path]) -> list[str]:
     failures: list[str] = []
     for path in paths:
         normalized = path.as_posix()
-        if any(pattern.search(normalized) for pattern in FORBIDDEN_PATHS):
+        is_env_template = path.name == ".env.example" or path.name.endswith(".env.example")
+        if not is_env_template and any(pattern.search(normalized) for pattern in FORBIDDEN_PATHS):
             failures.append(f"forbidden tracked path: {normalized}")
             continue
-        if path.suffix.lower() not in TEXT_SUFFIXES or normalized.startswith("tests/"):
-            continue
         try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
+            data = path.read_bytes()
+        except OSError:
+            failures.append(f"cannot read tracked path: {normalized}")
             continue
-        patterns = SECRET_PATTERNS
-        if path.suffix.lower() != ".md":
-            patterns += SOURCE_ONLY_SECRET_PATTERNS
-        if any(pattern.search(text) for pattern in patterns):
+        # Scan ASCII secret signatures in every file, including assets and fixtures.
+        text = data.decode("utf-8", errors="replace")
+        high_confidence = any(pattern.search(text) for pattern in SECRET_PATTERNS)
+        source_match = False
+        if "tests" not in path.parts:
+            source_match = any(
+                not PLACEHOLDER_CREDENTIAL.search(match.group())
+                for pattern in SOURCE_ONLY_SECRET_PATTERNS
+                for match in pattern.finditer(text)
+            )
+        if high_confidence or source_match:
             failures.append(f"possible secret pattern: {normalized}")
     return failures
 

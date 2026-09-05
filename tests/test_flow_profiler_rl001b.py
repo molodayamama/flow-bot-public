@@ -269,7 +269,7 @@ class SingleWriterAndSafetyTests(unittest.TestCase):
                 + ("session-" + "tok" + "en=abc123 ")
                 + ("BEARER_" + "TOK" + "EN=abc123 ")
                 + "cookie=abc person@example.test "
-                + "http://REDACTED:REDACTED@proxy.example.invalid:8080/path https://images.invalid/generated.png"
+                + "https://user:pass@proxy.invalid/path https://images.invalid/generated.png"
             ),
             "page_state": "browser-error",
             "raw_prompt": full_prompt,

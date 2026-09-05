@@ -18,7 +18,7 @@ if not API_KEY or API_KEY.startswith("your_"):
 solver = TwoCaptcha(API_KEY)
 
 # Параметры для тестирования
-SITEKEY = "REDACTED_CREDENTIAL"  # Найденный sitekey
+SITEKEY = "6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV"  # Найденный sitekey
 URL = "https://labs.google/fx/tools/flow"
 
 # Возможные action

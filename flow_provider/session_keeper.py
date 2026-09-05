@@ -494,7 +494,7 @@ class SessionKeeper:
     # ── reCAPTCHA sitekey ─────────────────
 
     # Известный sitekey для labs.google (enterprise reCAPTCHA v3)
-    RECAPTCHA_SITEKEY = "REDACTED_CREDENTIAL"
+    RECAPTCHA_SITEKEY = "6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV"
     # Compatibility aliases: callers historically read request policy from the
     # keeper class.  The canonical definitions now live in request_policy.py.
     RECAPTCHA_ACTIONS = RECAPTCHA_ACTIONS

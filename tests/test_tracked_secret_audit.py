@@ -39,8 +39,42 @@ class TrackedSecretAuditTests(unittest.TestCase):
     def test_private_key_header_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "leak.txt"
-            path.write_text("-----BEGIN PRIVATE KEY-----\n", encoding="utf-8")
+            path.write_text("-----BEGIN " + "PRIVATE KEY-----\n", encoding="utf-8")
             self.assertEqual(len(audit([path])), 1)
+
+    def test_private_account_in_html_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "page.html"
+            account = "private-account@" + "gmail.com"
+            path.write_text(account, encoding="utf-8")
+            failures = audit([path])
+            self.assertEqual(len(failures), 1)
+            self.assertNotIn(account, failures[0])
+
+    def test_proxy_credentials_in_markdown_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notes.md"
+            value = "AbCdEf0123456789" + ":" + "GhIjKl9876543210"
+            path.write_text(f"Credentials: `{value}`", encoding="utf-8")
+            self.assertEqual(len(audit([path])), 1)
+
+    def test_token_in_fixture_is_not_exempt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tests" / "fixture.txt"
+            path.parent.mkdir()
+            path.write_text("123456789:" + "A" * 35, encoding="utf-8")
+            self.assertEqual(len(audit([path])), 1)
+
+    def test_local_env_and_database_are_forbidden(self) -> None:
+        for name in (".env.production", "seller.env", "metrics.db-wal", "archive.bundle"):
+            with self.subTest(name=name):
+                self.assertIn("forbidden tracked path", audit([Path(name)])[0])
+
+    def test_env_template_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".env.example"
+            path.write_text("ROBOKASSA_PASSWORD1=replace_me\n", encoding="utf-8")
+            self.assertEqual(audit([path]), [])
 
 
 if __name__ == "__main__":

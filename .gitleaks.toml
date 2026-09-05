@@ -1,0 +1,17 @@
+title = "Flow Bot publication audit"
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Google's public reCAPTCHA site key, not a credential"
+condition = "AND"
+paths = ['''(?:^|/)(?:flow_provider/session_keeper\.py|test_recaptcha_params\.py)$''']
+regexTarget = "secret"
+regexes = ['''^6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV$''']
+
+[[allowlists]]
+description = "Published RFC 6238 SHA1 test vector used by offline TOTP tests"
+condition = "AND"
+paths = ['''(?:^|/)tests/test_account_onboarding\.py$''']
+regexTarget = "secret"
+regexes = ['''^GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ$''']

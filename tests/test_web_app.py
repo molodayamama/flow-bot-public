@@ -701,7 +701,7 @@ class WebAppDisabledTests(unittest.TestCase):
         config = WebAppConfig(
             enabled=True,
             session_secret="test-secret-that-is-longer-than-thirty-two-characters",
-            public_origin="http://REDACTED:REDACTED@proxy.example.invalid:8080",
+            public_origin="https://user:password@photozhab.test",
         )
         with self.assertRaisesRegex(ValueError, "WEB_PUBLIC_ORIGIN"):
             config.validate()

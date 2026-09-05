@@ -13,7 +13,7 @@ import proxy_supervisor as ps
 class NormalizeTests(unittest.TestCase):
     def test_bare_credentials_get_http_scheme(self) -> None:
         url = ps.normalize_upstream("user:pass@192.0.2.10:10000")
-        self.assertEqual(url, "http://REDACTED:REDACTED@proxy.example.invalid:8080")
+        self.assertEqual(url, "http://user:pass@192.0.2.10:10000")
 
     def test_label_strips_credentials(self) -> None:
         url = ps.normalize_upstream("user:pass@192.0.2.10:10000")
@@ -71,7 +71,7 @@ class StateTests(unittest.TestCase):
         sup = ps.LocalProxySupervisor(state_path=self.path)
         sup._entries[8131] = {
             "port": 8131,
-            "upstream": "http://REDACTED:REDACTED@proxy.example.invalid:8080",
+            "upstream": "http://user:pass@1.2.3.4:10000",
             "label": "http://1.2.3.4:10000",
             "created_at": 123.0,
         }
@@ -80,13 +80,13 @@ class StateTests(unittest.TestCase):
         reloaded = ps.LocalProxySupervisor(state_path=self.path)
         self.assertIn(8131, reloaded._entries)
         self.assertEqual(reloaded._entries[8131]["upstream"],
-                         "http://REDACTED:REDACTED@proxy.example.invalid:8080")
+                         "http://user:pass@1.2.3.4:10000")
 
     def test_list_status_has_no_credentials(self) -> None:
         sup = ps.LocalProxySupervisor(state_path=self.path)
         sup._entries[8131] = {
             "port": 8131,
-            "upstream": "http://REDACTED:REDACTED@proxy.example.invalid:8080",
+            "upstream": "http://user:secretpw@1.2.3.4:10000",
             "label": "http://1.2.3.4:10000",
             "created_at": 1.0,
         }
@@ -100,7 +100,7 @@ class StateTests(unittest.TestCase):
     def test_ports_view_shape_and_no_creds(self) -> None:
         sup = ps.LocalProxySupervisor(state_path=self.path)
         sup._entries[8131] = {
-            "port": 8131, "upstream": "http://REDACTED:REDACTED@proxy.example.invalid:8080",
+            "port": 8131, "upstream": "http://u:p@1.2.3.4:10000",
             "label": "http://1.2.3.4:10000", "created_at": 1.0,
         }
         view = sup.ports_view()
@@ -115,7 +115,7 @@ class StateTests(unittest.TestCase):
     def test_teardown_removes_entry(self) -> None:
         sup = ps.LocalProxySupervisor(state_path=self.path)
         sup._entries[8131] = {
-            "port": 8131, "upstream": "http://REDACTED:REDACTED@proxy.example.invalid:8080",
+            "port": 8131, "upstream": "http://u:p@1.2.3.4:10000",
             "label": "http://1.2.3.4:10000", "created_at": 1.0,
         }
         sup._save()

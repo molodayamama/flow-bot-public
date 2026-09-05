@@ -255,7 +255,7 @@ class SendTests(unittest.TestCase):
     def test_get_file_bytes_rejects_embedded_url_credentials(self):
         c, sess = _client()
         with self.assertRaises(MaxApiError) as raised:
-            run(c.get_file_bytes(PlatformFile(file_id="f", url="http://REDACTED:REDACTED@proxy.example.invalid:8080/f.png")))
+            run(c.get_file_bytes(PlatformFile(file_id="f", url="https://user:password@cdn.example/f.png")))
         self.assertEqual(raised.exception.code, "media_url_invalid")
         self.assertEqual(sess.calls, [])
 

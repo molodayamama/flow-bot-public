@@ -320,7 +320,7 @@ Notes:
 - `python -m py_compile` is an assumption because Python version is not pinned.
 - In a clean worktree without local `.env`, the full offline unit suite may need
   an explicitly fake Telegram token, for example:
-  `$env:TELEGRAM_TOKEN = '123456789:REDACTED'; python -m unittest discover -s tests -p "test_*.py"`.
+  `$env:TELEGRAM_TOKEN = '123456789:TEST'; python -m unittest discover -s tests -p "test_*.py"`.
 - Secret scans must not print secret values in command output or final reports.
   Use file-only output such as `rg -l` / `--files-with-matches`, or a dedicated
   redaction tool. Do not use `rg -n`, `-o`, `-C`, `-A`, or `-B` for secret
@@ -1101,8 +1101,8 @@ For the documentation bootstrap task:
   paths, for `KEEP_WARM_AFTER_REQUEST_SEC` seconds (default 1800).
 - Safe offline validation:
   - `python -m py_compile flow_bot.py`
-  - `$env:TELEGRAM_TOKEN='123456789:REDACTED'; python -m unittest discover -s tests -p test_keeper_parking.py`
-  - `$env:TELEGRAM_TOKEN='123456789:REDACTED'; python -m unittest discover -s tests -p test_flow_accounts.py`
+  - `$env:TELEGRAM_TOKEN='123456789:TEST'; python -m unittest discover -s tests -p test_keeper_parking.py`
+  - `$env:TELEGRAM_TOKEN='123456789:TEST'; python -m unittest discover -s tests -p test_flow_accounts.py`
   - `git diff --check`
 - Live validation after deploy: journal should show `keep-warm pinned after
   request: <role>:<account> for 1800 sec` only after real bot/backend requests,
@@ -1311,3 +1311,21 @@ For the documentation bootstrap task:
   404. HSTS, frame, nosniff, and referrer-policy headers were present.
 - No generation, payment, captcha, OAuth exchange, Telegram/MAX provider call,
   proxy verification, or browser-profile action is part of this validation.
+
+## Publication / sensitive-history cleanup
+
+- Export the latest approved source tree into a separate repository with no parents.
+- Audit the complete staged file list, including templates, HTML, extensionless files
+  and fixtures: `python tools/check_tracked_secrets.py`.
+- Run `python -m unittest discover -s tests -p "test_tracked_secret_audit.py"`.
+- Independently scan the publication directory and every reachable commit using
+  Gitleaks 8.30.1, with `--redact=100` and `.gitleaks.toml`. The only scoped
+  exceptions are a public reCAPTCHA site key and the published RFC 6238 test vector.
+- Check all reachable Git objects and commit metadata for known private values.
+- Confirm one parentless commit and no old tags, branches or alternate object store.
+- Inspect the diff against the original snapshot outside the public repository;
+  do not import old history to perform that comparison.
+- Both remote branches must move atomically with expected-SHA force-with-lease
+  guards. Credential rotation confirmation is required by AGENTS.md before push.
+- GitHub cached objects, other clones and private rollback bundles are separate
+  from the rewritten branch history. Do not claim global erasure after a push.

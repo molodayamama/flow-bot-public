@@ -27,7 +27,7 @@ class GenerateLandingMediaTests(unittest.TestCase):
         for url in (
             "http://flow-content.google/image/example",
             "https://flow-content.google.evil.test/image/example",
-            "http://REDACTED:REDACTED@proxy.example.invalid:8080/example",
+            "https://user:pass@labs.google/example",
             "https://example.test/image.png",
         ):
             self.assertFalse(media_tool._is_allowed_media_url(url), url)
