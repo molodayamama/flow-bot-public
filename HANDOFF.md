@@ -282,3 +282,24 @@ Co-Authored-By: Codex <noreply@openai.com>
 Risks: No real env, credentials, Gmail account data, profiles, HAR, payment state,
 logs, captures, databases or runtime media included. Preserve public site assets.
 Next role: Verify actual GitHub publication and record the observed result.
+
+## Additional pre-publication verification
+
+A targeted inspection of the initial login helper found a historical proxy
+endpoint without a password; standard credential scanners did not flag it.
+Extended all-history inspection found four infrastructure IP values in old
+login/checker code and an admin input placeholder. These were replaced with a
+documentation address, and the placeholder now uses generic example credentials.
+All 542 commits, dates and parent relationships are retained. Current changes
+are limited to the admin placeholder and corresponding proxy test data; no
+runtime behavior or user data changed. Nine static-page tests and seventeen
+proxy-supervisor tests pass, as do the tracked-file and Gitleaks history audits.
+
+The initial private staging upload must not be made public, since it received
+those historical endpoint objects. Preserve it privately under a staging name
+and create the final repository independently again. Require a different GitHub
+repository ID and verify both the original raw commits and staging-upload SHA
+are unavailable there before public access. The original flow-bot stays private.
+
+Final commit subject: Remove remaining historical proxy endpoints before publication
+Co-Authored-By: Codex <noreply@openai.com>
