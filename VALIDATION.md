@@ -1334,3 +1334,8 @@ For the documentation bootstrap task:
   guards. Credential rotation confirmation is required by AGENTS.md before push.
 - GitHub cached objects, other clones and private rollback bundles are separate
   from the rewritten branch history. Do not claim global erasure after a push.
+- If publishing through a new independent repository, create it private first,
+  push only the verified main branch, and confirm it is not a fork. Verify that
+  an old known-unfiltered commit cannot be retrieved from that repository.
+  After the authorized public visibility change, repeat the commit-access checks
+  without authentication and verify a fresh clone and CI. Preserve full history.

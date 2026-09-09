@@ -216,3 +216,69 @@ Co-Authored-By: Codex <noreply@openai.com>
 Risks: No real env, tokens, Gmail credentials, profiles, databases, payment state,
 captures, logs or private runtime media are introduced. Public site assets remain.
 Next role: Verify remote publication and synchronize the clean working copy.
+
+## New independent public repository — 2026-09-09
+
+## Role Handoff
+Task: Publish sanitized history in a new independent GitHub repository.
+Role completed: Architect
+Files touched: HANDOFF.md; planned README.md and VALIDATION.md.
+Assumptions: Operator accepted creating a new repository for public access.
+Preserve all 541 existing commits and current application behavior. Keep the
+original repository private; publish only main, without creating a fork.
+Validation: Clean working copy; remote main unchanged; destination name available.
+Re-run current-file and full-history secret scans; verify old unfiltered SHA
+is unavailable in the new repository before and after making it public.
+Risks: Public disclosure is consequential. Create private first, upload only
+clean main, inspect server state, then change visibility. No runtime deployment.
+Rollback: Original private repository/backups remain unchanged; a failed
+publication gate leaves the new repository private.
+Next role: Reviewer
+
+## Role Handoff
+Task: Review publication boundaries.
+Role completed: Reviewer
+Files touched: HANDOFF.md
+Assumptions: A new independent repository must not inherit the old object network.
+Validation: approved with notes. Preserve dates/topology; no squash or raw backup
+refs. Update clone instructions, use explicit main-only push, confirm fork=false,
+and verify current/old commit access without printing sensitive file contents.
+Risks: Do not change the original repository's visibility or delete local state.
+Next role: Implementer
+
+## Role Handoff
+Task: Prepare independent publication.
+Role completed: Implementer
+Files touched: README.md, VALIDATION.md, HANDOFF.md.
+Assumptions: New repository name is flow-bot-public. HTTPS clone requires no SSH setup.
+Validation: Updated clone URL and directory; documented independent-repository
+verification. No application, dependency, model, payment or runtime changes.
+Risks: No secrets or local runtime data added. No deviations from reviewed scope.
+Next role: Verifier
+
+## Role Handoff
+Task: Validate publication source.
+Role completed: Verifier
+Files touched: HANDOFF.md; redacted scanner reports outside the repository.
+Assumptions: Existing application tests remain applicable for documentation-only
+changes; target repository CI will independently validate the uploaded revision.
+Validation: PASS python tools/check_tracked_secrets.py; PASS git diff --check;
+PASS complete main-history Gitleaks scan with reviewed public-fixture exceptions;
+PASS count of 541 preserved commits. No live provider, payment or browser calls.
+Risks: Repository-specific old-object access and anonymous checks follow upload.
+Next role: Committer
+
+## Role Handoff
+Task: Commit documentation and publish clean main to the independent repository.
+Role completed: Committer
+Files touched: README.md, VALIDATION.md, HANDOFF.md only.
+Assumptions: Create private, explicitly push main, validate, then enable public
+access as requested. Keep original flow-bot private and retain its history.
+Validation: Inspect exactly three staged documentation paths and staged diff;
+repeat the source scan. After upload verify branch tips, no old raw commit,
+fork=false, CI, then public anonymous access and fresh-clone history.
+Commit message: Prepare independent public repository and clone instructions
+Co-Authored-By: Codex <noreply@openai.com>
+Risks: No real env, credentials, Gmail account data, profiles, HAR, payment state,
+logs, captures, databases or runtime media included. Preserve public site assets.
+Next role: Verify actual GitHub publication and record the observed result.

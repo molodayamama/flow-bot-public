@@ -36,8 +36,8 @@ Google могут потребовать обновления клиента. Go
 ## Установка
 
 ```bash
-git clone git@github.com:molodayamama/flow-bot.git
-cd flow-bot
+git clone https://github.com/molodayamama/flow-bot-public.git
+cd flow-bot-public
 python -m venv .venv
 ```
 
